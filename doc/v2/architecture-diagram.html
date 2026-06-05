@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>工程管理智能体开源优先架构图</title>
+	<style>
+		:root {
+			color-scheme: light;
+			--bg: #f6f8fb;
+			--surface: #ffffff;
+			--ink: #17202a;
+			--muted: #5e6d82;
+			--line: #d8e0ec;
+			--bus: #445a72;
+			--blue: #2f6fed;
+			--teal: #0f8b8d;
+			--green: #238b45;
+			--amber: #b56b00;
+			--rose: #b42348;
+			--violet: #6f4cc3;
+			--slate: #536276;
+			--shadow: 0 16px 36px rgba(24, 36, 52, 0.09);
+		}
+
+		* { box-sizing: border-box; }
+
+		body {
+			margin: 0;
+			min-width: 320px;
+			background: var(--bg);
+			color: var(--ink);
+			font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+			line-height: 1.55;
+		}
+
+		.page {
+			width: 100%;
+			margin: 0 auto;
+			padding: 10px 10px 24px;
+		}
+
+		.header {
+			display: flex;
+			align-items: flex-start;
+			justify-content: space-between;
+			gap: 20px;
+			margin-bottom: 10px;
+		}
+
+		h1 {
+			margin: 0 0 8px;
+			font-size: clamp(24px, 3vw, 34px);
+			font-weight: 800;
+			letter-spacing: 0;
+		}
+
+		.subtitle {
+			max-width: 1080px;
+			margin: 0;
+			color: var(--muted);
+			font-size: 14px;
+		}
+
+		.badge {
+			flex: 0 0 auto;
+			display: inline-flex;
+			align-items: center;
+			min-height: 36px;
+			padding: 6px 13px;
+			border: 1px solid var(--line);
+			border-radius: 999px;
+			background: var(--surface);
+			color: var(--muted);
+			font-size: 13px;
+			white-space: nowrap;
+		}
+
+		.diagram-shell {
+			border: 1px solid var(--line);
+			border-radius: 10px;
+			background: var(--surface);
+			box-shadow: var(--shadow);
+			overflow: hidden;
+		}
+
+		.arch-diagram {
+			display: block;
+			width: 100%;
+			min-width: 0;
+			max-width: 100%;
+			height: auto;
+		}
+
+		svg text {
+			font-family: "Microsoft YaHei", "PingFang SC", Arial, sans-serif;
+			letter-spacing: 0;
+		}
+
+		.lane-bg {
+			fill: #f8fafc;
+			stroke: #e3e9f2;
+			stroke-width: 1;
+		}
+
+		.lane-title {
+			fill: #2c3b4d;
+			font-size: 18px;
+			font-weight: 800;
+		}
+
+		.node rect {
+			stroke-width: 2;
+			rx: 8;
+			ry: 8;
+		}
+
+		.entry rect { fill: #edfafa; stroke: var(--teal); }
+		.core rect { fill: #eef4ff; stroke: var(--blue); }
+		.ingest rect { fill: #fff7ea; stroke: var(--amber); }
+		.retrieval rect { fill: #effaf4; stroke: var(--green); }
+		.agent rect { fill: #f5f0ff; stroke: var(--violet); }
+		.support rect { fill: #f7fafc; stroke: #7a8da4; }
+		.data rect { fill: #fff1f4; stroke: var(--rose); }
+		.govern rect { fill: #fffaf0; stroke: #c27700; }
+
+		.node-title {
+			fill: var(--ink);
+			font-size: 17px;
+			font-weight: 800;
+		}
+
+		.node-small {
+			fill: #536276;
+			font-size: 11.5px;
+		}
+
+		.tech {
+			fill: #28384d;
+			font-size: 11.3px;
+			font-weight: 800;
+		}
+
+		.tag {
+			fill: #ffffff;
+			stroke: #bdcbe0;
+			stroke-width: 1;
+		}
+
+		.tag-text {
+			fill: #34465b;
+			font-size: 11px;
+			font-weight: 700;
+		}
+
+		.bus-line {
+			fill: none;
+			stroke: var(--bus);
+			stroke-width: 2.2;
+			marker-end: url(#arrow);
+		}
+
+		.bus-line-soft {
+			fill: none;
+			stroke: #8997aa;
+			stroke-width: 1.8;
+			stroke-dasharray: 7 6;
+			marker-end: url(#arrow-soft);
+		}
+
+		.bus-bar {
+			fill: #edf2f7;
+			stroke: #9fb0c4;
+			stroke-width: 1.5;
+			rx: 8;
+			ry: 8;
+		}
+
+		.bus-text,
+		.arrow-label {
+			fill: #47586d;
+			font-size: 12px;
+			font-weight: 800;
+		}
+
+		.legend {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 10px 16px;
+			align-items: center;
+			padding: 14px 16px;
+			border-top: 1px solid var(--line);
+			background: #fbfcff;
+			color: var(--muted);
+			font-size: 13px;
+		}
+
+		.legend-item {
+			display: inline-flex;
+			align-items: center;
+			gap: 7px;
+		}
+
+		.swatch {
+			width: 13px;
+			height: 13px;
+			border-radius: 3px;
+			border: 1px solid currentColor;
+		}
+
+		.summary {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 14px;
+			margin-top: 18px;
+		}
+
+		.summary-block {
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: var(--surface);
+			padding: 14px 16px;
+			box-shadow: var(--shadow);
+		}
+
+		.summary-block strong {
+			display: block;
+			margin-bottom: 6px;
+			font-size: 16px;
+		}
+
+		.summary-block span {
+			display: block;
+			color: var(--muted);
+			font-size: 14px;
+		}
+
+		.note {
+			margin-top: 16px;
+			padding: 13px 15px;
+			border: 1px solid #c8d7ed;
+			border-radius: 8px;
+			background: #eef5ff;
+			color: #29425f;
+			font-size: 14px;
+		}
+
+		@media (max-width: 900px) {
+			.header,
+			.summary {
+				display: grid;
+				grid-template-columns: 1fr;
+			}
+
+			.badge {
+				justify-self: start;
+				white-space: normal;
+			}
+		}
+
+		@media (max-width: 620px) {
+			.page {
+				padding: 8px 6px 18px;
+			}
+		}
+	</style>
+</head>
+<body>
+	<main class="page">
+		<header class="header">
+			<div>
+				<h1>工程管理智能体开源优先架构图</h1>
+				<p class="subtitle">重新评估后采用“开源平台为主、少量胶水开发”的路线：NocoBase 承担业务后台，RAGFlow 承担知识库与 RAG，AgentScope/RAGFlow Agent 承担智能体平台，FastAPI 只做必要适配层。</p>
+			</div>
+			<div class="badge">开源平台集成 + 工程业务插件</div>
+		</header>
+
+		<section class="diagram-shell" aria-label="工程管理智能体项目架构图">
+			<svg class="arch-diagram" viewBox="0 0 1420 980" role="img" aria-labelledby="diagramTitle diagramDesc">
+				<title id="diagramTitle">工程管理智能体开源优先总线式架构图</title>
+				<desc id="diagramDesc">展示 NocoBase、RAGFlow、AgentScope、LiteLLM、Keycloak/Casdoor 等开源项目在工程管理智能体中的分工。</desc>
+				<defs>
+					<marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+						<path d="M0,0 L10,5 L0,10 Z" fill="#445a72" />
+					</marker>
+					<marker id="arrow-soft" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
+						<path d="M0,0 L10,5 L0,10 Z" fill="#8997aa" />
+					</marker>
+				</defs>
+
+				<rect x="0" y="0" width="1420" height="980" rx="14" fill="#ffffff" />
+				<rect class="lane-bg" x="38" y="34" width="1035" height="145" rx="10" />
+				<rect class="lane-bg" x="38" y="202" width="1035" height="142" rx="10" />
+				<rect class="lane-bg" x="38" y="368" width="1035" height="165" rx="10" />
+				<rect class="lane-bg" x="38" y="558" width="1035" height="160" rx="10" />
+				<rect class="lane-bg" x="38" y="748" width="1322" height="158" rx="10" />
+
+				<text class="lane-title" x="58" y="62">入口层</text>
+				<text class="lane-title" x="58" y="230">业务内核</text>
+				<text class="lane-title" x="58" y="396">AI 服务层</text>
+				<text class="lane-title" x="58" y="586">任务与工具层</text>
+				<text class="lane-title" x="58" y="776">数据层</text>
+
+				<rect class="bus-bar" x="105" y="170" width="900" height="28" />
+				<text class="bus-text" x="555" y="189" text-anchor="middle">统一接入总线：鉴权、限流、请求路由、入口审计</text>
+				<rect class="bus-bar" x="105" y="350" width="900" height="28" />
+				<text class="bus-text" x="555" y="369" text-anchor="middle">业务能力分发总线：业务后台、知识库、权限问答、Agent 编排</text>
+				<rect class="bus-bar" x="105" y="540" width="900" height="28" />
+				<text class="bus-text" x="555" y="559" text-anchor="middle">AI 能力调用总线：任务、工具、模型、观测</text>
+				<rect class="bus-bar" x="105" y="730" width="1120" height="28" />
+				<text class="bus-text" x="665" y="749" text-anchor="middle">数据访问总线：业务库、RAG 元数据、对象存储、全文/向量引擎、模型调用</text>
+
+				<path class="bus-line" d="M165 148 L165 170" />
+				<path class="bus-line" d="M360 148 L360 170" />
+				<path class="bus-line" d="M555 148 L555 170" />
+				<path class="bus-line" d="M750 148 L750 170" />
+				<path class="bus-line" d="M945 148 L945 170" />
+				<path class="bus-line" d="M555 198 L555 222" />
+				<path class="bus-line" d="M555 320 L555 350" />
+				<path class="bus-line" d="M215 378 L215 410" />
+				<path class="bus-line" d="M555 378 L555 410" />
+				<path class="bus-line" d="M895 378 L895 410" />
+				<path class="bus-line" d="M215 510 L215 540" />
+				<path class="bus-line" d="M555 510 L555 540" />
+				<path class="bus-line" d="M895 510 L895 540" />
+				<path class="bus-line" d="M215 568 L215 594" />
+				<path class="bus-line" d="M555 568 L555 594" />
+				<path class="bus-line" d="M895 568 L895 594" />
+				<path class="bus-line" d="M215 702 L215 730" />
+				<path class="bus-line" d="M555 702 L555 730" />
+				<path class="bus-line" d="M895 702 L895 730" />
+				<path class="bus-line" d="M180 758 L180 786" />
+				<path class="bus-line" d="M420 758 L420 786" />
+				<path class="bus-line" d="M660 758 L660 786" />
+				<path class="bus-line" d="M900 758 L900 786" />
+				<path class="bus-line" d="M1140 758 L1140 786" />
+
+				<path class="bus-line-soft" d="M930 270 L1128 270" />
+				<path class="bus-line-soft" d="M1040 460 L1128 460" />
+				<path class="bus-line-soft" d="M1040 650 L1128 650" />
+				<text class="arrow-label" x="978" y="258">权限审计</text>
+				<text class="arrow-label" x="1050" y="448">Agent 受控</text>
+				<text class="arrow-label" x="1050" y="638">模型治理</text>
+
+				<g class="node entry">
+					<rect x="85" y="76" width="160" height="72" />
+					<text class="node-title" x="165" y="102" text-anchor="middle">Web 后台</text>
+					<text class="node-small" x="165" y="123" text-anchor="middle">管理、审核、问答</text>
+					<text class="tech" x="165" y="140" text-anchor="middle">React / Vue</text>
+				</g>
+				<g class="node entry">
+					<rect x="280" y="76" width="160" height="72" />
+					<text class="node-title" x="360" y="102" text-anchor="middle">企业微信</text>
+					<text class="node-small" x="360" y="123" text-anchor="middle">提醒、日报、审批</text>
+					<text class="tech" x="360" y="140" text-anchor="middle">WeCom API</text>
+				</g>
+				<g class="node entry">
+					<rect x="475" y="76" width="160" height="72" />
+					<text class="node-title" x="555" y="102" text-anchor="middle">微信机器人</text>
+					<text class="node-small" x="555" y="123" text-anchor="middle">现场高频提问</text>
+					<text class="tech" x="555" y="140" text-anchor="middle">Bot Webhook</text>
+				</g>
+				<g class="node entry">
+					<rect x="670" y="76" width="160" height="72" />
+					<text class="node-title" x="750" y="102" text-anchor="middle">Hermes 入口</text>
+					<text class="node-small" x="750" y="123" text-anchor="middle">助手壳、Skill 展示</text>
+					<text class="tech" x="750" y="140" text-anchor="middle">Hermes Skill</text>
+				</g>
+				<g class="node entry">
+					<rect x="865" y="76" width="160" height="72" />
+					<text class="node-title" x="945" y="102" text-anchor="middle">资料与业务系统</text>
+					<text class="node-small" x="945" y="123" text-anchor="middle">文件、台账、项目系统</text>
+					<text class="tech" x="945" y="140" text-anchor="middle">Office/PDF/API</text>
+				</g>
+
+				<g class="node core">
+					<rect x="185" y="238" width="740" height="82" />
+					<text class="node-title" x="555" y="265" text-anchor="middle">NocoBase 业务后台 + 轻量适配层</text>
+					<text class="node-small" x="555" y="287" text-anchor="middle">项目、人员、权限、表单、流程、审计、工程业务插件</text>
+					<text class="tech" x="555" y="305" text-anchor="middle">NocoBase + PostgreSQL + Workflow/RBAC；FastAPI Adapter</text>
+				</g>
+
+				<g class="node ingest">
+					<rect x="75" y="410" width="280" height="100" />
+					<text class="node-title" x="215" y="439" text-anchor="middle">RAGFlow 知识库</text>
+					<text class="node-small" x="215" y="461" text-anchor="middle">文档解析、切块、索引、引用、知识集 API</text>
+					<text class="tech" x="215" y="482" text-anchor="middle">RAGFlow + DeepDoc + Docling/MinerU</text>
+				</g>
+				<g class="node retrieval">
+					<rect x="415" y="410" width="280" height="100" />
+					<text class="node-title" x="555" y="439" text-anchor="middle">RAGFlow 检索问答</text>
+					<text class="node-small" x="555" y="461" text-anchor="middle">混合召回、rerank、引用、问答 API、权限映射</text>
+					<text class="tech" x="555" y="482" text-anchor="middle">RAGFlow API + Dataset 权限同步</text>
+				</g>
+				<g class="node agent">
+					<rect x="755" y="410" width="280" height="100" />
+					<text class="node-title" x="895" y="439" text-anchor="middle">Agent 平台</text>
+					<text class="node-small" x="895" y="461" text-anchor="middle">多会话、多智能体、工具调用、人机确认</text>
+					<text class="tech" x="895" y="482" text-anchor="middle">AgentScope 2.0；RAGFlow Agent / Dify 可选</text>
+				</g>
+
+				<g class="node support">
+					<rect x="75" y="594" width="280" height="108" />
+					<text class="node-title" x="215" y="622" text-anchor="middle">流程与任务</text>
+					<text class="node-small" x="215" y="644" text-anchor="middle">审批流、定时任务、解析任务、失败重试</text>
+					<text class="tech" x="215" y="667" text-anchor="middle">NocoBase Workflow + RAGFlow Task</text>
+					<text class="tech" x="215" y="685" text-anchor="middle">Temporal 可选</text>
+				</g>
+				<g class="node support">
+					<rect x="415" y="594" width="280" height="108" />
+					<text class="node-title" x="555" y="622" text-anchor="middle">集成与自动化</text>
+					<text class="node-small" x="555" y="644" text-anchor="middle">微信、邮件、项目系统、RAGFlow、Agent 工具</text>
+					<text class="tech" x="555" y="667" text-anchor="middle">NocoBase Plugin + MCP Server</text>
+					<text class="tech" x="555" y="685" text-anchor="middle">REST/Webhook</text>
+				</g>
+				<g class="node support">
+					<rect x="755" y="594" width="280" height="108" />
+					<text class="node-title" x="895" y="622" text-anchor="middle">模型网关</text>
+					<text class="node-small" x="895" y="644" text-anchor="middle">统一模型、embedding、rerank、限流、费用</text>
+					<text class="tech" x="895" y="667" text-anchor="middle">LiteLLM + DeepSeek/OpenAI/Qwen</text>
+					<text class="tech" x="895" y="685" text-anchor="middle">本地模型 / API</text>
+				</g>
+
+				<g class="node data">
+					<rect x="80" y="786" width="200" height="88" />
+					<text class="node-title" x="180" y="819" text-anchor="middle">业务库</text>
+					<text class="node-small" x="180" y="840" text-anchor="middle">项目、权限、流程、审计、问答记录</text>
+					<text class="tech" x="180" y="858" text-anchor="middle">PostgreSQL for NocoBase</text>
+				</g>
+				<g class="node data">
+					<rect x="320" y="786" width="200" height="88" />
+					<text class="node-title" x="420" y="819" text-anchor="middle">RAG 元数据</text>
+					<text class="node-small" x="420" y="840" text-anchor="middle">知识集、文档、chunk、任务状态</text>
+					<text class="tech" x="420" y="858" text-anchor="middle">RAGFlow MySQL + MinIO</text>
+				</g>
+				<g class="node data">
+					<rect x="560" y="786" width="200" height="88" />
+					<text class="node-title" x="660" y="819" text-anchor="middle">队列与缓存</text>
+					<text class="node-small" x="660" y="839" text-anchor="middle">RAGFlow/NocoBase</text>
+					<text class="node-small" x="660" y="856" text-anchor="middle">异步任务与缓存</text>
+					<text class="tech" x="660" y="870" text-anchor="middle">Redis / Queue</text>
+				</g>
+				<g class="node data">
+					<rect x="800" y="786" width="200" height="88" />
+					<text class="node-title" x="900" y="819" text-anchor="middle">检索引擎</text>
+					<text class="node-small" x="900" y="840" text-anchor="middle">全文、向量、混合召回</text>
+					<text class="tech" x="900" y="858" text-anchor="middle">RAGFlow ES / Infinity</text>
+				</g>
+				<g class="node data">
+					<rect x="1040" y="786" width="200" height="88" />
+					<text class="node-title" x="1140" y="819" text-anchor="middle">外部模型</text>
+					<text class="node-small" x="1140" y="840" text-anchor="middle">LLM、embedding、rerank</text>
+					<text class="tech" x="1140" y="858" text-anchor="middle">DeepSeek / Local / API</text>
+				</g>
+
+				<g class="node govern">
+					<rect x="1128" y="202" width="235" height="516" />
+					<text class="node-title" x="1245" y="235" text-anchor="middle">横向治理与安全</text>
+					<rect class="tag" x="1152" y="260" width="188" height="46" rx="7" />
+					<rect class="tag" x="1152" y="322" width="188" height="46" rx="7" />
+					<rect class="tag" x="1152" y="384" width="188" height="46" rx="7" />
+					<rect class="tag" x="1152" y="446" width="188" height="46" rx="7" />
+					<rect class="tag" x="1152" y="508" width="188" height="46" rx="7" />
+					<rect class="tag" x="1152" y="570" width="188" height="46" rx="7" />
+					<text class="tag-text" x="1246" y="288" text-anchor="middle">RBAC：NocoBase + PG</text>
+					<text class="tag-text" x="1246" y="350" text-anchor="middle">SSO 候选：Keycloak/Casdoor</text>
+					<text class="tag-text" x="1246" y="412" text-anchor="middle">审计：NocoBase + PG 日志</text>
+					<text class="tag-text" x="1246" y="474" text-anchor="middle">观测：Langfuse / Phoenix</text>
+					<text class="tag-text" x="1246" y="536" text-anchor="middle">人工确认：审批流 / HITL</text>
+					<text class="tag-text" x="1246" y="598" text-anchor="middle">外发控制：策略 + 留痕</text>
+					<text class="node-small" x="1246" y="652" text-anchor="middle">贯穿入口、业务 API、检索、</text>
+					<text class="node-small" x="1246" y="671" text-anchor="middle">Agent、工具和模型调用</text>
+				</g>
+
+				<text class="node-small" x="710" y="934" text-anchor="middle">红线：开源平台可承载通用能力；工程业务规则、权限映射、审批边界和系统集成由业务插件/适配层掌握。</text>
+			</svg>
+
+			<div class="legend" aria-label="图例">
+				<span class="legend-item"><span class="swatch" style="color: var(--teal);"></span>入口</span>
+				<span class="legend-item"><span class="swatch" style="color: var(--blue);"></span>业务内核</span>
+				<span class="legend-item"><span class="swatch" style="color: var(--amber);"></span>知识入库</span>
+				<span class="legend-item"><span class="swatch" style="color: var(--green);"></span>检索服务</span>
+				<span class="legend-item"><span class="swatch" style="color: var(--violet);"></span>Agent 编排</span>
+				<span class="legend-item"><span class="swatch" style="color: var(--rose);"></span>数据存储</span>
+				<span class="legend-item">实线：平台集成主链路</span>
+				<span class="legend-item">虚线：治理、安全、审计链路</span>
+			</div>
+		</section>
+
+		<section class="summary" aria-label="架构读图说明">
+			<div class="summary-block">
+				<strong>主线变化</strong>
+				<span>不再默认全自研，改为 NocoBase + RAGFlow + AgentScope/LiteLLM 的开源平台组合。</span>
+			</div>
+			<div class="summary-block">
+				<strong>开发边界</strong>
+				<span>我们重点改业务插件、权限同步、RAGFlow 集成、Agent 工具和企业微信等胶水层。</span>
+			</div>
+			<div class="summary-block">
+				<strong>保留红线</strong>
+				<span>知识库和 Agent 可以用平台，但工程业务权限、审批和审计必须有统一边界。</span>
+			</div>
+		</section>
+
+		<div class="note">这版是“开源优先”落地方案：先试 NocoBase 管业务后台，RAGFlow 管知识库，AgentScope/RAGFlow Agent 管智能体，LiteLLM 管模型，再按工程业务补插件和适配服务。</div>
+	</main>
+</body>
+</html>

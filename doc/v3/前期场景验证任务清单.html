@@ -1,0 +1,739 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>前期场景验证任务清单</title>
+	<style>
+		:root {
+			--bg: #f6f7f9;
+			--panel: #ffffff;
+			--ink: #1f2933;
+			--muted: #657286;
+			--line: #d7dde6;
+			--blue: #2563eb;
+			--green: #12805c;
+			--amber: #b7791f;
+			--violet: #6d4aff;
+			--red: #c2410c;
+			--shadow: 0 10px 28px rgba(31, 41, 51, 0.08);
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			margin: 0;
+			background: var(--bg);
+			color: var(--ink);
+			font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif;
+			line-height: 1.55;
+		}
+
+		.page {
+			width: min(1440px, 100%);
+			margin: 0 auto;
+			padding: 24px;
+		}
+
+		.hero {
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 22px 26px;
+			box-shadow: var(--shadow);
+		}
+
+		h1 {
+			margin: 0 0 10px;
+			font-size: 30px;
+			line-height: 1.25;
+			font-weight: 760;
+		}
+
+		.subtitle {
+			margin: 0;
+			color: var(--muted);
+			font-size: 16px;
+			max-width: 1040px;
+		}
+
+		.scope {
+			margin-top: 16px;
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 10px;
+		}
+
+		.scope div {
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 14px;
+			background: #fbfcfe;
+		}
+
+		.scope b {
+			display: block;
+			margin-bottom: 6px;
+			font-size: 15px;
+			color: var(--ink);
+		}
+
+		.scope span {
+			display: block;
+			font-size: 13px;
+			color: var(--muted);
+		}
+
+		.section-title {
+			margin: 28px 0 12px;
+			font-size: 20px;
+			font-weight: 760;
+		}
+
+		.section-desc {
+			margin: 0 0 14px;
+			color: var(--muted);
+			font-size: 14px;
+		}
+
+		/* 首个可演示版本高亮块 */
+		.monday {
+			background: linear-gradient(180deg, #fff7ed 0%, #ffffff 100%);
+			border: 1.5px solid var(--amber);
+			border-radius: 10px;
+			box-shadow: var(--shadow);
+			padding: 20px 22px;
+		}
+
+		.monday .flag {
+			display: inline-block;
+			font-size: 12px;
+			font-weight: 700;
+			color: #fff;
+			background: var(--red);
+			border-radius: 5px;
+			padding: 2px 10px;
+			margin-bottom: 10px;
+		}
+
+		.monday h3 {
+			margin: 0 0 6px;
+			font-size: 18px;
+			font-weight: 760;
+		}
+
+		.monday .slice {
+			margin: 12px 0 0;
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px;
+			align-items: center;
+		}
+
+		.monday .step {
+			background: #fff;
+			border: 1px solid var(--amber);
+			border-radius: 7px;
+			padding: 8px 14px;
+			font-size: 13.5px;
+			font-weight: 600;
+			color: var(--ink);
+		}
+
+		.monday .arrow {
+			color: var(--amber);
+			font-weight: 700;
+		}
+
+		.monday .pass {
+			margin: 14px 0 0;
+			font-size: 13.5px;
+			color: var(--ink);
+			background: #fffbeb;
+			border-left: 3px solid var(--amber);
+			padding: 8px 12px;
+		}
+
+		/* 场景卡 */
+		.scenes {
+			display: grid;
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+			gap: 16px;
+		}
+
+		.scene {
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 10px;
+			box-shadow: var(--shadow);
+			overflow: hidden;
+		}
+
+		.scene-head {
+			padding: 16px 18px;
+			border-bottom: 1px solid var(--line);
+		}
+
+		.scene-tag {
+			display: inline-block;
+			font-size: 12px;
+			font-weight: 700;
+			color: #fff;
+			border-radius: 5px;
+			padding: 2px 10px;
+			margin-bottom: 8px;
+		}
+
+		.scene-1 .scene-tag {
+			background: var(--blue);
+		}
+
+		.scene-2 .scene-tag {
+			background: var(--green);
+		}
+
+		.scene-name {
+			margin: 0 0 4px;
+			font-size: 18px;
+			font-weight: 760;
+		}
+
+		.scene-who {
+			margin: 0;
+			font-size: 13px;
+			color: var(--muted);
+		}
+
+		.scene-body {
+			padding: 14px 18px;
+		}
+
+		.scene-body h4 {
+			margin: 0 0 8px;
+			font-size: 13px;
+			color: var(--muted);
+		}
+
+		.feat {
+			list-style: none;
+			margin: 0;
+			padding: 0;
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+		}
+
+		.feat li {
+			position: relative;
+			padding: 8px 10px 8px 30px;
+			border: 1px solid var(--line);
+			border-radius: 7px;
+			background: #fbfcfe;
+			font-size: 13.5px;
+		}
+
+		.feat li::before {
+			content: "";
+			position: absolute;
+			left: 11px;
+			top: 12px;
+			width: 8px;
+			height: 8px;
+			border-radius: 50%;
+		}
+
+		.scene-1 .feat li::before {
+			background: var(--blue);
+		}
+
+		.scene-2 .feat li::before {
+			background: var(--green);
+		}
+
+		.feat .order {
+			font-size: 11.5px;
+			color: var(--muted);
+			margin-left: 6px;
+		}
+
+		.tag-now {
+			display: inline-block;
+			font-size: 11px;
+			font-weight: 700;
+			border-radius: 4px;
+			padding: 0 6px;
+			margin-left: 6px;
+			vertical-align: middle;
+		}
+
+		.t-week1 {
+			background: #fde68a;
+			color: #92400e;
+		}
+
+		.t-later {
+			background: #e5e7eb;
+			color: #6b7280;
+		}
+
+		/* 通用面板 */
+		.panel {
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 10px;
+			box-shadow: var(--shadow);
+			padding: 18px 20px;
+		}
+
+		table {
+			width: 100%;
+			border-collapse: collapse;
+			font-size: 13.5px;
+		}
+
+		th,
+		td {
+			border: 1px solid var(--line);
+			padding: 9px 11px;
+			text-align: left;
+			vertical-align: top;
+		}
+
+		th {
+			background: #f0f3f8;
+			font-weight: 700;
+			color: var(--ink);
+		}
+
+		td code {
+			background: #f0f3f8;
+			border-radius: 4px;
+			padding: 1px 6px;
+			font-size: 12.5px;
+		}
+
+		/* 三角色 */
+		.roles {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 16px;
+		}
+
+		.role {
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 10px;
+			box-shadow: var(--shadow);
+			display: flex;
+			flex-direction: column;
+			overflow: hidden;
+		}
+
+		.role-head {
+			padding: 16px 18px;
+			border-bottom: 1px solid var(--line);
+		}
+
+		.role-tag {
+			display: inline-block;
+			font-size: 12px;
+			font-weight: 700;
+			color: #fff;
+			border-radius: 5px;
+			padding: 2px 10px;
+			margin-bottom: 8px;
+		}
+
+		.role-b .role-tag {
+			background: var(--blue);
+		}
+
+		.role-a .role-tag {
+			background: var(--green);
+		}
+
+		.role-c .role-tag {
+			background: var(--violet);
+		}
+
+		.role-name {
+			margin: 0 0 4px;
+			font-size: 18px;
+			font-weight: 760;
+		}
+
+		.role-duty {
+			margin: 0;
+			font-size: 13px;
+			color: var(--muted);
+		}
+
+		.task-list {
+			list-style: none;
+			margin: 0;
+			padding: 10px 14px 14px;
+			flex: 1;
+		}
+
+		.task-list li {
+			position: relative;
+			padding: 8px 8px 8px 30px;
+			font-size: 13.5px;
+			border-bottom: 1px dashed #eef1f5;
+			line-height: 1.5;
+		}
+
+		.task-list li:last-child {
+			border-bottom: none;
+		}
+
+		.task-list li::before {
+			content: "";
+			position: absolute;
+			left: 8px;
+			top: 11px;
+			width: 13px;
+			height: 13px;
+			border: 1.5px solid var(--line);
+			border-radius: 3px;
+			background: #fff;
+		}
+
+		.task-id {
+			font-weight: 700;
+			margin-right: 4px;
+		}
+
+		.role-b .task-id {
+			color: var(--blue);
+		}
+
+		.role-a .task-id {
+			color: var(--green);
+		}
+
+		.role-c .task-id {
+			color: var(--violet);
+		}
+
+		/* 暂不做的任务：置灰 + 灰色✕ */
+		.task-list li.defer {
+			color: #aab2bd;
+		}
+
+		.task-list li.defer .task-id {
+			color: #c2c8d0 !important;
+		}
+
+		.task-list li.defer::before {
+			content: "✕";
+			border: none;
+			background: transparent;
+			color: #c2c8d0;
+			font-size: 13px;
+			font-weight: 700;
+			line-height: 13px;
+			text-align: center;
+			top: 10px;
+		}
+
+		.role-foot {
+			padding: 14px 18px;
+			border-top: 1px solid var(--line);
+			background: #fbfcfe;
+		}
+
+		.role-foot h4 {
+			margin: 0 0 6px;
+			font-size: 13px;
+			color: var(--ink);
+		}
+
+		.role-foot ul {
+			margin: 0;
+			padding-left: 18px;
+		}
+
+		.role-foot li {
+			font-size: 12.5px;
+			color: var(--muted);
+			margin-bottom: 3px;
+		}
+
+		/* 验收 */
+		.accept {
+			list-style: none;
+			margin: 0;
+			padding: 0;
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 10px;
+		}
+
+		.accept li {
+			position: relative;
+			padding: 12px 14px 12px 40px;
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			background: #fbfcfe;
+			font-size: 13.5px;
+		}
+
+		.accept li b {
+			display: block;
+			margin-bottom: 2px;
+		}
+
+		.accept li::before {
+			content: "✓";
+			position: absolute;
+			left: 13px;
+			top: 13px;
+			width: 18px;
+			height: 18px;
+			line-height: 18px;
+			text-align: center;
+			font-size: 12px;
+			font-weight: 700;
+			color: #fff;
+			background: var(--green);
+			border-radius: 4px;
+		}
+
+		@media (max-width: 1080px) {
+
+			.roles {
+				grid-template-columns: 1fr;
+			}
+
+			.scenes,
+			.accept {
+				grid-template-columns: 1fr;
+			}
+
+			.scope {
+				grid-template-columns: 1fr;
+			}
+		}
+	</style>
+</head>
+
+<body>
+	<main class="page">
+		<section class="hero">
+			<h1>前期场景验证任务清单</h1>
+			<p class="subtitle">
+				前期不做重平台后台，围绕两个真实场景快速验证：能不能帮项目经理、总工和工程管理部门<b>真正减负、提效、管住风险</b>。权限、知识管理、后台、日志、追溯先做最小可用版，只要支撑场景闭环；验证通过后再逐步沉淀成统一平台。
+			</p>
+			<div class="scope">
+				<div>
+					<b>验证目标</b>
+					<span>不是交付完整产品，而是证明它对两个真实场景有用、人愿意用</span>
+				</div>
+				<div>
+					<b>首个可演示版本</b>
+					<span>先拿出施工单位场景一条最薄竖切，证明完整价值链路跑得通</span>
+				</div>
+				<div>
+					<b>红线</b>
+					<span>结果先出草稿、人工确认；答案带来源；先做最小权限，不先做重后台</span>
+				</div>
+			</div>
+		</section>
+
+		<h2 class="section-title">首个可演示版本（最薄竖切）</h2>
+		<div class="monday">
+			<span class="flag">首期交付</span>
+			<h3>施工单位场景 · 一条链路跑通</h3>
+			<p class="section-desc" style="margin:0;">
+				第一阶段只验证「链路能不能打通」。先做施工单位场景里最薄的一条：把已经抽好的微信群信息喂进去，自动出一段项目动态摘要，存下来并展示出来。日报、周报、待办等价值产出，等链路稳了再加。
+			</p>
+			<div class="slice">
+				<span class="step">微信信息获取 ♻️已实现</span>
+				<span class="arrow">→</span>
+				<span class="step">自动摘要</span>
+				<span class="arrow">→</span>
+				<span class="step">存储</span>
+				<span class="arrow">→</span>
+				<span class="step">简单页面展示</span>
+			</div>
+			<p class="pass">
+				<b>过关标准：</b>拿真实项目的微信群记录喂进去，整条链路（获取 → 模型 → 存储 → 展示）跑通不报错、稳定出摘要，第一阶段验证就算通过；项目经理看完觉得摘要有用是加分项。
+			</p>
+		</div>
+
+		<h2 class="section-title">两个验证场景（前期要逐步做到）</h2>
+		<p class="section-desc">首个版本只覆盖场景一的一条竖切；前期探索期内，按下面两个场景逐步补齐。<span class="tag-now t-week1">优先先做</span> 是验证期重点，<span class="tag-now t-later">稍后</span> 排在后面。</p>
+		<div class="scenes">
+			<section class="scene scene-1">
+				<div class="scene-head">
+					<span class="scene-tag">场景一</span>
+					<p class="scene-name">施工单位 · 项目智能秘书</p>
+					<p class="scene-who">服务对象：项目经理、总工、工程部长 —— 帮他们少写材料、少漏任务、少整理资料</p>
+				</div>
+				<div class="scene-body">
+					<h4>重点能力</h4>
+					<ul class="feat">
+						<li>微信群 / 信息摘要<span class="tag-now t-week1">打通先做</span></li>
+						<li>待办提取<span class="tag-now t-later">打通后</span></li>
+						<li>日报 / 周报生成<span class="tag-now t-later">打通后</span></li>
+						<li>资料归档<span class="tag-now t-later">稍后</span></li>
+						<li>整改闭环<span class="tag-now t-later">稍后</span></li>
+					</ul>
+				</div>
+			</section>
+			<section class="scene scene-2">
+				<div class="scene-head">
+					<span class="scene-tag">场景二</span>
+					<p class="scene-name">建设方 · 项目群智能监管</p>
+					<p class="scene-who">服务对象：工程管理部门 —— 帮他们看清状态、发现风险、跟踪整改、追溯依据</p>
+				</div>
+				<div class="scene-body">
+					<h4>重点能力</h4>
+					<ul class="feat">
+						<li>项目状态问答<span class="tag-now t-week1">本周先做</span></li>
+						<li>项目看板<span class="tag-now t-later">稍后</span></li>
+						<li>风险项目识别<span class="tag-now t-later">稍后</span></li>
+						<li>逾期整改 / 长期无更新提醒<span class="tag-now t-later">稍后</span></li>
+						<li>资料完整性检查<span class="tag-now t-later">稍后</span></li>
+					</ul>
+				</div>
+			</section>
+		</div>
+
+		<h2 class="section-title">最小支撑能力（够用就行，不先做重）</h2>
+		<div class="panel">
+			<table>
+				<thead>
+					<tr>
+						<th style="width:120px;">能力</th>
+						<th style="width:240px;">前期最小版做到</th>
+						<th>暂不做 / 往后挪</th>
+					</tr>
+				</thead>
+				<tbody>
+					<tr>
+						<td>权限</td>
+						<td>登录 + 用户能看哪些项目；问答按项目过滤</td>
+						<td>完整 RBAC、组织级权限、知识空间细粒度授权</td>
+					</tr>
+					<tr>
+						<td>知识管理</td>
+						<td>资料能传、能解析、能按项目检索带来源</td>
+						<td>审核流、版本、失效、知识图谱关系</td>
+					</tr>
+					<tr>
+						<td>后台</td>
+						<td>能建项目、加成员、看数据的基础页面</td>
+						<td>低代码后台、完整配置台、规则可视化配置</td>
+					</tr>
+					<tr>
+						<td>日志 / 追溯</td>
+						<td>技能调用有记录；答案能指到来源文件</td>
+						<td>完整审计中心、证据链可视化、操作回放</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+
+		<h2 class="section-title">三角色当前真实工作</h2>
+		<p class="section-desc">围绕「首个竖切 + 场景验证」分工。方框是要推进的事项；前期目标是趟通可行性，不是交付完整模块。</p>
+		<div class="roles">
+			<section class="role role-c">
+				<div class="role-head">
+					<span class="role-tag">角色 C · 主攻首版</span>
+					<p class="role-name">智能体与技能</p>
+					<p class="role-duty">让微信信息变成项目动态摘要 —— 首版先把这条链路打通。</p>
+				</div>
+				<ul class="task-list">
+					<li><span class="task-id">C1</span>信息入口：微信群记录已抽取入库（♻️已实现），先用它跑通</li>
+					<li><span class="task-id">C2</span>信息抽取：从内容里识别项目、时间、人员、事项</li>
+					<li><span class="task-id">C3</span>技能-摘要：把一段信息整理成项目动态摘要</li>
+					<li class="defer"><span class="task-id">C4</span>技能-待办提取：抽出责任人、事项、期限、来源<span class="tag-now t-later">打通后</span></li>
+					<li class="defer"><span class="task-id">C5</span>技能-周报草稿：把事件/待办汇成一份可改的周报<span class="tag-now t-later">打通后</span></li>
+					<li><span class="task-id">C6</span>模型接入：DeepSeek/Qwen 调用 + prompt 先写在配置里</li>
+					<li><span class="task-id">C7</span>人工确认（简单版）：结果先出草稿，人确认后才算数</li>
+					<li><span class="task-id">C8</span>运行底座：微信抽取、摘要等 skill 都跑在已部署的 Hermes 上，第一阶段就用它</li>
+					<li><span class="task-id">C9</span>编排方式：第一阶段先用 Hermes 现有串接把这几步跑通，LangGraph 留到后面做多步/审批/催办流程时再上层引入</li>
+				</ul>
+				<div class="role-foot">
+					<h4>首版要拿出</h4>
+					<ul>
+						<li>一段真实微信信息 → 摘要，能存下来、能在页面看到</li>
+						<li>结论：链路打通没、抽取准不准、哪些坑</li>
+					</ul>
+				</div>
+			</section>
+
+			<section class="role role-a">
+				<div class="role-head">
+					<span class="role-tag">角色 A · 支撑问答</span>
+					<p class="role-name">知识库</p>
+					<p class="role-duty">让资料能进来、能按项目查到、答案能指到来源。</p>
+				</div>
+				<ul class="task-list">
+					<li><span class="task-id">A1</span>文档解析：先把 PDF/Word/文本读进来，拿到正文</li>
+					<li><span class="task-id">A2</span>切片 + 入库：内容切块存起来，关联到项目</li>
+					<li><span class="task-id">A3</span>检索：PostgreSQL 全文检索先跑通，中文分词处理</li>
+					<li><span class="task-id">A4</span>带来源返回：结果带文件名和位置，供问答引用</li>
+					<li><span class="task-id">A5</span>按项目过滤：只返回该项目的资料（最小权限）</li>
+					<li><span class="task-id">A6</span>给 C 一个检索接口：search(问题, 项目) → 带来源结果</li>
+					<li><span class="task-id">A7</span>评估：pgvector 向量检索、RAGFlow 要不要上</li>
+				</ul>
+				<div class="role-foot">
+					<h4>首版要拿出</h4>
+					<ul>
+						<li>传一份资料能解析、能检索、能带来源</li>
+						<li>给 C 的检索接口（哪怕先返回假数据约定格式）</li>
+					</ul>
+				</div>
+			</section>
+
+			<section class="role role-b">
+				<div class="role-head">
+					<span class="role-tag">角色 B · 搭骨架</span>
+					<p class="role-name">平台骨架</p>
+					<p class="role-duty">搭最小地基，让 A、C 有地方挂、有库可用；后续 Web 端也由骨架继续开发。</p>
+				</div>
+				<ul class="task-list">
+					<li><span class="task-id">B1</span>FastAPI 骨架 + docker-compose 起本地环境</li>
+					<li><span class="task-id">B2</span>PostgreSQL + MinIO 起好，能连能存</li>
+					<li><span class="task-id">B3</span>最小表：用户、项目、项目成员、原始信息、文件</li>
+					<li><span class="task-id">B4</span>登录 + 当前用户能看哪些项目（最小权限）</li>
+					<li><span class="task-id">B5</span>项目 / 成员接口：能建项目、加人</li>
+					<li><span class="task-id">B6</span>信息写入接口：C 把摘要写进来（待办/周报字段预留）</li>
+					<li><span class="task-id">B7</span>简单 Web 展示页：登录 → 看项目下的摘要，用于功能演示</li>
+					<li><span class="task-id">B8</span>技能调用记录：skill 调用有日志（最小版）</li>
+				</ul>
+				<div class="role-foot">
+					<h4>首版要拿出</h4>
+					<ul>
+						<li>一键起环境，能登录、建项目</li>
+						<li>一个简单 Web 页：能把 C 产出的摘要存下来并展示</li>
+					</ul>
+				</div>
+			</section>
+		</div>
+
+		<h2 class="section-title">验证成功标准（不是功能齐全，是真有用）</h2>
+		<ul class="accept">
+			<li>
+				<b>减负</b>
+				项目经理说摘要帮他省了整理时间，愿意改了就用
+			</li>
+			<li>
+				<b>提效</b>
+				待办能被自动抽出来，不用人逐条翻消息找
+			</li>
+			<li>
+				<b>管住风险</b>
+				项目状态问答能带来源回答，不编造、不越权
+			</li>
+		</ul>
+	</main>
+</body>
+
+</html>

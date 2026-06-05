@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>工程项目智能管理产品阶段目标图</title>
+	<style>
+		:root {
+			--bg: #f6f7f9;
+			--panel: #ffffff;
+			--ink: #1f2933;
+			--muted: #657286;
+			--line: #d7dde6;
+			--blue: #2563eb;
+			--green: #12805c;
+			--amber: #b7791f;
+			--violet: #6d4aff;
+			--red: #c2410c;
+			--shadow: 0 10px 28px rgba(31, 41, 51, 0.08);
+		}
+
+		* {
+			box-sizing: border-box;
+		}
+
+		body {
+			margin: 0;
+			background: var(--bg);
+			color: var(--ink);
+			font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", Arial, sans-serif;
+			line-height: 1.55;
+		}
+
+		.page {
+			width: min(1440px, 100%);
+			margin: 0 auto;
+			padding: 24px;
+		}
+
+		.hero {
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 22px 26px;
+			box-shadow: var(--shadow);
+		}
+
+		h1 {
+			margin: 0 0 10px;
+			font-size: 30px;
+			line-height: 1.25;
+			font-weight: 760;
+		}
+
+		.subtitle {
+			margin: 0;
+			color: var(--muted);
+			font-size: 16px;
+			max-width: 980px;
+		}
+
+		.principle {
+			margin-top: 16px;
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			gap: 10px;
+		}
+
+		.principle div {
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 14px;
+			background: #fbfcfe;
+			text-align: left;
+		}
+
+		.principle b {
+			display: block;
+			margin-bottom: 6px;
+			font-size: 16px;
+			color: var(--ink);
+		}
+
+		.principle span {
+			display: block;
+			font-size: 13px;
+			color: var(--muted);
+		}
+
+		.section-title {
+			margin: 26px 0 12px;
+			font-size: 20px;
+			font-weight: 760;
+		}
+
+		.architecture {
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 18px;
+			box-shadow: var(--shadow);
+			overflow-x: auto;
+		}
+
+		.arch-svg {
+			display: block;
+			width: 100%;
+			min-width: 1120px;
+			height: auto;
+		}
+
+		.phase-grid {
+			display: grid;
+			grid-template-columns: repeat(4, minmax(0, 1fr));
+			gap: 14px;
+			position: relative;
+		}
+
+		.phase {
+			min-height: 0;
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-top: 5px solid var(--blue);
+			border-radius: 8px;
+			padding: 16px;
+			box-shadow: var(--shadow);
+			position: relative;
+		}
+
+		.phase.green { border-top-color: var(--green); }
+		.phase.amber { border-top-color: var(--amber); }
+		.phase.violet { border-top-color: var(--violet); }
+
+		.phase-number {
+			font-size: 13px;
+			color: var(--muted);
+			font-weight: 700;
+		}
+
+		.phase h2 {
+			margin: 4px 0 10px;
+			font-size: 20px;
+			line-height: 1.3;
+		}
+
+		.phase h3 {
+			margin: 10px 0 5px;
+			font-size: 14px;
+			color: var(--ink);
+		}
+
+		.goal {
+			margin: 0 0 10px;
+			color: var(--ink);
+			font-weight: 700;
+		}
+
+		.phase ul,
+		.base ul {
+			margin: 0;
+			padding-left: 18px;
+			color: var(--muted);
+			font-size: 13px;
+		}
+
+		.phase li,
+		.base li {
+			margin: 3px 0;
+		}
+
+		.highlight {
+			border-color: rgba(37, 99, 235, 0.35);
+			background: #f8fbff;
+		}
+
+		.base {
+			margin-top: 12px;
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 18px;
+			box-shadow: var(--shadow);
+		}
+
+		.base h3 {
+			margin: 0 0 10px;
+			font-size: 18px;
+		}
+
+		.base-grid {
+			display: grid;
+			grid-template-columns: repeat(6, minmax(0, 1fr));
+			gap: 10px;
+		}
+
+		.base-item {
+			border: 1px solid var(--line);
+			border-radius: 8px;
+			padding: 12px;
+			background: #fbfcfe;
+		}
+
+		.base-item b {
+			display: block;
+			margin-bottom: 6px;
+			font-size: 14px;
+		}
+
+		.base-item span {
+			display: block;
+			color: var(--muted);
+			font-size: 13px;
+		}
+
+		.footer-note {
+			margin: 20px 0 0;
+			color: var(--muted);
+			font-size: 13px;
+			text-align: center;
+		}
+
+		@media (max-width: 1120px) {
+			.phase-grid {
+				grid-template-columns: 1fr 1fr;
+			}
+
+			.arch-svg {
+				min-width: 1060px;
+			}
+
+			.base-grid {
+				grid-template-columns: 1fr 1fr;
+			}
+		}
+
+		@media (max-width: 720px) {
+			.page {
+				padding: 14px;
+			}
+
+			h1 {
+				font-size: 24px;
+			}
+
+			.phase-grid,
+			.base-grid {
+				grid-template-columns: 1fr;
+			}
+
+			.arch-svg {
+				min-width: 980px;
+			}
+
+			.principle {
+				grid-template-columns: 1fr;
+			}
+		}
+	</style>
+</head>
+<body>
+	<main class="page">
+		<section class="hero">
+			<h1>工程项目智能管理产品阶段目标图</h1>
+			<p class="subtitle">给开发团队看的全局路线：产品能力分三层建设，阶段按能力成熟度顺序推进，每个阶段都明确做什么、怎么做、达到什么成功。</p>
+			<div class="principle" aria-label="产品能力三层">
+				<div>
+					<b>第一层：知道项目发生了什么</b>
+					<span>信息采集、资料整理、项目摘要、状态问答</span>
+				</div>
+				<div>
+					<b>第二层：推动项目该做什么</b>
+					<span>待办提取、节点提醒、整改闭环、资料缺失提醒、日报周报生成</span>
+				</div>
+				<div>
+					<b>第三层：辅助项目怎么做得更好</b>
+					<span>方案审核、风险识别、参数校核、经验推荐、专业辅助决策</span>
+				</div>
+			</div>
+		</section>
+
+		<h2 class="section-title">整体代码框架图</h2>
+		<section class="architecture" aria-label="整体代码框架图">
+			<svg class="arch-svg" viewBox="0 0 1360 850" role="img" aria-labelledby="arch-title arch-desc">
+				<title id="arch-title">工程项目智能管理产品整体架构图</title>
+				<desc id="arch-desc">用户和外部信息从入口层进入，由 FastAPI 统一业务内核控制权限、项目事件、任务状态和证据链，再受控调用 Obsidian、RAGFlow、技能、模型、异步任务和数据存储。</desc>
+				<defs>
+					<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+						<path d="M 0 0 L 10 5 L 0 10 z" fill="#778395"></path>
+					</marker>
+					<marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+						<path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"></path>
+					</marker>
+					<style>
+						.arch-svg .group { fill: #ffffff; stroke: #d7dde6; stroke-width: 1.5; }
+						.arch-svg .group-soft { fill: #fbfcfe; stroke: #d7dde6; stroke-width: 1.5; }
+						.arch-svg .core { fill: #f8fbff; stroke: #2563eb; stroke-width: 2.2; }
+						.arch-svg .knowledge { fill: #fffaf2; stroke: #b7791f; stroke-width: 1.7; }
+						.arch-svg .data { fill: #f7fcfa; stroke: #12805c; stroke-width: 1.7; }
+						.arch-svg .box { fill: #ffffff; stroke: #d7dde6; stroke-width: 1.4; }
+						.arch-svg .box-blue { fill: #ffffff; stroke: #9bb7f0; stroke-width: 1.5; }
+						.arch-svg .box-amber { fill: #ffffff; stroke: #d7b46a; stroke-width: 1.5; }
+						.arch-svg .box-green { fill: #ffffff; stroke: #79b9a2; stroke-width: 1.5; }
+						.arch-svg .flow { fill: none; stroke: #778395; stroke-width: 2.1; marker-end: url(#arrow); }
+						.arch-svg .flow-blue { fill: none; stroke: #2563eb; stroke-width: 2.4; marker-end: url(#arrow-blue); }
+						.arch-svg .flow-dash { fill: none; stroke: #778395; stroke-width: 1.9; stroke-dasharray: 7 6; marker-end: url(#arrow); }
+						.arch-svg .bus { fill: none; stroke: #778395; stroke-width: 2; stroke-linecap: round; }
+						.arch-svg .layer { font-size: 16px; font-weight: 760; fill: #1f2933; }
+						.arch-svg .title { font-size: 17px; font-weight: 760; fill: #1f2933; }
+						.arch-svg .label { font-size: 14px; font-weight: 730; fill: #1f2933; }
+						.arch-svg .text { font-size: 12px; fill: #657286; }
+						.arch-svg .small { font-size: 11px; fill: #657286; }
+						.arch-svg .flow-label { font-size: 12px; font-weight: 700; fill: #4b5b70; }
+					</style>
+				</defs>
+
+				<rect x="20" y="40" width="230" height="385" rx="10" class="group-soft"></rect>
+				<text x="135" y="70" text-anchor="middle" class="layer">用户与信息源</text>
+				<rect x="45" y="95" width="180" height="52" rx="8" class="box"></rect>
+				<text x="135" y="116" text-anchor="middle" class="label">项目经理 / 总工</text>
+				<text x="135" y="135" text-anchor="middle" class="text">看项目、问状态、批报告</text>
+				<rect x="45" y="165" width="180" height="52" rx="8" class="box"></rect>
+				<text x="135" y="186" text-anchor="middle" class="label">工程管理部门</text>
+				<text x="135" y="205" text-anchor="middle" class="text">看多项目、查风险、催闭环</text>
+				<rect x="45" y="235" width="180" height="52" rx="8" class="box"></rect>
+				<text x="135" y="256" text-anchor="middle" class="label">管理员</text>
+				<text x="135" y="275" text-anchor="middle" class="text">管用户、项目、权限、配置</text>
+				<rect x="45" y="320" width="180" height="64" rx="8" class="box"></rect>
+				<text x="135" y="344" text-anchor="middle" class="label">外部信息源</text>
+				<text x="135" y="363" text-anchor="middle" class="text">企业微信、钉钉、邮件</text>
+				<text x="135" y="380" text-anchor="middle" class="text">文件、OA、项目系统</text>
+
+				<rect x="290" y="40" width="250" height="385" rx="10" class="group-soft"></rect>
+				<text x="415" y="70" text-anchor="middle" class="layer">入口层</text>
+				<rect x="315" y="95" width="200" height="52" rx="8" class="box"></rect>
+				<text x="415" y="116" text-anchor="middle" class="label">Web 工作台</text>
+				<text x="415" y="135" text-anchor="middle" class="text">看板、任务、报告、问答</text>
+				<rect x="315" y="165" width="200" height="52" rx="8" class="box"></rect>
+				<text x="415" y="186" text-anchor="middle" class="label">管理配置（Web 内）</text>
+				<text x="415" y="205" text-anchor="middle" class="text">用户、项目、权限、规则</text>
+				<rect x="315" y="235" width="200" height="52" rx="8" class="box"></rect>
+				<text x="415" y="256" text-anchor="middle" class="label">企业微信 / 钉钉 Bot</text>
+				<text x="415" y="275" text-anchor="middle" class="text">提醒、确认、摘要、问答</text>
+				<rect x="315" y="320" width="200" height="64" rx="8" class="box"></rect>
+				<text x="415" y="344" text-anchor="middle" class="label">文件 / 邮件入口</text>
+				<text x="415" y="363" text-anchor="middle" class="text">上传、同步、归档、解析触发</text>
+
+				<rect x="590" y="40" width="365" height="385" rx="12" class="core"></rect>
+				<text x="772" y="72" text-anchor="middle" class="title">FastAPI 统一业务内核</text>
+				<text x="772" y="94" text-anchor="middle" class="text">所有权限、项目状态、任务状态、证据链都在这里闭环</text>
+				<rect x="620" y="120" width="145" height="54" rx="8" class="box-blue"></rect>
+				<text x="692" y="143" text-anchor="middle" class="label">认证鉴权</text>
+				<text x="692" y="161" text-anchor="middle" class="text">用户 / 角色 / 项目权限</text>
+				<rect x="780" y="120" width="145" height="54" rx="8" class="box-blue"></rect>
+				<text x="852" y="143" text-anchor="middle" class="label">API 编排</text>
+				<text x="852" y="161" text-anchor="middle" class="text">入口统一收口</text>
+				<rect x="620" y="195" width="305" height="58" rx="8" class="box-blue"></rect>
+				<text x="772" y="219" text-anchor="middle" class="label">项目事件中心</text>
+				<text x="772" y="238" text-anchor="middle" class="text">消息、资料、会议、风险、问题统一转成项目事件</text>
+				<rect x="620" y="275" width="145" height="54" rx="8" class="box-blue"></rect>
+				<text x="692" y="298" text-anchor="middle" class="label">任务状态机</text>
+				<text x="692" y="316" text-anchor="middle" class="text">待办 / 整改 / 复核</text>
+				<rect x="780" y="275" width="145" height="54" rx="8" class="box-blue"></rect>
+				<text x="852" y="298" text-anchor="middle" class="label">证据链与审计</text>
+				<text x="852" y="316" text-anchor="middle" class="text">来源 / 日志 / 留痕</text>
+				<rect x="620" y="350" width="305" height="52" rx="8" class="box-blue"></rect>
+				<text x="772" y="372" text-anchor="middle" class="label">Skill Registry / Tool Gateway</text>
+				<text x="772" y="390" text-anchor="middle" class="text">技能跑在 Hermes 底座（已在用）：摘要、待办提取、报告生成、风险识别</text>
+
+				<rect x="1010" y="40" width="330" height="385" rx="10" class="knowledge"></rect>
+				<text x="1175" y="70" text-anchor="middle" class="layer">知识与智能能力组件</text>
+				<rect x="1035" y="105" width="280" height="54" rx="8" class="box-amber"></rect>
+				<text x="1175" y="128" text-anchor="middle" class="label">Obsidian</text>
+				<text x="1175" y="146" text-anchor="middle" class="text">知识组织、标签、双链、经验维护</text>
+				<rect x="1035" y="178" width="280" height="54" rx="8" class="box-amber"></rect>
+				<text x="1175" y="201" text-anchor="middle" class="label">RAGFlow 可选</text>
+				<text x="1175" y="219" text-anchor="middle" class="text">文档解析、切片、索引、检索问答</text>
+				<rect x="1035" y="251" width="280" height="54" rx="8" class="box-amber"></rect>
+				<text x="1175" y="274" text-anchor="middle" class="label">LLM Service</text>
+				<text x="1175" y="292" text-anchor="middle" class="text">DeepSeek / Qwen，后续可接 LiteLLM</text>
+				<rect x="1035" y="324" width="280" height="54" rx="8" class="box-amber"></rect>
+				<text x="1175" y="347" text-anchor="middle" class="label">LangGraph 编排（后期）</text>
+				<text x="1175" y="365" text-anchor="middle" class="text">多步骤、审批、催办、人工确认（后续按需引入）</text>
+
+				<rect x="590" y="470" width="365" height="88" rx="10" class="group"></rect>
+				<text x="772" y="502" text-anchor="middle" class="layer">异步执行层</text>
+				<text x="772" y="526" text-anchor="middle" class="label">Celery / Scheduler / Worker</text>
+				<text x="772" y="546" text-anchor="middle" class="text">解析、索引、摘要、报告、提醒、风险扫描、失败重试</text>
+
+				<rect x="290" y="670" width="1050" height="145" rx="10" class="data"></rect>
+				<text x="315" y="702" class="layer">数据与存储层</text>
+				<rect x="315" y="735" width="275" height="58" rx="8" class="box-green"></rect>
+				<text x="453" y="759" text-anchor="middle" class="label">PostgreSQL 业务主库</text>
+				<text x="453" y="778" text-anchor="middle" class="text">用户、项目、事件、任务、权限、证据、日志</text>
+				<rect x="610" y="735" width="195" height="58" rx="8" class="box-green"></rect>
+				<text x="707" y="759" text-anchor="middle" class="label">MinIO / 对象存储</text>
+				<text x="707" y="778" text-anchor="middle" class="text">原始资料、附件、图片、报告</text>
+				<rect x="825" y="735" width="165" height="58" rx="8" class="box-green"></rect>
+				<text x="907" y="759" text-anchor="middle" class="label">Redis</text>
+				<text x="907" y="778" text-anchor="middle" class="text">队列、缓存、临时状态</text>
+				<rect x="1010" y="735" width="295" height="58" rx="8" class="box-green"></rect>
+				<text x="1157" y="759" text-anchor="middle" class="label">知识检索索引</text>
+				<text x="1157" y="778" text-anchor="middle" class="text">由 RAGFlow 或自建索引维护，受权限过滤</text>
+
+				<path d="M 225 121 L 315 121" class="flow"></path>
+				<path d="M 225 191 L 315 191" class="flow"></path>
+				<path d="M 225 261 L 315 261" class="flow"></path>
+				<path d="M 225 352 L 315 352" class="flow"></path>
+				<path d="M 515 121 L 590 121" class="flow-blue"></path>
+				<path d="M 515 191 L 590 191" class="flow-blue"></path>
+				<path d="M 515 261 L 590 261" class="flow-blue"></path>
+				<path d="M 515 352 L 590 352" class="flow-blue"></path>
+
+				<path d="M 955 225 L 1010 225" class="flow-blue"></path>
+				<text x="982" y="214" text-anchor="middle" class="flow-label">受控调用</text>
+				<path d="M 1010 300 L 955 300" class="flow-dash"></path>
+				<text x="982" y="322" text-anchor="middle" class="flow-label">结果与引用</text>
+
+				<path d="M 772 425 L 772 470" class="flow-blue"></path>
+				<text x="818" y="454" class="flow-label">异步任务</text>
+				<path d="M 772 558 L 772 625" class="bus"></path>
+				<path d="M 453 625 L 907 625" class="bus"></path>
+				<path d="M 453 625 L 453 735" class="flow"></path>
+				<path d="M 707 625 L 707 735" class="flow"></path>
+				<path d="M 907 625 L 907 735" class="flow"></path>
+				<text x="985" y="615" text-anchor="middle" class="flow-label">业务数据写入 / 状态回写 / 文件归档</text>
+				<path d="M 1157 425 L 1157 735" class="flow"></path>
+				<text x="1195" y="560" class="flow-label">索引维护</text>
+
+				<rect x="40" y="450" width="510" height="82" rx="8" fill="#fff" stroke="#d7dde6" stroke-width="1.4"></rect>
+				<text x="60" y="478" class="label">关键边界</text>
+				<text x="60" y="500" class="text">FastAPI + PostgreSQL 掌握项目状态、权限、任务、证据链；</text>
+				<text x="60" y="520" class="text">管理配置放进 Web 工作台；Obsidian、RAGFlow、模型和异步任务都受统一业务内核约束。</text>
+			</svg>
+		</section>
+
+		<h2 class="section-title">四阶段顺序路线</h2>
+		<section class="phase-grid" aria-label="四阶段目标">
+			<article class="phase">
+				<div class="phase-number">阶段一</div>
+				<h2>核心闭环 MVP</h2>
+				<p class="goal">把最关键链路跑通，证明产品能用。</p>
+				<h3>做什么</h3>
+				<ul>
+					<li>信息入口、项目事件中心</li>
+					<li>任务状态机、报告草稿</li>
+					<li>Obsidian 知识组织、RAGFlow 接入评估、最小后台</li>
+				</ul>
+				<h3>怎么做</h3>
+				<ul>
+					<li>FastAPI + PostgreSQL</li>
+					<li>Celery/Redis + MinIO/对象存储</li>
+					<li>Obsidian 管知识组织，RAGFlow 可选承接解析检索</li>
+					<li>Web 管理配置 + Skill Registry</li>
+				</ul>
+				<h3>成功标准</h3>
+				<ul>
+					<li>核心链路完整跑通</li>
+					<li>结果有状态、有依据、有日志</li>
+					<li>证明产品在推进项目事务</li>
+				</ul>
+			</article>
+
+			<article class="phase green">
+				<div class="phase-number">阶段二</div>
+				<h2>项目级产品化</h2>
+				<p class="goal">把单项目能力做稳，证明产品能持续用。</p>
+				<h3>做什么</h3>
+				<ul>
+					<li>统一事件、任务、资料、报告模型</li>
+					<li>模板、规则、提醒可配置</li>
+					<li>权限、日志、异常处理完善</li>
+				</ul>
+				<h3>怎么做</h3>
+				<ul>
+					<li>领域模型稳定化</li>
+					<li>技能配置化、可观测、可回放</li>
+					<li>测试集、权限回归、失败重试</li>
+				</ul>
+				<h3>成功标准</h3>
+				<ul>
+					<li>单项目可以连续运行</li>
+					<li>新增项目主要靠配置接入</li>
+					<li>关键技能可定位、可重试、可修正</li>
+				</ul>
+			</article>
+
+			<article class="phase amber">
+				<div class="phase-number">阶段三</div>
+				<h2>多项目管理平台</h2>
+				<p class="goal">把多项目管理做起来，证明产品能规模化用。</p>
+				<h3>做什么</h3>
+				<ul>
+					<li>多项目总览和项目健康度</li>
+					<li>风险评分、逾期、资料缺失识别</li>
+					<li>跨项目汇总、组织权限、经验复用</li>
+				</ul>
+				<h3>怎么做</h3>
+				<ul>
+					<li>组织级指标和风险指标表</li>
+					<li>项目快照、报告和风险清单</li>
+					<li>系统集成、模型和技能效果观测</li>
+				</ul>
+				<h3>成功标准</h3>
+				<ul>
+					<li>多项目能统一展示并下钻依据</li>
+					<li>风险和异常能自动暴露</li>
+					<li>管理汇总不再主要靠人工收集</li>
+				</ul>
+			</article>
+
+			<article class="phase violet">
+				<div class="phase-number">阶段四</div>
+				<h2>行业级智能产品</h2>
+				<p class="goal">沉淀专业能力和行业经验，形成长期壁垒。</p>
+				<h3>做什么</h3>
+				<ul>
+					<li>工程风险知识图谱和行业经验库</li>
+					<li>施工方案审查、规范匹配、风险提示</li>
+					<li>复杂编排、多智能体、企业级治理</li>
+				</ul>
+				<h3>怎么做</h3>
+				<ul>
+					<li>GraphRAG/Neo4j 扩展关系推理</li>
+					<li>LangGraph/Temporal 承载复杂流程</li>
+					<li>LiteLLM、Langfuse、评测集治理</li>
+				</ul>
+				<h3>成功标准</h3>
+				<ul>
+					<li>系统具备专业辅助判断能力</li>
+					<li>跨项目经验可复用到新项目</li>
+					<li>形成可复制、可运营产品形态</li>
+				</ul>
+			</article>
+		</section>
+
+		<h2 class="section-title">贯穿四阶段的底座能力</h2>
+		<section class="base" aria-label="贯穿四阶段的底座能力">
+			<h3>这些能力贯穿每个阶段，并随产品成熟持续加深</h3>
+			<div class="base-grid">
+				<div class="base-item">
+					<b>信息采集</b>
+					<span>消息、邮件、文件、业务系统数据进入项目事件中心</span>
+				</div>
+				<div class="base-item">
+					<b>资料与知识</b>
+					<span>Obsidian 做知识组织，RAGFlow 可选做解析检索，资料和引用统一追溯</span>
+				</div>
+				<div class="base-item">
+					<b>状态问答</b>
+					<span>围绕项目状态、资料、任务和风险进行依据化问答</span>
+				</div>
+				<div class="base-item">
+					<b>任务推进</b>
+					<span>待办、提醒、整改、资料缺失和报告生成闭环</span>
+				</div>
+				<div class="base-item">
+					<b>专业辅助</b>
+					<span>方案审核、风险识别、参数校核和经验推荐</span>
+				</div>
+				<div class="base-item">
+					<b>权限留痕</b>
+					<span>用户权限、任务状态、证据链、技能日志和审计记录</span>
+				</div>
+			</div>
+		</section>
+
+		<p class="footer-note">阶段图读法：三层能力是产品结构，四个阶段是建设顺序；每个阶段都回答开发团队最关心的三个问题：做什么、怎么做、怎样算成功。</p>
+	</main>
+</body>
+</html>
