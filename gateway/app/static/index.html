@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>工程管理智能体 · 演示</title>
+	<style>
+		* { box-sizing: border-box; }
+		body { margin: 0; font-family: "Microsoft YaHei", system-ui, sans-serif; background: #f4f6f9; color: #2b3445; }
+		header { background: #2d5fff; color: #fff; padding: 16px 24px; font-size: 18px; font-weight: 600; }
+		.wrap { max-width: 960px; margin: 24px auto; padding: 0 16px; }
+		.card { background: #fff; border: 1px solid #e3e8f0; border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+		.card h2 { margin: 0 0 14px; font-size: 16px; }
+		label { display: block; font-size: 13px; color: #66708a; margin: 10px 0 4px; }
+		input, select { width: 100%; padding: 9px 11px; border: 1px solid #d2d9e6; border-radius: 7px; font-size: 14px; }
+		button { margin-top: 14px; padding: 9px 18px; background: #2d5fff; color: #fff; border: none; border-radius: 7px; font-size: 14px; cursor: pointer; }
+		button.ghost { background: #eef2fb; color: #2d5fff; }
+		button:disabled { opacity: .5; cursor: not-allowed; }
+		.row { display: flex; gap: 12px; align-items: flex-end; }
+		.row > div { flex: 1; }
+		.msg { border-left: 3px solid #2d5fff; background: #f7f9ff; padding: 10px 14px; border-radius: 0 7px 7px 0; margin-bottom: 10px; }
+		.msg .meta { font-size: 12px; color: #8a93a8; margin-bottom: 4px; }
+		.hint { font-size: 13px; color: #8a93a8; }
+		.hidden { display: none; }
+		#whoami { float: right; font-size: 13px; font-weight: 400; }
+	</style>
+</head>
+
+<body>
+	<header>工程管理智能体 · 项目动态演示<span id="whoami"></span></header>
+	<div class="wrap">
+
+		<div class="card" id="loginCard">
+			<h2>登录</h2>
+			<div class="row">
+				<div>
+					<label>用户名</label>
+					<input id="username" value="demo" />
+				</div>
+				<div>
+					<label>密码</label>
+					<input id="password" type="password" value="demo123" />
+				</div>
+			</div>
+			<button onclick="register()" class="ghost">注册</button>
+			<button onclick="login()">登录</button>
+			<p class="hint" id="loginHint"></p>
+		</div>
+
+		<div class="card hidden" id="appCard">
+			<h2>项目动态摘要</h2>
+			<div class="row">
+				<div>
+					<label>选择项目</label>
+					<select id="projectSel" onchange="loadMessages()"></select>
+				</div>
+				<div style="flex:0 0 auto;">
+					<button onclick="createProject()" class="ghost">新建项目</button>
+				</div>
+			</div>
+			<div id="messages" style="margin-top:18px;"></div>
+		</div>
+
+	</div>
+
+	<script>
+		let token = "";
+
+		function authHeader() {
+			return { "Authorization": "Bearer " + token };
+		}
+
+		async function register() {
+			const r = await fetch("/auth/register", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					username: username.value,
+					password: password.value,
+					display_name: username.value
+				})
+			});
+			loginHint.textContent = r.ok ? "注册成功，请登录" : "注册失败：" + (await r.json()).detail;
+		}
+
+		async function login() {
+			const body = new URLSearchParams({ username: username.value, password: password.value });
+			const r = await fetch("/auth/login", { method: "POST", body });
+			if (!r.ok) { loginHint.textContent = "登录失败：" + (await r.json()).detail; return; }
+			token = (await r.json()).access_token;
+			const me = await (await fetch("/auth/me", { headers: authHeader() })).json();
+			whoami.textContent = "已登录：" + (me.display_name || me.username);
+			loginCard.classList.add("hidden");
+			appCard.classList.remove("hidden");
+			loadProjects();
+		}
+
+		async function loadProjects() {
+			const list = await (await fetch("/projects", { headers: authHeader() })).json();
+			projectSel.innerHTML = "";
+			list.forEach(p => {
+				const o = document.createElement("option");
+				o.value = p.id; o.textContent = p.name;
+				projectSel.appendChild(o);
+			});
+			if (list.length) loadMessages();
+			else messages.innerHTML = '<p class="hint">还没有项目，点「新建项目」创建一个。</p>';
+		}
+
+		async function createProject() {
+			const name = prompt("项目名称");
+			if (!name) return;
+			await fetch("/projects", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", ...authHeader() },
+				body: JSON.stringify({ name })
+			});
+			loadProjects();
+		}
+
+		async function loadMessages() {
+			const pid = projectSel.value;
+			if (!pid) return;
+			const list = await (await fetch(`/projects/${pid}/messages`, { headers: authHeader() })).json();
+			if (!list.length) {
+				messages.innerHTML = '<p class="hint">该项目还没有摘要。等 C 的链路把摘要写进来后会显示在这里。</p>';
+				return;
+			}
+			messages.innerHTML = list.map(m => `
+				<div class="msg">
+					<div class="meta">${new Date(m.created_at).toLocaleString()} · 来源：${m.source}${m.source_ref ? " / " + m.source_ref : ""}</div>
+					<div>${(m.summary || "").replace(/</g, "&lt;")}</div>
+				</div>`).join("");
+		}
+	</script>
+</body>
+
+</html>
