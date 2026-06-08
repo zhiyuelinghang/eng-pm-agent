@@ -1,0 +1,15 @@
+{
+  "chatroomId": "58738682002@chatroom",
+  "displayName": "23号线2标上下行线",
+  "last_run_at": "2026-06-08 16:13:53",
+  "last_window": {
+    "start": "20260608",
+    "end": "20260608"
+  },
+  "totals": {
+    "appended": 6,
+    "media_downloaded": 0,
+    "media_reference_only": 2
+  },
+  "last_local_id": 37
+}

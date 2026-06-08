@@ -2,6 +2,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -17,6 +18,19 @@ from .database import Base
 # ============================================================
 # 第一阶段就要用的最小表
 # ============================================================
+class Role(Base):
+    """角色：code 为英文标识（如 admin），name 为中文名称（如 管理员）。"""
+
+    __tablename__ = "roles"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(32), unique=True, nullable=False)   # 英文标识
+    name = Column(String(64), nullable=False)                # 中文名称
+    description = Column(Text)
+    builtin = Column(Boolean, default=False)                 # 内置角色不可删除
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class User(Base):
     """用户。"""
 

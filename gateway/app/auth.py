@@ -61,3 +61,13 @@ def visible_project_ids(db: Session, user: models.User) -> list[int]:
         .all()
     )
     return [r[0] for r in rows]
+
+
+def require_admin(current: "models.User" = Depends(get_current_user)) -> "models.User":
+    """仅允许全局管理员（role == admin）访问。"""
+    if current.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="需要管理员权限",
+        )
+    return current

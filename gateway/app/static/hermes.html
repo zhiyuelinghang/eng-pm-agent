@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Hermes 能力中心 · 工程管理智能体</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #f4f6fb; --card: #fff; --line: #e7eaf3; --txt: #1f2430;
+    --muted: #8a93a6; --brand: #5b6cff; --brand2: #8b5bff;
+    --ok: #16b364; --off: #c2c8d6; --shadow: 0 4px 18px rgba(31,36,48,.06);
+  }
+  body { font-family: -apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;
+    background: var(--bg); color: var(--txt); line-height: 1.5; }
+  .topbar { background: #fff; color: var(--txt); height: 64px;
+    padding: 0 30px; display:flex; align-items:center; justify-content:space-between;
+    border-bottom: 1px solid var(--line); }
+  .topbar h1 { margin:0; font-size: 18px; font-weight: 700; }
+  .topbar .crumb { font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  .topbar .status { font-size:13px; background:var(--bg); color:var(--muted);
+    border:1px solid var(--line); padding:6px 12px;
+    border-radius:20px; display:flex; align-items:center; gap:7px; }
+  .dot { width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px rgba(22,179,100,.18); }
+  .dot.bad { background:#ef4444; box-shadow:0 0 0 3px rgba(239,68,68,.18); }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 26px 32px 60px; }
+
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:26px; }
+  .stat { background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:18px 20px; box-shadow:var(--shadow); }
+  .stat .n { font-size:30px; font-weight:800; color:var(--brand); }
+  .stat .l { font-size:13px; color:var(--muted); margin-top:4px; }
+
+  .tabs { display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; }
+  .tab { padding:9px 18px; border-radius:10px; font-size:14px; cursor:pointer;
+    background:var(--card); border:1px solid var(--line); color:var(--muted); transition:.15s; }
+  .tab.active { background:var(--brand); border-color:var(--brand); color:#fff; font-weight:600; }
+
+  .panel { display:none; } .panel.active { display:block; }
+  .section-title { font-size:15px; font-weight:700; margin:22px 0 12px; display:flex;
+    align-items:center; gap:8px; }
+  .section-title .pill { font-size:12px; color:var(--muted); background:var(--bg);
+    border:1px solid var(--line); border-radius:20px; padding:2px 10px; font-weight:500; }
+
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:14px; }
+  .item { background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:15px 16px; box-shadow:var(--shadow); transition:.15s; }
+  .item:hover { transform:translateY(-2px); border-color:#cdd4ff; }
+  .item .name { font-weight:700; font-size:14px; display:flex; align-items:center;
+    justify-content:space-between; gap:8px; }
+  .item .desc { font-size:12.5px; color:var(--muted); margin-top:6px; }
+  .badge { font-size:11px; padding:2px 9px; border-radius:20px; font-weight:600; white-space:nowrap; }
+  .badge.on { background:#e7f8ee; color:var(--ok); } .badge.off { background:#f0f1f5; color:var(--off); }
+  .badge.cat { background:#eef0ff; color:var(--brand); }
+  .toolcount { font-size:11px; color:var(--muted); margin-top:8px; }
+
+  .feat-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:10px; }
+  .feat { background:var(--card); border:1px solid var(--line); border-radius:10px;
+    padding:11px 14px; font-size:13px; display:flex; align-items:center; justify-content:space-between; }
+  .feat .y { color:var(--ok); font-weight:700; } .feat .n { color:var(--off); }
+
+  .sess { background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:15px 18px; box-shadow:var(--shadow); margin-bottom:12px; }
+  .sess .pv { font-size:14px; font-weight:600; margin-bottom:8px; }
+  .job { background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:15px 18px; box-shadow:var(--shadow); margin-bottom:12px; }
+  .job-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; }
+  .job-name { font-size:15px; font-weight:700; }
+  .job .desc { font-size:13px; color:var(--muted); margin:4px 0 10px; }
+  .job .meta { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--muted); }
+  .job .meta b { color:var(--txt); font-weight:600; }
+  .job-acts { margin-top:12px; padding-top:11px; border-top:1px solid var(--line); display:flex; gap:8px; }
+  .btn-sm2 { font-size:12.5px; padding:6px 13px; border-radius:8px; cursor:pointer;
+    background:var(--bg); color:var(--txt); border:1px solid var(--line); transition:background-color .15s, border-color .15s, color .15s; }
+  .btn-sm2:hover { background:#eef0ff; border-color:#cdd4ff; color:var(--brand); }
+  .btn-sm2:focus-visible { outline:none; box-shadow:0 0 0 3px rgba(91,108,255,.3); }
+  .btn-sm2:active { transform:scale(.97); }
+  .btn-sm2.danger:hover { background:#fdecec; border-color:#f5b5b5; color:#ef4444; }
+  .btn-sm2.danger:focus-visible { box-shadow:0 0 0 3px rgba(239,68,68,.3); }
+  .job-form { background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:18px 20px; box-shadow:var(--shadow); margin-bottom:22px; }
+  .jf-title { font-size:15px; font-weight:700; margin-bottom:14px; }
+  .jf-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px; }
+  .job-form input, .job-form textarea { width:100%; padding:10px 13px; font-size:13.5px;
+    border:1.5px solid var(--line); border-radius:10px; background:#fafbfe; font-family:inherit; resize:vertical; }
+  .job-form input:focus, .job-form textarea:focus { outline:none; border-color:var(--brand);
+    background:#fff; box-shadow:0 0 0 4px rgba(91,108,255,.12); }
+  .jf-foot { display:flex; align-items:center; justify-content:space-between; margin-top:12px; }
+  .jf-hint { font-size:12px; color:var(--muted); }
+  .btn-primary { background:var(--brand); color:#fff; border:none;
+    padding:9px 20px; font-size:13.5px; font-weight:600; border-radius:10px; cursor:pointer;
+    transition:background-color .15s, transform .1s; }
+  .btn-primary:hover { background:#4a5ae8; }
+  .btn-primary:focus-visible { outline:none; box-shadow:0 0 0 3px rgba(91,108,255,.4); }
+  .btn-primary:active { transform:scale(.98); }
+  .sess .meta { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--muted); }
+  .sess .meta b { color:var(--txt); font-weight:600; }
+  .empty { color:var(--muted); font-size:14px; padding:30px; text-align:center;
+    background:var(--card); border:1px dashed var(--line); border-radius:12px; }
+  .runtime-card { background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:16px 18px; box-shadow:var(--shadow); margin-bottom:18px; font-size:13.5px; }
+  .runtime-card .row { display:flex; gap:10px; padding:5px 0; }
+  .runtime-card .k { color:var(--muted); width:110px; flex-shrink:0; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div>
+      <h1>Hermes 能力中心</h1>
+      <div class="crumb">平台能力 · 技能 · 工具集 · 会话历史</div>
+    </div>
+    <div class="status" id="status"><span class="dot" id="dot"></span><span id="statusText">连接中…</span></div>
+  </div>
+
+  <div class="wrap">
+    <div class="stats" id="stats"></div>
+
+    <div class="tabs">
+      <div class="tab active" data-p="overview">平台概览</div>
+      <div class="tab" data-p="skills">技能 Skills</div>
+      <div class="tab" data-p="toolsets">工具集 Toolsets</div>
+      <div class="tab" data-p="jobs">定时任务</div>
+      <div class="tab" data-p="sessions">会话历史</div>
+    </div>
+
+    <div class="panel active" id="p-overview"></div>
+    <div class="panel" id="p-skills"></div>
+    <div class="panel" id="p-toolsets"></div>
+    <div class="panel" id="p-jobs"></div>
+    <div class="panel" id="p-sessions"></div>
+  </div>
+
+<script>
+const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+async function api(path){ const r = await fetch(path); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+async function apiSend(path, method, body){
+  const opt = { method, headers: body ? {"Content-Type":"application/json"} : {} };
+  if(body) opt.body = JSON.stringify(body);
+  const r = await fetch(path, opt);
+  if(!r.ok){ let m=""; try{ m=(await r.json()).detail||""; }catch(e){} throw new Error(m||("HTTP "+r.status)); }
+  return r.json();
+}
+
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach(x=>x.classList.remove("active"));
+  t.classList.add("active");
+  document.getElementById("p-"+t.dataset.p).classList.add("active");
+});
+
+function fmtTime(ts){ if(!ts) return "—"; const d=new Date(ts*1000);
+  return d.toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}); }
+function fmtNum(n){ return (n||0).toLocaleString(); }
+
+async function loadOverview(){
+  const o = await api("/hermes/overview");
+  document.getElementById("dot").classList.toggle("bad", o.status!=="ok");
+  document.getElementById("statusText").textContent =
+    (o.platform||"hermes") + " · " + (o.status==="ok"?"运行中":"异常");
+
+  const s = o.stats||{};
+  document.getElementById("stats").innerHTML = [
+    [s.skills,"可用技能 Skills"],[s.toolsets,"工具集 Toolsets"],
+    [s.jobs,"定时任务"],[s.sessions,"会话记录"]
+  ].map(([n,l])=>`<div class="stat"><div class="n">${n??"—"}</div><div class="l">${l}</div></div>`).join("");
+
+  const rt = o.runtime||{};
+  let html = `<div class="runtime-card">
+    <div class="row"><span class="k">平台</span><b>${esc(o.platform)}</b></div>
+    <div class="row"><span class="k">模型</span><b>${esc((o.models||[]).join(", ")||"—")}</b></div>
+    <div class="row"><span class="k">运行模式</span><b>${esc(rt.mode||"—")}</b></div>
+    <div class="row"><span class="k">工具执行</span><b>${esc(rt.tool_execution||"—")}</b></div>
+    <div class="row"><span class="k">说明</span><span style="color:var(--muted)">${esc(rt.description||"")}</span></div>
+  </div>`;
+  const feats = o.features||{};
+  const keyMap = {chat_completions:"对话补全",chat_completions_streaming:"流式对话",
+    responses_api:"Responses API",run_submission:"任务提交",run_events_sse:"任务事件流",
+    session_chat:"会话对话",session_fork:"会话分叉",skills_api:"技能 API",
+    tool_progress_events:"工具进度",approval_events:"审批事件"};
+  html += `<div class="section-title">平台特性 <span class="pill">能力开关</span></div><div class="feat-grid">`;
+  for(const [k,label] of Object.entries(keyMap)){
+    const on = feats[k]; html += `<div class="feat"><span>${label}</span><span class="${on?'y':'n'}">${on?'✓':'✕'}</span></div>`;
+  }
+  html += `</div>`;
+  document.getElementById("p-overview").innerHTML = html;
+}
+
+async function loadSkills(){
+  const data = await api("/hermes/skills");
+  const groups = {};
+  data.forEach(s => { const c=s.category||"未分类"; (groups[c]=groups[c]||[]).push(s); });
+  let html = "";
+  Object.keys(groups).sort().forEach(cat=>{
+    html += `<div class="section-title">${esc(cat)} <span class="pill">${groups[cat].length}</span></div><div class="grid">`;
+    groups[cat].forEach(s=>{
+      html += `<div class="item"><div class="name">${esc(s.name)}</div><div class="desc">${esc(s.description)}</div></div>`;
+    });
+    html += `</div>`;
+  });
+  document.getElementById("p-skills").innerHTML = html || `<div class="empty">暂无技能</div>`;
+}
+
+async function loadToolsets(){
+  const data = await api("/hermes/toolsets");
+  data.sort((a,b)=> (b.enabled?1:0)-(a.enabled?1:0));
+  let html = `<div class="grid">`;
+  data.forEach(t=>{
+    html += `<div class="item"><div class="name"><span>${esc(t.label||t.name)}</span>
+      <span class="badge ${t.enabled?'on':'off'}">${t.enabled?'已启用':'未启用'}</span></div>
+      <div class="desc">${esc(t.description||"")}</div>
+      <div class="toolcount">🔧 ${(t.tools||[]).length} 个工具</div></div>`;
+  });
+  html += `</div>`;
+  document.getElementById("p-toolsets").innerHTML = html;
+}
+
+async function loadJobs(){
+  let data;
+  try { data = await api("/hermes/jobs"); } catch(e){ data = []; }
+
+  const form = `<div class="job-form">
+    <div class="jf-title">＋ 新建定时任务</div>
+    <div class="jf-row">
+      <input id="jfName" placeholder="任务名称，如：微信群消息采集" />
+      <input id="jfSched" placeholder="调度，如 0 9 * * * 或 30m / every 2h" />
+    </div>
+    <textarea id="jfPrompt" rows="2" placeholder="任务指令（prompt），如：汇总今日工程微信群的关键消息"></textarea>
+    <div class="jf-foot">
+      <span class="jf-hint" id="jfHint">cron 格式：分 时 日 月 周；也支持 30m、every 2h</span>
+      <button class="btn-primary" onclick="createJob()">创建任务</button>
+    </div>
+  </div>`;
+
+  let listHtml = `<div class="section-title">已有任务 <span class="pill">${data.length}</span></div>`;
+  if(!data.length){
+    listHtml += `<div class="empty">暂无定时任务，使用上方表单创建</div>`;
+  } else {
+    data.forEach(j=>{
+      const paused = j.state==="paused" || !j.enabled;
+      const cron = (j.schedule&&j.schedule.display) || j.schedule_display || "—";
+      const id = esc(j.id);
+      listHtml += `<div class="job">
+        <div class="job-head">
+          <div class="job-name">⏰ ${esc(j.name||"(未命名)")}</div>
+          <span class="badge ${paused?'off':'on'}">${paused?'已暂停':'运行中'}</span>
+        </div>
+        ${j.prompt?`<div class="desc">${esc(j.prompt)}</div>`:""}
+        <div class="meta">
+          <span>📅 <b>${esc(cron)}</b></span>
+          <span>⏭️ 下次：${fmtTime2(j.next_run_at)}</span>
+          <span>🕓 上次：${j.last_run_at?fmtTime2(j.last_run_at)+(j.last_status?` (${esc(j.last_status)})`:''):"未运行"}</span>
+          <span>📤 ${esc(j.deliver||"local")}</span>
+          ${j.last_error?`<span style="color:#ef4444">⚠️ ${esc(j.last_error).slice(0,40)}</span>`:""}
+        </div>
+        <div class="job-acts">
+          <button class="btn-sm2" onclick="runJob('${id}')">▶ 立即运行</button>
+          <button class="btn-sm2" onclick="toggleJob('${id}',${paused?1:0})">${paused?'恢复':'暂停'}</button>
+          <button class="btn-sm2 danger" onclick="deleteJob('${id}','${esc(j.name||'')}')">删除</button>
+        </div>
+      </div>`;
+    });
+  }
+  document.getElementById("p-jobs").innerHTML = form + listHtml;
+}
+
+async function createJob(){
+  const name = document.getElementById("jfName").value.trim();
+  const schedule = document.getElementById("jfSched").value.trim();
+  const prompt = document.getElementById("jfPrompt").value.trim();
+  const hint = document.getElementById("jfHint");
+  if(!name || !schedule){ hint.textContent = "请填写任务名称和调度"; hint.style.color = "#ef4444"; return; }
+  hint.textContent = "创建中…"; hint.style.color = "";
+  try {
+    await apiSend("/hermes/jobs", "POST", {name, schedule, prompt});
+    await loadJobs(); loadOverview().catch(()=>{});
+  } catch(e){ hint.textContent = "创建失败：" + e.message; hint.style.color = "#ef4444"; }
+}
+async function runJob(id){
+  try { await apiSend("/hermes/jobs/"+id+"/run", "POST"); alert("已触发，将在下次调度 tick 运行"); }
+  catch(e){ alert("运行失败：" + e.message); }
+}
+async function toggleJob(id, paused){
+  try { await apiSend("/hermes/jobs/"+id, "PATCH", {enabled: paused===1}); await loadJobs(); loadOverview().catch(()=>{}); }
+  catch(e){ alert("操作失败：" + e.message); }
+}
+async function deleteJob(id, name){
+  if(!confirm("确定删除任务「"+name+"」？")) return;
+  try { await apiSend("/hermes/jobs/"+id, "DELETE"); await loadJobs(); loadOverview().catch(()=>{}); }
+  catch(e){ alert("删除失败：" + e.message); }
+}
+
+function fmtTime2(iso){ if(!iso) return "—"; const d=new Date(iso);
+  if(isNaN(d)) return esc(iso);
+  return d.toLocaleString("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}); }
+
+async function loadSessions(){
+  let data;
+  try { data = await api("/hermes/sessions"); } catch(e){ data = []; }
+  if(!data.length){ document.getElementById("p-sessions").innerHTML = `<div class="empty">暂无会话记录</div>`; return; }
+  let html = `<div class="section-title">最近会话 <span class="pill">${data.length}</span></div>`;
+  data.forEach(s=>{
+    html += `<div class="sess"><div class="pv">${esc(s.preview||s.title||"（无预览）")}</div>
+      <div class="meta">
+        <span>🕑 ${fmtTime(s.last_active||s.started_at)}</span>
+        <span>💬 <b>${s.message_count||0}</b> 条消息</span>
+        <span>🔧 <b>${s.tool_call_count||0}</b> 次工具</span>
+        <span>🤖 ${esc(s.model||"—")}</span>
+        <span>📥 ${fmtNum(s.input_tokens)} / 📤 ${fmtNum(s.output_tokens)} tokens</span>
+      </div></div>`;
+  });
+  document.getElementById("p-sessions").innerHTML = html;
+}
+
+(async()=>{
+  try { await loadOverview(); } catch(e){
+    document.getElementById("statusText").textContent = "Hermes 未连接";
+    document.getElementById("dot").classList.add("bad");
+    document.getElementById("p-overview").innerHTML = `<div class="empty">无法连接 Hermes：${esc(e.message)}</div>`;
+  }
+  loadSkills().catch(()=>{}); loadToolsets().catch(()=>{}); loadJobs().catch(()=>{}); loadSessions().catch(()=>{});
+})();
+</script>
+</body>
+</html>

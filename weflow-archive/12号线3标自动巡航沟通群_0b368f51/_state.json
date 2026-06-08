@@ -1,0 +1,15 @@
+{
+  "chatroomId": "45416422217@chatroom",
+  "displayName": "12号线3标自动巡航沟通群",
+  "last_run_at": "2026-06-08 16:13:52",
+  "last_window": {
+    "start": "20260608",
+    "end": "20260608"
+  },
+  "totals": {
+    "appended": 40,
+    "media_downloaded": 0,
+    "media_reference_only": 26
+  },
+  "last_local_id": 499
+}

@@ -81,3 +81,45 @@ class SkillLogOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class UserAdminCreate(BaseModel):
+    """管理员新建用户。"""
+
+    username: str
+    password: str
+    display_name: str | None = None
+    role: str = "member"  # admin / member
+
+
+class UserAdminUpdate(BaseModel):
+    """管理员更新用户（字段均可选）。"""
+
+    display_name: str | None = None
+    role: str | None = None
+    password: str | None = None
+
+
+class RoleCreate(BaseModel):
+    """新建角色：code 英文标识，name 中文名称。"""
+
+    code: str
+    name: str
+    description: str | None = None
+
+
+class RoleUpdate(BaseModel):
+    """更新角色：仅可改中文名称与描述，标识 code 不可变。"""
+
+    name: str | None = None
+    description: str | None = None
+
+
+class RoleOut(BaseModel):
+    id: int
+    code: str
+    name: str
+    description: str | None = None
+    builtin: bool
+
+    model_config = {"from_attributes": True}

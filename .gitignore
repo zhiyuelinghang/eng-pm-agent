@@ -3,3 +3,9 @@ __pycache__/
 .env
 .venv/
 node_modules/
+
+# Hermes 第三方项目（NousResearch/hermes-agent，2.2G），从上游获取，不纳入本仓库
+/hermes/*
+# 仅保留自研的微信采集 MCP
+!/hermes/my_mcp/
+/hermes/my_mcp/__pycache__/

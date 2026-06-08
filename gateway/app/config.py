@@ -17,5 +17,14 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 720
 
+    # Hermes（角色 C 的运行底座）只读对接配置。
+    # 令牌从 .env 注入，切勿写入代码或提交到仓库。
+    hermes_base_url: str = "http://127.0.0.1:8088"
+    hermes_api_key: str = ""
+    hermes_timeout: float = 10.0
+
+    # 微信群消息归档目录（weflow-archive 脚本的产出根目录）
+    weflow_archive_root: str = "/workspace/eng-pm-agent/weflow-archive"
+
 
 settings = Settings()

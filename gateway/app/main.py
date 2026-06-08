@@ -12,6 +12,9 @@ from .database import Base, engine
 from . import models  # noqa: F401  确保模型被注册后再建表
 from .routers import router
 from .auth_router import router as auth_router
+from .hermes_proxy import router as hermes_router
+from .users_router import router as users_router
+from .roles_router import router as roles_router
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -20,12 +23,31 @@ app = FastAPI(title="工程管理智能体 · 平台骨架")
 
 @app.on_event("startup")
 def on_startup():
-    """启动时自动建表（前期用，后续可换 Alembic 迁移）。"""
+    """启动时自动建表（前期用，后续可换 Alembic 迁移），并种入内置角色。"""
     Base.metadata.create_all(bind=engine)
+    _seed_builtin_roles()
 
+
+def _seed_builtin_roles():
+    """确保内置角色 admin / member 存在。"""
+    from sqlalchemy.orm import Session
+
+    builtin = [
+        ("admin", "管理员", "平台管理员，拥有用户与角色管理等全部权限"),
+        ("member", "普通成员", "普通成员，仅能查看被授权的项目数据"),
+    ]
+    with Session(engine) as db:
+        for code, name, desc in builtin:
+            exists = db.query(models.Role).filter(models.Role.code == code).first()
+            if exists is None:
+                db.add(models.Role(code=code, name=name, description=desc, builtin=True))
+        db.commit()
 
 app.include_router(auth_router)
 app.include_router(router)
+app.include_router(hermes_router)
+app.include_router(users_router)
+app.include_router(roles_router)
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
