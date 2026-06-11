@@ -1,0 +1,331 @@
+/* ===================================================
+   工程智管家 · 浅色专业设计系统 v3
+   风格：极简瑞士 — 工业灰中性色阶 + 安全橙强调
+   （工程行业语义：安全橙 = 现场安全色，克制使用）
+=================================================== */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* === Backgrounds === */
+  --bg-base:     #F4F5F7;
+  --bg-surface:  #FFFFFF;
+  --bg-card:     #FFFFFF;
+  --bg-elevated: #F7F8FA;
+  --bg-hover:    #F2F4F6;
+  --bg-active:   #FFF3EA;
+  --bg-inverse:  #1F2937;
+
+  /* === Primary（安全橙）=== */
+  --color-primary:       #E8590C;
+  --color-primary-light: #F97316;
+  --color-primary-dark:  #C2410C;
+  --color-primary-soft:  #FEF0E6;
+  --color-primary-dim:   rgba(232,89,12,0.08);
+
+  /* === Semantic Colors === */
+  --color-danger:        #DC2626;
+  --color-danger-soft:   #FDEBEB;
+  --color-warning:       #B45309;
+  --color-warning-soft:  #FCF0DC;
+  --color-success:       #047857;
+  --color-success-soft:  #E2F4EC;
+  --color-info:          #0369A1;
+  --color-info-soft:     #E3F1FA;
+  --color-accent:        #6D28D9;
+  --color-accent-soft:   #F0EAFB;
+
+  /* === Text === */
+  --text-primary:   #1B2430;
+  --text-secondary: #5A6678;
+  --text-muted:     #8792A2;
+  --text-disabled:  #C2CAD4;
+  --text-inverse:   #FFFFFF;
+
+  /* === Borders === */
+  --border-default:   #E5E8ED;
+  --border-subtle:    #EFF1F4;
+  --border-emphasis:  #D3D9E0;
+  --border-primary:   rgba(232,89,12,0.45);
+  --border-light:     #E5E8ED;
+
+  /* === Layout === */
+  --sidebar-width:  224px;
+  --header-height:  56px;
+
+  /* === Radius === */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+
+  /* === Shadows === */
+  --shadow-sm:  0 1px 2px rgba(23,32,46,0.06);
+  --shadow-md:  0 2px 8px rgba(23,32,46,0.08);
+  --shadow-lg:  0 16px 40px rgba(23,32,46,0.16);
+  --shadow-card: 0 1px 2px rgba(23,32,46,0.05);
+  --shadow-glow: 0 0 0 3px rgba(232,89,12,0.12);
+
+  /* === Transitions === */
+  --transition:      all 0.18s ease;
+  --transition-slow: all 0.25s ease;
+}
+
+/* === Base Reset === */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body {
+  height: 100%;
+  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+#app { height: 100%; }
+
+/* === Accessibility === */
+:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* === Custom Scrollbar === */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(23,32,46,0.16); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(23,32,46,0.3); }
+
+/* === Naive UI Fine-tuning === */
+.n-data-table .n-data-table-th { text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px !important; }
+.n-data-table-wrapper { border-radius: var(--radius-md); overflow: hidden; }
+.n-base-selection { font-size: 13px !important; }
+.n-input { font-size: 13px !important; }
+
+/* === Utility Classes === */
+.font-mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+.text-primary-color { color: var(--color-primary); }
+.text-success { color: var(--color-success); }
+.text-warning { color: var(--color-warning); }
+.text-danger { color: var(--color-danger); }
+.text-info { color: var(--color-info); }
+.text-muted { color: var(--text-muted); }
+.text-secondary { color: var(--text-secondary); }
+
+/* === Badge Variants === */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.badge-danger  { background: var(--color-danger-soft);  color: var(--color-danger); }
+.badge-warning { background: var(--color-warning-soft); color: var(--color-warning); }
+.badge-success { background: var(--color-success-soft); color: var(--color-success); }
+.badge-info    { background: var(--color-info-soft);    color: var(--color-info); }
+.badge-primary { background: var(--color-primary-soft); color: var(--color-primary); }
+.badge-accent  { background: var(--color-accent-soft);  color: var(--color-accent); }
+.badge-muted   { background: var(--bg-elevated); color: var(--text-secondary); border: 1px solid var(--border-default); }
+
+/* === Layout === */
+.page-wrapper {
+  padding: 16px 20px 24px;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  transition: padding 0.3s;
+}
+
+@media (max-width: 768px) {
+  .page-wrapper { padding: 12px; }
+  .card { padding: 12px; }
+}
+
+.page-desc { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4; }
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-card);
+  transition: border-color var(--transition), box-shadow var(--transition), transform var(--transition);
+}
+.card:hover {
+  border-color: var(--color-primary-light);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+/* === Section Header === */
+.section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.section-head-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); letter-spacing: 0.02em; }
+.section-head-link { font-size: 12px; color: var(--color-primary); text-decoration: none; display: flex; align-items: center; gap: 3px; transition: var(--transition); }
+.section-head-link:hover { color: var(--color-primary-dark); }
+
+/* === Risk Level Dots === */
+.risk-indicator { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.risk-indicator.critical { background: var(--color-danger); }
+.risk-indicator.high     { background: var(--color-warning); }
+.risk-indicator.medium   { background: var(--color-info); }
+.risk-indicator.low      { background: var(--color-success); }
+
+/* === Level Badges (Inline) === */
+.level-tag { padding: 2px 8px; border-radius: var(--radius-xs); font-size: 11px; font-weight: 700; }
+.level-tag.critical { background: var(--color-danger-soft);  color: var(--color-danger); }
+.level-tag.high     { background: var(--color-warning-soft); color: var(--color-warning); }
+.level-tag.medium   { background: var(--color-info-soft);    color: var(--color-info); }
+.level-tag.low      { background: var(--color-success-soft); color: var(--color-success); }
+
+/* === Small Action Button (表格/卡片行内操作) === */
+.action-btn-sm {
+  padding: 3px 10px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-emphasis);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.action-btn-sm:hover { border-color: var(--color-primary); color: var(--color-primary); background: var(--color-primary-dim); }
+
+/* === Unified Button Family（全局统一，render 函数生成的按钮也能命中）=== */
+.btn-primary, .btn-ghost, .btn-success, .btn-warning, .btn-ok, .btn-reject {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 7px 14px; border-radius: var(--radius-sm);
+  font-size: 12px; font-weight: 500; font-family: inherit;
+  border: 1px solid transparent; cursor: pointer; transition: var(--transition);
+}
+.btn-primary { background: var(--color-primary-soft); color: var(--color-primary); border-color: var(--border-primary); }
+.btn-primary:hover { background: var(--color-primary); color: #fff; }
+.btn-ghost { background: transparent; color: var(--text-secondary); border-color: var(--border-emphasis); }
+.btn-ghost:hover { background: var(--bg-hover); color: var(--text-primary); }
+.btn-success, .btn-ok { background: var(--color-success-soft); color: var(--color-success); border-color: rgba(4,120,87,.25); }
+.btn-success:hover, .btn-ok:hover { background: var(--color-success); color: #fff; }
+.btn-warning { background: var(--color-warning-soft); color: var(--color-warning); border-color: rgba(180,83,9,.25); }
+.btn-warning:hover { background: var(--color-warning); color: #fff; }
+.btn-reject { background: transparent; color: var(--color-danger); border-color: rgba(220,38,38,.3); }
+.btn-reject:hover { background: var(--color-danger-soft); }
+
+/* 表格行内操作按钮（render 函数生成，必须全局） */
+.action-btn {
+  padding: 4px 12px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-primary);
+  background: var(--color-primary-dim);
+  color: var(--color-primary);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.action-btn:hover { background: var(--color-primary-soft); }
+
+
+/* === Admin Table Specific Standard === */
+.admin-table .n-data-table-th {
+  background-color: var(--bg-elevated) !important;
+  font-weight: 600 !important;
+  color: var(--text-secondary) !important;
+}
+.admin-table .n-data-table-td {
+  font-size: 13px !important;
+  color: var(--text-primary) !important;
+}
+
+/* ===================================================
+   运维端统一设计层 v1（Data-Dense Dashboard）
+   所有 /admin/* 页面共用：页面容器 / 面板 / 行内按钮
+   仅运维端使用，不影响工地端（site）样式
+=================================================== */
+
+/* —— 统一页面容器 —— */
+.admin-view {
+  padding: 24px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  box-sizing: border-box;
+}
+@media (max-width: 768px) {
+  .admin-view { padding: 16px; gap: 14px; }
+}
+
+/* —— 统一内容面板（替代各页五花八门的卡片容器）—— */
+.admin-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.admin-panel--pad { padding: 16px; }
+.admin-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.admin-panel-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+.admin-panel-tools { display: flex; align-items: center; gap: 10px; }
+
+/* —— 统一表格/卡片行内操作按钮（render 函数生成的也命中）——
+   .tbtn          默认（次要操作）
+   .tbtn--primary 主操作
+   .tbtn--danger  危险操作 */
+.tbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 11px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  line-height: 1.4;
+  border: 1px solid var(--border-emphasis);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--transition);
+}
+.tbtn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-primary-dim);
+}
+.tbtn--primary {
+  border-color: var(--border-primary);
+  color: var(--color-primary);
+  background: var(--color-primary-soft);
+}
+.tbtn--primary:hover {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+.tbtn--danger { color: var(--text-muted); }
+.tbtn--danger:hover {
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
+.tbtn:disabled,
+.tbtn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.tbtn:disabled:hover,
+.tbtn[disabled]:hover {
+  border-color: var(--border-emphasis);
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+}
+

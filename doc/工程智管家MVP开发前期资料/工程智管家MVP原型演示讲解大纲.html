@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工程智管家 MVP 原型演示讲解大纲</title>
+<style>
+  :root{
+    --ink:#1b2430;
+    --ink-soft:#4f5b6b;
+    --muted:#8792a2;
+    --line:#e3e7ee;
+    --line-strong:#cfd6e1;
+    --bg:#f4f5f7;
+    --card:#ffffff;
+    --primary:#e8590c;
+    --primary-dark:#c2410c;
+    --primary-soft:#fef0e6;
+    --inverse:#1f2937;
+    --success:#047857;
+    --success-soft:#e2f4ec;
+    --warning:#b45309;
+    --warning-soft:#fcf0dc;
+    --danger:#dc2626;
+    --danger-soft:#fdebeb;
+    --info:#0369a1;
+    --info-soft:#e3f1fa;
+    --radius:12px;
+    --radius-sm:8px;
+    --shadow:0 1px 2px rgba(20,30,50,.04),0 10px 26px rgba(20,30,50,.06);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Hiragino Sans GB",sans-serif;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:var(--sans);color:var(--ink);background:var(--bg);line-height:1.7;-webkit-font-smoothing:antialiased}
+  a{color:inherit}
+  .shell{display:grid;grid-template-columns:276px minmax(0,1fr);min-height:100vh}
+  .side{position:sticky;top:0;height:100vh;overflow:auto;background:var(--card);border-right:1px solid var(--line);padding:24px 16px}
+  .brand{display:flex;gap:11px;align-items:center;padding:0 8px 20px;margin-bottom:16px;border-bottom:1px solid var(--line)}
+  .logo{width:36px;height:36px;border-radius:9px;background:var(--primary);color:#fff;display:grid;place-items:center;font-weight:800;font-size:15px;flex:none}
+  .brand b{display:block;font-size:14px;color:var(--ink)}
+  .brand span{display:block;font-size:11px;color:var(--muted);margin-top:1px}
+  .nav{display:flex;flex-direction:column;gap:2px}
+  .nav a{display:flex;gap:9px;align-items:baseline;text-decoration:none;padding:8px 10px;border-radius:var(--radius-sm);color:var(--ink-soft);font-size:13px;transition:background .18s,color .18s}
+  .nav a:hover{background:var(--bg);color:var(--ink)}
+  .nav .n{width:22px;flex:none;font-family:var(--mono);font-size:11px;color:var(--muted);font-weight:700}
+  .main{max-width:1060px;width:100%;margin:0 auto;padding:48px 46px 96px}
+  .cover{padding:28px 0 30px;margin-bottom:38px;border-bottom:1px solid var(--line)}
+  .kicker{font-size:12px;font-weight:800;color:var(--primary);letter-spacing:1.5px;text-transform:uppercase}
+  h1{font-size:34px;line-height:1.22;letter-spacing:-.4px;margin:12px 0 12px}
+  .cover p{max-width:760px;color:var(--ink-soft);font-size:15px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+  .chip{display:inline-flex;align-items:center;padding:4px 11px;border-radius:999px;border:1px solid var(--line);background:#fff;color:var(--ink-soft);font-size:12px;font-weight:600}
+  .chip.ok{border-color:rgba(4,120,87,.16);background:var(--success-soft);color:var(--success)}
+  .chip.warn{border-color:rgba(180,83,9,.18);background:var(--warning-soft);color:var(--warning)}
+  section{margin-bottom:52px;scroll-margin-top:24px}
+  .sec-head{display:flex;align-items:flex-start;gap:14px;margin-bottom:18px}
+  .sec-num{width:40px;height:40px;border-radius:10px;background:var(--inverse);color:#fff;display:grid;place-items:center;font-family:var(--mono);font-size:12px;font-weight:800;flex:none}
+  h2{font-size:22px;letter-spacing:-.2px;line-height:1.3}
+  .sec-sub{font-size:13px;color:var(--muted);margin-top:2px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px 24px;box-shadow:var(--shadow);margin-bottom:14px}
+  .card.flat{box-shadow:none}
+  .card h3{font-size:16px;margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .card h3::before{content:"";width:4px;height:16px;border-radius:3px;background:var(--primary);flex:none}
+  .card p{font-size:14px;color:var(--ink-soft);margin-bottom:9px}
+  .card p:last-child{margin-bottom:0}
+  .grid{display:grid;gap:14px}
+  .grid.c2{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .grid.c3{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .mini{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:16px 17px;box-shadow:0 1px 2px rgba(20,30,50,.04)}
+  .mini .t{font-size:14px;font-weight:800;color:var(--ink);margin-bottom:4px}
+  .mini .d{font-size:13px;color:var(--ink-soft);line-height:1.6}
+  .mini .tag{display:inline-flex;margin-bottom:8px;padding:2px 7px;border-radius:5px;font-size:11px;font-weight:800;background:var(--primary-soft);color:var(--primary)}
+  .note{border-left:3px solid var(--primary);background:var(--primary-soft);border-radius:0 10px 10px 0;padding:13px 16px;color:var(--ink-soft);font-size:13.5px;margin:14px 0}
+  .note.safe{border-color:var(--success);background:var(--success-soft)}
+  .note.warn{border-color:var(--warning);background:var(--warning-soft)}
+  .note b{color:var(--ink)}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0 2px}
+  .step{display:inline-flex;align-items:center;min-height:34px;padding:7px 12px;border-radius:var(--radius-sm);background:#fff;border:1px solid var(--line);font-size:13px;font-weight:700;color:var(--ink-soft)}
+  .step.hot{background:var(--primary-soft);color:var(--primary);border-color:transparent}
+  .step.done{background:var(--success-soft);color:var(--success);border-color:transparent}
+  .arr{font-size:13px;color:var(--muted);font-family:var(--mono)}
+  .tbl{width:100%;border-collapse:collapse;font-size:13px}
+  .tbl th{text-align:left;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;padding:10px;border-bottom:2px solid var(--line);white-space:nowrap}
+  .tbl td{padding:11px 10px;border-bottom:1px solid var(--line);color:var(--ink-soft);vertical-align:top}
+  .tbl tr:last-child td{border-bottom:none}
+  .tbl b{color:var(--ink)}
+  .badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:800;white-space:nowrap}
+  .badge.p0{background:var(--danger-soft);color:var(--danger)}
+  .badge.p1{background:var(--warning-soft);color:var(--warning)}
+  .badge.ok{background:var(--success-soft);color:var(--success)}
+  .badge.info{background:var(--info-soft);color:var(--info)}
+  .route{font-family:var(--mono);font-size:11.5px;background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--ink-soft);white-space:nowrap}
+  .timeline{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:#fff}
+  .tl{display:grid;grid-template-columns:142px minmax(0,1fr);gap:16px;padding:15px 17px;border-bottom:1px solid var(--line)}
+  .tl:last-child{border-bottom:none}
+  .tl .m{font-weight:900;color:var(--primary);font-size:13px}
+  .tl .body .tt{font-size:14px;font-weight:800;color:var(--ink);margin-bottom:3px}
+  .tl .body .dd{font-size:13px;color:var(--ink-soft)}
+  .page-list{display:grid;gap:12px}
+  .page-card{display:grid;grid-template-columns:180px minmax(0,1fr);gap:16px;align-items:start;background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;box-shadow:0 1px 2px rgba(20,30,50,.04)}
+  .page-title{font-size:14px;font-weight:900;color:var(--ink);margin-bottom:5px}
+  .page-route{margin-top:6px}
+  .page-card p{font-size:13px;color:var(--ink-soft);line-height:1.65;margin-bottom:8px}
+  .page-card ul{display:flex;flex-direction:column;gap:5px;list-style:none}
+  .page-card li{position:relative;padding-left:15px;color:var(--ink-soft);font-size:13px;line-height:1.55}
+  .page-card li::before{content:"";position:absolute;left:1px;top:9px;width:5px;height:5px;border-radius:50%;background:var(--primary);opacity:.65}
+  .script{display:grid;gap:10px}
+  .script-item{display:grid;grid-template-columns:86px minmax(0,1fr);gap:12px;align-items:start;padding:12px 14px;border-radius:var(--radius-sm);background:#fff;border:1px solid var(--line)}
+  .script-item .time{font-family:var(--mono);font-size:12px;color:var(--primary);font-weight:900}
+  .script-item .say{font-size:13.5px;color:var(--ink-soft)}
+  .script-item b{color:var(--ink)}
+  .print-hint{font-size:12px;color:var(--muted);margin-top:18px}
+  @media(max-width:960px){
+    .shell{grid-template-columns:1fr}
+    .side{display:none}
+    .main{padding:30px 18px 76px}
+    .grid.c2,.grid.c3{grid-template-columns:1fr}
+    .page-card,.tl,.script-item{grid-template-columns:1fr}
+    h1{font-size:28px}
+  }
+  @media print{
+    body{background:#fff}
+    .shell{display:block}
+    .side{display:none}
+    .main{max-width:none;padding:0}
+    section{break-inside:avoid;margin-bottom:28px}
+    .card,.mini,.page-card{box-shadow:none}
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">智</div>
+      <div><b>原型讲解大纲</b><span>工程智管家 MVP</span></div>
+    </div>
+    <nav class="nav">
+      <a href="#overview"><span class="n">01</span>讲解总口径</a>
+      <a href="#roles"><span class="n">02</span>两端与角色</a>
+      <a href="#flow"><span class="n">03</span>主业务闭环</a>
+      <a href="#ops"><span class="n">04</span>运维端页面</a>
+      <a href="#site"><span class="n">05</span>工地端页面</a>
+      <a href="#demo"><span class="n">06</span>推荐演示路线</a>
+      <a href="#talk"><span class="n">07</span>讲解话术</a>
+      <a href="#qa"><span class="n">08</span>用户常问问题</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <header class="cover">
+      <div class="kicker">Prototype Briefing Guide</div>
+      <h1>工程智管家 MVP 原型演示讲解大纲</h1>
+      <p>这份 HTML 用来辅助下午给用户讲原型：说明当前整套系统做什么、两端如何分工、主流程怎么走、每个页面承担什么作用，以及推荐按什么顺序演示。</p>
+      <div class="meta">
+        <span class="chip ok">原型页面与演示状态已覆盖</span>
+        <span class="chip">范围：运维端 + 工地端</span>
+        <span class="chip">用途：现场讲解大纲</span>
+        <span class="chip warn">不以真实 API 联调为本次评审口径</span>
+      </div>
+    </header>
+
+    <section id="overview">
+      <div class="sec-head">
+        <div class="sec-num">01</div>
+        <div><h2>讲解总口径</h2><div class="sec-sub">先把用户听感定住：它不是再造一个平台，而是现有平台和项目一线之间的智能工作层。</div></div>
+      </div>
+
+      <div class="card">
+        <h3>一句话定位</h3>
+        <p><b>工程智管家 MVP 是面向项目一线的“进度风险提醒与填报减负智能体”。</b></p>
+        <p>它不替代公司平台、股份平台、业主平台和检测平台，而是把 WBS、风险源、日报、附件和填报动作串起来，帮助项目部少整理、早提醒、任务到人、草稿可确认、填报可辅助。</p>
+      </div>
+
+      <div class="grid c3">
+        <div class="mini"><div class="tag">价值 1</div><div class="t">少填报</div><div class="d">从 WBS、风险清单、日报、照片和监测资料中提取可复用信息，减少重复录入。</div></div>
+        <div class="mini"><div class="tag">价值 2</div><div class="t">早提醒</div><div class="d">根据 WBS 计划、风险等级和提醒规则提前生成风险任务，而不是等平台报警。</div></div>
+        <div class="mini"><div class="tag">价值 3</div><div class="t">任务到人</div><div class="d">提醒、确认、补材料和填报事项都进入任务中心，并分派到具体责任人。</div></div>
+        <div class="mini"><div class="tag">价值 4</div><div class="t">人工确认</div><div class="d">日报解析、风险草稿、填报包都允许人工修改和确认，避免 AI 直接替人拍板。</div></div>
+        <div class="mini"><div class="tag">价值 5</div><div class="t">协助填平台</div><div class="d">用户自行登录目标平台后，系统辅助填写字段和上传附件，最终提交仍由用户本人完成。</div></div>
+        <div class="mini"><div class="tag">价值 6</div><div class="t">留痕追溯</div><div class="d">提醒、草稿、确认、填报、配置都有日志和来源依据，方便复盘和解释。</div></div>
+      </div>
+
+      <div class="note safe"><b>本次原型评审口径：</b>看页面、状态、入口、流程和业务故事是否完整；不把真实后端 API、真实文件解析、真实 Playwright 自动化作为本轮缺口。</div>
+    </section>
+
+    <section id="roles">
+      <div class="sec-head">
+        <div class="sec-num">02</div>
+        <div><h2>两端与角色</h2><div class="sec-sub">系统分为运维端和工地端，两端的工作重点不同。</div></div>
+      </div>
+
+      <div class="grid c2">
+        <div class="card flat">
+          <h3>运维端</h3>
+          <p><b>服务对象：</b>实施管理员、系统管理员、项目配置责任人。</p>
+          <p><b>主要任务：</b>把项目底座搭起来，包括项目、成员、WBS、风险源、关联关系、日报目录、提醒规则、上报模板、平台字段映射和操作日志。</p>
+          <p><b>讲解重点：</b>运维端不是日常一线使用入口，而是前期初始化和规则维护入口。</p>
+        </div>
+        <div class="card flat">
+          <h3>工地端</h3>
+          <p><b>服务对象：</b>项目负责人、项目执行人、资料与填报负责人。</p>
+          <p><b>主要任务：</b>看首页待办、处理风险任务、确认日报解析、审核风险草稿、启动填报助手。</p>
+          <p><b>讲解重点：</b>一线用户不每天维护复杂底图，只处理任务、补材料、确认结果。</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>角色和页面关系</h3>
+        <table class="tbl">
+          <thead><tr><th>角色</th><th>常看页面</th><th>核心动作</th></tr></thead>
+          <tbody>
+            <tr><td><b>实施管理员</b></td><td>项目配置、WBS 导入、风险源管理、WBS-风险关联、规则配置</td><td>初始化项目底图和提醒规则</td></tr>
+            <tr><td><b>项目负责人</b></td><td>工地首页、任务中心、风险任务、草稿审核</td><td>看风险、看逾期、确认关键结果</td></tr>
+            <tr><td><b>项目执行人</b></td><td>任务中心、风险任务、任务详情</td><td>处理风险任务、补充材料、提交确认</td></tr>
+            <tr><td><b>资料与填报负责人</b></td><td>日报解析、草稿审核、填报助手</td><td>确认日报、审核草稿、启动辅助填报</td></tr>
+            <tr><td><b>系统管理员</b></td><td>成员配置、操作日志</td><td>维护人员权限、查看配置和操作记录</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="flow">
+      <div class="sec-head">
+        <div class="sec-num">03</div>
+        <div><h2>主业务闭环</h2><div class="sec-sub">讲原型时建议一直围绕这条线，不要散讲页面。</div></div>
+      </div>
+
+      <div class="card">
+        <h3>完整闭环</h3>
+        <div class="flow">
+          <span class="step hot">创建项目</span><span class="arr">-></span>
+          <span class="step hot">配置成员</span><span class="arr">-></span>
+          <span class="step hot">导入 WBS</span><span class="arr">-></span>
+          <span class="step hot">导入风险源</span><span class="arr">-></span>
+          <span class="step hot">建立 WBS-风险关联</span><span class="arr">-></span>
+          <span class="step hot">配置提醒和材料规则</span><span class="arr">-></span>
+          <span class="step done">生成风险任务</span><span class="arr">-></span>
+          <span class="step done">日报扫描解析</span><span class="arr">-></span>
+          <span class="step done">人工确认日报</span><span class="arr">-></span>
+          <span class="step done">生成风险草稿</span><span class="arr">-></span>
+          <span class="step done">审核生成填报包</span><span class="arr">-></span>
+          <span class="step done">填报助手辅助录入</span><span class="arr">-></span>
+          <span class="step done">用户最终提交</span>
+        </div>
+      </div>
+
+      <div class="timeline">
+        <div class="tl"><div class="m">第一段</div><div class="body"><div class="tt">后台初始化</div><div class="dd">先用运维端把项目、成员、WBS、风险源、关联规则、日报目录、提醒规则、模板和字段映射配置好。</div></div></div>
+        <div class="tl"><div class="m">第二段</div><div class="body"><div class="tt">任务生成与到人</div><div class="dd">系统根据 WBS 计划时间和风险规则，把提醒转成任务，分派给具体负责人和确认人。</div></div></div>
+        <div class="tl"><div class="m">第三段</div><div class="body"><div class="tt">日报进入人工确认</div><div class="dd">系统从日报目录识别文件，提取日期、进度、问题、风险和附件信息，用户在日报解析页修正并确认。</div></div></div>
+        <div class="tl"><div class="m">第四段</div><div class="body"><div class="tt">草稿和填报包</div><div class="dd">已确认日报、WBS、风险源、附件和模板共同生成风险上报草稿，审核后形成填报包。</div></div></div>
+        <div class="tl"><div class="m">第五段</div><div class="body"><div class="tt">网页填报助手</div><div class="dd">用户自行登录目标平台，系统辅助录入字段、上传附件、保存草稿，并停在最终提交前。</div></div></div>
+      </div>
+    </section>
+
+    <section id="ops">
+      <div class="sec-head">
+        <div class="sec-num">04</div>
+        <div><h2>运维端页面说明</h2><div class="sec-sub">运维端用于“搭底图、配规则、看日志”。演示时从项目注册/管理进入。</div></div>
+      </div>
+
+      <div class="page-list">
+        <div class="page-card"><div><div class="page-title">登录页</div><span class="badge info">入口</span><div class="page-route"><span class="route">/login</span></div></div><div><p>先选择“系统运维端”或“工地现场端”。运维端登录后进入项目注册/管理。</p><ul><li>用于说明系统有两类使用场景。</li><li>演示时可先选运维端完成初始化，再切到工地端看一线闭环。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">项目注册/管理</div><span class="badge p0">P0</span><div class="page-route"><span class="route">/admin/project</span></div></div><div><p>管理系统里的项目底座，创建、编辑、停用项目，并进入“项目工作台”。</p><ul><li>讲解点：所有 WBS、风险源、任务、日报都归属到当前项目。</li><li>演示动作：点击“进入工作台”，进入项目级配置集合。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">成员与责任配置</div><span class="badge p0">P0</span><div class="page-route"><span class="route">/admin/members</span></div></div><div><p>维护项目成员、职位、联系方式、责任标签和每个人负责的风险源。</p><ul><li>讲解点：系统不是只按角色提醒，而是任务到具体人。</li><li>演示动作：添加或编辑成员，查看成员对应的风险责任。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">WBS 导入</div><span class="badge p0">P0</span><div class="page-route"><span class="route">/admin/wbs</span></div></div><div><p>导入施工进度计划，形成系统判断风险触发时间的工序底图。</p><ul><li>讲解点：上传后进入解析预览，能人工调整工序名称、层级和计划时间。</li><li>演示动作：点击“选择文件导入”，展示“文件接收 -> 解析字段 -> 人工确认 -> 写入底图”。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">风险源管理</div><span class="badge p0">P0</span><div class="page-route"><span class="route">/admin/risk-sources</span></div></div><div><p>导入和维护风险源，包括风险等级、类型、管控周期、责任人、确认人、控制要求和材料要求。</p><ul><li>讲解点：风险源不是简单列表，还包括后续草稿和补材料所需的要求。</li><li>演示动作：展示风险源导入预览，编辑材料要求和控制要求。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">WBS-风险关联</div><span class="badge p0">P0</span><div class="page-route"><span class="route">/admin/wbs-risk-link</span></div></div><div><p>把具体 WBS 工序和风险源绑定，配置提前提醒天数和提醒方式。</p><ul><li>讲解点：系统能提前提醒，是因为这里建立了“哪个工序触发哪个风险”。</li><li>演示动作：新增一条关联规则，说明后续如何生成风险任务。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">日报目录配置</div><span class="badge p0">P0</span><div class="page-route"><span class="route">/admin/daily-dir</span></div></div><div><p>配置 incoming、processing、archive、failed、processed 等目录，以及扫描频率和启用状态。</p><ul><li>讲解点：系统不是让用户上传每份日报，而是从微信群监听服务落盘目录扫描。</li><li>演示动作：展示文件流转路径和测试扫描。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">提醒规则配置</div><span class="badge p0">P0</span><div class="page-route"><span class="route">/admin/rules</span></div></div><div><p>按风险等级配置提前提醒天数和启用状态。</p><ul><li>讲解点：重大风险可以提前 14 天，一般风险可提前 3 天，规则可按项目调整。</li><li>演示动作：修改提醒天数，说明任务生成逻辑。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">上报模板配置</div><span class="badge p1">P1</span><div class="page-route"><span class="route">/admin/templates</span></div></div><div><p>维护风险动态上报模板，定义草稿章节、字段、数据来源和缺项规则。</p><ul><li>讲解点：AI 草稿不是自由发挥，而是按模板填字段。</li><li>演示动作：在字段配置和文书预览之间切换。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">平台字段映射</div><span class="badge p1">P1</span><div class="page-route"><span class="route">/admin/field-mapping</span></div></div><div><p>配置内部草稿字段和外部平台字段的对应关系，同时维护附件类型映射。</p><ul><li>讲解点：填报助手知道“系统字段要填到平台哪个字段”，靠这里配置。</li><li>演示动作：校验映射，说明失败字段如何转人工处理。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">操作日志</div><span class="badge p0">P0</span><div class="page-route"><span class="route">/admin/logs</span></div></div><div><p>查询系统配置、任务生成、日报解析、草稿确认等操作记录。</p><ul><li>讲解点：关键过程留痕，方便追溯“谁改了什么、系统什么时候生成了什么”。</li><li>演示动作：按级别或关键词筛选日志。</li></ul></div></div>
+      </div>
+    </section>
+
+    <section id="site">
+      <div class="sec-head">
+        <div class="sec-num">05</div>
+        <div><h2>工地端页面说明</h2><div class="sec-sub">工地端用于“看待办、处理任务、确认日报、审核草稿、辅助填报”。</div></div>
+      </div>
+
+      <div class="page-list">
+        <div class="page-card"><div><div class="page-title">工地首页</div><span class="badge p0">P0</span><div class="page-route"><span class="route">/dashboard</span></div></div><div><p>一线用户进入系统后的工作台，展示逾期任务、待处理任务、待确认日报、待审核草稿、待填报事项和即将触发风险。</p><ul><li>讲解点：首页不放复杂后台配置，只回答“我今天要处理什么”。</li><li>演示动作：从统计卡片和快捷入口进入任务、日报、草稿、填报助手。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">任务中心</div><span class="badge p0">P0</span><div class="page-route"><span class="route">/tasks</span></div></div><div><p>所有提醒、确认、补材料和填报事项的统一入口。</p><ul><li>讲解点：任务中心按今日任务、逾期任务、待补充材料、待确认日报、待审核草稿、待填报事项筛选。</li><li>演示动作：打开任务详情抽屉，展示触发原因、关联 WBS、关联风险源、材料补充、状态流转。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">风险任务</div><span class="badge p0">P0</span><div class="page-route"><span class="route">/risks</span></div></div><div><p>按风险源展示等级、类型、管控期、责任人、确认人、所需材料、关联 WBS、当前状态和触发规则。</p><ul><li>讲解点：用户能从风险视角查看风险是否临近、缺哪些材料、有哪些日报和附件。</li><li>演示动作：生成草稿，查看历史草稿，进入填报包。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">日报解析确认</div><span class="badge p0">P0</span><div class="page-route"><span class="route">/daily-reports</span></div></div><div><p>展示从日报文件中提取的日期、施工内容、进度、问题、风险、监测、明日计划、匹配 WBS 和附件标记。</p><ul><li>讲解点：AI 解析结果不是只读，用户可以改字段、调 WBS、标记附件后再确认入库。</li><li>演示动作：切换待确认、历史归档、异常文件；异常文件可重新解析或转人工确认。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">草稿审核</div><span class="badge p0">P0</span><div class="page-route"><span class="route">/drafts</span></div></div><div><p>审核系统生成的风险进展上报草稿，展示正文、字段化信息、来源引用、附件清单和缺项提示。</p><ul><li>讲解点：草稿可编辑、可驳回、可审核，通过后生成平台填报包。</li><li>演示动作：修改正文，填写审核意见，点击“审核通过并生成填报包”。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">填报助手</div><span class="badge p1">P1</span><div class="page-route"><span class="route">/filling</span></div></div><div><p>预览已确认填报包的待填字段和附件，展示安全声明、登录确认、辅助录入进度、失败字段、草稿保存和最终提交状态。</p><ul><li>讲解点：系统不保存密码、不绕验证码、不自动最终提交。</li><li>演示动作：打开目标平台，确认已登录，启动辅助填报，标记平台草稿已保存，最后标记用户已提交。</li></ul></div></div>
+        <div class="page-card"><div><div class="page-title">用户与班组</div><span class="badge info">现场入口</span><div class="page-route"><span class="route">/members</span></div></div><div><p>工地端可查看项目成员和责任标签，方便一线知道任务和风险责任分工。</p><ul><li>讲解点：同一成员可承担多个责任，系统按责任标签分派任务。</li><li>演示动作：查看成员负责的风险源。</li></ul></div></div>
+      </div>
+    </section>
+
+    <section id="demo">
+      <div class="sec-head">
+        <div class="sec-num">06</div>
+        <div><h2>推荐演示路线</h2><div class="sec-sub">如果时间有限，按这条路线讲，最容易让用户理解整套闭环。</div></div>
+      </div>
+
+      <div class="card">
+        <h3>15 分钟标准演示</h3>
+        <div class="script">
+          <div class="script-item"><div class="time">0-2 分钟</div><div class="say"><b>开场定位：</b>工程智管家不是新平台，而是帮项目部把 WBS、风险、日报、附件和填报串起来的智能工作层。</div></div>
+          <div class="script-item"><div class="time">2-6 分钟</div><div class="say"><b>运维端建底图：</b>项目配置 -> 成员责任 -> WBS 导入预览 -> 风险源导入预览 -> WBS-风险关联 -> 提醒规则。</div></div>
+          <div class="script-item"><div class="time">6-8 分钟</div><div class="say"><b>补充自动化配置：</b>日报目录说明文件来源，上报模板说明草稿生成规则，平台字段映射说明填报助手怎么知道填哪里。</div></div>
+          <div class="script-item"><div class="time">8-11 分钟</div><div class="say"><b>工地端处理任务：</b>首页看待办 -> 任务中心筛选 -> 任务详情看触发原因、材料和状态流转。</div></div>
+          <div class="script-item"><div class="time">11-13 分钟</div><div class="say"><b>日报到草稿：</b>日报解析确认 -> 修改字段和 WBS -> 草稿审核 -> 审核通过生成填报包。</div></div>
+          <div class="script-item"><div class="time">13-15 分钟</div><div class="say"><b>填报助手收口：</b>预览字段和附件 -> 用户自行登录 -> 启动辅助填报 -> 保存平台草稿 -> 用户最终提交。</div></div>
+        </div>
+      </div>
+
+      <div class="grid c2">
+        <div class="mini"><div class="t">如果只给 5 分钟</div><div class="d">讲首页、任务中心、日报确认、草稿审核、填报助手五个页面即可。重点是“任务驱动 + 人工确认 + 辅助填报”。</div></div>
+        <div class="mini"><div class="t">如果用户关注后台</div><div class="d">重点讲项目工作台：WBS、风险源、关联、规则、模板、字段映射。这些说明系统为什么能提前提醒和自动生成草稿。</div></div>
+      </div>
+    </section>
+
+    <section id="talk">
+      <div class="sec-head">
+        <div class="sec-num">07</div>
+        <div><h2>讲解话术</h2><div class="sec-sub">可以直接照着讲，语气按现场调整。</div></div>
+      </div>
+
+      <div class="card">
+        <h3>开场话术</h3>
+        <p>“我们这版原型重点不是再做一个大而全的平台，而是在现有平台和项目一线之间加一个智能工作层。系统先把 WBS、风险源、日报目录、提醒规则、模板和字段映射配置好；一线人员日常主要看任务、确认日报、审核草稿和启动填报助手。”</p>
+      </div>
+
+      <div class="card">
+        <h3>解释为什么需要后台配置</h3>
+        <p>“系统要提前提醒，前提是知道哪个 WBS 工序会触发哪个风险源；系统要生成草稿，前提是知道风险源要求哪些材料、模板需要哪些字段；系统要辅助填平台，前提是知道内部字段和平台字段怎么对应。所以后台配置是为了让一线少维护。”</p>
+      </div>
+
+      <div class="card">
+        <h3>解释人工确认边界</h3>
+        <p>“日报解析、草稿生成、网页填报都不是直接自动提交。系统负责整理、提取、生成和辅助，关键节点都要人工确认。特别是外部平台账号、密码、验证码只在目标平台输入，系统不保存密码，不绕验证码，也不自动最终提交。”</p>
+      </div>
+
+      <div class="card">
+        <h3>收尾话术</h3>
+        <p>“这条闭环跑通以后，项目部每天不用从多个文件和平台里反复复制粘贴，而是围绕任务中心处理：哪些风险快到了、哪些材料缺了、哪些日报要确认、哪些草稿要审核、哪些填报包要处理，都能在一个工作台里看到。”</p>
+      </div>
+    </section>
+
+    <section id="qa">
+      <div class="sec-head">
+        <div class="sec-num">08</div>
+        <div><h2>用户常问问题</h2><div class="sec-sub">提前准备几个回答，避免现场被问散。</div></div>
+      </div>
+
+      <div class="card">
+        <table class="tbl">
+          <thead><tr><th>用户可能问</th><th>建议回答</th></tr></thead>
+          <tbody>
+            <tr><td><b>AI 解析日报错了怎么办？</b></td><td>日报解析确认页可以人工修改日期、施工内容、进度、问题、风险内容和匹配 WBS，确认后才入库。</td></tr>
+            <tr><td><b>风险提醒怎么来的？</b></td><td>后台先把 WBS 和风险源建立关联，再按风险等级配置提前提醒天数，系统根据计划开始时间生成任务。</td></tr>
+            <tr><td><b>每个风险要哪些材料在哪里配？</b></td><td>风险源管理页维护材料要求，上报模板页维护缺项规则，任务和草稿里会显示缺哪些材料。</td></tr>
+            <tr><td><b>草稿是按什么格式生成？</b></td><td>上报模板配置页定义章节、字段和来源，草稿生成后还要人工审核确认。</td></tr>
+            <tr><td><b>填报助手会不会替用户提交？</b></td><td>不会。用户自行登录目标平台，系统只辅助录入和上传附件，保存草稿后停在最终提交前。</td></tr>
+            <tr><td><b>如果字段填不上怎么办？</b></td><td>平台字段映射页维护字段对应关系；填报助手页会显示失败字段和失败原因，转人工处理。</td></tr>
+            <tr><td><b>现在是完整上线版本吗？</b></td><td>当前是原型演示版本，重点验证流程、页面和业务闭环；真实 API、文件解析和平台自动化会在后续开发联调阶段落地。</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="note warn"><b>讲解提醒：</b>用户如果问“现在能不能真实解析文件、真实填平台”，回答要稳：当前演示的是原型闭环，真实解析和真实平台自动化属于后续联调与验收工作，不混在本次原型评审里判断。</div>
+      <div class="print-hint">提示：本页可直接浏览器打印为 PDF；打印时会隐藏左侧导航。</div>
+    </section>
+  </main>
+</div>
+</body>
+</html>

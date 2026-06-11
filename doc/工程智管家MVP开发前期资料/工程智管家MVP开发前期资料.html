@@ -1,0 +1,1225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工程智管家 MVP · 开发前期资料</title>
+<style>
+  :root{
+    --ink:#1c2430; --ink-soft:#4a5567; --muted:#8a94a6;
+    --line:#e6e9ef; --bg:#f5f6f8; --card:#ffffff;
+    --accent:#2f5bd0; --accent-soft:#eaf0fc;
+    --green:#1f7a4d; --green-soft:#e6f4ec;
+    --amber:#9a6a12; --amber-soft:#fbf0d9;
+    --red:#b3341f; --red-soft:#fbe9e5;
+    --radius:14px;
+    --shadow:0 1px 2px rgba(20,30,50,.04), 0 8px 24px rgba(20,30,50,.06);
+    --shadow-sm:0 1px 2px rgba(20,30,50,.05);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Hiragino Sans GB",sans-serif;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:var(--sans);color:var(--ink);background:var(--bg);line-height:1.7;-webkit-font-smoothing:antialiased}
+
+  /* layout */
+  .shell{display:grid;grid-template-columns:268px 1fr;min-height:100vh}
+  .side{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;background:#fff;border-right:1px solid var(--line);padding:26px 18px}
+  .main{max-width:960px;margin:0 auto;padding:56px 48px 120px;width:100%}
+
+  /* sidebar */
+  .brand{display:flex;align-items:center;gap:10px;padding:0 8px 22px;border-bottom:1px solid var(--line);margin-bottom:18px}
+  .brand .logo{width:34px;height:34px;border-radius:9px;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:700;font-size:15px;flex:none}
+  .brand b{font-size:14.5px;letter-spacing:.2px;display:block}
+  .brand span{font-size:11.5px;color:var(--muted)}
+  .nav a{display:flex;gap:10px;align-items:baseline;padding:8px 10px;border-radius:9px;color:var(--ink-soft);text-decoration:none;font-size:13.5px;transition:.15s}
+  .nav a .n{font-variant-numeric:tabular-nums;color:var(--muted);font-size:12px;font-weight:600;width:20px;flex:none}
+  .nav a:hover{background:var(--bg);color:var(--ink)}
+  .nav a.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+  .nav a.active .n{color:var(--accent)}
+
+  /* cover */
+  .cover{padding:34px 0 12px;border-bottom:1px solid var(--line);margin-bottom:44px}
+  .kicker{font-size:12.5px;font-weight:600;color:var(--accent);letter-spacing:1.5px;text-transform:uppercase}
+  .cover h1{font-size:32px;line-height:1.25;margin:14px 0 12px;letter-spacing:-.4px}
+  .cover p{color:var(--ink-soft);font-size:15px;max-width:680px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+  .meta .chip{font-size:12.5px;color:var(--ink-soft);background:#fff;border:1px solid var(--line);border-radius:999px;padding:5px 13px;box-shadow:var(--shadow-sm)}
+
+  /* document blocks */
+  section{margin-bottom:64px;scroll-margin-top:24px}
+  .sec-head{display:flex;align-items:flex-start;gap:16px;margin-bottom:24px}
+  .sec-num{font-size:13px;font-weight:700;color:#fff;background:var(--ink);border-radius:9px;min-width:42px;height:42px;display:grid;place-items:center;flex:none;letter-spacing:.5px}
+  .sec-head h2{font-size:23px;letter-spacing:-.3px;margin-bottom:3px}
+  .sec-head .who{font-size:13px;color:var(--muted)}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:26px 28px;box-shadow:var(--shadow);margin-bottom:18px}
+  .card h3{font-size:16px;margin:0 0 12px;display:flex;align-items:center;gap:9px}
+  .card h3::before{content:"";width:4px;height:16px;border-radius:3px;background:var(--accent)}
+  .card h4{font-size:14px;color:var(--ink);margin:18px 0 8px}
+  .card p{color:var(--ink-soft);font-size:14px;margin-bottom:10px}
+  .card p:last-child{margin-bottom:0}
+  .lead{font-size:14.5px;color:var(--ink-soft)}
+
+  ul.list{list-style:none;display:flex;flex-direction:column;gap:7px;margin:4px 0}
+  ul.list li{position:relative;padding-left:22px;font-size:14px;color:var(--ink-soft)}
+  ul.list li::before{content:"";position:absolute;left:4px;top:9px;width:6px;height:6px;border-radius:50%;background:var(--accent);opacity:.55}
+
+  /* grid of mini cards */
+  .grid{display:grid;gap:14px}
+  .grid.c2{grid-template-columns:repeat(2,1fr)}
+  .grid.c3{grid-template-columns:repeat(3,1fr)}
+  .mini{background:#fff;border:1px solid var(--line);border-radius:11px;padding:16px 17px;box-shadow:var(--shadow-sm)}
+  .mini .t{font-weight:600;font-size:14px;margin-bottom:5px}
+  .mini .d{font-size:13px;color:var(--ink-soft)}
+
+  /* tables */
+  .tbl{width:100%;border-collapse:collapse;font-size:13.5px;margin:6px 0}
+  .tbl th{text-align:left;font-weight:600;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.4px;padding:10px 12px;border-bottom:2px solid var(--line)}
+  .tbl td{padding:11px 12px;border-bottom:1px solid var(--line);color:var(--ink-soft);vertical-align:top}
+  .tbl tr:last-child td{border-bottom:none}
+  .tbl tr:hover td{background:#fafbfc}
+  .tbl td:first-child,.tbl th:first-child{padding-left:4px}
+  .mono{font-family:var(--mono);font-size:12.5px;color:var(--accent);background:var(--accent-soft);padding:1px 6px;border-radius:5px}
+
+  /* badges */
+  .b{display:inline-block;font-size:11.5px;font-weight:700;padding:2px 9px;border-radius:999px;letter-spacing:.3px}
+  .b.p0{color:var(--red);background:var(--red-soft)}
+  .b.p1{color:var(--amber);background:var(--amber-soft)}
+  .b.p2{color:var(--ink-soft);background:var(--line)}
+  .b.ok{color:var(--green);background:var(--green-soft)}
+
+  /* flow */
+  .flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:8px;margin:8px 0}
+  .flow .step{background:var(--accent-soft);color:var(--accent);font-size:13px;font-weight:600;padding:9px 14px;border-radius:9px;display:flex;align-items:center}
+  .flow .arr{color:var(--muted);align-self:center;font-size:14px}
+  .flow.green .step{background:var(--green-soft);color:var(--green)}
+
+  /* numbered steps */
+  ol.steps{list-style:none;counter-reset:s;display:flex;flex-direction:column;gap:11px;margin:6px 0}
+  ol.steps li{counter-increment:s;position:relative;padding-left:42px;font-size:14px;color:var(--ink-soft);min-height:28px;display:flex;align-items:center}
+  ol.steps li::before{content:counter(s);position:absolute;left:0;top:0;width:28px;height:28px;border-radius:8px;background:#fff;border:1px solid var(--line);color:var(--accent);font-weight:700;font-size:13px;display:grid;place-items:center;box-shadow:var(--shadow-sm)}
+
+  /* callout */
+  .note{border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 10px 10px 0;padding:14px 18px;font-size:13.5px;color:var(--ink-soft);margin:14px 0}
+  .note.warn{border-color:var(--amber);background:var(--amber-soft)}
+  .note.safe{border-color:var(--green);background:var(--green-soft)}
+  .note b{color:var(--ink)}
+
+  /* two-col split for milestones */
+  .timeline{display:flex;flex-direction:column;gap:0}
+  .tl{display:grid;grid-template-columns:88px 1fr;gap:18px;padding:16px 0;border-bottom:1px solid var(--line)}
+  .tl:last-child{border-bottom:none}
+  .tl .m{font-weight:700;color:var(--accent);font-size:14px}
+  .tl .m small{display:block;color:var(--muted);font-weight:400;font-size:12px;margin-top:2px}
+  .tl .body .tt{font-weight:600;font-size:14px;margin-bottom:4px}
+  .tl .body .dd{font-size:13px;color:var(--ink-soft)}
+
+  /* db group */
+  .dbgroup{border:1px solid var(--line);border-radius:11px;overflow:hidden;margin-bottom:12px}
+  .dbgroup .h{background:#fafbfc;padding:11px 16px;font-weight:600;font-size:13.5px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+  .dbgroup .h span{font-size:12px;color:var(--muted);font-weight:400}
+  .dbgroup .tags{padding:13px 16px;display:flex;flex-wrap:wrap;gap:7px}
+  .dbgroup .tags code{font-family:var(--mono);font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 8px;color:var(--ink-soft)}
+  .dbgroup .tags code.star{color:var(--accent);background:var(--accent-soft);border-color:transparent;font-weight:600}
+  .tname{display:flex;align-items:baseline;gap:10px;margin:24px 0 6px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+  .tname:first-of-type{margin-top:6px}
+  .tname code{font-family:var(--mono);font-size:14.5px;font-weight:600;color:var(--ink)}
+  .tname span{font-size:12.5px;color:var(--muted)}
+  .tname.star code{color:var(--accent)}
+  .tname.star::after{content:'核心';font-size:11px;color:var(--accent);background:var(--accent-soft);padding:2px 7px;border-radius:5px;font-weight:600}
+  .ftbl{width:100%;border-collapse:collapse;font-size:13px;margin:2px 0}
+  .ftbl th{text-align:left;font-weight:600;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px;padding:8px 10px;border-bottom:1.5px solid var(--line)}
+  .ftbl td{padding:7px 10px;border-bottom:1px solid var(--line);color:var(--ink-soft);vertical-align:top}
+  .ftbl tr:last-child td{border-bottom:none}
+  .ftbl tr:hover td{background:#fafbfc}
+  .ftbl .f{font-family:var(--mono);font-size:12px;color:var(--ink);white-space:nowrap;font-weight:500}
+  .ftbl .t{font-family:var(--mono);font-size:11.5px;color:var(--muted);white-space:nowrap}
+  .tdesc{font-size:12.5px;line-height:1.65;color:var(--ink-soft);margin:2px 0 10px}
+  .tdesc b{color:var(--muted);font-weight:600}
+  .ck{display:inline-block;font-family:var(--mono);font-size:10.5px;padding:1px 6px;border-radius:4px;background:var(--bg);border:1px solid var(--line);color:var(--muted);margin-right:3px}
+  .ck.pk{color:#9a6b00;background:#fff7e6;border-color:#ffe2a8}
+  .ck.fk{color:var(--accent);background:var(--accent-soft);border-color:transparent}
+  .enum{font-size:12px;color:var(--muted);margin:8px 0 2px;line-height:1.8}
+  .enum b{color:var(--ink-soft);font-weight:600}
+
+  .endpoint{display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .endpoint:last-child{border-bottom:none}
+  .verb{font-family:var(--mono);font-size:11px;font-weight:700;padding:2px 8px;border-radius:5px;min-width:54px;text-align:center;flex:none}
+  .verb.get{color:var(--green);background:var(--green-soft)}
+  .verb.post{color:var(--accent);background:var(--accent-soft)}
+  .verb.patch,.verb.put{color:var(--amber);background:var(--amber-soft)}
+  .verb.del{color:var(--red);background:var(--red-soft)}
+  .endpoint .path{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+  .endpoint .desc{color:var(--muted);margin-left:auto;font-size:12.5px}
+
+  .back{position:fixed;right:26px;bottom:26px;width:44px;height:44px;border-radius:50%;background:var(--ink);color:#fff;display:grid;place-items:center;text-decoration:none;box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:.25s;font-size:18px}
+  .back.show{opacity:1;pointer-events:auto}
+
+  @media(max-width:880px){
+    .shell{grid-template-columns:1fr}
+    .side{display:none}
+    .main{padding:32px 20px 90px}
+    .grid.c2,.grid.c3{grid-template-columns:1fr}
+    .endpoint .desc{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <!-- SIDEBAR -->
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">智</div>
+      <div><b>工程智管家 MVP</b><span>开发前期资料 · 基线版</span></div>
+    </div>
+    <nav class="nav" id="nav">
+      <a href="#doc0"><span class="n">00</span>文档目录与使用说明</a>
+      <a href="#doc1"><span class="n">01</span>总体建设方案</a>
+      <a href="#doc2"><span class="n">02</span>用户需求规格说明书</a>
+      <a href="#doc3"><span class="n">03</span>系统架构设计</a>
+      <a href="#doc4"><span class="n">04</span>初步数据库设计</a>
+      <a href="#doc5"><span class="n">05</span>API 接口规划</a>
+      <a href="#doc6"><span class="n">06</span>前端页面与交互</a>
+      <a href="#doc7"><span class="n">07</span>开发任务拆解与排期</a>
+    </nav>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+    <header class="cover">
+      <div class="kicker">合流污水一期复线工程 · FXZ1.2 标试点</div>
+      <h1>工程智管家 MVP 开发前期资料</h1>
+      <p>面向项目一线的进度风险提醒与填报减负系统。本资料把用户需求转成开发前所需的六类基线文档：需求规格、系统架构、数据库、接口、页面交互与任务拆解。</p>
+      <div class="meta">
+        <span class="chip">📅 编制 2026-06-09</span>
+        <span class="chip">📐 状态：开发前期基线</span>
+        <span class="chip">🧩 A/B 双层架构</span>
+        <span class="chip">🤖 LangGraph 受控编排</span>
+        <span class="chip">🗂 共 8 份文档</span>
+      </div>
+    </header>
+
+    <!-- ===================== 00 ===================== -->
+    <section id="doc0">
+      <div class="sec-head">
+        <div class="sec-num">00</div>
+        <div><h2>文档目录与使用说明</h2><div class="who">面向全体成员 · 文档结构、使用方法、交付关系</div></div>
+      </div>
+
+      <div class="card">
+        <h3>文档包定位</h3>
+        <p class="lead">本套文档不是汇报材料，也不是概念方案，而是进入开发前的基线资料。它回答：系统为什么做、MVP 边界在哪、用户与任务如何定义、架构如何分层、数据库与接口怎么拆、页面如何组织、任务如何排期。</p>
+      </div>
+
+      <div class="card">
+        <h3>八份文档清单</h3>
+        <table class="tbl">
+          <thead><tr><th>序号</th><th>文件</th><th>面向对象</th><th>主要内容</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">00</span></td><td>文档目录与使用说明</td><td>全体成员</td><td>文档结构、使用方法、交付关系</td></tr>
+            <tr><td><span class="mono">01</span></td><td>总体建设方案</td><td>业务方、产品、研发负责人</td><td>产品定位、目标、MVP 闭环、边界、阶段</td></tr>
+            <tr><td><span class="mono">02</span></td><td>用户需求规格说明书</td><td>产品、开发、测试</td><td>用户模型、业务场景、功能需求、优先级</td></tr>
+            <tr><td><span class="mono">03</span></td><td>系统架构设计</td><td>架构、后端、前端</td><td>上下文、逻辑架构、流程、状态机、安全边界</td></tr>
+            <tr><td><span class="mono">04</span></td><td>初步数据库设计</td><td>后端、数据库、测试</td><td>核心表、字段、关系、状态枚举</td></tr>
+            <tr><td><span class="mono">05</span></td><td>API 接口规划</td><td>后端、前端、测试</td><td>API 模块、接口清单、权限说明</td></tr>
+            <tr><td><span class="mono">06</span></td><td>前端页面与交互说明</td><td>产品、前端、测试</td><td>页面结构、信息架构、关键交互</td></tr>
+            <tr><td><span class="mono">07</span></td><td>开发任务拆解与排期建议</td><td>项目经理、研发、测试</td><td>里程碑、任务拆解、依赖、交付顺序</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>当前基线结论 · 最小闭环</h3>
+        <div class="flow green">
+          <span class="step">WBS 风险底图</span><span class="arr">→</span>
+          <span class="step">微信日报进展</span><span class="arr">→</span>
+          <span class="step">风险预警任务</span><span class="arr">→</span>
+          <span class="step">任务到人</span><span class="arr">→</span>
+          <span class="step">风险进展草稿</span><span class="arr">→</span>
+          <span class="step">人工审核确认</span><span class="arr">→</span>
+          <span class="step">网页辅助填报</span><span class="arr">→</span>
+          <span class="step">操作留痕追溯</span>
+        </div>
+        <p style="margin-top:12px">开发应先跑通这条闭环，再扩展更多平台、更多项目、更多智能分析能力。</p>
+      </div>
+
+      <div class="card">
+        <h3>需求到开发资料映射自检</h3>
+        <p>按需求行横向阅读，可快速定位到对应的架构、数据、接口、页面与任务拆解，确认“需求已转成可执行资料”。</p>
+        <table class="tbl">
+          <thead><tr><th>需求主题</th><th>需求规格</th><th>数据库</th><th>API</th><th>任务</th></tr></thead>
+          <tbody>
+            <tr><td>项目、成员、责任配置</td><td>02 §2、4.1</td><td>04 §4</td><td>05 §3</td><td>M1</td></tr>
+            <tr><td>WBS 计划导入</td><td>02 §3.1、4.2</td><td>04 §5.1</td><td>05 §4</td><td>M2</td></tr>
+            <tr><td>风险源清单导入</td><td>02 §3.1、4.2</td><td>04 §5.2</td><td>05 §5</td><td>M2</td></tr>
+            <tr><td>WBS-风险源关联</td><td>02 §3.1、4.2</td><td>04 §5.3</td><td>05 §6</td><td>M2</td></tr>
+            <tr><td>风险预警任务</td><td>02 §3.2、4.3</td><td>04 §5.5、6</td><td>05 §7</td><td>M3</td></tr>
+            <tr><td>微信日报目录与解析</td><td>02 §3.3、4.4</td><td>04 §7</td><td>05 §8</td><td>M4</td></tr>
+            <tr><td>风险草稿生成</td><td>02 §3.5、4.5</td><td>04 §8.1</td><td>05 §9</td><td>M5</td></tr>
+            <tr><td>填报包与网页辅助填报</td><td>02 §3.6、4.5</td><td>04 §8.2-8.4</td><td>05 §10</td><td>M6</td></tr>
+          </tbody>
+        </table>
+        <div class="note"><b>架构基线补充：</b>系统按 A/B 双层落地——前端采用独立 Web 工程，推荐 Vue 3 + TypeScript + Vite + Element Plus；A 类确定性业务流用 FastAPI + PostgreSQL 直接实现；B 类智能工作流（日报解析、风险草稿生成、自然语言录入预留）用 LangGraph 受控编排，取其状态机、人在环暂停确认与断点续跑能力，大模型只在节点内做“文本到结构化”的填空，不自主决定流程。耗时解析与工作流统一经 Celery 执行（Beat 定时 + Worker 队列）；Hermes 保留为 LangGraph 按需调用的复杂子任务工具，不作为流程编排者。技术栈选用 PostgreSQL、Redis、Celery、MinIO。</div>
+      </div>
+    </section>
+
+    <!-- ===================== 01 ===================== -->
+    <section id="doc1">
+      <div class="sec-head">
+        <div class="sec-num">01</div>
+        <div><h2>总体建设方案</h2><div class="who">产品定位、建设目标、MVP 闭环、系统边界、阶段规划</div></div>
+      </div>
+
+      <div class="card">
+        <h3>建设背景</h3>
+        <p>项目一线已同时使用公司平台、股份平台、业主平台、检测平台、小程序、在线表格和微信群。系统越多，现场反而越累：</p>
+        <ul class="list">
+          <li>平台多、填报入口多，同类信息重复录入</li>
+          <li>微信群、日报、照片、监测资料、平台表单之间缺少联动</li>
+          <li>WBS 计划和风险源清单已存在，但没有主动提醒和任务分派</li>
+          <li>日报文件能下载，但仍需人工阅读、整理、提取</li>
+          <li>风险上报、节点变更、材料上传仍靠人工复制粘贴</li>
+        </ul>
+        <div class="note">目标不是再造一个新平台，而是在现有平台和项目一线之间建立一个<b>智能工作层</b>。</div>
+      </div>
+
+      <div class="card">
+        <h3>产品定位与核心价值</h3>
+        <p class="lead" style="margin-bottom:16px">面向项目一线的进度风险提醒与填报减负智能体。承担“信息整理、风险提醒、任务推进、草稿生成、辅助填报”，不替代各既有平台。</p>
+        <div class="grid c3">
+          <div class="mini"><div class="t">少填报</div><div class="d">从 WBS、风险清单、日报、附件提取信息，减少重复录入</div></div>
+          <div class="mini"><div class="t">早提醒</div><div class="d">按 WBS 工序计划与风险关联提前生成风险任务</div></div>
+          <div class="mini"><div class="t">任务到人</div><div class="d">不只通知角色，而是分派到具体成员</div></div>
+          <div class="mini"><div class="t">自动整理</div><div class="d">自动读取微信群日报目录，提取进展和材料</div></div>
+          <div class="mini"><div class="t">人工确认</div><div class="d">智能生成内容必须经责任人确认</div></div>
+          <div class="mini"><div class="t">留痕追溯</div><div class="d">提醒、草稿、确认、填报均可查询依据</div></div>
+        </div>
+        <div class="note" style="margin-top:16px"><b>技术路线（一句话）：</b>流程可控的上报辅助系统，不是开放式自主智能体。前端采用独立 Web 工程，推荐 Vue 3 + TypeScript + Vite + Element Plus；后端是 Python API 服务，确定性业务流用 FastAPI + PostgreSQL；智能工作流用 LangGraph 编排，大模型只在节点内做“文本到结构化”的填空。耗时任务统一经 Celery 执行，技术栈选用 PostgreSQL、Redis、Celery、MinIO。</div>
+      </div>
+
+      <div class="card">
+        <h3>用户范围 · 轻量人员模型</h3>
+        <table class="tbl">
+          <thead><tr><th>用户类型</th><th>主要职责</th></tr></thead>
+          <tbody>
+            <tr><td>项目负责人</td><td>查看总览、重大风险、逾期任务，确认关键结果</td></tr>
+            <tr><td>项目执行人</td><td>补充现场日报资料、照片、进度说明，响应风险提醒</td></tr>
+            <tr><td>资料与填报负责人</td><td>审核日报解析、整理附件、审核草稿、启动填报助手</td></tr>
+            <tr><td>实施管理员</td><td>导入 WBS、风险源，配置成员、规则、模板和字段映射</td></tr>
+          </tbody>
+        </table>
+        <p style="margin-top:10px">一个人可承担多个职责，系统按责任标签分派任务。</p>
+      </div>
+
+      <div class="grid c2">
+        <div class="card" style="margin-bottom:0">
+          <h3>MVP 必须做</h3>
+          <ul class="list">
+            <li>项目后台初始化 / 成员与责任配置</li>
+            <li>WBS 计划导入 / 风险源清单导入</li>
+            <li>WBS 工序与风险源人工关联</li>
+            <li>风险预警任务生成</li>
+            <li>微信日报目录监听 / 文件基础解析</li>
+            <li>日报进展匹配 WBS / 风险材料缺项提醒</li>
+            <li>风险进展上报草稿生成 / 人工审核确认</li>
+            <li>网页填报助手原型 / 操作日志</li>
+          </ul>
+        </div>
+        <div class="card" style="margin-bottom:0">
+          <h3>MVP 暂不做</h3>
+          <ul class="list">
+            <li>不做完整项目管理平台</li>
+            <li>不做所有平台接口打通</li>
+            <li>不保存外部平台账号密码</li>
+            <li>不绕过验证码、不自动最终提交</li>
+            <li>不做复杂进度计划自动调整、节点自动顺延</li>
+            <li>不做全量监测数据智能预警</li>
+            <li>不做复杂图像识别闭环</li>
+            <li>不做企业级跨项目看板</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>阶段规划</h3>
+        <div class="timeline">
+          <div class="tl"><div class="m">开发准备</div><div class="body"><div class="tt">确认样例、字段、模板和规则</div><div class="dd">产出样例文件、字段映射、任务清单</div></div></div>
+          <div class="tl"><div class="m">基础底座</div><div class="body"><div class="tt">项目、成员、责任、日志</div><div class="dd">后台配置能力</div></div></div>
+          <div class="tl"><div class="m">风险底图</div><div class="body"><div class="tt">WBS、风险源、关联规则</div><div class="dd">风险预警可计算</div></div></div>
+          <div class="tl"><div class="m">任务闭环</div><div class="body"><div class="tt">风险提醒任务到人</div><div class="dd">工地端任务中心</div></div></div>
+          <div class="tl"><div class="m">日报闭环</div><div class="body"><div class="tt">目录扫描、解析、确认</div><div class="dd">实际进展可复用</div></div></div>
+          <div class="tl"><div class="m">草稿闭环</div><div class="body"><div class="tt">缺项检查、草稿生成、审核</div><div class="dd">风险上报草稿可用</div></div></div>
+          <div class="tl"><div class="m">填报原型</div><div class="body"><div class="tt">填报包、字段映射、网页辅助</div><div class="dd">保存草稿并提交前暂停</div></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 02 ===================== -->
+    <section id="doc2">
+      <div class="sec-head">
+        <div class="sec-num">02</div>
+        <div><h2>用户需求规格说明书</h2><div class="who">将用户需求转化为可开发、可测试、可验收的需求规格</div></div>
+      </div>
+
+      <div class="card">
+        <h3>用户目标</h3>
+        <div class="grid c2">
+          <div class="mini"><div class="t">少填报</div><div class="d">从 WBS、风险清单、日报、照片、监测资料提取信息</div></div>
+          <div class="mini"><div class="t">早提醒</div><div class="d">在风险进入管控期前提醒，不等平台报警</div></div>
+          <div class="mini"><div class="t">任务到人</div><div class="d">直接分派到具体责任人，而非抽象角色</div></div>
+          <div class="mini"><div class="t">少维护</div><div class="d">一线只处理任务和确认，不维护复杂底图</div></div>
+          <div class="mini"><div class="t">自动整理</div><div class="d">自动读取日报，提取进度、照片、问题、风险</div></div>
+          <div class="mini"><div class="t">协助填平台</div><div class="d">登录后辅助填字段、传附件，但不自动提交</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>核心业务场景</h3>
+        <ol class="steps">
+          <li><b style="color:var(--ink)">后台初始化 WBS 与风险源</b>　— 导入计划与清单、建立关联、配置提醒规则与材料要求</li>
+          <li><b style="color:var(--ink)">按 WBS 工序提前触发风险提醒</b>　— 提醒转化为任务，分派到人，展示触发原因与所需材料</li>
+          <li><b style="color:var(--ink)">从微信群日报文件获取实际进展</b>　— 定时扫描、去重、提取日期/进度/照片/问题</li>
+          <li><b style="color:var(--ink)">用日报实际进展校验 WBS 工序状态</b>　— 高/低置信度/无法匹配分流，低置信度生成确认任务</li>
+          <li><b style="color:var(--ink)">生成风险进展上报草稿</b>　— 标明数据来源与缺项，必须允许人工修改</li>
+          <li><b style="color:var(--ink)">网页平台辅助录入</b>　— 用户自登录，助手填字段传附件，停在提交前</li>
+        </ol>
+      </div>
+
+      <div class="card">
+        <h3>功能需求清单</h3>
+        <h4>项目后台配置</h4>
+        <table class="tbl"><tbody>
+          <tr><td><span class="mono">FR-001</span></td><td>创建和维护试点项目基础信息</td><td><span class="b p0">P0</span></td></tr>
+          <tr><td><span class="mono">FR-003</span></td><td>配置项目成员</td><td><span class="b p0">P0</span></td></tr>
+          <tr><td><span class="mono">FR-004</span></td><td>配置成员责任标签</td><td><span class="b p0">P0</span></td></tr>
+          <tr><td><span class="mono">FR-007</span></td><td>配置上报模板</td><td><span class="b p1">P1</span></td></tr>
+          <tr><td><span class="mono">FR-008</span></td><td>配置平台字段映射</td><td><span class="b p1">P1</span></td></tr>
+        </tbody></table>
+        <h4>WBS 与风险底图</h4>
+        <table class="tbl"><tbody>
+          <tr><td><span class="mono">FR-101</span></td><td>上传 WBS 进度计划文件</td><td><span class="b p0">P0</span></td></tr>
+          <tr><td><span class="mono">FR-104</span></td><td>上传风险源清单</td><td><span class="b p0">P0</span></td></tr>
+          <tr><td><span class="mono">FR-107</span></td><td>支持人工建立 WBS-风险源关联</td><td><span class="b p0">P0</span></td></tr>
+          <tr><td><span class="mono">FR-108</span></td><td>支持自动推荐 WBS-风险源关联</td><td><span class="b p1">P1</span></td></tr>
+        </tbody></table>
+        <h4>日报解析</h4>
+        <table class="tbl"><tbody>
+          <tr><td><span class="mono">FR-301</span></td><td>配置并扫描微信群日报目录</td><td><span class="b p0">P0</span></td></tr>
+          <tr><td><span class="mono">FR-303</span></td><td>支持 Word/Excel/PPT/PDF/图片基础解析</td><td><span class="b p0">P0</span></td></tr>
+          <tr><td><span class="mono">FR-305</span></td><td>支持人工修改和确认解析结果</td><td><span class="b p0">P0</span></td></tr>
+          <tr><td><span class="mono">FR-306</span></td><td>自动匹配 WBS 工序</td><td><span class="b p1">P1</span></td></tr>
+        </tbody></table>
+        <h4>草稿与填报</h4>
+        <table class="tbl"><tbody>
+          <tr><td><span class="mono">FR-401</span></td><td>为指定风险源生成风险进展上报草稿</td><td><span class="b p0">P0</span></td></tr>
+          <tr><td><span class="mono">FR-402</span></td><td>检查材料缺项并生成补充任务</td><td><span class="b p0">P0</span></td></tr>
+          <tr><td><span class="mono">FR-404</span></td><td>确认草稿后生成填报包</td><td><span class="b p0">P0</span></td></tr>
+          <tr><td><span class="mono">FR-405</span></td><td>用户登录平台后辅助填写字段</td><td><span class="b p1">P1</span></td></tr>
+        </tbody></table>
+      </div>
+
+      <div class="card">
+        <h3>非功能需求</h3>
+        <div class="grid c2">
+          <div class="mini"><div class="t">安全</div><div class="d">不保存平台密码、不绕验证码、不自动最终提交</div></div>
+          <div class="mini"><div class="t">可追溯</div><div class="d">解析、提醒、草稿、填报、确认都要留日志</div></div>
+          <div class="mini"><div class="t">可解释</div><div class="d">风险提醒和草稿必须标明来源与触发原因</div></div>
+          <div class="mini"><div class="t">可确认</div><div class="d">智能生成内容必须经过人工确认</div></div>
+          <div class="mini"><div class="t">可恢复</div><div class="d">文件处理、草稿、填报失败后应可重试</div></div>
+          <div class="mini"><div class="t">易用性</div><div class="d">工地端以任务中心为主，减少复杂菜单</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== 03 ===================== -->
+    <section id="doc3">
+      <div class="sec-head">
+        <div class="sec-num">03</div>
+        <div><h2>系统架构设计</h2><div class="who">上下文、逻辑架构、关键流程、状态机、安全边界、技术分层</div></div>
+      </div>
+
+      <div class="card">
+        <h3>架构总则 · A/B 双层</h3>
+        <div class="grid c2">
+          <div class="mini" style="border-left:3px solid var(--green)">
+            <div class="t">A 类 · 确定性业务流（约 70%）</div>
+            <div class="d">项目/成员/责任配置、WBS 与风险导入、关联、提醒规则按日期计算、任务状态机、目录扫描去重、填报包组装。<br><b style="color:var(--green)">规则 + SQL + 定时器，用 FastAPI + SQLAlchemy 直接实现，不碰图编排与大模型。</b></div>
+          </div>
+          <div class="mini" style="border-left:3px solid var(--accent)">
+            <div class="t">B 类 · 受控智能工作流（约 30%，价值核心）</div>
+            <div class="d">日报解析（抽取→补抽取→语义匹配→挂起确认→回流）、风险草稿生成（聚合→生成→缺项→审核打回）、自然语言录入（预留）。<br><b style="color:var(--accent)">多步 + 分支 + 循环 + 中途暂停等人工确认，用 LangGraph 编排。</b></div>
+          </div>
+        </div>
+        <div class="note warn"><b>关键定位：</b>LangGraph 只取其“状态机 + 人在环 interrupt + 持久化断点续跑”能力，当作确定性工作流引擎。节点和边由工程师写死，大模型只负责节点内的“文本 → 结构化”填空，<b>不自主决定流程走向</b>。Hermes 只作为 LangGraph 按需调用的复杂子任务工具，用于未知格式兜底、跨系统取数、复杂网页操作，不作为流程编排者。</div>
+      </div>
+
+      <div class="card">
+        <h3>逻辑分层</h3>
+        <div class="grid c2">
+          <div class="mini"><div class="t">① 前端应用层</div><div class="d">Vue 3 + TypeScript + Vite + Element Plus 独立工程；工地端首页、任务中心、风险页、日报确认页、草稿页、配置页、填报助手页</div></div>
+          <div class="mini"><div class="t">② 业务服务层（A）</div><div class="d">认证权限、项目/成员、WBS、风险源、关联、任务、日报、草稿、填报包、日志 API</div></div>
+          <div class="mini"><div class="t">③ 智能工作流层（B）</div><div class="d">日报解析工作流、风险草稿工作流、自然语言录入预留、统一 LLM 客户端、文件解析器、Hermes 复杂子任务工具</div></div>
+          <div class="mini"><div class="t">④ 异步任务与调度层</div><div class="d">Celery Beat 定时（扫描/提醒/逾期）、Celery Worker 队列、Redis Broker/Backend、Playwright 填报助手</div></div>
+          <div class="mini"><div class="t">⑤ 数据层</div><div class="d">PostgreSQL（业务态 + LangGraph Checkpoint）、Redis、MinIO 对象存储、微信日报目录</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>核心状态机</h3>
+        <h4>任务状态机</h4>
+        <div class="flow">
+          <span class="step">pending</span><span class="arr">→</span>
+          <span class="step">processing</span><span class="arr">→</span>
+          <span class="step">need_more_info</span><span class="arr">↔</span>
+          <span class="step">pending_confirm</span><span class="arr">→</span>
+          <span class="step">completed</span>
+        </div>
+        <h4>日报解析状态机</h4>
+        <div class="flow">
+          <span class="step">discovered</span><span class="arr">→</span>
+          <span class="step">processing</span><span class="arr">→</span>
+          <span class="step">parsed / low_confidence</span><span class="arr">→</span>
+          <span class="step">pending_review</span><span class="arr">→</span>
+          <span class="step">confirmed</span><span class="arr">→</span>
+          <span class="step">archived</span>
+        </div>
+        <h4>风险草稿状态机</h4>
+        <div class="flow">
+          <span class="step">draft</span><span class="arr">→</span>
+          <span class="step">pending_review</span><span class="arr">↔</span>
+          <span class="step">revised</span><span class="arr">→</span>
+          <span class="step">confirmed</span><span class="arr">→</span>
+          <span class="step">packaged</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>技术选型与分层（已定基线）</h3>
+        <p>技术栈按职责分层选型：前端采用独立 Web 工程，不使用 Python 前端；推荐 Vue 3 + TypeScript + Vite + Element Plus。A 类确定性业务用 FastAPI + PostgreSQL，B 类智能工作流单独引入 LangGraph。基础设施统一为 PostgreSQL 15、Redis 7、Celery、MinIO。</p>
+        <table class="tbl">
+          <thead><tr><th>层级</th><th>选型</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>前端层</td><td><span class="mono">Vue 3 + TypeScript + Vite + Element Plus</span></td><td>独立前端工程，通过 JSON API 调用后端；负责路由、表格、表单、状态轮询、任务操作与审核交互</td></tr>
+            <tr><td>业务服务层（A）</td><td><span class="mono">FastAPI + Pydantic</span></td><td>业务 API、认证、权限、日志，纯确定性逻辑</td></tr>
+            <tr><td>业务数据层</td><td><span class="mono">PostgreSQL 15</span></td><td>存结构化业务态</td></tr>
+            <tr><td>对象存储</td><td><span class="mono">MinIO</span></td><td>存日报、照片、附件原件，元数据落附件表</td></tr>
+            <tr><td>缓存与队列</td><td><span class="mono">Redis 7</span></td><td>作 Celery Broker/Backend 与缓存</td></tr>
+            <tr><td>智能工作流（B）</td><td><span class="mono">LangGraph + PG Checkpointer</span></td><td>日报解析、草稿生成、自然语言录入预留三条工作流；状态机 + interrupt 人在环 + 断点续跑落 Postgres</td></tr>
+            <tr><td>大模型访问</td><td><span class="mono">统一 LLM 客户端</span></td><td>模型/超时/重试/降级集中；Pydantic 结构化输出；Prompt 与 schema 版本化</td></tr>
+            <tr><td>文件解析</td><td><span class="mono">docx / xlsx / pptx / pdf</span></td><td>按 MIME 分发的 Parser 接口（图片 OCR 可选）</td></tr>
+            <tr><td>复杂子任务工具</td><td><span class="mono">Hermes</span></td><td>被 LangGraph 按需调用，用于未知格式兜底、跨系统取数、复杂网页操作；不作为流程编排者</td></tr>
+            <tr><td>异步与调度</td><td><span class="mono">Celery（Beat + Worker）</span></td><td>定时跑扫描/提醒/逾期；耗时工作流投递到 Celery Worker</td></tr>
+            <tr><td>网页填报</td><td><span class="mono">Playwright（受控）</span></td><td>用户自登录，不存密码、不绕验证码、不自动提交，全程留日志</td></tr>
+          </tbody>
+        </table>
+        <div class="note safe"><b>边界约定：</b>① Hermes 只作为复杂子任务工具，不编排业务流程；② 不把 A 类业务流塞进 LangGraph（纯 CRUD 无分支价值）；③ 不自建工作流步骤表替代 LangGraph（执行态交给 Checkpointer）。</div>
+      </div>
+    </section>
+
+    <!-- ===================== 04 ===================== -->
+    <section id="doc4">
+      <div class="sec-head">
+        <div class="sec-num">04</div>
+        <div><h2>初步数据库设计</h2><div class="who">PostgreSQL · 核心表、字段、关系、状态枚举</div></div>
+      </div>
+
+      <div class="card">
+        <h3>设计基线约定</h3>
+        <ul class="list">
+          <li><b style="color:var(--ink)">主键统一：</b>全库主键统一用 bigint（BIGSERIAL），避免 int4 与 int8 外键混用</li>
+          <li><b style="color:var(--ink)">项目外键用 project_id：</b>projects.id 是项目唯一主键；各子表关联项目的外键统一用 project_id，不再设置项目业务编码字段，也不再单独维护标段名称字段</li>
+          <li><b style="color:var(--ink)">project_members 一表承载成员与归属：</b>含 user_id、project_id、member_role，并含 display_name、phone、status；member_role 只表示项目内粗粒度归属</li>
+          <li><b style="color:var(--ink)">附件归一到 attachments：</b>一张 attachments 表（接 MinIO）统一承担日报、照片、附件原件元数据</li>
+          <li><b style="color:var(--ink)">身份/权限/参与/职责四轴正交：</b>users 只存自然人账号（跨项目唯一一份）；users.role 管系统级权限；project_members 管参与了哪些项目；responsibility_tags + member_responsibilities 管项目内岗位责任与任务分派。四轴分表、互不耦合，不把项目属性塞进用户表</li>
+          <li><b style="color:var(--ink)">B 类工作流执行态交 LangGraph：</b>节点进度、中间状态、断点交 PostgreSQL Checkpointer，人在环用 tasks + interrupt，不自建工作流步骤表</li>
+          <li><b style="color:var(--ink)">异步作业统一由 Celery 执行：</b>Celery Beat 负责定时触发，Celery Worker 负责耗时作业执行；async_jobs 表只作为前端可见的状态镜像</li>
+          <li><b style="color:var(--ink)">自然语言录入作为预留工作流：</b>本期只在 source_type/job_type 等字段中保留 nl_intake 取值，不纳入 MVP 必交付实现</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>表分组（共 27 张表）</h3>
+        <div class="dbgroup">
+          <div class="h">基础配置 <span>项目、成员、责任标签</span></div>
+          <div class="tags"><code>projects</code><code>users</code><code>project_members</code><code>responsibility_tags</code><code>member_responsibilities</code></div>
+        </div>
+        <div class="dbgroup">
+          <div class="h">WBS 与风险底图 <span>工序、风险、关联、提醒、材料</span></div>
+          <div class="tags"><code>wbs_items</code><code>risk_sources</code><code>wbs_risk_links</code><code>reminder_rules</code><code>material_requirements</code></div>
+        </div>
+        <div class="dbgroup">
+          <div class="h">任务与消息 <span>任务中心、任务依赖、状态历史、用户站内消息</span></div>
+          <div class="tags"><code class="star">tasks</code><code>task_materials</code><code>task_dependencies</code><code>task_status_history</code><code>task_comments</code><code class="star">notifications</code></div>
+        </div>
+        <div class="dbgroup">
+          <div class="h">日报解析 <span>目录配置、文件、解析结果、进度条目</span></div>
+          <div class="tags"><code>daily_report_configs</code><code>daily_report_files</code><code>daily_report_parse_results</code><code>daily_progress_items</code></div>
+        </div>
+        <div class="dbgroup">
+          <div class="h">草稿与填报 <span>草稿、填报包、字段映射</span></div>
+          <div class="tags"><code>risk_report_drafts</code><code>fill_packages</code><code>platform_field_mappings</code><code>fill_package_items</code></div>
+        </div>
+        <div class="dbgroup">
+          <div class="h">附件、作业与日志 <span>附件、异步作业、操作日志</span></div>
+          <div class="tags"><code>attachments</code><code>async_jobs</code><code>operation_logs</code></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>基础配置表</h3>
+
+        <div class="tname"><code>projects</code><span>项目表</span></div>
+        <div class="tdesc"><b>作用：</b>工程项目主数据，全系统的顶层归属，projects.id 是项目唯一主键。<br><b>关联表：</b>被 project_members、wbs_items、risk_sources、tasks 等几乎所有业务表以 project_id 引用。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_name</td><td class="t">varchar(200)</td><td><span class="ck">not null</span></td><td>项目名称</td></tr>
+          <tr><td class="f">owner_unit</td><td class="t">varchar(200)</td><td></td><td>所属单位</td></tr>
+          <tr><td class="f">description</td><td class="t">text</td><td></td><td>项目说明</td></tr>
+          <tr><td class="f">status</td><td class="t">varchar(32)</td><td><span class="ck">default active</span></td><td>active、inactive、archived</td></tr>
+          <tr><td class="f">created_at / updated_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建、更新时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>users</code><span>用户表 · 自然人账号，“身份”这条独立轴</span></div>
+        <div class="tdesc"><b>作用：</b>系统内的自然人账号，跨项目唯一一份，承载账号、个人信息、组织归属与系统权限（role）。<br><b>关联表：</b>被 project_members（参与哪些项目）、tasks、operation_logs 等引用。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">username</td><td class="t">varchar(64)</td><td><span class="ck">unique</span><span class="ck">not null</span></td><td>登录账号</td></tr>
+          <tr><td class="f">password_hash</td><td class="t">varchar(255)</td><td><span class="ck">not null</span></td><td>密码哈希（bcrypt/argon2）</td></tr>
+          <tr><td class="f">real_name</td><td class="t">varchar(100)</td><td><span class="ck">not null</span></td><td>真实姓名</td></tr>
+          <tr><td class="f">phone</td><td class="t">varchar(50)</td><td><span class="ck">unique</span></td><td>手机号，可作登录名</td></tr>
+          <tr><td class="f">email</td><td class="t">varchar(200)</td><td></td><td>邮箱</td></tr>
+          <tr><td class="f">employee_no</td><td class="t">varchar(64)</td><td></td><td>工号</td></tr>
+          <tr><td class="f">gender</td><td class="t">varchar(16)</td><td></td><td>male、female、unknown</td></tr>
+          <tr><td class="f">avatar_url</td><td class="t">varchar(1000)</td><td></td><td>头像地址</td></tr>
+          <tr><td class="f">org_name</td><td class="t">varchar(200)</td><td></td><td>所属单位名称</td></tr>
+          <tr><td class="f">org_type</td><td class="t">varchar(32)</td><td></td><td>owner、general_contractor、supervisor、designer、subcontractor</td></tr>
+          <tr><td class="f">title</td><td class="t">varchar(100)</td><td></td><td>职务/岗位：项目经理、总工、安全员等</td></tr>
+          <tr><td class="f">role</td><td class="t">varchar(32)</td><td><span class="ck">default member</span></td><td>系统级角色：superadmin、admin、member</td></tr>
+          <tr><td class="f">status</td><td class="t">varchar(32)</td><td><span class="ck">default active</span></td><td>账号状态：active、disabled、locked</td></tr>
+          <tr><td class="f">last_login_at</td><td class="t">timestamptz</td><td></td><td>最近登录时间</td></tr>
+          <tr><td class="f">last_login_ip</td><td class="t">varchar(64)</td><td></td><td>最近登录 IP</td></tr>
+          <tr><td class="f">created_at / updated_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建、更新时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>project_members</code><span>项目成员表 · 唯一约束 project_id+user_id</span></div>
+        <div class="tdesc"><b>作用：</b>记录“哪个用户参与了哪个项目”及项目内显示名与联系方式，是 users 与 projects 的多对多连接表。<br><b>关联表：</b>关联 projects、users；被 member_responsibilities 引用。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">user_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>用户 ID</td></tr>
+          <tr><td class="f">member_role</td><td class="t">varchar(32)</td><td><span class="ck">default member</span></td><td>项目内粗粒度角色：owner、manager、member；不承载业务责任</td></tr>
+          <tr><td class="f">display_name</td><td class="t">varchar(100)</td><td></td><td>项目内显示名</td></tr>
+          <tr><td class="f">phone</td><td class="t">varchar(50)</td><td></td><td>联系方式</td></tr>
+          <tr><td class="f">status</td><td class="t">varchar(32)</td><td><span class="ck">default active</span></td><td>状态</td></tr>
+          <tr><td class="f">created_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>responsibility_tags</code><span>责任标签表</span></div>
+        <div class="tdesc"><b>作用：</b>可复用的岗位责任标签字典（安全负责人、风险确认人等），全局共享，不属于具体项目。<br><b>关联表：</b>被 member_responsibilities 引用。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">code</td><td class="t">varchar(64)</td><td><span class="ck">unique</span><span class="ck">not null</span></td><td>标签编码</td></tr>
+          <tr><td class="f">tag_name</td><td class="t">varchar(100)</td><td><span class="ck">not null</span></td><td>标签名称</td></tr>
+          <tr><td class="f">description</td><td class="t">text</td><td></td><td>说明</td></tr>
+          <tr><td class="f">builtin</td><td class="t">boolean</td><td><span class="ck">default false</span></td><td>是否内置</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>member_responsibilities</code><span>成员责任表（成员 × 标签 × 范围）</span></div>
+        <div class="tdesc"><b>作用：</b>把责任标签授予某个项目成员并限定范围（项目/风险/WBS），是“项目内职责”轴的落地表。<br><b>关联表：</b>关联 projects、project_members、responsibility_tags；scope_type 为 risk/wbs 时分别关联 risk_sources、wbs_items。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id；必须与 project_member_id 所属项目一致</td></tr>
+          <tr><td class="f">project_member_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目成员 ID</td></tr>
+          <tr><td class="f">responsibility_tag_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>责任标签 ID</td></tr>
+          <tr><td class="f">scope_type</td><td class="t">varchar(64)</td><td></td><td>范围：project、risk、wbs</td></tr>
+          <tr><td class="f">risk_source_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>scope_type 为 risk 时填写风险源 ID</td></tr>
+          <tr><td class="f">wbs_item_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>scope_type 为 wbs 时填写 WBS 工序 ID</td></tr>
+          <tr><td class="f">created_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建时间</td></tr>
+        </tbody></table>
+
+        <div class="note"><b>users</b> 为系统级用户表（登录、全局角色），项目内成员信息与责任由 <span class="mono">project_members</span> 与 <span class="mono">member_responsibilities</span> 承载。</div>
+      </div>
+
+      <div class="card">
+        <h3>WBS 与风险底图表</h3>
+
+        <div class="tname"><code>wbs_items</code><span>WBS 工序表（自关联父子层级）</span></div>
+        <div class="tdesc"><b>作用：</b>项目进度计划的工序分解（WBS），自关联成父子层级，是进度与提醒的基准。<br><b>关联表：</b>关联 projects；被 wbs_risk_links、tasks、daily_progress_items、risk_report_drafts 引用。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">parent_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>父级工序</td></tr>
+          <tr><td class="f">code</td><td class="t">varchar(100)</td><td></td><td>WBS 编码</td></tr>
+          <tr><td class="f">wbs_item_name</td><td class="t">varchar(300)</td><td><span class="ck">not null</span></td><td>工序名称</td></tr>
+          <tr><td class="f">level</td><td class="t">integer</td><td></td><td>层级</td></tr>
+          <tr><td class="f">planned_start / planned_finish</td><td class="t">date</td><td></td><td>计划开始、完成时间</td></tr>
+          <tr><td class="f">duration_days</td><td class="t">integer</td><td></td><td>工期</td></tr>
+          <tr><td class="f">predecessor / successor</td><td class="t">varchar(300)</td><td></td><td>前置、后续工序</td></tr>
+          <tr><td class="f">is_key_node</td><td class="t">boolean</td><td><span class="ck">default false</span></td><td>是否关键节点</td></tr>
+          <tr><td class="f">status</td><td class="t">varchar(32)</td><td><span class="ck">default not_started</span></td><td>工序状态</td></tr>
+          <tr><td class="f">source_file_id</td><td class="t">bigint</td><td></td><td>来源文件 ID</td></tr>
+          <tr><td class="f">raw_data</td><td class="t">jsonb</td><td></td><td>导入原始字段</td></tr>
+          <tr><td class="f">created_at / updated_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建、更新时间</td></tr>
+        </tbody></table>
+        <div class="enum"><b>状态：</b>not_started · approaching · started · in_progress · completed · delayed · paused · pending_review</div>
+
+        <div class="tname"><code>risk_sources</code><span>风险源表</span></div>
+        <div class="tdesc"><b>作用：</b>项目的风险底图清单（重大/较大/一般风险）及状态、负责人、控制要求。<br><b>关联表：</b>关联 projects；被 wbs_risk_links、risk_report_drafts、tasks 引用。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">risk_name</td><td class="t">varchar(300)</td><td><span class="ck">not null</span></td><td>风险名称</td></tr>
+          <tr><td class="f">level</td><td class="t">varchar(64)</td><td></td><td>风险等级</td></tr>
+          <tr><td class="f">type</td><td class="t">varchar(100)</td><td></td><td>风险类型</td></tr>
+          <tr><td class="f">description</td><td class="t">text</td><td></td><td>风险描述</td></tr>
+          <tr><td class="f">planned_start / planned_finish</td><td class="t">date</td><td></td><td>风险计划开始、结束</td></tr>
+          <tr><td class="f">responsible_user_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>风险负责人</td></tr>
+          <tr><td class="f">leader_name</td><td class="t">varchar(100)</td><td></td><td>挂牌领导</td></tr>
+          <tr><td class="f">current_progress</td><td class="t">text</td><td></td><td>当前进展</td></tr>
+          <tr><td class="f">control_requirements</td><td class="t">text</td><td></td><td>控制要求</td></tr>
+          <tr><td class="f">status</td><td class="t">varchar(32)</td><td><span class="ck">default active</span></td><td>风险状态</td></tr>
+          <tr><td class="f">raw_data</td><td class="t">jsonb</td><td></td><td>导入原始字段</td></tr>
+          <tr><td class="f">created_at / updated_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建、更新时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>wbs_risk_links</code><span>WBS 风险关联表 · 唯一约束 project_id+wbs+risk+stage</span></div>
+        <div class="tdesc"><b>作用：</b>工序与风险源的多对多关联，配置触发阶段与提前提醒天数，是“工序临近→生成风险提醒任务”的规则底座。<br><b>关联表：</b>关联 wbs_items、risk_sources；被 material_requirements 引用。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">wbs_item_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>WBS 工序 ID</td></tr>
+          <tr><td class="f">risk_source_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>风险源 ID</td></tr>
+          <tr><td class="f">trigger_stage</td><td class="t">varchar(64)</td><td></td><td>before_start、started、in_progress、completed</td></tr>
+          <tr><td class="f">reminder_days</td><td class="t">integer[]</td><td></td><td>提前提醒天数，如 {14,7,3}</td></tr>
+          <tr><td class="f">responsible_user_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>负责人</td></tr>
+          <tr><td class="f">confirmer_user_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>确认人</td></tr>
+          <tr><td class="f">basis</td><td class="t">text</td><td></td><td>关联依据</td></tr>
+          <tr><td class="f">status</td><td class="t">varchar(32)</td><td><span class="ck">default active</span></td><td>状态</td></tr>
+          <tr><td class="f">created_at / updated_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建、更新时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>material_requirements</code><span>材料要求表</span></div>
+        <div class="tdesc"><b>作用：</b>某风险或关联规则触发时需要准备的材料清单，供生成任务时带出待补材料。<br><b>关联表：</b>关联 risk_sources、wbs_risk_links。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">risk_source_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>风险源 ID</td></tr>
+          <tr><td class="f">wbs_risk_link_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>关联规则 ID</td></tr>
+          <tr><td class="f">material_type</td><td class="t">varchar(100)</td><td><span class="ck">not null</span></td><td>材料类型</td></tr>
+          <tr><td class="f">material_name</td><td class="t">varchar(200)</td><td><span class="ck">not null</span></td><td>材料名称</td></tr>
+          <tr><td class="f">required</td><td class="t">boolean</td><td><span class="ck">default true</span></td><td>是否必需</td></tr>
+          <tr><td class="f">description</td><td class="t">text</td><td></td><td>要求说明</td></tr>
+          <tr><td class="f">created_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>reminder_rules</code><span>提醒规则表</span></div>
+        <div class="tdesc"><b>作用：</b>按风险等级配置的提前提醒天数与默认负责人/确认人，是关联规则未单独指定时的默认提醒策略。<br><b>关联表：</b>关联 projects、users。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">risk_level</td><td class="t">varchar(64)</td><td></td><td>重大、较大、一般风险</td></tr>
+          <tr><td class="f">reminder_days</td><td class="t">integer[]</td><td><span class="ck">not null</span></td><td>提前提醒天数，如 {14,7,3}</td></tr>
+          <tr><td class="f">repeat_enabled</td><td class="t">boolean</td><td><span class="ck">default true</span></td><td>是否允许重复提醒</td></tr>
+          <tr><td class="f">default_assignee_user_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>默认负责人</td></tr>
+          <tr><td class="f">default_confirmer_user_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>默认确认人</td></tr>
+          <tr><td class="f">status</td><td class="t">varchar(32)</td><td><span class="ck">default active</span></td><td>状态</td></tr>
+          <tr><td class="f">created_at / updated_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建、更新时间</td></tr>
+        </tbody></table>
+      </div>
+
+      <div class="card">
+        <h3>任务与消息中心表</h3>
+
+        <div class="tname star"><code>tasks</code><span>任务表 — 所有提醒、确认、填报的统一载体</span></div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">dedup_key</td><td class="t">varchar(300)</td><td><span class="ck">unique</span><span class="ck">nullable</span></td><td>幂等键，防定时预警任务每日重复生成</td></tr>
+          <tr><td class="f">title</td><td class="t">varchar(300)</td><td><span class="ck">not null</span></td><td>任务标题</td></tr>
+          <tr><td class="f">type</td><td class="t">varchar(64)</td><td><span class="ck">not null</span></td><td>任务类型（见下）</td></tr>
+          <tr><td class="f">status</td><td class="t">varchar(32)</td><td><span class="ck">default pending</span></td><td>任务状态（见下）</td></tr>
+          <tr><td class="f">priority</td><td class="t">integer</td><td><span class="ck">default 0</span></td><td>优先级</td></tr>
+          <tr><td class="f">assignee_user_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>负责人</td></tr>
+          <tr><td class="f">confirmer_user_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>确认人</td></tr>
+          <tr><td class="f">due_at</td><td class="t">timestamptz</td><td></td><td>截止时间</td></tr>
+          <tr><td class="f">started_at</td><td class="t">timestamptz</td><td></td><td>开始处理时间，用于计算处理时长</td></tr>
+          <tr><td class="f">last_reminded_at / next_remind_at</td><td class="t">timestamptz</td><td></td><td>最近提醒、下次提醒时间</td></tr>
+          <tr><td class="f">wbs_item_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>WBS 工序</td></tr>
+          <tr><td class="f">risk_source_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>风险源</td></tr>
+          <tr><td class="f">source_type / source_id</td><td class="t">varchar(64) / bigint</td><td></td><td>来源对象类型与 ID，source_type 可含 nl_intake</td></tr>
+          <tr><td class="f">required_materials</td><td class="t">jsonb</td><td></td><td>所需材料只读展示快照，不参与材料齐否判断</td></tr>
+          <tr><td class="f">trigger_reason</td><td class="t">text</td><td></td><td>触发原因</td></tr>
+          <tr><td class="f">result</td><td class="t">text</td><td></td><td>处理结果</td></tr>
+          <tr><td class="f">created_at / updated_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建、更新时间</td></tr>
+          <tr><td class="f">completed_at</td><td class="t">timestamptz</td><td></td><td>完成时间</td></tr>
+        </tbody></table>
+        <div class="enum"><b>类型：</b>risk_warning · material_prepare · photo_supplement · monitor_upload · risk_status_confirm · daily_review · draft_review · platform_fill<br><b>状态：</b>pending · processing · need_more_info · pending_confirm · completed · overdue · cancelled<br><b>材料判断：</b>以 task_materials.status 为准，required_materials 只做展示快照</div>
+
+        <div class="tname star"><code>notifications</code><span>消息通知表 — 用户站内消息中心</span></div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>项目 ID</td></tr>
+          <tr><td class="f">recipient_user_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>接收人</td></tr>
+          <tr><td class="f">type</td><td class="t">varchar(64)</td><td><span class="ck">not null</span></td><td>消息类型（见下）</td></tr>
+          <tr><td class="f">title</td><td class="t">varchar(300)</td><td><span class="ck">not null</span></td><td>消息标题</td></tr>
+          <tr><td class="f">content</td><td class="t">text</td><td></td><td>消息正文</td></tr>
+          <tr><td class="f">level</td><td class="t">varchar(32)</td><td><span class="ck">default info</span></td><td>info、warning、urgent</td></tr>
+          <tr><td class="f">source_type</td><td class="t">varchar(64)</td><td></td><td>task、risk_source、daily_report、draft</td></tr>
+          <tr><td class="f">source_id</td><td class="t">bigint</td><td></td><td>关联对象 ID</td></tr>
+          <tr><td class="f">link</td><td class="t">varchar(500)</td><td></td><td>前端跳转路由</td></tr>
+          <tr><td class="f">is_read</td><td class="t">boolean</td><td><span class="ck">default false</span></td><td>是否已读</td></tr>
+          <tr><td class="f">read_at</td><td class="t">timestamptz</td><td></td><td>已读时间</td></tr>
+          <tr><td class="f">created_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建时间</td></tr>
+        </tbody></table>
+        <div class="enum"><b>类型：</b>task_assigned · task_due_soon · task_overdue · risk_reminder · draft_review · parse_confirm · system<br><b>索引：</b>recipient_user_id+is_read（我的未读）、recipient_user_id+created_at（消息列表倒序）</div>
+        <div class="note"><b>消息与任务的关系：</b>遵循需求“提醒必须转化为任务，而不是只发消息”。消息只是提醒入口，真正的待办是任务；多数消息通过 <span class="mono">source_type/source_id</span> 指向一条 tasks 记录。</div>
+
+        <div class="tname"><code>task_materials</code><span>任务材料表（任务 × 附件）</span></div>
+        <div class="tdesc"><b>作用：</b>任务材料的真相源，记录某任务应准备/已提交的材料项、状态、附件与提交人。材料是否齐全、是否待补，以本表 status 为准。<br><b>关联表：</b>关联 tasks、attachments、users。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">task_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>任务 ID</td></tr>
+          <tr><td class="f">material_type</td><td class="t">varchar(100)</td><td></td><td>材料类型</td></tr>
+          <tr><td class="f">material_name</td><td class="t">varchar(200)</td><td></td><td>材料名称</td></tr>
+          <tr><td class="f">required</td><td class="t">boolean</td><td><span class="ck">default true</span></td><td>是否必需</td></tr>
+          <tr><td class="f">status</td><td class="t">varchar(32)</td><td><span class="ck">default pending</span></td><td>pending、submitted、accepted、rejected、missing</td></tr>
+          <tr><td class="f">attachment_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>附件 ID，未提交时为空</td></tr>
+          <tr><td class="f">submitted_by / submitted_at</td><td class="t">bigint / timestamptz</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>提交人、提交时间</td></tr>
+          <tr><td class="f">reviewed_by / reviewed_at</td><td class="t">bigint / timestamptz</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>审核人、审核时间</td></tr>
+          <tr><td class="f">created_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>task_dependencies</code><span>任务依赖表</span></div>
+        <div class="tdesc"><b>作用：</b>承载任务之间的先后依赖，例如“先备料后填报”。<br><b>关联表：</b>两次关联 tasks，分别表示当前任务和前置任务。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">task_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>当前任务 ID</td></tr>
+          <tr><td class="f">depends_on_task_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>前置任务 ID</td></tr>
+          <tr><td class="f">dep_type</td><td class="t">varchar(64)</td><td><span class="ck">default finish_to_start</span></td><td>finish_to_start、start_to_start、manual</td></tr>
+          <tr><td class="f">created_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>task_status_history</code><span>任务状态历史表</span></div>
+        <div class="tdesc"><b>作用：</b>记录任务状态流转历史，保留“曾经逾期”等事实，支撑按期率、处理时长、退回次数等统计。<br><b>关联表：</b>关联 tasks、users。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">task_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>任务 ID</td></tr>
+          <tr><td class="f">from_status / to_status</td><td class="t">varchar(32)</td><td><span class="ck">not null</span></td><td>原状态、新状态</td></tr>
+          <tr><td class="f">changed_by</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>变更人，系统自动流转时为空</td></tr>
+          <tr><td class="f">reason</td><td class="t">text</td><td></td><td>变更原因</td></tr>
+          <tr><td class="f">changed_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>变更时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>task_comments</code><span>任务备注表</span></div>
+        <div class="tdesc"><b>作用：</b>任务下的处理备注与沟通记录，保留任务推进过程。<br><b>关联表：</b>关联 tasks、users。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">task_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>任务 ID</td></tr>
+          <tr><td class="f">user_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>备注人</td></tr>
+          <tr><td class="f">content</td><td class="t">text</td><td><span class="ck">not null</span></td><td>备注内容</td></tr>
+          <tr><td class="f">created_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建时间</td></tr>
+        </tbody></table>
+      </div>
+
+      <div class="card">
+        <h3>日报解析表</h3>
+
+        <div class="tname"><code>daily_report_configs</code><span>日报目录配置表</span></div>
+        <div class="tdesc"><b>作用：</b>配置每个项目的日报文件来源目录与扫描参数，是日报扫描任务的源头。<br><b>关联表：</b>关联 projects。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">incoming_dir</td><td class="t">varchar(1000)</td><td><span class="ck">not null</span></td><td>新文件目录</td></tr>
+          <tr><td class="f">processing_dir</td><td class="t">varchar(1000)</td><td></td><td>处理中目录</td></tr>
+          <tr><td class="f">processed_dir</td><td class="t">varchar(1000)</td><td></td><td>处理成功目录</td></tr>
+          <tr><td class="f">failed_dir</td><td class="t">varchar(1000)</td><td></td><td>处理失败目录</td></tr>
+          <tr><td class="f">archive_dir</td><td class="t">varchar(1000)</td><td></td><td>原始文件归档目录</td></tr>
+          <tr><td class="f">scan_interval_seconds</td><td class="t">integer</td><td><span class="ck">default 600</span></td><td>扫描间隔</td></tr>
+          <tr><td class="f">enabled</td><td class="t">boolean</td><td><span class="ck">default true</span></td><td>是否启用</td></tr>
+          <tr><td class="f">created_at / updated_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建、更新时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>daily_report_files</code><span>日报文件表 · 唯一约束 project_id+file_hash</span></div>
+        <div class="tdesc"><b>作用：</b>扫描发现的微信日报原始文件及去重指纹与处理状态。<br><b>关联表：</b>关联 projects；被 daily_report_parse_results 引用。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">original_filename</td><td class="t">varchar(500)</td><td><span class="ck">not null</span></td><td>原始文件名</td></tr>
+          <tr><td class="f">file_path</td><td class="t">varchar(1000)</td><td><span class="ck">not null</span></td><td>文件路径</td></tr>
+          <tr><td class="f">file_hash</td><td class="t">varchar(128)</td><td><span class="ck">not null</span></td><td>文件指纹（去重）</td></tr>
+          <tr><td class="f">file_type</td><td class="t">varchar(64)</td><td></td><td>文件类型</td></tr>
+          <tr><td class="f">source_group</td><td class="t">varchar(200)</td><td></td><td>微信群名</td></tr>
+          <tr><td class="f">source_sender</td><td class="t">varchar(100)</td><td></td><td>发送人</td></tr>
+          <tr><td class="f">source_sent_at</td><td class="t">timestamptz</td><td></td><td>发送时间</td></tr>
+          <tr><td class="f">process_status</td><td class="t">varchar(32)</td><td><span class="ck">default discovered</span></td><td>处理状态</td></tr>
+          <tr><td class="f">error_message</td><td class="t">text</td><td></td><td>错误信息</td></tr>
+          <tr><td class="f">created_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建时间</td></tr>
+          <tr><td class="f">processed_at</td><td class="t">timestamptz</td><td></td><td>处理时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>daily_report_parse_results</code><span>日报解析结果表（LLM 结构化输出）</span></div>
+        <div class="tdesc"><b>作用：</b>LLM 对单个日报文件的结构化解析结果（施工内容、进度、问题、风险等）与人工确认状态。<br><b>关联表：</b>关联 daily_report_files、users；被 daily_progress_items 引用。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">file_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>日报文件 ID</td></tr>
+          <tr><td class="f">report_date</td><td class="t">date</td><td></td><td>日报日期</td></tr>
+          <tr><td class="f">construction_content</td><td class="t">text</td><td></td><td>施工内容</td></tr>
+          <tr><td class="f">progress_text</td><td class="t">text</td><td></td><td>当前进度</td></tr>
+          <tr><td class="f">cumulative_progress</td><td class="t">text</td><td></td><td>累计进展</td></tr>
+          <tr><td class="f">issues</td><td class="t">text</td><td></td><td>存在问题</td></tr>
+          <tr><td class="f">next_plan</td><td class="t">text</td><td></td><td>明日计划</td></tr>
+          <tr><td class="f">risk_text / monitor_text</td><td class="t">text</td><td></td><td>风险、监测相关内容</td></tr>
+          <tr><td class="f">confidence</td><td class="t">numeric(5,2)</td><td></td><td>解析置信度</td></tr>
+          <tr><td class="f">review_status</td><td class="t">varchar(32)</td><td><span class="ck">default pending_review</span></td><td>确认状态</td></tr>
+          <tr><td class="f">reviewer_user_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>确认人</td></tr>
+          <tr><td class="f">reviewed_at</td><td class="t">timestamptz</td><td></td><td>确认时间</td></tr>
+          <tr><td class="f">raw_text</td><td class="t">text</td><td></td><td>原始提取文本</td></tr>
+          <tr><td class="f">structured_data</td><td class="t">jsonb</td><td></td><td>结构化解析结果</td></tr>
+          <tr><td class="f">created_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>daily_progress_items</code><span>日报进度条目表（进度 × WBS 语义匹配）</span></div>
+        <div class="tdesc"><b>作用：</b>解析结果内拆出的逐条进度，语义匹配到具体 WBS 工序以回填进度。<br><b>关联表：</b>关联 projects、daily_report_parse_results、wbs_items。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">parse_result_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>解析结果 ID</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id；必须与 parse_result_id 所属项目一致</td></tr>
+          <tr><td class="f">wbs_item_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>匹配 WBS</td></tr>
+          <tr><td class="f">progress_text</td><td class="t">text</td><td><span class="ck">not null</span></td><td>进度描述</td></tr>
+          <tr><td class="f">match_confidence</td><td class="t">numeric(5,2)</td><td></td><td>匹配置信度</td></tr>
+          <tr><td class="f">match_status</td><td class="t">varchar(32)</td><td><span class="ck">default pending_review</span></td><td>匹配状态</td></tr>
+          <tr><td class="f">confirmed_by</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>确认人</td></tr>
+          <tr><td class="f">confirmed_at</td><td class="t">timestamptz</td><td></td><td>确认时间</td></tr>
+        </tbody></table>
+      </div>
+
+      <div class="card">
+        <h3>草稿与填报表</h3>
+
+        <div class="tname"><code>risk_report_drafts</code><span>风险上报草稿表（LLM 生成 + 人工审核）</span></div>
+        <div class="tdesc"><b>作用：</b>LLM 生成、人工审核的风险上报草稿，含数据来源摘要与缺材料提示。<br><b>关联表：</b>关联 projects、risk_sources、wbs_items、daily_report_parse_results、attachments；被 fill_packages 引用。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">risk_source_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>风险源 ID</td></tr>
+          <tr><td class="f">wbs_item_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>WBS 工序 ID</td></tr>
+          <tr><td class="f">title</td><td class="t">varchar(300)</td><td><span class="ck">not null</span></td><td>草稿标题</td></tr>
+          <tr><td class="f">content</td><td class="t">text</td><td><span class="ck">not null</span></td><td>草稿正文</td></tr>
+          <tr><td class="f">source_summary</td><td class="t">text</td><td></td><td>数据来源摘要</td></tr>
+          <tr><td class="f">daily_report_parse_result_ids</td><td class="t">bigint[]</td><td></td><td>关联的日报解析结果 ID 列表</td></tr>
+          <tr><td class="f">missing_materials</td><td class="t">jsonb</td><td></td><td>缺少材料</td></tr>
+          <tr><td class="f">attachment_ids</td><td class="t">bigint[]</td><td></td><td>附件 ID 列表</td></tr>
+          <tr><td class="f">status</td><td class="t">varchar(32)</td><td><span class="ck">default draft</span></td><td>草稿状态（见下）</td></tr>
+          <tr><td class="f">reviewer_user_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>审核人</td></tr>
+          <tr><td class="f">confirmed_at</td><td class="t">timestamptz</td><td></td><td>确认时间</td></tr>
+          <tr><td class="f">created_by</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>创建人或系统用户</td></tr>
+          <tr><td class="f">created_at / updated_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建、更新时间</td></tr>
+        </tbody></table>
+        <div class="enum"><b>状态：</b>draft · pending_review · revised · confirmed · packaged · cancelled</div>
+
+        <div class="tname"><code>fill_packages</code><span>填报包表</span></div>
+        <div class="tdesc"><b>作用：</b>由草稿生成、面向某目标平台的待填报数据包，package_data 存待填字段与附件。<br><b>关联表：</b>关联 risk_report_drafts；被 fill_package_items 引用。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">draft_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>草稿 ID</td></tr>
+          <tr><td class="f">target_platform</td><td class="t">varchar(100)</td><td></td><td>目标平台</td></tr>
+          <tr><td class="f">business_flow</td><td class="t">varchar(100)</td><td></td><td>业务流程</td></tr>
+          <tr><td class="f">status</td><td class="t">varchar(32)</td><td><span class="ck">default created</span></td><td>状态（见下）</td></tr>
+          <tr><td class="f">package_data</td><td class="t">jsonb</td><td></td><td>待填字段和附件数据</td></tr>
+          <tr><td class="f">created_by</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>创建人</td></tr>
+          <tr><td class="f">created_at / updated_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建、更新时间</td></tr>
+        </tbody></table>
+        <div class="enum"><b>状态：</b>created · ready · filling · saved_as_draft · failed · submitted_by_user · cancelled</div>
+
+        <div class="tname"><code>platform_field_mappings</code><span>平台字段映射表</span></div>
+        <div class="tdesc"><b>作用：</b>目标上报平台的字段与本系统来源字段的映射规则，含网页选择器定位提示。<br><b>关联表：</b>关联 projects；被 fill_package_items 引用。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">target_platform</td><td class="t">varchar(100)</td><td><span class="ck">not null</span></td><td>目标平台</td></tr>
+          <tr><td class="f">business_flow</td><td class="t">varchar(100)</td><td><span class="ck">not null</span></td><td>业务流程</td></tr>
+          <tr><td class="f">platform_field_key</td><td class="t">varchar(200)</td><td><span class="ck">not null</span></td><td>平台字段标识</td></tr>
+          <tr><td class="f">platform_field_label</td><td class="t">varchar(200)</td><td></td><td>平台字段名称</td></tr>
+          <tr><td class="f">source_field_path</td><td class="t">varchar(300)</td><td><span class="ck">not null</span></td><td>来源字段路径</td></tr>
+          <tr><td class="f">field_type</td><td class="t">varchar(64)</td><td></td><td>字段类型</td></tr>
+          <tr><td class="f">required</td><td class="t">boolean</td><td><span class="ck">default false</span></td><td>是否必填</td></tr>
+          <tr><td class="f">selector_hint</td><td class="t">text</td><td></td><td>网页选择器或定位提示</td></tr>
+          <tr><td class="f">status</td><td class="t">varchar(32)</td><td><span class="ck">default active</span></td><td>状态</td></tr>
+          <tr><td class="f">created_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>fill_package_items</code><span>填报包明细表</span></div>
+        <div class="tdesc"><b>作用：</b>填报包内逐字段/逐附件的填报项与状态，是网页自动填报的最小执行单元。<br><b>关联表：</b>关联 fill_packages、platform_field_mappings、attachments。</div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">fill_package_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>填报包 ID</td></tr>
+          <tr><td class="f">mapping_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>字段映射 ID</td></tr>
+          <tr><td class="f">item_type</td><td class="t">varchar(64)</td><td><span class="ck">not null</span></td><td>field、attachment</td></tr>
+          <tr><td class="f">label</td><td class="t">varchar(200)</td><td></td><td>字段或附件名称</td></tr>
+          <tr><td class="f">value_text</td><td class="t">text</td><td></td><td>待填写文本</td></tr>
+          <tr><td class="f">attachment_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>附件 ID</td></tr>
+          <tr><td class="f">required</td><td class="t">boolean</td><td><span class="ck">default false</span></td><td>是否必填</td></tr>
+          <tr><td class="f">fill_status</td><td class="t">varchar(32)</td><td><span class="ck">default pending</span></td><td>填报状态</td></tr>
+          <tr><td class="f">error_message</td><td class="t">text</td><td></td><td>失败原因</td></tr>
+          <tr><td class="f">created_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建时间</td></tr>
+        </tbody></table>
+      </div>
+
+      <div class="card">
+        <h3>附件、作业与日志表</h3>
+
+        <div class="tname"><code>attachments</code><span>附件表（接 MinIO 对象存储）</span></div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">filename</td><td class="t">varchar(500)</td><td><span class="ck">not null</span></td><td>文件名</td></tr>
+          <tr><td class="f">file_path</td><td class="t">varchar(1000)</td><td><span class="ck">not null</span></td><td>文件路径或对象键</td></tr>
+          <tr><td class="f">file_hash</td><td class="t">varchar(128)</td><td></td><td>文件指纹</td></tr>
+          <tr><td class="f">file_type</td><td class="t">varchar(64)</td><td></td><td>文件类型</td></tr>
+          <tr><td class="f">source_type</td><td class="t">varchar(64)</td><td></td><td>daily_report、manual_upload、platform</td></tr>
+          <tr><td class="f">source_id</td><td class="t">bigint</td><td></td><td>来源对象 ID</td></tr>
+          <tr><td class="f">uploaded_by</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>上传人</td></tr>
+          <tr><td class="f">created_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建时间</td></tr>
+        </tbody></table>
+
+        <div class="tname"><code>async_jobs</code><span>异步作业表 — 面向 UI 的作业态镜像</span></div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span></td><td>项目 ID，关联 projects.id</td></tr>
+          <tr><td class="f">job_type</td><td class="t">varchar(64)</td><td><span class="ck">not null</span></td><td>daily_parse、daily_workflow、draft_workflow、nl_intake、web_fill</td></tr>
+          <tr><td class="f">status</td><td class="t">varchar(32)</td><td><span class="ck">default queued</span></td><td>queued、running、interrupted、succeeded、failed、cancelled</td></tr>
+          <tr><td class="f">target_type / target_id</td><td class="t">varchar(64) / bigint</td><td></td><td>关联对象类型与 ID</td></tr>
+          <tr><td class="f">celery_task_id</td><td class="t">varchar(128)</td><td></td><td>Celery 任务 ID</td></tr>
+          <tr><td class="f">checkpoint_thread_id</td><td class="t">varchar(128)</td><td></td><td>LangGraph 线程/检查点 ID</td></tr>
+          <tr><td class="f">progress</td><td class="t">numeric(5,2)</td><td></td><td>进度百分比</td></tr>
+          <tr><td class="f">error_message</td><td class="t">text</td><td></td><td>失败原因</td></tr>
+          <tr><td class="f">created_at / updated_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建、更新时间</td></tr>
+        </tbody></table>
+        <div class="note"><b>interrupted</b> 状态表示工作流在 LangGraph interrupt 处暂停、等待人工确认，对应任务中心的一条确认任务；确认后从 checkpoint_thread_id 恢复。</div>
+
+        <div class="tname"><code>operation_logs</code><span>操作日志表（审计留痕）</span></div>
+        <table class="ftbl"><thead><tr><th>字段</th><th>类型</th><th>约束</th><th>说明</th></tr></thead><tbody>
+          <tr><td class="f">id</td><td class="t">bigserial</td><td><span class="ck pk">PK</span></td><td>主键</td></tr>
+          <tr><td class="f">project_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>项目 ID</td></tr>
+          <tr><td class="f">user_id</td><td class="t">bigint</td><td><span class="ck fk">FK</span><span class="ck">nullable</span></td><td>操作人</td></tr>
+          <tr><td class="f">action</td><td class="t">varchar(100)</td><td><span class="ck">not null</span></td><td>操作类型</td></tr>
+          <tr><td class="f">target_type / target_id</td><td class="t">varchar(100) / bigint</td><td></td><td>操作对象类型与 ID</td></tr>
+          <tr><td class="f">summary</td><td class="t">text</td><td></td><td>操作摘要</td></tr>
+          <tr><td class="f">before_data / after_data</td><td class="t">jsonb</td><td></td><td>变更前、变更后</td></tr>
+          <tr><td class="f">ip_address</td><td class="t">varchar(100)</td><td></td><td>IP</td></tr>
+          <tr><td class="f">user_agent</td><td class="t">text</td><td></td><td>客户端信息</td></tr>
+          <tr><td class="f">created_at</td><td class="t">timestamptz</td><td><span class="ck">not null</span></td><td>创建时间</td></tr>
+        </tbody></table>
+      </div>
+    </section>
+
+    <!-- ===================== 05 ===================== -->
+    <section id="doc5">
+      <div class="sec-head">
+        <div class="sec-num">05</div>
+        <div><h2>API 接口规划</h2><div class="who">前后端 API 边界 · 按业务模块组织</div></div>
+      </div>
+
+      <div class="card">
+        <h3>设计原则</h3>
+        <div class="note"><b>前端工程基线：</b>前端采用独立 Web 工程，不使用 Python 前端。推荐 Vue 3 + TypeScript + Vite + Element Plus，配合 Vue Router、Pinia 和 Axios/OpenAPI Client 调用后端 FastAPI JSON 接口。</div>
+        <ul class="list">
+          <li>接口按业务模块组织，不按页面硬编码</li>
+          <li>所有项目级业务数据带 project_id 或从当前项目上下文获取</li>
+          <li>智能生成内容必须有确认接口</li>
+          <li>文件导入、日报解析、草稿生成、填报助手等耗时动作走异步作业</li>
+          <li>外部平台密码、验证码不经本系统接口传输和保存</li>
+        </ul>
+        <div class="note"><b>异步作业约定：</b>触发接口返回 <span class="mono">{ job_id, status }</span>，前端轮询 <span class="mono">GET /api/async-jobs/{job_id}</span> 查 status（queued / running / interrupted / succeeded / failed）。status 为 <b>interrupted</b> 时同时生成确认任务，用户在确认接口提交后工作流从断点恢复。</div>
+      </div>
+
+      <div class="card">
+        <h3>WBS 与风险源接口</h3>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/projects/{project_id}/wbs/import</span><span class="desc">上传并导入 WBS 文件</span></div>
+        <div class="endpoint"><span class="verb get">GET</span><span class="path">/api/projects/{project_id}/wbs</span><span class="desc">查询 WBS 工序列表</span></div>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/projects/{project_id}/risks/import</span><span class="desc">上传并导入风险源清单</span></div>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/projects/{project_id}/wbs-risk-links</span><span class="desc">创建 WBS-风险关联</span></div>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/projects/{project_id}/wbs-risk-links/recommend</span><span class="desc">自动推荐关联（P1）</span></div>
+      </div>
+
+      <div class="card">
+        <h3>任务中心接口</h3>
+        <div class="endpoint"><span class="verb get">GET</span><span class="path">/api/tasks/my</span><span class="desc">查询我的任务</span></div>
+        <div class="endpoint"><span class="verb get">GET</span><span class="path">/api/tasks/summary</span><span class="desc">查询任务统计</span></div>
+        <div class="endpoint"><span class="verb patch">PATCH</span><span class="path">/api/tasks/{task_id}/status</span><span class="desc">更新任务状态</span></div>
+        <div class="endpoint"><span class="verb get">GET</span><span class="path">/api/tasks/{task_id}/status-history</span><span class="desc">查询状态流转历史</span></div>
+        <div class="endpoint"><span class="verb get">GET</span><span class="path">/api/tasks/{task_id}/dependencies</span><span class="desc">查询任务依赖</span></div>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/tasks/{task_id}/confirm</span><span class="desc">确认任务结果</span></div>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/projects/{project_id}/tasks/generate-risk-reminders</span><span class="desc">手动触发风险提醒生成</span></div>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/projects/{project_id}/nl-intake</span><span class="desc">自然语言录入预留入口</span></div>
+      </div>
+
+      <div class="card">
+        <h3>日报、草稿与填报接口</h3>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/projects/{project_id}/daily-reports/scan</span><span class="desc">手动扫描日报目录</span></div>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/daily-report-files/{file_id}/parse</span><span class="desc">触发解析（异步作业）</span></div>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/daily-reports/{parse_result_id}/confirm</span><span class="desc">确认解析结果</span></div>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/risks/{risk_source_id}/drafts</span><span class="desc">生成风险上报草稿（异步作业）</span></div>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/risk-drafts/{draft_id}/confirm</span><span class="desc">确认草稿</span></div>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/risk-drafts/{draft_id}/fill-package</span><span class="desc">生成平台填报包</span></div>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/fill-packages/{package_id}/start</span><span class="desc">启动填报助手</span></div>
+        <div class="endpoint"><span class="verb post">POST</span><span class="path">/api/fill-packages/{package_id}/mark-submitted-by-user</span><span class="desc">标记用户已最终提交</span></div>
+      </div>
+
+      <div class="card">
+        <h3>权限原则</h3>
+        <table class="tbl">
+          <thead><tr><th>操作</th><th>权限要求</th></tr></thead>
+          <tbody>
+            <tr><td>项目配置 / WBS·风险源导入</td><td>系统配置责任或管理员</td></tr>
+            <tr><td>任务处理</td><td>任务负责人或确认人</td></tr>
+            <tr><td>日报确认</td><td>日报资料责任或任务负责人</td></tr>
+            <tr><td>草稿审核</td><td>技术审核、风险管控或指定审核人</td></tr>
+            <tr><td>网页填报</td><td>平台填报责任或指定任务负责人</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ===================== 06 ===================== -->
+    <section id="doc6">
+      <div class="sec-head">
+        <div class="sec-num">06</div>
+        <div><h2>前端页面与交互说明</h2><div class="who">页面结构、信息架构、关键交互、验收点</div></div>
+      </div>
+
+      <div class="card">
+        <h3>设计原则</h3>
+        <ul class="list">
+          <li>工地端首页以任务为中心，一线少看配置、多处理任务与确认</li>
+          <li>每个页面都要明确下一步操作</li>
+          <li>智能生成内容必须可编辑、可确认、可追溯</li>
+          <li>风险、逾期、缺项要突出，但不制造信息噪音</li>
+          <li>耗时操作走异步作业，页面以进度状态轮询展示，不阻塞用户</li>
+          <li>网页填报助手必须明确安全边界：不保存密码、不绕验证码、不自动提交</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>页面结构</h3>
+        <div class="note"><b>代码目录：</b>前端工程放在 <span class="mono">frontend/</span>，后续按 <span class="mono">src/api</span>、<span class="mono">src/router</span>、<span class="mono">src/stores</span>、<span class="mono">src/views</span>、<span class="mono">src/components</span>、<span class="mono">src/styles</span>、<span class="mono">src/types</span> 组织。</div>
+        <div class="grid c2">
+          <div class="mini">
+            <div class="t">工地端</div>
+            <div class="d">首页 · 任务中心 · 风险任务详情 · 日报解析确认 · 风险草稿审核 · 填报包预览与网页填报助手</div>
+          </div>
+          <div class="mini">
+            <div class="t">后台配置</div>
+            <div class="d">项目配置 · 成员与责任 · WBS 导入 · 风险源导入 · WBS-风险关联 · 日报目录 · 提醒规则 · 上报模板 · 字段映射 · 操作日志</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>工地端首页 · 任务工作台</h3>
+        <div class="grid c3">
+          <div class="mini"><div class="t">今日待办</div><div class="d">今日需要处理的任务</div></div>
+          <div class="mini"><div class="t">即将触发风险</div><div class="d">未来 3/7/14 天即将触发</div></div>
+          <div class="mini"><div class="t">逾期任务</div><div class="d">已超过截止时间</div></div>
+          <div class="mini"><div class="t">待补充材料</div><div class="d">缺照片、监测、审批资料</div></div>
+          <div class="mini"><div class="t">待确认日报</div><div class="d">需人工确认的解析结果</div></div>
+          <div class="mini"><div class="t">待审核草稿</div><div class="d">需审核的风险上报草稿</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>页面优先级</h3>
+        <table class="tbl">
+          <tbody>
+            <tr><td>工地端首页 / 任务中心 / 风险任务详情</td><td><span class="b p0">P0</span></td></tr>
+            <tr><td>日报解析确认页 / 风险草稿审核页</td><td><span class="b p0">P0</span></td></tr>
+            <tr><td>项目、成员、WBS、风险源、关联、日报目录配置</td><td><span class="b p0">P0</span></td></tr>
+            <tr><td>填报包预览 / 网页填报助手页 / 字段映射 / 模板配置</td><td><span class="b p1">P1</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h3>网页填报助手 · 安全提示</h3>
+        <div class="note safe">账号、密码和验证码请只在目标平台页面输入。系统不会保存密码，不会绕过验证码，不会自动最终提交。启动自动录入后助手作为异步作业运行，页面展示「录入中 / 已完成 / 字段失败」，始终停在最终提交前。</div>
+      </div>
+    </section>
+
+    <!-- ===================== 07 ===================== -->
+    <section id="doc7">
+      <div class="sec-head">
+        <div class="sec-num">07</div>
+        <div><h2>开发任务拆解与排期建议</h2><div class="who">里程碑、任务拆解、依赖关系、交付顺序</div></div>
+      </div>
+
+      <div class="card">
+        <h3>里程碑总览</h3>
+        <div class="timeline">
+          <div class="tl"><div class="m">M0<small>开发准备</small></div><div class="body"><div class="tt">样例、字段、规则、环境与技术选型确认</div><div class="dd">样例文件、字段字典、模板；确认前端工程基线、主键升 bigint、Celery、LLM 客户端、LangGraph+PG Checkpointer、Hermes 边界、Parser、Playwright 路线</div></div></div>
+          <div class="tl"><div class="m">M1<small>基础底座</small></div><div class="body"><div class="tt">项目、成员、责任、日志、前端骨架</div><div class="dd">后台基础配置可用；搭建 frontend 独立前端工程骨架；搭建异步基础设施骨架（Celery Beat + Worker + Redis + async_jobs 表）</div></div></div>
+          <div class="tl"><div class="m">M2<small>WBS 风险底图</small></div><div class="body"><div class="tt">WBS、风险源、人工关联</div><div class="dd">可生成风险预警依据</div></div></div>
+          <div class="tl"><div class="m">M3<small>任务中心</small></div><div class="body"><div class="tt">风险提醒任务到人</div><div class="dd">工地端任务闭环可用</div></div></div>
+          <div class="tl"><div class="m">M4<small>日报解析</small></div><div class="body"><div class="tt">目录扫描、文件解析、人工确认</div><div class="dd">LLM 客户端 + Parser；用 LangGraph 实现解析工作流（抽取→匹配→interrupt 确认→回流）</div></div></div>
+          <div class="tl"><div class="m">M5<small>草稿生成</small></div><div class="body"><div class="tt">缺项检查、风险草稿、审核确认</div><div class="dd">用 LangGraph 实现草稿工作流（聚合→生成→缺项→审核打回）</div></div></div>
+          <div class="tl"><div class="m">M6<small>填报助手原型</small></div><div class="body"><div class="tt">填报包、字段映射、辅助录入</div><div class="dd">基于 Playwright 受控填报；保存草稿并停在提交前</div></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>推荐开发顺序</h3>
+        <div class="flow">
+          <span class="step">项目/成员/责任/日志</span><span class="arr">→</span>
+          <span class="step">WBS 导入</span><span class="arr">→</span>
+          <span class="step">风险源导入</span><span class="arr">→</span>
+          <span class="step">WBS-风险关联</span><span class="arr">→</span>
+          <span class="step">风险提醒任务</span><span class="arr">→</span>
+          <span class="step">任务中心</span><span class="arr">→</span>
+          <span class="step">日报扫描</span><span class="arr">→</span>
+          <span class="step">日报解析</span><span class="arr">→</span>
+          <span class="step">日报确认</span><span class="arr">→</span>
+          <span class="step">风险草稿</span><span class="arr">→</span>
+          <span class="step">填报包预览</span><span class="arr">→</span>
+          <span class="step">网页填报助手</span>
+        </div>
+        <div class="note warn">不建议一开始就投入大量精力做网页填报助手，因为它依赖草稿、字段映射、附件和人工确认都先稳定。</div>
+      </div>
+
+      <div class="card">
+        <h3>仍需拍板的开放项</h3>
+        <ul class="list">
+          <li>LLM 供应商与具体模型（影响统一客户端与成本）</li>
+          <li>图片是否走 OCR、走哪个引擎</li>
+          <li>Playwright 进程模型：后端独立服务 vs 浏览器扩展，如何共享用户登录态（技术不确定性最高，建议单独预研）</li>
+          <li>日报 ↔ WBS 语义匹配是否引入 pgvector</li>
+          <li>Hermes 在内网/离线环境能否运行其依赖的浏览器与 MCP</li>
+          <li>dedup_key 的拼接规则需与预警生成逻辑一并定死，建议“链路 ID + 类型 + 触发日历日”</li>
+        </ul>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<a href="#" class="back" id="back" aria-label="回到顶部">↑</a>
+
+<script>
+  (() => {
+  const navLinks = [...document.querySelectorAll('#nav a')];
+  const docBlocks = navLinks.map(link => document.querySelector(link.getAttribute('href')));
+  const backButton = document.getElementById('back');
+  function updateActiveNav(){
+    const y = window.scrollY + 120;
+    let activeIndex = 0;
+    docBlocks.forEach((section, index)=>{ if(section && section.offsetTop <= y) activeIndex = index; });
+    navLinks.forEach((link, index)=> link.classList.toggle('active', index===activeIndex));
+    backButton.classList.toggle('show', window.scrollY > 600);
+  }
+  window.addEventListener('scroll', updateActiveNav, {passive:true});
+  updateActiveNav();
+  })();
+</script>
+</body>
+</html>
