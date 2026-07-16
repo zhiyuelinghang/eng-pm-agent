@@ -8,12 +8,17 @@ from .config import get_settings
 
 
 settings = get_settings()
-if settings.database_url.startswith("sqlite:///"):
-    database_path = settings.database_url.removeprefix("sqlite:///")
+database_url = settings.database_url
+if database_url.startswith("sqlite:///"):
+    database_path = database_url.removeprefix("sqlite:///")
     if database_path and database_path != ":memory:":
-        Path(database_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-engine = create_engine(settings.database_url, connect_args=connect_args, pool_pre_ping=True)
+        resolved_path = Path(database_path).expanduser()
+        if not resolved_path.is_absolute():
+            resolved_path = Path(__file__).resolve().parents[2] / resolved_path
+        resolved_path.parent.mkdir(parents=True, exist_ok=True)
+        database_url = f"sqlite:///{resolved_path.as_posix()}"
+connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+engine = create_engine(database_url, connect_args=connect_args, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 

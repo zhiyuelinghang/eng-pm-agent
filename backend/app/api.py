@@ -35,6 +35,8 @@ def ok(data: Any, message: str = "ok") -> dict[str, Any]:
 def serialize(row: Any) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for column in row.__table__.columns:
+        if column.name == "password_hash":
+            continue
         value = getattr(row, column.name)
         result[column.name] = value.isoformat() if isinstance(value, datetime) else value
     return result

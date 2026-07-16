@@ -16,7 +16,7 @@
           <label>项目名称<input v-model.trim="projectForm.project_name" required placeholder="例如：真如社区卫生服务中心扩建项目"></label>
           <label>所属单位<input v-model.trim="projectForm.owner_unit" placeholder="建设单位或管理单位"></label>
           <label>工程说明<textarea v-model.trim="projectForm.description" rows="3" placeholder="工程范围、阶段和当前重点"></textarea></label>
-          <button class="primary" :disabled="submitting">创建并进入配置</button>
+          <button type="submit" class="primary" :disabled="submitting">创建并进入配置</button>
         </form>
       </article>
       <article class="panel projects-panel">
@@ -44,7 +44,7 @@
             <input v-model.trim="memberForm.name" required placeholder="姓名">
             <input v-model.trim="memberForm.username" placeholder="登录账号（可选）">
             <input v-model.trim="memberForm.title" placeholder="岗位，例如安全员">
-            <button class="primary" :disabled="submitting">添加</button>
+            <button type="button" class="primary" :disabled="submitting" @click="submitMember">添加</button>
           </form>
           <div class="item-list">
             <div v-for="member in store.members" :key="member.id"><strong>{{ member.name }}</strong><span>{{ member.title }}</span><small>{{ member.role.join('、') || '未设置责任标签' }}</small></div>
@@ -59,7 +59,7 @@
             <input v-model.trim="wbsForm.name" required placeholder="工序名称">
             <input v-model="wbsForm.planned_start" type="date">
             <input v-model="wbsForm.planned_finish" type="date">
-            <button class="primary" :disabled="submitting">添加工序</button>
+            <button type="submit" class="primary" :disabled="submitting">添加工序</button>
           </form>
           <div class="item-list">
             <div v-for="item in store.wbsItems" :key="item.id"><strong>{{ item.code }} · {{ item.name }}</strong><span>{{ item.planStart || '未排期' }} 至 {{ item.planEnd || '未排期' }}</span><small>{{ item.progress }}% · {{ item.status }}</small></div>
@@ -76,7 +76,7 @@
             <input v-model.trim="qualityForm.name" required placeholder="质量验收项">
             <input v-model.trim="qualityForm.requirement" required placeholder="控制指标或验收要求">
             <input v-model.trim="qualityForm.inspection_frequency" placeholder="检查频次">
-            <button class="primary" :disabled="submitting">添加指标</button>
+            <button type="submit" class="primary" :disabled="submitting">添加指标</button>
           </form>
           <div class="item-list">
             <div v-for="item in store.qualityMetrics" :key="item.id"><strong>{{ item.name }}</strong><span>{{ store.getWbsName(item.wbsId || '') }} · {{ item.inspectionFrequency || '频次待定' }}</span><small>{{ item.requirement }}</small></div>
