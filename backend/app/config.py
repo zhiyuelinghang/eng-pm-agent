@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     jwt_expire_minutes: int = 480
     cors_origins: str = "http://localhost:38429,http://127.0.0.1:38429"
     upload_dir: Path = Path("data/uploads")
+    ai_api_key: str = ""
+    ai_base_url: str = "https://api.openai.com/v1"
+    ai_model: str = "gpt-4.1-mini"
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

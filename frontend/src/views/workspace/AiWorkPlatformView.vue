@@ -686,6 +686,7 @@ import {
   Search, Send, Settings, Table, User, UserPlus,
 } from '@vicons/tabler'
 import { useAppStore } from '@/stores/app'
+import api, { type ApiEnvelope } from '@/api/client'
 import type { DraftStatus, FillStatus, Member, RiskLevel, Task, TaskStatus } from '@/types'
 
 type ChatMessage = {
@@ -694,6 +695,10 @@ type ChatMessage = {
   content: string
   generatedTaskIds?: string[]
 }
+
+type CollaborationSession = { id: string; title: string; desc: string; time: string; participantIds: string[]; taskIds: string[] }
+type ApiCollaborationSession = { id: number; title: string; summary?: string; participant_ids: number[]; task_ids: number[]; created_at: string; updated_at: string }
+type ApiCollaborationMessage = { id: number; role: 'assistant' | 'user'; content: string; generated_task_ids: number[]; created_at: string }
 
 type ChatSuggestion = {
   label: string
@@ -918,11 +923,13 @@ watch(section, () => {
 onMounted(() => {
   nextTick(updateHomePageSize)
   window.addEventListener('resize', updateHomePageSize, { passive: true })
+  void loadCollaborationSessions()
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', updateHomePageSize)
 })
+watch(() => store.currentProjectId, () => { void loadCollaborationSessions() })
 const currentUserName = computed(() => store.getMemberName(currentUserId))
 const homeCollaborators = computed(() =>
   [
@@ -1010,33 +1017,8 @@ function dispatchQuickCommand() {
   quickCommand.value = ''
 }
 
-const sessions = ref([
-  {
-    id: 's1',
-    title: '今日项目跟进：风险、资料与填报闭环',
-    desc: '深基坑风险、日报解析、资料缺口',
-    time: '2026-06-10 09:42:18',
-    participantIds: ['m1', 'm2', 'm3'],
-    taskIds: ['t2', 't4', 't6', 't3'],
-  },
-  {
-    id: 's2',
-    title: '深基坑风险上报草稿审核',
-    desc: '草稿材料、缺项附件、确认人',
-    time: '2026-06-09 18:12:43',
-    participantIds: ['m1', 'm2', 'm3'],
-    taskIds: ['t4', 't2'],
-  },
-  {
-    id: 's3',
-    title: '施工日报解析与 WBS 进度复核',
-    desc: '日报内容匹配 WBS，提取风险材料',
-    time: '2026-06-09 08:16:05',
-    participantIds: ['m1', 'm3'],
-    taskIds: ['t3'],
-  },
-])
-const activeSessionId = ref('s1')
+const sessions = ref<CollaborationSession[]>([])
+const activeSessionId = ref('')
 const activeSession = computed(() => sessions.value.find(item => item.id === activeSessionId.value))
 const activeSessionTasks = computed(() => {
   const ids = activeSession.value?.taskIds ?? []
@@ -1084,38 +1066,7 @@ const sideActionItems = [
 const prompt = ref('')
 const chatSuggestionsOpen = ref(false)
 const generatedChatSuggestions = ref<Record<string, ChatSuggestion[]>>({})
-const sessionMessages = ref<Record<string, ChatMessage[]>>({
-  s1: [
-    { id: 'm1', role: 'assistant', content: '我已读取当前项目、WBS、风险源、日报和待办任务。今天建议先处理地面沉降监测报告缺项，再审核深基坑风险草稿。' },
-    { id: 'm2', role: 'user', content: '把今天需要我参与的事项排个优先级。' },
-    {
-      id: 'm3',
-      role: 'assistant',
-      content: '已按截止时间、风险等级和资料阻塞关系拆成下面 4 项工作。每项工作会继续跟踪责任人、截止时间和处理状态。',
-      generatedTaskIds: ['t2', 't4', 't3', 't6'],
-    },
-  ],
-  s2: [
-    { id: 'm4', role: 'assistant', content: '深基坑风险草稿已生成，但还有材料缺项会影响确认。建议先锁定缺项附件，再提交审核。' },
-    { id: 'm5', role: 'user', content: '把草稿审核和缺项补充拆成可以跟踪的工作。' },
-    {
-      id: 'm6',
-      role: 'assistant',
-      content: '已生成 2 项工作：王芳负责草稿审核，李明补齐地表沉降监测报告。完成后再进入填报包生成。',
-      generatedTaskIds: ['t4', 't2'],
-    },
-  ],
-  s3: [
-    { id: 'm7', role: 'assistant', content: '已从 2026-06-09 施工日报中识别到基坑开挖进度、监测数据和风险材料引用。' },
-    { id: 'm8', role: 'user', content: '生成一项日报复核任务，确认后同步 WBS 进度。' },
-    {
-      id: 'm9',
-      role: 'assistant',
-      content: '已生成日报解析确认任务。王芳确认后，系统会把基坑开挖进度和风险材料引用同步到项目状态与资料流。',
-      generatedTaskIds: ['t3'],
-    },
-  ],
-})
+const sessionMessages = ref<Record<string, ChatMessage[]>>({})
 const homeQuickSessionId = ref<string | null>(null)
 const homeQuickSession = computed(() =>
   homeQuickSessionId.value
@@ -1130,8 +1081,24 @@ const homeQuickChatMessages = computed<ChatMessage[]>(() =>
 const activeChatMessages = computed(() => sessionMessages.value[activeSessionId.value] ?? [])
 const activeChatSuggestions = computed(() => generatedChatSuggestions.value[activeSessionId.value] ?? [])
 
+function mapSession(row: ApiCollaborationSession): CollaborationSession { return { id: String(row.id), title: row.title, desc: row.summary || '暂无会话摘要', time: row.updated_at || row.created_at, participantIds: (row.participant_ids || []).map(String), taskIds: (row.task_ids || []).map(String) } }
+function mapMessage(row: ApiCollaborationMessage): ChatMessage { return { id: String(row.id), role: row.role, content: row.content, generatedTaskIds: (row.generated_task_ids || []).map(String) } }
+async function loadSessionMessages(sessionId: string) {
+  if (!sessionId) return
+  const response = await api.get<ApiEnvelope<ApiCollaborationMessage[]>>(`/collaboration-sessions/${sessionId}/messages`)
+  sessionMessages.value = { ...sessionMessages.value, [sessionId]: response.data.data.map(mapMessage) }
+}
+async function loadCollaborationSessions() {
+  if (!store.currentProjectId) return
+  const response = await api.get<ApiEnvelope<ApiCollaborationSession[]>>(`/projects/${store.currentProjectId}/collaboration-sessions`)
+  sessions.value = response.data.data.map(mapSession)
+  if (!activeSessionId.value || !sessions.value.some(item => item.id === activeSessionId.value)) activeSessionId.value = sessions.value[0]?.id || ''
+  if (activeSessionId.value) await loadSessionMessages(activeSessionId.value)
+}
+
 watch(activeSessionId, () => {
   chatSuggestionsOpen.value = false
+  void loadSessionMessages(activeSessionId.value)
 })
 
 function seedPrompt(text: string) {
@@ -1215,38 +1182,13 @@ function generatedTaskIdsFromPrompt(content: string) {
   return []
 }
 
-function sendPrompt() {
+async function sendPrompt() {
   const content = prompt.value.trim()
-  if (!content) return
-  const messages = sessionMessages.value[activeSessionId.value] ?? []
-  const isFirstUserMessage = !messages.some(message => message.role === 'user')
-  const generatedTaskIds = generatedTaskIdsFromPrompt(content)
-  messages.push({ id: `u${Date.now()}`, role: 'user', content })
-  messages.push({
-    id: `a${Date.now() + 1}`,
-    role: 'assistant',
-    content: generatedTaskIds.length
-      ? `已按当前项目的任务、风险和资料状态生成可跟踪工作。右侧会同步更新责任人、截止时间和处理状态。`
-      : `已收到。我会按 ${currentProject.value?.name ?? '当前项目'} 的任务、风险和资料状态继续处理。`,
-    generatedTaskIds: generatedTaskIds.length ? generatedTaskIds : undefined,
-  })
-  sessionMessages.value[activeSessionId.value] = messages
-  const targetSession = sessions.value.find(session => session.id === activeSessionId.value)
-  if (targetSession) {
-    if (isFirstUserMessage || targetSession.title === '新的工程协同') targetSession.title = sessionTitleFromFirstMessage(content)
-    targetSession.desc = content.slice(0, 22)
-    targetSession.time = nowStr()
-    if (generatedTaskIds.length) {
-      const generatedTasks = generatedTaskIds
-        .map(id => store.tasks.find(task => task.id === id))
-        .filter((task): task is Task => Boolean(task))
-      targetSession.taskIds = Array.from(new Set([...targetSession.taskIds, ...generatedTaskIds]))
-      targetSession.participantIds = Array.from(new Set([
-        ...targetSession.participantIds,
-        ...generatedTasks.flatMap(task => [task.responsibleId, task.confirmatorId]),
-      ]))
-    }
-  }
+  if (!content || !activeSessionId.value) return
+  const response = await api.post<ApiEnvelope<{ session: ApiCollaborationSession; message: ApiCollaborationMessage }>>(`/collaboration-sessions/${activeSessionId.value}/messages`, { content })
+  const session = mapSession(response.data.data.session)
+  sessions.value = sessions.value.map(item => item.id === session.id ? session : item)
+  await loadSessionMessages(activeSessionId.value)
   store.addLog({ id: `log${Date.now()}`, time: nowStr(), operator: '系统', action: '会话处理', detail: content, level: 'success' })
   prompt.value = ''
 }
@@ -1302,18 +1244,13 @@ function syncHomeQuickCommand(content: string) {
   activeSessionId.value = id
 }
 
-function startNewSession() {
-  const id = `s${Date.now()}`
-  sessions.value.unshift({
-    id,
-    title: '新的工程协同',
-    desc: '新会话',
-    time: nowStr(),
-    participantIds: ['m1'],
-    taskIds: [],
-  })
-  sessionMessages.value[id] = []
-  activeSessionId.value = id
+async function startNewSession() {
+  if (!store.currentProjectId) return
+  const response = await api.post<ApiEnvelope<ApiCollaborationSession>>(`/projects/${store.currentProjectId}/collaboration-sessions`, { title: '新的工程协同' })
+  const session = mapSession(response.data.data)
+  sessions.value.unshift(session)
+  sessionMessages.value = { ...sessionMessages.value, [session.id]: [] }
+  activeSessionId.value = session.id
 }
 
 const taskFilter = ref<'all' | TaskStatus>('all')

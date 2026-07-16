@@ -7,17 +7,18 @@ from typing import Any, TypeVar
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import get_db
-from .models import (Attachment, DailyReport, FillPackage, OperationLog, PlatformFieldMapping, Project, ProjectMember, ProjectSettings,
+from .models import (Attachment, CollaborationMessage, CollaborationSession, DailyReport, FillPackage, OperationLog, PlatformFieldMapping, Project, ProjectMember, ProjectSettings,
                      QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsRiskLink)
 from .schemas import (DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
                       LoginRequest, MemberInput, ProjectInput, RiskInput, TaskInput, TaskTransitionInput,
                       WbsInput, WbsRiskLinkInput, OperationLogInput, PlatformFieldMappingInput, ProjectSettingsInput,
-                      QualityMetricInput, TaskStepUpdate)
+                      CollaborationMessageInput, CollaborationSessionInput, QualityMetricInput, TaskStepUpdate)
 from .security import create_access_token, decode_access_token, hash_password, verify_password
 
 
@@ -407,6 +408,64 @@ def transition_fill_package(package_id: int, payload: TaskTransitionInput, db: S
     if payload.status not in {"pending", "filling", "saved", "submitted", "failed", "cancelled"}: raise HTTPException(status_code=422, detail="不支持的填报状态")
     row.status = payload.status; audit(db, user, "更新填报状态", f"填报包状态变更为 {row.status}", row.project_id, "fill_package", row.id); db.commit(); db.refresh(row)
     return ok(serialize(row), "填报状态已更新")
+
+
+def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str, list[int]]:
+    tasks = db.scalars(select(Task).where(Task.project_id == project_id, Task.status.in_(["overdue", "pending", "processing", "need_more_info", "pending_confirm"])).order_by(Task.updated_at.desc())).all()
+    related = [task.id for task in tasks[:4]]
+    settings = get_settings()
+    if settings.ai_api_key:
+        prompt = f"你是工程项目协同助手。用户问题：{content}\n待办任务：" + "；".join(f"{task.title}（{task.status}，截止{task.due_at or '未设置'}）" for task in tasks[:8])
+        try:
+            response = httpx.post(f"{settings.ai_base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {settings.ai_api_key}"}, json={"model": settings.ai_model, "messages": [{"role": "system", "content": "给出简洁、可执行、可追溯的工程协同建议。"}, {"role": "user", "content": prompt}]}, timeout=30)
+            response.raise_for_status()
+            answer = response.json()["choices"][0]["message"]["content"]
+            return answer, related
+        except (httpx.HTTPError, KeyError, IndexError, TypeError):
+            pass
+    overdue = next((task for task in tasks if task.status == "overdue"), None)
+    focus = overdue or (tasks[0] if tasks else None)
+    if focus:
+        return f"已基于当前项目真实数据记录协同意见：优先处理「{focus.title}」，状态为{focus.status}，截止日期{focus.due_at or '未设置'}。建议明确责任人、补齐所需资料后提交复核。", related
+    return "当前项目暂无未闭环任务。可先补充工程资料、WBS、风险源或质量指标，再生成协同计划。", []
+
+
+@router.get("/projects/{project_id}/collaboration-sessions")
+def list_collaboration_sessions(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+    project_or_404(db, project_id)
+    rows = db.scalars(select(CollaborationSession).where(CollaborationSession.project_id == project_id).order_by(CollaborationSession.updated_at.desc())).all()
+    return ok([serialize(row) for row in rows])
+
+
+@router.post("/projects/{project_id}/collaboration-sessions")
+def create_collaboration_session(project_id: int, payload: CollaborationSessionInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    project_or_404(db, project_id)
+    row = CollaborationSession(project_id=project_id, participant_ids=list(set(payload.participant_ids + [user.id])), **payload.model_dump(exclude={"participant_ids"}))
+    db.add(row); db.flush(); audit(db, user, "创建协同会话", f"创建会话「{row.title}」", project_id, "collaboration_session", row.id); db.commit(); db.refresh(row)
+    return ok(serialize(row), "协同会话已创建")
+
+
+def session_or_404(db: Session, session_id: int) -> CollaborationSession:
+    return entity_or_404(db, CollaborationSession, session_id, "协同会话不存在")
+
+
+@router.get("/collaboration-sessions/{session_id}/messages")
+def list_collaboration_messages(session_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+    session_or_404(db, session_id)
+    rows = db.scalars(select(CollaborationMessage).where(CollaborationMessage.session_id == session_id).order_by(CollaborationMessage.created_at)).all()
+    return ok([serialize(row) for row in rows])
+
+
+@router.post("/collaboration-sessions/{session_id}/messages")
+def create_collaboration_message(session_id: int, payload: CollaborationMessageInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    session = session_or_404(db, session_id)
+    db.add(CollaborationMessage(session_id=session.id, role="user", content=payload.content)); db.flush()
+    answer, task_ids = collaboration_reply(session.project_id, payload.content, db)
+    assistant = CollaborationMessage(session_id=session.id, role="assistant", content=answer, generated_task_ids=task_ids)
+    db.add(assistant); session.summary = payload.content[:120]
+    audit(db, user, "协同会话处理", f"会话「{session.title}」处理新消息", session.project_id, "collaboration_session", session.id)
+    db.commit(); db.refresh(assistant); db.refresh(session)
+    return ok({"session": serialize(session), "message": serialize(assistant)}, "协同建议已生成")
 
 
 @router.post("/projects/{project_id}/attachments")

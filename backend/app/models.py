@@ -197,6 +197,26 @@ class FillPackage(TimestampMixin, Base):
     attachments: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
 
 
+class CollaborationSession(TimestampMixin, Base):
+    __tablename__ = "collaboration_sessions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    participant_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    task_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+
+
+class CollaborationMessage(Base):
+    __tablename__ = "collaboration_messages"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("collaboration_sessions.id", ondelete="CASCADE"), index=True)
+    role: Mapped[str] = mapped_column(String(32))
+    content: Mapped[str] = mapped_column(Text)
+    generated_task_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Attachment(TimestampMixin, Base):
     __tablename__ = "attachments"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

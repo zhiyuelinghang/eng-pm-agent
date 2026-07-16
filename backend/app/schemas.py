@@ -150,6 +150,17 @@ class FillPackageInput(BaseModel):
     attachments: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class CollaborationSessionInput(BaseModel):
+    title: str = Field(default="新的工程协同", min_length=1, max_length=300)
+    summary: str | None = None
+    participant_ids: list[int] = Field(default_factory=list)
+    task_ids: list[int] = Field(default_factory=list)
+
+
+class CollaborationMessageInput(BaseModel):
+    content: str = Field(min_length=1)
+
+
 class OperationLogInput(BaseModel):
     action: str
     detail: str
