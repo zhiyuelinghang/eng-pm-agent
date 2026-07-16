@@ -51,6 +51,7 @@ const titleMap: Record<string, string> = {
   '/tasks':     '任务管理',
   '/project':   '项目状态',
   '/docs':      '工程资料',
+  '/settings':  '工程配置',
 }
 const pageTitle = computed(() => {
   for (const [prefix, title] of Object.entries(titleMap)) {
@@ -75,7 +76,7 @@ const projectOptions = computed(() =>
   }))
 )
 
-const handleProjectChange = (id: string) => { store.currentProjectId = id }
+const handleProjectChange = (id: string) => { void store.selectProject(id) }
 
 const dropdownTheme = {
   borderRadius: '8px',

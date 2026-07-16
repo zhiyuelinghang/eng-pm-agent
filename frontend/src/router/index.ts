@@ -1,6 +1,7 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import MainLayout from '@/components/layout/MainLayout.vue'
 import AiWorkPlatformView from '@/views/workspace/AiWorkPlatformView.vue'
+import ProjectSetupView from '@/views/workspace/ProjectSetupView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -21,6 +22,7 @@ const router = createRouter({
         { path: 'tasks', name: 'TaskManagement', component: AiWorkPlatformView, meta: { title: '任务管理', group: 'workspace' } },
         { path: 'project', name: 'ProjectStatus', component: AiWorkPlatformView, meta: { title: '项目状态', group: 'workspace' } },
         { path: 'docs', name: 'EngineeringDocs', component: AiWorkPlatformView, meta: { title: '工程资料', group: 'workspace' } },
+        { path: 'settings', name: 'ProjectSetup', component: ProjectSetupView, meta: { title: '工程配置', group: 'workspace' } },
         { path: 'dashboard', redirect: '/workbench' },
         { path: 'risks', redirect: '/tasks' },
         { path: 'daily-reports', redirect: '/docs' },
@@ -36,7 +38,7 @@ const router = createRouter({
 export default router
 
 router.beforeEach((to) => {
-  const loggedIn = sessionStorage.getItem('logged_in')
+  const loggedIn = sessionStorage.getItem('logged_in') && sessionStorage.getItem('access_token')
   if (!to.meta?.public && !loggedIn) {
     return { path: '/login' }
   }

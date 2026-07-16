@@ -37,7 +37,7 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { NIcon } from 'naive-ui'
 import {
-  ChartBar, Folder, Home, ListCheck, Logout, MessageCircle, Robot,
+  ChartBar, Folder, Home, ListCheck, Logout, MessageCircle, Robot, Settings,
 } from '@vicons/tabler'
 
 const router = useRouter()
@@ -49,6 +49,7 @@ const menus = computed(() => [
   { path: '/tasks', title: '任务管理', icon: ListCheck, badge: store.pendingTasks.length + store.processingTasks.length },
   { path: '/project', title: '项目状态', icon: ChartBar, badge: 0 },
   { path: '/docs', title: '工程资料', icon: Folder, badge: store.pendingDailyReports.length + store.pendingFills.length },
+  { path: '/settings', title: '工程配置', icon: Settings, badge: 0 },
 ])
 
 const handleLogout = () => {

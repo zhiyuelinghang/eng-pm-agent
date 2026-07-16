@@ -443,12 +443,21 @@
       </div>
       <div class="task-filterbar">
         <span>当前显示 {{ filteredTasks.length }} / {{ store.tasks.length }} 条</span>
+        <button class="task-create-button" @click="taskCreateOpen = !taskCreateOpen">{{ taskCreateOpen ? '收起新建任务' : '新建任务' }}</button>
         <div class="filter-tabs">
           <button v-for="tab in taskTabs" :key="tab.key" :class="{ active: taskFilter === tab.key }" @click="taskFilter = tab.key">
             {{ tab.label }}
           </button>
         </div>
       </div>
+      <form v-if="taskCreateOpen" class="task-create-form" @submit.prevent="createManualTask">
+        <input v-model.trim="taskCreateForm.title" required placeholder="任务名称，例如：基坑开挖条件核查">
+        <select v-model="taskCreateForm.task_type"><option value="risk_alert">风险预警</option><option value="material_missing">资料缺项</option><option value="daily_confirm">日报确认</option><option value="draft_review">草稿审核</option><option value="fill_platform">平台填报</option></select>
+        <select v-model="taskCreateForm.assignee_user_id"><option value="">选择负责人</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }}</option></select>
+        <select v-model="taskCreateForm.risk_source_id"><option value="">关联风险源（可选）</option><option v-for="risk in store.riskSources" :key="risk.id" :value="risk.id">{{ risk.name }}</option></select>
+        <input v-model="taskCreateForm.due_at" type="date" aria-label="截止日期">
+        <button type="submit">创建并分派</button>
+      </form>
       <div class="task-board">
         <article v-for="task in filteredTasks" :key="task.id" class="task-card">
           <div class="task-top">
@@ -531,6 +540,17 @@
     </section>
 
     <section v-else class="page-stack docs-page">
+      <section class="document-intake-panel">
+        <div>
+          <span>资料入库</span>
+          <h2>上传工程资料</h2>
+          <p>文件会归属当前项目，自动识别资料类别；同名文件将保留版本记录和上传留痕。</p>
+        </div>
+        <label class="document-upload-button" :class="{ disabled: documentUploading }">
+          <input type="file" :disabled="documentUploading" @change="uploadDocument">
+          {{ documentUploading ? '正在入库…' : '选择并上传文件' }}
+        </label>
+      </section>
       <div class="docs-work-grid">
         <article v-for="item in docWorkItems" :key="item.label" class="doc-work-card">
           <div>
@@ -566,6 +586,79 @@
             <strong>{{ item.name }}</strong>
             <p>{{ item.desc }}</p>
             <em>{{ item.state }}</em>
+          </article>
+        </div>
+      </section>
+      <section class="panel document-storage-panel">
+        <div class="panel-head">
+          <div><h2>已入库资料</h2><p>当前项目的文件、类别和版本</p></div>
+          <strong>{{ store.attachments.length }} 个文件</strong>
+        </div>
+        <div class="document-list">
+          <article v-for="item in store.attachments.slice(0, 8)" :key="item.id">
+            <span>{{ item.category }}</span>
+            <strong>{{ item.fileName }}</strong>
+            <p>版本 V{{ item.version }} · {{ formatFileSize(item.fileSize) }}</p>
+            <em>{{ formatDateTime(item.createdAt, 'end') }}</em>
+            <button v-if="item.category === '日报'" type="button" class="document-action" @click="store.parseDailyAttachment(item.id)">登记日报</button>
+          </article>
+          <p v-if="!store.attachments.length" class="empty-document-note">暂无已入库资料，可上传日报、监测记录、现场照片或工程文件。</p>
+        </div>
+      </section>
+      <section class="panel document-review-panel">
+        <div class="panel-head">
+          <div><h2>日报确认队列</h2><p>确认后日报将正式进入项目资料流；任务中心同步保留处理记录。</p></div>
+          <strong>{{ store.pendingDailyReports.length }} 待确认</strong>
+        </div>
+        <div class="document-list">
+          <article v-for="report in store.pendingDailyReports" :key="report.id">
+            <span>日报</span>
+            <strong>{{ report.fileName }}</strong>
+            <p>{{ report.constructionContent || '待补充施工内容' }}</p>
+            <em>匹配置信度 {{ Math.round(report.confidence * 100) }}%</em>
+            <button type="button" class="document-action confirm" @click="store.confirmDailyReport(report.id)">确认入库</button>
+          </article>
+          <p v-if="!store.pendingDailyReports.length" class="empty-document-note">暂无待确认日报。上传后点击“登记日报”即可生成确认任务。</p>
+        </div>
+      </section>
+      <section class="panel document-review-panel">
+        <div class="panel-head">
+          <div><h2>风险草稿与填报</h2><p>将风险材料整理为可审核草稿，确认后生成平台填报包并留存状态。</p></div>
+          <button type="button" class="document-action confirm" @click="draftCreateOpen = !draftCreateOpen">{{ draftCreateOpen ? '收起草稿' : '新建草稿' }}</button>
+        </div>
+        <form v-if="draftCreateOpen" class="draft-create-form" @submit.prevent="createRiskDraft">
+          <select v-model="draftCreateForm.risk_source_id" required><option value="">关联风险源</option><option v-for="risk in store.riskSources" :key="risk.id" :value="risk.id">{{ risk.name }}</option></select>
+          <input v-model.trim="draftCreateForm.title" required placeholder="草稿标题">
+          <textarea v-model.trim="draftCreateForm.content" required placeholder="填写风险说明、处置建议和资料依据"></textarea>
+          <button type="submit" class="document-action confirm">保存草稿</button>
+        </form>
+        <div class="document-list">
+          <article v-for="draft in store.riskDrafts" :key="draft.id">
+            <span>草稿</span>
+            <strong>{{ draft.title }}</strong>
+            <p>{{ draft.content }}</p>
+            <em>{{ draftStatusLabel(draft.status) }}</em>
+            <div class="document-actions">
+              <button v-if="draft.status === 'draft' || draft.status === 'rejected'" type="button" class="document-action" @click="store.submitDraftReview(draft.id)">提交审核</button>
+              <template v-else-if="draft.status === 'reviewing'">
+                <button type="button" class="document-action confirm" @click="store.confirmDraft(draft.id)">确认</button>
+                <button type="button" class="document-action" @click="store.rejectDraft(draft.id, '请补充材料后重新提交')">退回</button>
+              </template>
+              <button v-else-if="draft.status === 'confirmed'" type="button" class="document-action confirm" @click="createDefaultFillPackage(draft.id, draft.title, draft.content)">生成填报包</button>
+            </div>
+          </article>
+          <p v-if="!store.riskDrafts.length" class="empty-document-note">暂无风险草稿。请先在工程配置中建立风险源，或直接新建草稿。</p>
+        </div>
+        <div v-if="store.fillPackages.length" class="document-list fill-package-list">
+          <article v-for="item in store.fillPackages" :key="item.id">
+            <span>填报</span>
+            <strong>{{ item.processName }}</strong>
+            <p>{{ item.platformName }} · {{ item.fields.length }} 个映射字段</p>
+            <em>{{ fillStatusLabel(item.status) }}</em>
+            <div class="document-actions">
+              <button v-if="item.status === 'pending'" type="button" class="document-action" @click="store.startFilling(item.id)">开始填报</button>
+              <button v-if="item.status === 'filling'" type="button" class="document-action confirm" @click="store.markFillDone(item.id)">标记已提交</button>
+            </div>
           </article>
         </div>
       </section>
@@ -1214,6 +1307,8 @@ function startNewSession() {
 }
 
 const taskFilter = ref<'all' | TaskStatus>('all')
+const taskCreateOpen = ref(false)
+const taskCreateForm = ref<{ title: string; task_type: Task['type']; assignee_user_id: string; risk_source_id: string; due_at: string }>({ title: '', task_type: 'risk_alert', assignee_user_id: '', risk_source_id: '', due_at: '' })
 const taskTabs: Array<{ key: 'all' | TaskStatus, label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'overdue', label: '逾期' },
@@ -1224,12 +1319,39 @@ const taskTabs: Array<{ key: 'all' | TaskStatus, label: string }> = [
 ]
 const filteredTasks = computed(() => taskFilter.value === 'all' ? store.tasks : store.tasks.filter(task => task.status === taskFilter.value))
 
+async function createManualTask() {
+  if (!taskCreateForm.value.title) return
+  await store.createTask({ ...taskCreateForm.value, trigger_reason: '由项目成员在任务中心创建' })
+  taskCreateForm.value = { title: '', task_type: 'risk_alert', assignee_user_id: '', risk_source_id: '', due_at: '' }
+  taskCreateOpen.value = false
+}
+
 const documentCards = computed(() => [
   { title: '日报解析', desc: '施工内容、风险和进度记录', count: store.dailyReports.length, icon: FileText },
   { title: '风险草稿', desc: '待审核的风险上报内容', count: store.riskDrafts.length, icon: Notes },
   { title: '填报包', desc: '字段与附件映射到平台', count: store.fillPackages.length, icon: Table },
   { title: '目录监控', desc: store.dirConfig.enabled ? '文件目录监听中' : '目录监听未启用', count: `${store.dirConfig.scanInterval}m`, icon: Folder },
 ])
+const documentUploading = ref(false)
+const draftCreateOpen = ref(false)
+const draftCreateForm = ref({ risk_source_id: '', title: '', content: '' })
+async function uploadDocument(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  documentUploading.value = true
+  try { await store.uploadAttachment(file) } finally { documentUploading.value = false; input.value = '' }
+}
+async function createRiskDraft() {
+  if (!draftCreateForm.value.risk_source_id || !draftCreateForm.value.title || !draftCreateForm.value.content) return
+  await store.createRiskDraft(draftCreateForm.value)
+  draftCreateForm.value = { risk_source_id: '', title: '', content: '' }
+  draftCreateOpen.value = false
+}
+function createDefaultFillPackage(draftId: string, title: string, content: string) {
+  return store.createFillPackage(draftId, { platform_name: '监管填报平台', process_name: title, fields: [{ name: '风险说明', value: content }], attachments: [] })
+}
+function formatFileSize(bytes: number) { return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB` }
 const totalMissingItems = computed(() => store.riskDrafts.reduce((sum, item) => sum + item.missingItems.length, 0))
 const docWorkItems = computed(() => {
   const daily = store.pendingDailyReports[0]
@@ -3849,6 +3971,38 @@ function nowStr() {
   font-size: 12px;
   font-weight: 760;
 }
+.task-create-button {
+  margin-left: auto;
+  padding: 7px 11px;
+  border: 1px solid var(--border-emphasis);
+  border-radius: 6px;
+  color: var(--color-primary);
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.task-create-form {
+  display: grid;
+  grid-template-columns: 1.5fr .9fr 1fr 1.2fr .9fr auto;
+  gap: 8px;
+  padding: 12px;
+  margin: -2px 0 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: #fff;
+}
+.task-create-form input, .task-create-form select {
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border-emphasis);
+  border-radius: 5px;
+  font: inherit;
+  font-size: 12px;
+  background: #fff;
+}
+.task-create-form button { border: 0; border-radius: 5px; padding: 7px 11px; color: #fff; background: var(--color-primary); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
 
 .filter-tabs button.active {
   background: #173235;
@@ -3860,6 +4014,25 @@ function nowStr() {
   display: grid;
   gap: 14px;
 }
+.document-intake-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 20px;
+  border: 1px solid rgba(205,91,32,.24);
+  border-radius: 10px;
+  background: linear-gradient(100deg, rgba(255,247,242,.96), #fff);
+}
+.document-intake-panel span { color: var(--color-primary); font-size: 11px; font-weight: 800; letter-spacing: .06em; }
+.document-intake-panel h2 { margin: 4px 0; font-size: 16px; }
+.document-intake-panel p { margin: 0; color: var(--text-muted); font-size: 12px; }
+.document-upload-button { flex: 0 0 auto; padding: 9px 13px; border-radius: 6px; color: #fff; background: var(--color-primary); font-size: 12px; font-weight: 750; cursor: pointer; }
+.document-upload-button input { display: none; }.document-upload-button.disabled { opacity: .6; cursor: wait; }
+.document-storage-panel, .document-review-panel { margin-top: 18px; }.empty-document-note { padding: 14px 0; color: var(--text-muted); font-size: 13px; }
+.draft-create-form { display: grid; grid-template-columns: minmax(160px, .7fr) minmax(180px, 1fr) minmax(240px, 1.7fr) auto; gap: 9px; margin: 12px 0; }
+.draft-create-form input, .draft-create-form select, .draft-create-form textarea { min-width: 0; padding: 8px 9px; border: 1px solid var(--border-color); border-radius: 5px; background: #fff; color: var(--text-main); font: inherit; font-size: 12px; }
+.draft-create-form textarea { min-height: 36px; resize: vertical; }
 
 .project-focus-strip {
   grid-template-columns: minmax(0, 1.2fr) minmax(240px, .62fr) minmax(240px, .62fr);
@@ -4036,9 +4209,12 @@ function nowStr() {
 .doc-card strong { font-size: 24px; font-variant-numeric: tabular-nums; }
 .document-list article {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) minmax(180px, 1fr) 80px;
+  grid-template-columns: 64px minmax(0, 1fr) minmax(180px, 1fr) 100px auto;
 }
 .document-list em { color: var(--color-primary); font-style: normal; font-weight: 700; }
+.document-action { padding: 6px 9px; border: 1px solid rgba(21, 94, 117, .2); border-radius: 5px; background: #fff; color: var(--color-primary-dark); font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.document-action.confirm { border-color: transparent; background: var(--color-primary); color: #fff; }
+.document-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }.fill-package-list { margin-top: 10px; }
 
 @media (max-width: 1180px) {
   .workspace-grid,

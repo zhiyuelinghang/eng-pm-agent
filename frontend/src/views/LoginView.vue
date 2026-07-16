@@ -126,22 +126,20 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
+import api, { type ApiEnvelope } from '@/api/client'
 const router = useRouter()
 const message = useMessage()
 
 const step = ref(1)
 const role = ref<'site' | 'ops'>('site')
-const form = reactive({ username: 'user', password: 'demo2026', remember: false })
+const form = reactive({ username: 'admin', password: 'ChangeMe123!', remember: false })
 const showPwd = ref(false)
 const isLoading = ref(false)
 
 const selectRole = (newRole: 'site' | 'ops') => {
   role.value = newRole
-  if (newRole === 'site') {
-    form.username = 'user'
-  } else {
-    form.username = 'admin'
-  }
+  form.username = newRole === 'site' ? '' : 'admin'
+  form.password = newRole === 'site' ? '' : 'ChangeMe123!'
   step.value = 2
 }
 
@@ -151,12 +149,24 @@ const handleLogin = async () => {
     return
   }
   isLoading.value = true
-  await new Promise(r => setTimeout(r, 900))
-  isLoading.value = false
-  sessionStorage.setItem('logged_in', '1')
-  sessionStorage.setItem('user_role', role.value)
-  message.success('登录成功')
-  router.push('/workbench')
+  try {
+    const response = await api.post<ApiEnvelope<{ access_token: string; user: { id: number; role: string; real_name: string } }>>('/auth/login', {
+      username: form.username,
+      password: form.password,
+    })
+    const { access_token, user } = response.data.data
+    sessionStorage.setItem('access_token', access_token)
+    sessionStorage.setItem('logged_in', '1')
+    sessionStorage.setItem('user_role', ['admin', 'superadmin'].includes(user.role) ? 'ops' : 'site')
+    sessionStorage.setItem('current_user_id', String(user.id))
+    sessionStorage.setItem('current_user_name', user.real_name)
+    message.success('登录成功')
+    router.push('/workbench')
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '登录失败，请检查账号、密码和后端服务。')
+  } finally {
+    isLoading.value = false
+  }
 }
 </script>
 

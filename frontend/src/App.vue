@@ -11,9 +11,14 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import { zhCN, dateZhCN } from 'naive-ui'
 import type { GlobalThemeOverrides } from 'naive-ui'
 import { NConfigProvider, NLoadingBarProvider, NMessageProvider, NDialogProvider } from 'naive-ui'
+import { useAppStore } from '@/stores/app'
+
+const store = useAppStore()
+onMounted(() => { void store.initialize() })
 
 const themeOverrides: GlobalThemeOverrides = {
   common: {
