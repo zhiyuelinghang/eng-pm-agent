@@ -138,8 +138,8 @@ const isLoading = ref(false)
 
 const selectRole = (newRole: 'site' | 'ops') => {
   role.value = newRole
-  form.username = newRole === 'site' ? '' : 'admin'
-  form.password = newRole === 'site' ? '' : 'ChangeMe123!'
+  form.username = 'admin'
+  form.password = 'ChangeMe123!'
   step.value = 2
 }
 
