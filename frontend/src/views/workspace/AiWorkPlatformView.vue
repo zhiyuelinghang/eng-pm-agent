@@ -561,6 +561,14 @@
           {{ documentUploading ? '正在入库…' : '选择并上传文件' }}
         </label>
       </section>
+      <form class="document-search-panel" @submit.prevent="searchDocuments">
+        <input v-model.trim="documentSearchKeyword" placeholder="检索文件名或已提取的文本内容，例如：基坑、监测、验收">
+        <button type="submit" :disabled="documentSearching">{{ documentSearching ? '检索中…' : '检索资料' }}</button>
+      </form>
+      <section v-if="documentSearchKeyword" class="panel document-search-results">
+        <div class="panel-head"><div><h2>资料检索结果</h2><p>{{ documentSearchResults.length }} 条匹配；结果包含文件信息与文本命中片段。</p></div></div>
+        <div class="document-list"><article v-for="item in documentSearchResults" :key="item.id"><span>{{ item.category }}</span><strong>{{ item.fileName }}</strong><p>{{ item.snippet || `版本 V${item.version} · 未提取文本或仅匹配文件名` }}</p><em>V{{ item.version }}</em></article><p v-if="!documentSearching && !documentSearchResults.length" class="empty-document-note">未找到匹配资料。</p></div>
+      </section>
       <div class="docs-work-grid">
         <article v-for="item in docWorkItems" :key="item.label" class="doc-work-card">
           <div>
@@ -685,7 +693,7 @@ import {
   Dots, FileText, Folder, ListCheck, Notes, Paperclip, Pin, Plus, Refresh, Robot,
   Search, Send, Settings, Table, User, UserPlus,
 } from '@vicons/tabler'
-import { useAppStore } from '@/stores/app'
+import { useAppStore, type AttachmentRecord } from '@/stores/app'
 import api, { type ApiEnvelope } from '@/api/client'
 import type { DraftStatus, FillStatus, Member, RiskLevel, Task, TaskStatus } from '@/types'
 
@@ -1283,6 +1291,9 @@ const documentCards = computed(() => [
   { title: '目录监控', desc: store.dirConfig.enabled ? '文件目录监听中' : '目录监听未启用', count: `${store.dirConfig.scanInterval}m`, icon: Folder },
 ])
 const documentUploading = ref(false)
+const documentSearchKeyword = ref('')
+const documentSearchResults = ref<AttachmentRecord[]>([])
+const documentSearching = ref(false)
 const draftCreateOpen = ref(false)
 const draftCreateForm = ref({ risk_source_id: '', title: '', content: '' })
 async function uploadDocument(event: Event) {
@@ -1291,6 +1302,10 @@ async function uploadDocument(event: Event) {
   if (!file) return
   documentUploading.value = true
   try { await store.uploadAttachment(file) } finally { documentUploading.value = false; input.value = '' }
+}
+async function searchDocuments() {
+  documentSearching.value = true
+  try { documentSearchResults.value = await store.searchDocuments(documentSearchKeyword.value) } finally { documentSearching.value = false }
 }
 async function createRiskDraft() {
   if (!draftCreateForm.value.risk_source_id || !draftCreateForm.value.title || !draftCreateForm.value.content) return
@@ -3988,6 +4003,7 @@ function nowStr() {
 .document-intake-panel p { margin: 0; color: var(--text-muted); font-size: 12px; }
 .document-upload-button { flex: 0 0 auto; padding: 9px 13px; border-radius: 6px; color: #fff; background: var(--color-primary); font-size: 12px; font-weight: 750; cursor: pointer; }
 .document-upload-button input { display: none; }.document-upload-button.disabled { opacity: .6; cursor: wait; }
+.document-search-panel { display: flex; gap: 8px; margin-top: 12px; }.document-search-panel input { flex: 1; min-width: 0; padding: 9px 11px; border: 1px solid var(--border-emphasis); border-radius: 6px; background: #fff; font: inherit; font-size: 12px; }.document-search-panel button { border: 0; border-radius: 6px; padding: 0 13px; background: #173235; color: #fff; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }.document-search-panel button:disabled { opacity: .6; cursor: wait; }.document-search-results { margin-top: 12px; }
 .document-storage-panel, .document-review-panel { margin-top: 18px; }.empty-document-note { padding: 14px 0; color: var(--text-muted); font-size: 13px; }
 .draft-create-form { display: grid; grid-template-columns: minmax(160px, .7fr) minmax(180px, 1fr) minmax(240px, 1.7fr) auto; gap: 9px; margin: 12px 0; }
 .draft-create-form input, .draft-create-form select, .draft-create-form textarea { min-width: 0; padding: 8px 9px; border: 1px solid var(--border-color); border-radius: 5px; background: #fff; color: var(--text-main); font: inherit; font-size: 12px; }

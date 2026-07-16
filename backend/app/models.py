@@ -232,6 +232,14 @@ class Attachment(TimestampMixin, Base):
     file_hash: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
 
+class AttachmentText(Base):
+    __tablename__ = "attachment_texts"
+    attachment_id: Mapped[int] = mapped_column(ForeignKey("attachments.id", ondelete="CASCADE"), primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    content: Mapped[str] = mapped_column(Text, default="")
+    extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class OperationLog(Base):
     __tablename__ = "operation_logs"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

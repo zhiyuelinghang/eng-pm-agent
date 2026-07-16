@@ -1,4 +1,5 @@
 import hashlib
+import io
 import re
 import shutil
 from datetime import UTC, date, datetime
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import get_db
-from .models import (Attachment, CollaborationMessage, CollaborationSession, DailyReport, FillPackage, OperationLog, PlatformFieldMapping, Project, ProjectMember, ProjectSettings,
+from .models import (Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, FillPackage, OperationLog, PlatformFieldMapping, Project, ProjectMember, ProjectSettings,
                      QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsRiskLink)
 from .schemas import (DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
                       LoginRequest, MemberInput, ProjectInput, RiskInput, TaskInput, TaskTransitionInput,
@@ -430,6 +431,22 @@ def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str
     return "当前项目暂无未闭环任务。可先补充工程资料、WBS、风险源或质量指标，再生成协同计划。", []
 
 
+def extract_attachment_text(content: bytes, suffix: str) -> str:
+    try:
+        if suffix in {".txt", ".md", ".csv"}:
+            return content.decode("utf-8", errors="ignore")[:200000]
+        if suffix == ".docx":
+            from docx import Document
+            return "\n".join(paragraph.text for paragraph in Document(io.BytesIO(content)).paragraphs)[:200000]
+        if suffix == ".pdf":
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(content)) as pdf:
+                return "\n".join(page.extract_text() or "" for page in pdf.pages)[:200000]
+    except Exception:
+        return ""
+    return ""
+
+
 @router.get("/projects/{project_id}/collaboration-sessions")
 def list_collaboration_sessions(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
     project_or_404(db, project_id)
@@ -480,7 +497,9 @@ def upload_attachment(project_id: int, file: UploadFile = File(...), category: s
         category = "日报" if "日报" in normalized else "进度计划" if any(key in normalized for key in ["wbs", "计划", "进度"]) else "风险资料" if any(key in normalized for key in ["风险", "监测", "隐患"]) else "工程资料"
     previous_version = db.scalar(select(func.max(Attachment.version)).where(Attachment.project_id == project_id, Attachment.file_name == safe_name)) or 0
     row = Attachment(project_id=project_id, file_name=safe_name, storage_path=str(target), content_type=file.content_type, file_size=len(content), file_hash=digest, category=category, version=previous_version + 1)
-    db.add(row); db.flush(); audit(db, user, "上传资料", f"上传资料「{safe_name}」", project_id, "attachment", row.id); db.commit(); db.refresh(row)
+    db.add(row); db.flush()
+    db.add(AttachmentText(attachment_id=row.id, project_id=project_id, content=extract_attachment_text(content, target.suffix.lower())))
+    audit(db, user, "上传资料", f"上传资料「{safe_name}」", project_id, "attachment", row.id); db.commit(); db.refresh(row)
     return ok(serialize(row), "资料已上传")
 
 
@@ -489,6 +508,21 @@ def list_attachments(project_id: int, keyword: str | None = None, db: Session = 
     project_or_404(db, project_id); stmt = select(Attachment).where(Attachment.project_id == project_id)
     if keyword: stmt = stmt.where(Attachment.file_name.contains(keyword))
     return ok([serialize(row) for row in db.scalars(stmt.order_by(Attachment.created_at.desc())).all()])
+
+
+@router.get("/projects/{project_id}/document-search")
+def search_documents(project_id: int, keyword: str, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+    project_or_404(db, project_id)
+    if not keyword.strip(): return ok([])
+    rows = db.execute(select(Attachment, AttachmentText.content).outerjoin(AttachmentText, AttachmentText.attachment_id == Attachment.id).where(Attachment.project_id == project_id, (Attachment.file_name.contains(keyword) | AttachmentText.content.contains(keyword))).order_by(Attachment.created_at.desc())).all()
+    result = []
+    for attachment, content in rows:
+        item = serialize(attachment)
+        if content:
+            index = content.lower().find(keyword.lower())
+            item["snippet"] = content[max(0, index - 40): index + len(keyword) + 80] if index >= 0 else ""
+        result.append(item)
+    return ok(result)
 
 
 @router.post("/attachments/{attachment_id}/parse-daily")
@@ -520,6 +554,7 @@ def parse_daily_attachment(attachment_id: int, db: Session = Depends(get_db), us
                          matched_wbs_id=matched.id if matched else None, confidence=0.85 if matched else 0.45,
                          parse_status="parsed", status="pending_confirm")
     db.add(report); db.flush()
+    attachment.source_type = "daily_report"; attachment.source_id = report.id
     task = Task(project_id=attachment.project_id, title=f"日报解析确认 — {attachment.file_name}", task_type="daily_confirm", risk_level="low",
                 assignee_user_id=user.id, due_at=datetime.now(UTC).date().isoformat(), wbs_item_id=report.matched_wbs_id,
                 trigger_reason="资料入库后登记日报，等待人工确认解析内容", required_materials=[])
