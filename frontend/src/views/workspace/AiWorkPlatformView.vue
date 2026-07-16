@@ -493,6 +493,9 @@
     </section>
 
     <section v-else-if="section === 'project'" class="page-stack project-page">
+      <div class="task-summary-strip supervision-strip">
+        <article><span>总体进度</span><strong>{{ store.dashboard?.progress_rate ?? 0 }}%</strong></article><article><span>风险预警</span><strong>{{ store.dashboard?.risk_warnings ?? 0 }}</strong></article><article><span>质量待核查</span><strong>{{ store.dashboard?.quality_issues ?? 0 }}</strong></article><article><span>未读通知</span><strong>{{ store.dashboard?.unread_notifications ?? 0 }}</strong></article>
+      </div>
       <div class="project-focus-strip">
         <article class="focus-card focus-card-main">
           <span>当前施工重点</span>
@@ -545,6 +548,10 @@
               </div>
             </article>
           </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div><h2>通知与工程变更</h2><p>风险、日报确认及变更事项统一留痕。</p></div></div>
+          <div class="risk-list"><article v-for="item in store.notifications.slice(0, 3)" :key="item.id"><span :class="['risk-indicator', item.priority === 'high' ? 'high' : 'low']"></span><div><strong>{{ item.title }}</strong><p>{{ item.content }}</p></div><button v-if="!item.is_read" class="document-action" @click="store.readNotification(item.id)">已读</button></article><article v-for="item in store.projectChanges.slice(0, 2)" :key="`change-${item.id}`"><span class="risk-indicator medium"></span><div><strong>{{ item.title }}</strong><p>{{ item.category }} · {{ item.status }}</p></div></article></div>
         </section>
       </div>
     </section>

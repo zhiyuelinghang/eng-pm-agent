@@ -14,12 +14,12 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import get_db
-from .models import (Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, FillPackage, OperationLog, PlatformFieldMapping, Project, ProjectMember, ProjectSettings,
+from .models import (Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, FillPackage, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectMember, ProjectSettings,
                      QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsRiskLink)
 from .schemas import (DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
                       LoginRequest, MemberInput, ProjectInput, RiskInput, TaskInput, TaskTransitionInput,
                       WbsInput, WbsRiskLinkInput, OperationLogInput, PlatformFieldMappingInput, ProjectSettingsInput,
-                      CollaborationMessageInput, CollaborationSessionInput, QualityMetricInput, TaskStepUpdate)
+                      CollaborationMessageInput, CollaborationSessionInput, ProjectChangeInput, QualityMetricInput, TaskStepUpdate)
 from .security import create_access_token, decode_access_token, hash_password, verify_password
 
 
@@ -130,6 +130,56 @@ def save_project_settings(project_id: int, payload: ProjectSettingsInput, db: Se
     db.flush(); audit(db, user, "更新目录与预警配置", "更新资料目录监控及预警规则", project_id, "project_settings", project_id)
     db.commit(); db.refresh(row)
     return ok(serialize(row), "目录与预警配置已保存")
+
+
+def refresh_project_notifications(project_id: int, db: Session) -> None:
+    overdue = db.scalars(select(Task).where(Task.project_id == project_id, Task.status == "overdue")).all()
+    waiting_dailies = db.scalars(select(DailyReport).where(DailyReport.project_id == project_id, DailyReport.status == "pending_confirm")).all()
+    for task in overdue:
+        exists = db.scalar(select(Notification).where(Notification.project_id == project_id, Notification.source_type == "task", Notification.source_id == task.id, Notification.notification_type == "overdue"))
+        if not exists: db.add(Notification(project_id=project_id, notification_type="overdue", title="任务已逾期", content=task.title, priority="high", source_type="task", source_id=task.id))
+    for report in waiting_dailies:
+        exists = db.scalar(select(Notification).where(Notification.project_id == project_id, Notification.source_type == "daily_report", Notification.source_id == report.id, Notification.notification_type == "daily_confirm"))
+        if not exists: db.add(Notification(project_id=project_id, notification_type="daily_confirm", title="日报待确认", content=report.file_name, priority="normal", source_type="daily_report", source_id=report.id))
+    db.commit()
+
+
+@router.get("/projects/{project_id}/dashboard")
+def project_dashboard(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+    project_or_404(db, project_id); refresh_project_notifications(project_id, db)
+    wbs = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id)).all()
+    tasks = db.scalars(select(Task).where(Task.project_id == project_id)).all()
+    risks = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id)).all()
+    metrics = db.scalars(select(QualityMetric).where(QualityMetric.project_id == project_id)).all()
+    changes = db.scalars(select(ProjectChange).where(ProjectChange.project_id == project_id, ProjectChange.status != "closed")).all()
+    notifications = db.scalars(select(Notification).where(Notification.project_id == project_id, Notification.is_read.is_(False))).all()
+    done = sum(1 for task in tasks if task.status == "completed")
+    return ok({"progress_rate": round(sum(item.progress for item in wbs) / len(wbs)) if wbs else 0, "risk_warnings": sum(1 for risk in risks if risk.level in {"critical", "high"}), "safety_issues": sum(1 for risk in risks if "安全" in risk.risk_type), "quality_issues": sum(1 for metric in metrics if metric.status != "passed"), "task_completion_rate": round(done * 100 / len(tasks)) if tasks else 0, "open_changes": len(changes), "unread_notifications": len(notifications), "main_risk": next((risk.name for risk in risks if risk.level in {"critical", "high"}), "暂无重大风险"), "main_quality": next((metric.name for metric in metrics if metric.status != "passed"), "暂无待核查质量项")})
+
+
+@router.get("/projects/{project_id}/changes")
+def list_project_changes(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+    return ok(list_for_project(ProjectChange, project_id, db))
+
+
+@router.post("/projects/{project_id}/changes")
+def create_project_change(project_id: int, payload: ProjectChangeInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
+    project_or_404(db, project_id); row = ProjectChange(project_id=project_id, **payload.model_dump()); db.add(row); db.flush()
+    audit(db, user, "登记工程变更", f"登记变更「{row.title}」", project_id, "project_change", row.id); db.commit(); db.refresh(row)
+    return ok(serialize(row), "工程变更已登记")
+
+
+@router.get("/projects/{project_id}/notifications")
+def list_notifications(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+    project_or_404(db, project_id); refresh_project_notifications(project_id, db)
+    rows = db.scalars(select(Notification).where(Notification.project_id == project_id).order_by(Notification.created_at.desc())).all()
+    return ok([serialize(row) for row in rows])
+
+
+@router.post("/notifications/{notification_id}/read")
+def read_notification(notification_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+    row = entity_or_404(db, Notification, notification_id, "通知不存在"); row.is_read = True; db.commit(); db.refresh(row)
+    return ok(serialize(row), "通知已标记已读")
 
 
 @router.get("/projects/{project_id}/members")

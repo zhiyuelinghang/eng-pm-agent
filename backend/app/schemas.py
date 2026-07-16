@@ -161,6 +161,14 @@ class CollaborationMessageInput(BaseModel):
     content: str = Field(min_length=1)
 
 
+class ProjectChangeInput(BaseModel):
+    category: str = "工程内容变更"
+    title: str = Field(min_length=1, max_length=300)
+    content: str = Field(min_length=1)
+    status: str = "pending"
+    source_refs: list[str] = Field(default_factory=list)
+
+
 class OperationLogInput(BaseModel):
     action: str
     detail: str
