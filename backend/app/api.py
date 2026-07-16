@@ -548,6 +548,12 @@ def create_collaboration_message(session_id: int, payload: CollaborationMessageI
     session = session_or_404(db, session_id)
     db.add(CollaborationMessage(session_id=session.id, role="user", content=payload.content)); db.flush()
     answer, task_ids = collaboration_reply(session.project_id, payload.content, db)
+    if "创建任务" in payload.content or "生成任务" in payload.content:
+        title = payload.content.replace("创建任务", "").replace("生成任务", "").strip(" ：:，,。")[:200] or "协同会话待办"
+        task = Task(project_id=session.project_id, title=f"协同任务 — {title}", task_type="risk_alert", risk_level="medium", assignee_user_id=user.id, trigger_reason=f"由协同会话「{session.title}」自动创建")
+        db.add(task); db.flush(); db.add(TaskStatusHistory(task_id=task.id, to_status="pending", changed_by=user.id, note="协同会话自动创建"))
+        task_ids = list(dict.fromkeys([*task_ids, task.id])); session.task_ids = list(dict.fromkeys([*(session.task_ids or []), task.id]))
+        answer = f"已创建任务「{task.title}」。\n{answer}"
     assistant = CollaborationMessage(session_id=session.id, role="assistant", content=answer, generated_task_ids=task_ids)
     db.add(assistant); session.summary = payload.content[:120]
     audit(db, user, "协同会话处理", f"会话「{session.title}」处理新消息", session.project_id, "collaboration_session", session.id)
