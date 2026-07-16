@@ -456,6 +456,7 @@
         <select v-model="taskCreateForm.assignee_user_id"><option value="">选择负责人</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }}</option></select>
         <select v-model="taskCreateForm.risk_source_id"><option value="">关联风险源（可选）</option><option v-for="risk in store.riskSources" :key="risk.id" :value="risk.id">{{ risk.name }}</option></select>
         <input v-model="taskCreateForm.due_at" type="date" aria-label="截止日期">
+        <input v-model.trim="taskCreateForm.workflow" class="task-workflow-input" placeholder="处理步骤，用顿号或逗号分隔（可选）">
         <button type="submit">创建并分派</button>
       </form>
       <div class="task-board">
@@ -472,11 +473,20 @@
             <span>截止：{{ formatDateTime(task.deadline, 'end') }}</span>
             <span>缺项：{{ task.missingCount }}</span>
           </div>
+          <ol v-if="task.workflowSteps.length" class="task-step-list">
+            <li v-for="(step, index) in task.workflowSteps" :key="`${task.id}-${index}`" :class="step.status">
+              <span>{{ index + 1 }}</span><strong>{{ step.name }}</strong><em>{{ taskStepLabel(step.status) }}</em>
+              <button v-if="task.status === 'processing' && step.status !== 'completed'" type="button" @click="store.updateTaskStep(task.id, index, 'completed')">完成步骤</button>
+            </li>
+          </ol>
           <div class="task-actions">
             <router-link to="/ai">协同处理</router-link>
-            <button @click="store.updateTaskStatus(task.id, 'processing')">开始处理</button>
-            <button @click="store.updateTaskStatus(task.id, 'waiting_confirm')">提交确认</button>
-            <button class="done" @click="store.updateTaskStatus(task.id, 'done')">完成</button>
+            <button v-if="task.status === 'pending' || task.status === 'overdue'" @click="store.updateTaskStatus(task.id, 'processing')">开始处理</button>
+            <button v-if="task.status === 'processing'" @click="store.updateTaskStatus(task.id, 'waiting_confirm')">提交确认</button>
+            <button v-if="task.status === 'processing'" @click="store.updateTaskStatus(task.id, 'need_more_info')">需要补充</button>
+            <button v-if="task.status === 'waiting_confirm'" @click="store.updateTaskStatus(task.id, 'processing')">退回处理</button>
+            <button v-if="task.status === 'waiting_confirm'" class="done" @click="store.updateTaskStatus(task.id, 'done')">确认完成</button>
+            <button v-if="task.status === 'need_more_info'" @click="store.updateTaskStatus(task.id, 'processing')">已补充，继续处理</button>
           </div>
         </article>
       </div>
@@ -1308,12 +1318,13 @@ function startNewSession() {
 
 const taskFilter = ref<'all' | TaskStatus>('all')
 const taskCreateOpen = ref(false)
-const taskCreateForm = ref<{ title: string; task_type: Task['type']; assignee_user_id: string; risk_source_id: string; due_at: string }>({ title: '', task_type: 'risk_alert', assignee_user_id: '', risk_source_id: '', due_at: '' })
+const taskCreateForm = ref<{ title: string; task_type: Task['type']; assignee_user_id: string; risk_source_id: string; due_at: string; workflow: string }>({ title: '', task_type: 'risk_alert', assignee_user_id: '', risk_source_id: '', due_at: '', workflow: '' })
 const taskTabs: Array<{ key: 'all' | TaskStatus, label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'overdue', label: '逾期' },
   { key: 'pending', label: '待处理' },
   { key: 'processing', label: '处理中' },
+  { key: 'need_more_info', label: '待补充' },
   { key: 'waiting_confirm', label: '待确认' },
   { key: 'done', label: '已完成' },
 ]
@@ -1321,8 +1332,10 @@ const filteredTasks = computed(() => taskFilter.value === 'all' ? store.tasks : 
 
 async function createManualTask() {
   if (!taskCreateForm.value.title) return
-  await store.createTask({ ...taskCreateForm.value, trigger_reason: '由项目成员在任务中心创建' })
-  taskCreateForm.value = { title: '', task_type: 'risk_alert', assignee_user_id: '', risk_source_id: '', due_at: '' }
+  const { workflow, ...payload } = taskCreateForm.value
+  const workflow_steps = workflow.split(/[、,，]/).map(name => name.trim()).filter(Boolean).map(name => ({ name, status: 'pending' as const }))
+  await store.createTask({ ...payload, workflow_steps, trigger_reason: '由项目成员在任务中心创建' })
+  taskCreateForm.value = { title: '', task_type: 'risk_alert', assignee_user_id: '', risk_source_id: '', due_at: '', workflow: '' }
   taskCreateOpen.value = false
 }
 
@@ -1409,6 +1422,10 @@ function taskTypeLabel(type: Task['type']) {
   } as Record<Task['type'], string>)[type]
 }
 
+function taskStepLabel(status: Task['workflowSteps'][number]['status']) {
+  return ({ pending: '待处理', processing: '处理中', completed: '已完成', blocked: '受阻' } as Record<Task['workflowSteps'][number]['status'], string>)[status]
+}
+
 function taskSourceLabel(type: Task['type']) {
   return ({
     risk_alert: 'WBS 风险规则自动触发',
@@ -1430,6 +1447,7 @@ function taskProgress(status: TaskStatus) {
     overdue: 20,
     pending: 30,
     processing: 58,
+    need_more_info: 45,
     waiting_confirm: 78,
     done: 100,
     cancelled: 0,
@@ -1445,6 +1463,7 @@ function statusLabel(status: TaskStatus | string) {
   return ({
     pending: '待处理',
     processing: '处理中',
+    need_more_info: '待补充资料',
     waiting_confirm: '待确认',
     done: '已完成',
     overdue: '已逾期',
@@ -3985,7 +4004,7 @@ function nowStr() {
 }
 .task-create-form {
   display: grid;
-  grid-template-columns: 1.5fr .9fr 1fr 1.2fr .9fr auto;
+  grid-template-columns: 1.3fr .85fr .9fr 1.1fr .75fr 1.2fr auto;
   gap: 8px;
   padding: 12px;
   margin: -2px 0 14px;
@@ -4003,6 +4022,9 @@ function nowStr() {
   background: #fff;
 }
 .task-create-form button { border: 0; border-radius: 5px; padding: 7px 11px; color: #fff; background: var(--color-primary); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.task-step-list { display: grid; gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; }
+.task-step-list li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto auto; align-items: center; gap: 7px; padding: 7px 8px; border-radius: 5px; background: #f6f8f7; color: var(--text-secondary); font-size: 12px; }
+.task-step-list li > span { display: grid; width: 19px; height: 19px; place-items: center; border-radius: 50%; background: #dce6e2; color: #48625e; font-size: 10px; font-weight: 800; }.task-step-list li.completed > span { background: #0f766e; color: #fff; }.task-step-list li.blocked { background: #fff5ed; }.task-step-list em { font-style: normal; color: var(--text-muted); }.task-step-list button { border: 0; border-radius: 4px; padding: 4px 6px; background: #e9f3f0; color: #0f766e; font-size: 11px; font-weight: 700; cursor: pointer; }
 
 .filter-tabs button.active {
   background: #173235;
@@ -4229,6 +4251,7 @@ function nowStr() {
   .docs-work-grid {
     grid-template-columns: 1fr;
   }
+  .task-create-form { grid-template-columns: 1fr 1fr; }
   .chat-layout { height: auto; }
   .conversation-list,
   .realtime-panel { max-height: none; }
@@ -4258,6 +4281,7 @@ function nowStr() {
   .document-list article {
     grid-template-columns: 1fr;
   }
+  .task-create-form { grid-template-columns: 1fr; }
   .message-row { max-width: 100%; }
 }
 </style>

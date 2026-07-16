@@ -34,6 +34,7 @@
         <article><span>WBS 工序</span><strong>{{ store.wbsItems.length }}</strong><p>计划与进度基线</p></article>
         <article><span>风险源</span><strong>{{ store.riskSources.length }}</strong><p>控制要求与责任人</p></article>
         <article><span>风险关联</span><strong>{{ store.wbsRiskLinks.length }}</strong><p>预警触发依据</p></article>
+        <article><span>质量指标</span><strong>{{ store.qualityMetrics.length }}</strong><p>工序质量控制点</p></article>
       </section>
 
       <section class="setup-grid">
@@ -63,6 +64,37 @@
           <div class="item-list">
             <div v-for="item in store.wbsItems" :key="item.id"><strong>{{ item.code }} · {{ item.name }}</strong><span>{{ item.planStart || '未排期' }} 至 {{ item.planEnd || '未排期' }}</span><small>{{ item.progress }}% · {{ item.status }}</small></div>
             <p v-if="!store.wbsItems.length" class="empty">暂无 WBS 工序。</p>
+          </div>
+        </article>
+      </section>
+
+      <section class="setup-grid">
+        <article class="panel">
+          <div class="panel-head"><div><h2>质量指标与工序</h2><p>把验收项、控制要求、检查频次和资料要求挂接到 WBS。</p></div></div>
+          <form class="compact-form quality-form" @submit.prevent="submitQualityMetric">
+            <select v-model="qualityForm.wbs_item_id"><option value="">关联 WBS（可选）</option><option v-for="item in store.wbsItems" :key="item.id" :value="item.id">{{ item.code }} · {{ item.name }}</option></select>
+            <input v-model.trim="qualityForm.name" required placeholder="质量验收项">
+            <input v-model.trim="qualityForm.requirement" required placeholder="控制指标或验收要求">
+            <input v-model.trim="qualityForm.inspection_frequency" placeholder="检查频次">
+            <button class="primary" :disabled="submitting">添加指标</button>
+          </form>
+          <div class="item-list">
+            <div v-for="item in store.qualityMetrics" :key="item.id"><strong>{{ item.name }}</strong><span>{{ store.getWbsName(item.wbsId || '') }} · {{ item.inspectionFrequency || '频次待定' }}</span><small>{{ item.requirement }}</small></div>
+            <p v-if="!store.qualityMetrics.length" class="empty">暂无质量指标。</p>
+          </div>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div><h2>外部平台字段映射</h2><p>生成填报包时会自动按已启用映射写入目标字段。</p></div></div>
+          <form class="compact-form mapping-form" @submit.prevent="submitPlatformMapping">
+            <input v-model.trim="mappingForm.platformName" required placeholder="平台名称，例如监管填报平台">
+            <select v-model="mappingForm.sourceField"><option value="draft_title">草稿标题</option><option value="draft_content">草稿内容</option><option value="source_refs">来源资料</option></select>
+            <input v-model.trim="mappingForm.targetField" required placeholder="平台目标字段">
+            <label class="check-label"><input v-model="mappingForm.required" type="checkbox"> 必填</label>
+            <button class="primary" :disabled="submitting">添加映射</button>
+          </form>
+          <div class="item-list">
+            <div v-for="item in store.platformMappings" :key="item.id"><strong>{{ item.platformName }} · {{ item.targetField }}</strong><span>{{ sourceFieldLabel(item.sourceField) }}{{ item.required ? ' · 必填' : '' }}</span><small><button class="link-button" type="button" @click="store.removePlatformMapping(item.id)">删除</button></small></div>
+            <p v-if="!store.platformMappings.length" class="empty">暂无字段映射；未配置时可手工填写填报字段。</p>
           </div>
         </article>
       </section>
@@ -131,6 +163,8 @@ const projectForm = reactive({ project_name: '', owner_unit: '', description: ''
 const memberForm = reactive({ name: '', username: '', title: '' })
 const wbsForm = reactive({ code: '', name: '', planned_start: '', planned_finish: '' })
 const riskForm = reactive<{ name: string; level: RiskLevel; risk_type: string; materials: string }>({ name: '', level: 'medium', risk_type: '', materials: '' })
+const qualityForm = reactive({ wbs_item_id: '', name: '', requirement: '', inspection_frequency: '' })
+const mappingForm = reactive({ platformName: '监管填报平台', sourceField: 'draft_content', targetField: '', required: false })
 const monitorForm = reactive<DirConfig>({ mainDir: '', archiveDir: '', tempDir: '', failedDir: '', backupDir: '', scanInterval: 30, enabled: false })
 const monitorRules = ref<RemindRule[]>([])
 const reminderForm = reactive<{ level: RiskLevel; days: number }>({ level: 'medium', days: 7 })
@@ -148,11 +182,14 @@ function submitProject() { void run(async () => { await store.createProject(proj
 function submitMember() { void run(async () => { await store.saveMember({ name: memberForm.name, username: memberForm.username, title: memberForm.title }); Object.assign(memberForm, { name: '', username: '', title: '' }) }, '成员已添加') }
 function submitWbs() { void run(async () => { await store.createWbs(wbsForm); Object.assign(wbsForm, { code: '', name: '', planned_start: '', planned_finish: '' }) }, 'WBS 工序已添加') }
 function submitRisk() { void run(async () => { const materials = riskForm.materials.split(/[、,，]/).map(item => item.trim()).filter(Boolean); await store.createRisk({ name: riskForm.name, level: riskForm.level, risk_type: riskForm.risk_type || '综合风险', material_requirements: materials }); Object.assign(riskForm, { name: '', level: 'medium', risk_type: '', materials: '' }) }, '风险源已添加') }
+function submitQualityMetric() { void run(async () => { await store.createQualityMetric(qualityForm); Object.assign(qualityForm, { wbs_item_id: '', name: '', requirement: '', inspection_frequency: '' }) }, '质量指标已添加') }
+function submitPlatformMapping() { void run(async () => { await store.createPlatformMapping({ ...mappingForm, enabled: true }); Object.assign(mappingForm, { platformName: '监管填报平台', sourceField: 'draft_content', targetField: '', required: false }) }, '平台字段映射已添加') }
 function saveMonitoring() { void run(() => store.saveProjectSettings({ ...monitorForm, reminderRules: monitorRules.value }), '目录与预警规则已保存') }
 function addReminderRule() { const index = monitorRules.value.findIndex(rule => rule.level === reminderForm.level); const next = { id: `rule-${reminderForm.level}`, level: reminderForm.level, days: Number(reminderForm.days) || 0, enabled: true }; if (index >= 0) monitorRules.value[index] = next; else monitorRules.value.push(next); message.info('规则已加入，请点击“保存配置”生效') }
 function removeReminderRule(ruleId: string) { monitorRules.value = monitorRules.value.filter(rule => rule.id !== ruleId); message.info('规则已移除，请点击“保存配置”生效') }
 function refresh() { void run(() => store.initialize(), '数据已刷新') }
 function riskLabel(level: RiskLevel) { return ({ critical: '重大风险', high: '高风险', medium: '中风险', low: '低风险' } as Record<RiskLevel, string>)[level] }
+function sourceFieldLabel(value: string) { return ({ draft_title: '草稿标题', draft_content: '草稿内容', source_refs: '来源资料' } as Record<string, string>)[value] || value }
 function formatTime(value: string) { return value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '刚刚' }
 </script>
 
@@ -160,6 +197,6 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .setup-page { max-width: 1440px; margin: 0 auto; padding: 28px; color: var(--text-primary); }
 .page-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; padding:6px 0 24px; }
 .page-heading span { color:var(--color-primary); font-size:12px; font-weight:700; letter-spacing:.08em; }.page-heading h1 { margin:6px 0; font-size:26px; }.page-heading p,.panel-head p { margin:0; color:var(--text-muted); font-size:13px; }.refresh,.primary { border:0; border-radius:6px; cursor:pointer; font-weight:700; }.refresh { background:#fff; border:1px solid var(--border-emphasis); padding:9px 14px; }.primary { background:var(--color-primary); color:#fff; padding:9px 14px; }.primary:disabled,.refresh:disabled { opacity:.55; cursor:not-allowed; }
-.setup-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-top:18px; }.panel { background:#fff; border:1px solid var(--border-default); border-radius:10px; padding:20px; min-width:0; }.panel-head { margin-bottom:16px; }.panel-head h2 { margin:0 0 5px; font-size:16px; }.form-stack { display:grid; gap:12px; }.form-stack label { display:grid; gap:6px; font-size:12px; font-weight:700; color:var(--text-secondary); }.form-stack input,.form-stack textarea,.compact-form input,.compact-form select { border:1px solid var(--border-emphasis); border-radius:6px; padding:9px 10px; font:inherit; background:#fff; color:var(--text-primary); }.form-stack textarea { resize:vertical; }.compact-form { display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:8px; }.wbs-form { grid-template-columns:.45fr 1.25fr 1fr 1fr auto; }.risk-form { grid-template-columns:1.1fr .55fr .9fr 1.35fr auto; }.reminder-form { grid-template-columns:1fr 1fr auto; }.directory-pair,.monitor-controls { display:grid; grid-template-columns:1fr 1fr; gap:10px; }.monitor-controls { align-items:end; grid-template-columns:1fr 1fr auto; }.check-label { display:flex !important; align-items:center; gap:7px; padding-bottom:9px; }.check-label input { width:15px; height:15px; }.link-button { border:0; padding:0; background:transparent; color:var(--color-primary); cursor:pointer; font:inherit; }.item-list { display:grid; gap:0; margin-top:16px; border-top:1px solid var(--border-default); }.item-list>div { display:grid; grid-template-columns:1.2fr 1fr .8fr; gap:10px; align-items:center; padding:11px 0; border-bottom:1px solid var(--border-default); font-size:12px; }.item-list strong { font-size:13px; }.item-list span,.item-list small { color:var(--text-muted); }.empty { color:var(--text-muted); font-size:13px; padding:14px 0; }.project-row { display:flex; text-align:left; align-items:center; gap:10px; width:100%; padding:12px 4px; border:0; border-bottom:1px solid var(--border-default); background:transparent; cursor:pointer; }.project-row.active { color:var(--color-primary); }.project-row>span { width:8px; height:8px; border-radius:50%; background:var(--color-success); }.project-row div { flex:1; }.project-row strong,.project-row p { display:block; margin:0; }.project-row p,.project-row em { margin-top:3px; color:var(--text-muted); font-size:11px; font-style:normal; }.config-summary { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-top:18px; }.config-summary article { padding:16px; background:#f8faf9; border:1px solid var(--border-default); border-radius:9px; }.config-summary span,.config-summary p { display:block; color:var(--text-muted); font-size:12px; }.config-summary strong { display:block; margin:8px 0 3px; font-size:28px; }.config-summary p { margin:0; }
+.setup-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-top:18px; }.panel { background:#fff; border:1px solid var(--border-default); border-radius:10px; padding:20px; min-width:0; }.panel-head { margin-bottom:16px; }.panel-head h2 { margin:0 0 5px; font-size:16px; }.form-stack { display:grid; gap:12px; }.form-stack label { display:grid; gap:6px; font-size:12px; font-weight:700; color:var(--text-secondary); }.form-stack input,.form-stack textarea,.compact-form input,.compact-form select { border:1px solid var(--border-emphasis); border-radius:6px; padding:9px 10px; font:inherit; background:#fff; color:var(--text-primary); }.form-stack textarea { resize:vertical; }.compact-form { display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:8px; }.wbs-form { grid-template-columns:.45fr 1.25fr 1fr 1fr auto; }.risk-form { grid-template-columns:1.1fr .55fr .9fr 1.35fr auto; }.quality-form { grid-template-columns:1fr 1fr 1.4fr .8fr auto; }.mapping-form { grid-template-columns:1.2fr .9fr 1fr auto auto; }.reminder-form { grid-template-columns:1fr 1fr auto; }.directory-pair,.monitor-controls { display:grid; grid-template-columns:1fr 1fr; gap:10px; }.monitor-controls { align-items:end; grid-template-columns:1fr 1fr auto; }.check-label { display:flex !important; align-items:center; gap:7px; padding-bottom:9px; }.check-label input { width:15px; height:15px; }.link-button { border:0; padding:0; background:transparent; color:var(--color-primary); cursor:pointer; font:inherit; }.item-list { display:grid; gap:0; margin-top:16px; border-top:1px solid var(--border-default); }.item-list>div { display:grid; grid-template-columns:1.2fr 1fr .8fr; gap:10px; align-items:center; padding:11px 0; border-bottom:1px solid var(--border-default); font-size:12px; }.item-list strong { font-size:13px; }.item-list span,.item-list small { color:var(--text-muted); }.empty { color:var(--text-muted); font-size:13px; padding:14px 0; }.project-row { display:flex; text-align:left; align-items:center; gap:10px; width:100%; padding:12px 4px; border:0; border-bottom:1px solid var(--border-default); background:transparent; cursor:pointer; }.project-row.active { color:var(--color-primary); }.project-row>span { width:8px; height:8px; border-radius:50%; background:var(--color-success); }.project-row div { flex:1; }.project-row strong,.project-row p { display:block; margin:0; }.project-row p,.project-row em { margin-top:3px; color:var(--text-muted); font-size:11px; font-style:normal; }.config-summary { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-top:18px; }.config-summary article { padding:16px; background:#f8faf9; border:1px solid var(--border-default); border-radius:9px; }.config-summary span,.config-summary p { display:block; color:var(--text-muted); font-size:12px; }.config-summary strong { display:block; margin:8px 0 3px; font-size:28px; }.config-summary p { margin:0; }
 @media (max-width:1000px) { .setup-grid,.first-grid { grid-template-columns:1fr; }.config-summary { grid-template-columns:repeat(2,1fr); }.compact-form,.wbs-form,.risk-form { grid-template-columns:1fr 1fr; }.compact-form button { grid-column:span 2; } } @media (max-width:600px) { .setup-page { padding:18px; }.page-heading { display:block; }.refresh { margin-top:12px; }.config-summary { grid-template-columns:1fr 1fr; }.item-list>div { grid-template-columns:1fr; gap:3px; } }
 </style>

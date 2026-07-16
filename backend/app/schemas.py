@@ -64,6 +64,25 @@ class RiskInput(BaseModel):
     status: str = "active"
 
 
+class QualityMetricInput(BaseModel):
+    wbs_item_id: int | None = None
+    name: str = Field(min_length=1, max_length=300)
+    requirement: str = Field(min_length=1)
+    inspection_frequency: str | None = None
+    required_materials: list[str] = Field(default_factory=list)
+    owner_user_id: int | None = None
+    status: str = "pending"
+
+
+class PlatformFieldMappingInput(BaseModel):
+    platform_name: str = Field(min_length=1, max_length=200)
+    source_field: str = Field(min_length=1, max_length=100)
+    target_field: str = Field(min_length=1, max_length=200)
+    transform_rule: str | None = None
+    required: bool = False
+    enabled: bool = True
+
+
 class WbsRiskLinkInput(BaseModel):
     wbs_item_id: int
     risk_source_id: int
@@ -88,6 +107,11 @@ class TaskInput(BaseModel):
 
 class TaskTransitionInput(BaseModel):
     status: str
+    note: str | None = None
+
+
+class TaskStepUpdate(BaseModel):
+    status: str = "completed"
     note: str | None = None
 
 

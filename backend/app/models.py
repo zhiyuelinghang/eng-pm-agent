@@ -93,6 +93,31 @@ class RiskSource(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), default="active")
 
 
+class QualityMetric(TimestampMixin, Base):
+    __tablename__ = "quality_metrics"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    wbs_item_id: Mapped[int | None] = mapped_column(ForeignKey("wbs_items.id", ondelete="SET NULL"), nullable=True)
+    name: Mapped[str] = mapped_column(String(300))
+    requirement: Mapped[str] = mapped_column(Text)
+    inspection_frequency: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    required_materials: Mapped[list[str]] = mapped_column(JSON, default=list)
+    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+
+
+class PlatformFieldMapping(TimestampMixin, Base):
+    __tablename__ = "platform_field_mappings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    platform_name: Mapped[str] = mapped_column(String(200))
+    source_field: Mapped[str] = mapped_column(String(100))
+    target_field: Mapped[str] = mapped_column(String(200))
+    transform_rule: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    required: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class WbsRiskLink(TimestampMixin, Base):
     __tablename__ = "wbs_risk_links"
     __table_args__ = (UniqueConstraint("wbs_item_id", "risk_source_id", name="uq_wbs_risk"),)

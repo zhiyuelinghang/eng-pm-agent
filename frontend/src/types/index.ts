@@ -1,7 +1,7 @@
 // 风险等级
 export type RiskLevel = 'critical' | 'high' | 'medium' | 'low'
 // 任务状态
-export type TaskStatus = 'pending' | 'processing' | 'waiting_confirm' | 'done' | 'overdue' | 'cancelled'
+export type TaskStatus = 'pending' | 'processing' | 'need_more_info' | 'waiting_confirm' | 'done' | 'overdue' | 'cancelled'
 // 日报解析状态
 export type ParseStatus = 'pending_confirm' | 'confirmed' | 'failed' | 'reparse'
 // 草稿状态
@@ -57,6 +57,29 @@ export interface RiskSource {
   projectId: string
 }
 
+export interface QualityMetric {
+  id: string
+  projectId: string
+  wbsId?: string
+  name: string
+  requirement: string
+  inspectionFrequency: string
+  requiredMaterials: string[]
+  ownerId?: string
+  status: 'pending' | 'processing' | 'passed' | 'failed'
+}
+
+export interface PlatformFieldMapping {
+  id: string
+  projectId: string
+  platformName: string
+  sourceField: 'draft_title' | 'draft_content' | 'source_refs' | string
+  targetField: string
+  transformRule?: string
+  required: boolean
+  enabled: boolean
+}
+
 export interface WbsRiskLink {
   id: string
   wbsId: string
@@ -81,6 +104,7 @@ export interface Task {
   status: TaskStatus
   missingCount: number
   triggerReason: string
+  workflowSteps: Array<{ name: string; owner?: string; status: 'pending' | 'processing' | 'completed' | 'blocked'; note?: string }>
   createdAt: string
 }
 

@@ -1,7 +1,7 @@
 import hashlib
 import re
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -12,11 +12,12 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import get_db
-from .models import (Attachment, DailyReport, FillPackage, OperationLog, Project, ProjectMember, ProjectSettings,
-                     RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsRiskLink)
+from .models import (Attachment, DailyReport, FillPackage, OperationLog, PlatformFieldMapping, Project, ProjectMember, ProjectSettings,
+                     QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsRiskLink)
 from .schemas import (DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
                       LoginRequest, MemberInput, ProjectInput, RiskInput, TaskInput, TaskTransitionInput,
-                      WbsInput, WbsRiskLinkInput, OperationLogInput, ProjectSettingsInput)
+                      WbsInput, WbsRiskLinkInput, OperationLogInput, PlatformFieldMappingInput, ProjectSettingsInput,
+                      QualityMetricInput, TaskStepUpdate)
 from .security import create_access_token, decode_access_token, hash_password, verify_password
 
 
@@ -198,6 +199,47 @@ def update_risk(risk_id: int, payload: RiskInput, db: Session = Depends(get_db),
     return ok(serialize(item), "风险源已更新")
 
 
+@router.get("/projects/{project_id}/quality-metrics")
+def list_quality_metrics(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+    return ok(list_for_project(QualityMetric, project_id, db))
+
+
+@router.post("/projects/{project_id}/quality-metrics")
+def create_quality_metric(project_id: int, payload: QualityMetricInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
+    project_or_404(db, project_id)
+    if payload.wbs_item_id: entity_or_404(db, WbsItem, payload.wbs_item_id, "WBS工序不存在")
+    item = QualityMetric(project_id=project_id, **payload.model_dump()); db.add(item); db.flush()
+    audit(db, user, "新增质量指标", f"新增质量指标「{item.name}」", project_id, "quality_metric", item.id); db.commit(); db.refresh(item)
+    return ok(serialize(item), "质量指标已添加")
+
+
+@router.patch("/quality-metrics/{metric_id}")
+def update_quality_metric(metric_id: int, payload: QualityMetricInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
+    item = entity_or_404(db, QualityMetric, metric_id, "质量指标不存在")
+    for key, value in payload.model_dump().items(): setattr(item, key, value)
+    audit(db, user, "更新质量指标", f"更新质量指标「{item.name}」", item.project_id, "quality_metric", item.id); db.commit(); db.refresh(item)
+    return ok(serialize(item), "质量指标已更新")
+
+
+@router.get("/projects/{project_id}/platform-field-mappings")
+def list_platform_mappings(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+    return ok(list_for_project(PlatformFieldMapping, project_id, db))
+
+
+@router.post("/projects/{project_id}/platform-field-mappings")
+def create_platform_mapping(project_id: int, payload: PlatformFieldMappingInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
+    project_or_404(db, project_id); item = PlatformFieldMapping(project_id=project_id, **payload.model_dump()); db.add(item); db.flush()
+    audit(db, user, "新增平台字段映射", f"新增「{item.platform_name}」字段映射", project_id, "platform_mapping", item.id); db.commit(); db.refresh(item)
+    return ok(serialize(item), "字段映射已添加")
+
+
+@router.delete("/platform-field-mappings/{mapping_id}")
+def delete_platform_mapping(mapping_id: int, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
+    item = entity_or_404(db, PlatformFieldMapping, mapping_id, "字段映射不存在"); db.delete(item)
+    audit(db, user, "删除平台字段映射", f"删除「{item.platform_name}」字段映射", item.project_id, "platform_mapping", item.id); db.commit()
+    return ok({}, "字段映射已删除")
+
+
 @router.get("/projects/{project_id}/wbs-risk-links")
 def list_links(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
     return ok(list_for_project(WbsRiskLink, project_id, db))
@@ -219,7 +261,16 @@ def delete_link(link_id: int, db: Session = Depends(get_db), user: User = Depend
 
 @router.get("/projects/{project_id}/tasks")
 def list_tasks(project_id: int, status_filter: str | None = None, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    project_or_404(db, project_id); stmt = select(Task).where(Task.project_id == project_id)
+    project_or_404(db, project_id)
+    open_tasks = db.scalars(select(Task).where(Task.project_id == project_id, Task.status.in_(["pending", "processing", "need_more_info", "pending_confirm"]))).all()
+    today = date.today().isoformat()
+    for task in open_tasks:
+        if task.due_at and task.due_at[:10] < today:
+            previous = task.status; task.status = "overdue"
+            db.add(TaskStatusHistory(task_id=task.id, from_status=previous, to_status="overdue", note="系统根据截止日期自动标记逾期"))
+            db.add(OperationLog(project_id=project_id, action="任务逾期提醒", detail=f"任务「{task.title}」已逾期", target_type="task", target_id=task.id))
+    if any(task.due_at and task.due_at[:10] < today for task in open_tasks): db.commit()
+    stmt = select(Task).where(Task.project_id == project_id)
     if status_filter: stmt = stmt.where(Task.status == status_filter)
     return ok([serialize(row) for row in db.scalars(stmt.order_by(Task.updated_at.desc())).all()])
 
@@ -242,12 +293,32 @@ def get_task(task_id: int, db: Session = Depends(get_db), _: User = Depends(get_
 @router.post("/tasks/{task_id}/transition")
 def transition_task(task_id: int, payload: TaskTransitionInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
     task = entity_or_404(db, Task, task_id, "任务不存在")
-    allowed = {"pending", "processing", "need_more_info", "pending_confirm", "completed", "overdue", "cancelled"}
-    if payload.status not in allowed: raise HTTPException(status_code=422, detail="不支持的任务状态")
+    transitions = {
+        "pending": {"processing", "cancelled"}, "processing": {"need_more_info", "pending_confirm", "cancelled"},
+        "need_more_info": {"processing", "cancelled"}, "pending_confirm": {"processing", "completed", "cancelled"},
+        "overdue": {"processing", "cancelled"}, "completed": set(), "cancelled": set(),
+    }
+    if payload.status not in transitions.get(task.status, set()): raise HTTPException(status_code=409, detail=f"任务当前为 {task.status}，不能流转到 {payload.status}")
     previous = task.status; task.status = payload.status
     db.add(TaskStatusHistory(task_id=task.id, from_status=previous, to_status=task.status, note=payload.note, changed_by=user.id))
     audit(db, user, "任务状态流转", f"任务「{task.title}」由 {previous} 变更为 {task.status}", task.project_id, "task", task.id); db.commit(); db.refresh(task)
     return ok(serialize(task), "任务状态已更新")
+
+
+@router.post("/tasks/{task_id}/steps/{step_index}")
+def update_task_step(task_id: int, step_index: int, payload: TaskStepUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    task = entity_or_404(db, Task, task_id, "任务不存在")
+    steps = list(task.workflow_steps or [])
+    if step_index < 0 or step_index >= len(steps): raise HTTPException(status_code=404, detail="任务步骤不存在")
+    if payload.status not in {"pending", "processing", "completed", "blocked"}: raise HTTPException(status_code=422, detail="不支持的步骤状态")
+    step = {**steps[step_index], "status": payload.status, "note": payload.note, "updated_at": datetime.now(UTC).isoformat(), "updated_by": user.id}
+    steps[step_index] = step; task.workflow_steps = steps
+    audit(db, user, "更新任务步骤", f"任务「{task.title}」步骤「{step.get('name', step_index + 1)}」更新为 {payload.status}", task.project_id, "task", task.id)
+    if steps and all(item.get("status") == "completed" for item in steps) and task.status == "processing":
+        previous = task.status; task.status = "pending_confirm"
+        db.add(TaskStatusHistory(task_id=task.id, from_status=previous, to_status="pending_confirm", note="全部任务步骤已完成，等待复核", changed_by=user.id))
+    db.commit(); db.refresh(task)
+    return ok(serialize(task), "任务步骤已更新")
 
 
 @router.get("/projects/{project_id}/daily-reports")
@@ -315,7 +386,12 @@ def return_draft(draft_id: int, payload: DraftReviewInput | None = None, db: Ses
 def create_fill_package(draft_id: int, payload: FillPackageInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
     draft = entity_or_404(db, RiskDraft, draft_id, "草稿不存在")
     if draft.status != "confirmed": raise HTTPException(status_code=409, detail="仅已确认草稿可生成填报包")
-    row = FillPackage(project_id=draft.project_id, draft_id=draft.id, **payload.model_dump()); draft.status = "packaged"; db.add(row); db.flush()
+    package_data = payload.model_dump()
+    if not package_data["fields"]:
+        values = {"draft_title": draft.title, "draft_content": draft.content, "source_refs": "；".join(draft.source_refs)}
+        mappings = db.scalars(select(PlatformFieldMapping).where(PlatformFieldMapping.project_id == draft.project_id, PlatformFieldMapping.platform_name == payload.platform_name, PlatformFieldMapping.enabled.is_(True))).all()
+        package_data["fields"] = [{"name": mapping.target_field, "value": values.get(mapping.source_field, ""), "required": mapping.required, "transform_rule": mapping.transform_rule} for mapping in mappings]
+    row = FillPackage(project_id=draft.project_id, draft_id=draft.id, **package_data); draft.status = "packaged"; db.add(row); db.flush()
     audit(db, user, "生成填报包", f"为草稿「{draft.title}」生成填报包", draft.project_id, "fill_package", row.id); db.commit(); db.refresh(row)
     return ok(serialize(row), "填报包已生成")
 
