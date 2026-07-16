@@ -1,5 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import MainLayout from '@/components/layout/MainLayout.vue'
+import AiWorkPlatformView from '@/views/workspace/AiWorkPlatformView.vue'
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -13,25 +14,20 @@ const router = createRouter({
     {
       path: '/',
       component: MainLayout,
-      redirect: '/dashboard',
+      redirect: '/workbench',
       children: [
-        { path: 'dashboard', name: 'Dashboard', component: () => import('@/views/site/DashboardView.vue'), meta: { title: '工地首页', group: 'site', icon: 'HomeFilled' } },
-        { path: 'tasks', name: 'Tasks', component: () => import('@/views/site/TaskCenterView.vue'), meta: { title: '任务中心', group: 'site', icon: 'List' } },
-        { path: 'risks', name: 'Risks', component: () => import('@/views/site/RiskTaskView.vue'), meta: { title: '风险任务', group: 'site', icon: 'Warning' } },
-        { path: 'daily-reports', name: 'DailyReports', component: () => import('@/views/site/DailyReportView.vue'), meta: { title: '日报解析', group: 'site', icon: 'Document' } },
-        { path: 'drafts', name: 'Drafts', component: () => import('@/views/site/DraftReviewView.vue'), meta: { title: '草稿审核', group: 'site', icon: 'EditPen' } },
-        { path: 'filling', name: 'Filling', component: () => import('@/views/site/FillingAssistantView.vue'), meta: { title: '填报助手', group: 'site', icon: 'Upload' } },
-        { path: 'members', name: 'SiteMembers', component: () => import('@/views/admin/MemberConfigView.vue'), meta: { title: '用户与班组', group: 'site', icon: 'User' } },
-        { path: 'admin/project', name: 'AdminProject', component: () => import('@/views/admin/ProjectConfigView.vue'), meta: { title: '项目配置', group: 'admin', icon: 'Setting' } },
-        { path: 'admin/members', name: 'AdminMembers', component: () => import('@/views/admin/MemberConfigView.vue'), meta: { title: '成员与责任', group: 'admin', icon: 'User' } },
-        { path: 'admin/wbs', name: 'AdminWbs', component: () => import('@/views/admin/WbsImportView.vue'), meta: { title: 'WBS 导入', group: 'admin', icon: 'Grid' } },
-        { path: 'admin/risk-sources', name: 'AdminRiskSources', component: () => import('@/views/admin/RiskSourceView.vue'), meta: { title: '风险源管理', group: 'admin', icon: 'CircleCloseFilled' } },
-        { path: 'admin/wbs-risk-link', name: 'AdminWbsRiskLink', component: () => import('@/views/admin/WbsRiskLinkView.vue'), meta: { title: 'WBS-风险关联', group: 'admin', icon: 'Share' } },
-        { path: 'admin/daily-dir', name: 'AdminDailyDir', component: () => import('@/views/admin/DailyDirConfigView.vue'), meta: { title: '日报目录配置', group: 'admin', icon: 'FolderOpened' } },
-        { path: 'admin/rules', name: 'AdminRules', component: () => import('@/views/admin/RemindRuleView.vue'), meta: { title: '提醒规则', group: 'admin', icon: 'Bell' } },
-        { path: 'admin/templates', name: 'AdminTemplates', component: () => import('@/views/admin/ReportTemplateView.vue'), meta: { title: '上报模板配置', group: 'admin', icon: 'Document' } },
-        { path: 'admin/field-mapping', name: 'AdminFieldMapping', component: () => import('@/views/admin/PlatformFieldMappingView.vue'), meta: { title: '平台字段映射', group: 'admin', icon: 'Connection' } },
-        { path: 'admin/logs', name: 'AdminLogs', component: () => import('@/views/admin/OperationLogView.vue'), meta: { title: '操作日志', group: 'admin', icon: 'Tickets' } },
+        { path: 'workbench', name: 'WorkBench', component: AiWorkPlatformView, meta: { title: '工作首页', group: 'workspace' } },
+        { path: 'ai', name: 'AiWorkspace', component: AiWorkPlatformView, meta: { title: '智能协同', group: 'workspace' } },
+        { path: 'tasks', name: 'TaskManagement', component: AiWorkPlatformView, meta: { title: '任务管理', group: 'workspace' } },
+        { path: 'project', name: 'ProjectStatus', component: AiWorkPlatformView, meta: { title: '项目状态', group: 'workspace' } },
+        { path: 'docs', name: 'EngineeringDocs', component: AiWorkPlatformView, meta: { title: '工程资料', group: 'workspace' } },
+        { path: 'dashboard', redirect: '/workbench' },
+        { path: 'risks', redirect: '/tasks' },
+        { path: 'daily-reports', redirect: '/docs' },
+        { path: 'drafts', redirect: '/docs' },
+        { path: 'filling', redirect: '/docs' },
+        { path: 'members', redirect: '/workbench' },
+        { path: 'admin/:pathMatch(.*)*', redirect: '/project' },
       ],
     },
   ],
@@ -48,10 +44,7 @@ router.beforeEach((to) => {
   if (loggedIn) {
     const userRole = sessionStorage.getItem('user_role') || 'site'
     if (userRole === 'site' && to.path.startsWith('/admin')) {
-      return { path: '/dashboard' }
-    }
-    if (userRole === 'ops' && !to.path.startsWith('/admin') && to.path !== '/login') {
-      return { path: '/admin/project' }
+      return { path: '/workbench' }
     }
   }
 })

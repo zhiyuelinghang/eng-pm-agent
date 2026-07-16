@@ -1,26 +1,25 @@
 /* ===================================================
-   工程智管家 · 浅色专业设计系统 v3
-   风格：极简瑞士 — 工业灰中性色阶 + 安全橙强调
-   （工程行业语义：安全橙 = 现场安全色，克制使用）
+   工程智管家 · 工程管理平台设计系统
+   风格：克制工程工作台 — 温润纸白 + 深青黑 + 安全铜强调
 =================================================== */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
   /* === Backgrounds === */
-  --bg-base:     #F4F5F7;
+  --bg-base:     #EDF1EE;
   --bg-surface:  #FFFFFF;
   --bg-card:     #FFFFFF;
   --bg-elevated: #F7F8FA;
   --bg-hover:    #F2F4F6;
   --bg-active:   #FFF3EA;
-  --bg-inverse:  #1F2937;
+  --bg-inverse:  #102528;
 
   /* === Primary（安全橙）=== */
-  --color-primary:       #E8590C;
-  --color-primary-light: #F97316;
-  --color-primary-dark:  #C2410C;
-  --color-primary-soft:  #FEF0E6;
-  --color-primary-dim:   rgba(232,89,12,0.08);
+  --color-primary:       #CD5B20;
+  --color-primary-light: #D96F32;
+  --color-primary-dark:  #A94718;
+  --color-primary-soft:  #F7ECE4;
+  --color-primary-dim:   rgba(205,91,32,0.10);
 
   /* === Semantic Colors === */
   --color-danger:        #DC2626;
@@ -31,8 +30,8 @@
   --color-success-soft:  #E2F4EC;
   --color-info:          #0369A1;
   --color-info-soft:     #E3F1FA;
-  --color-accent:        #6D28D9;
-  --color-accent-soft:   #F0EAFB;
+  --color-accent:        #0F766E;
+  --color-accent-soft:   #E8F3EF;
 
   /* === Text === */
   --text-primary:   #1B2430;
@@ -49,7 +48,7 @@
   --border-light:     #E5E8ED;
 
   /* === Layout === */
-  --sidebar-width:  224px;
+  --sidebar-width:  236px;
   --header-height:  56px;
 
   /* === Radius === */
@@ -64,7 +63,7 @@
   --shadow-md:  0 2px 8px rgba(23,32,46,0.08);
   --shadow-lg:  0 16px 40px rgba(23,32,46,0.16);
   --shadow-card: 0 1px 2px rgba(23,32,46,0.05);
-  --shadow-glow: 0 0 0 3px rgba(232,89,12,0.12);
+  --shadow-glow: 0 0 0 3px rgba(205,91,32,0.12);
 
   /* === Transitions === */
   --transition:      all 0.18s ease;
@@ -75,7 +74,7 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {
   height: 100%;
-  font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-family: 'Fira Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 14px;
   background: var(--bg-base);
   color: var(--text-primary);

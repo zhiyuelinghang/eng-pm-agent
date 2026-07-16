@@ -17,17 +17,17 @@ import { NConfigProvider, NLoadingBarProvider, NMessageProvider, NDialogProvider
 
 const themeOverrides: GlobalThemeOverrides = {
   common: {
-    primaryColor:         '#E8590C',
-    primaryColorHover:    '#F97316',
-    primaryColorPressed:  '#C2410C',
-    primaryColorSuppl:    '#E8590C',
+    primaryColor:         '#CD5B20',
+    primaryColorHover:    '#D96F32',
+    primaryColorPressed:  '#A94718',
+    primaryColorSuppl:    '#CD5B20',
     infoColor:            '#0369A1',
     successColor:         '#047857',
     warningColor:         '#B45309',
     errorColor:           '#DC2626',
     borderRadius:         '6px',
     borderRadiusSmall:    '4px',
-    fontFamily:           "'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif",
+    fontFamily:           "'Fira Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif",
     fontFamilyMono:       "'JetBrains Mono', 'Fira Code', monospace",
     bodyColor:            '#F4F5F7',
     cardColor:            '#FFFFFF',
@@ -54,9 +54,9 @@ const themeOverrides: GlobalThemeOverrides = {
   },
   Button: {
     textColorPrimary:       '#fff',
-    colorPrimary:           '#E8590C',
-    colorHoverPrimary:      '#F97316',
-    colorPressedPrimary:    '#C2410C',
+    colorPrimary:           '#CD5B20',
+    colorHoverPrimary:      '#D96F32',
+    colorPressedPrimary:    '#A94718',
     borderRadiusMedium:     '6px',
     borderRadiusSmall:      '4px',
     fontSizeMedium:         '13px',
@@ -66,9 +66,9 @@ const themeOverrides: GlobalThemeOverrides = {
   Input: {
     borderRadius:           '6px',
     border:                 '1px solid #D3D9E0',
-    borderHover:            '1px solid #E8590C',
-    borderFocus:            '1px solid #E8590C',
-    boxShadowFocus:         '0 0 0 3px rgba(232,89,12,0.12)',
+    borderHover:            '1px solid #CD5B20',
+    borderFocus:            '1px solid #CD5B20',
+    boxShadowFocus:         '0 0 0 3px rgba(205,91,32,0.12)',
     fontSizeMedium:         '13px',
   },
   Select: {
@@ -76,8 +76,8 @@ const themeOverrides: GlobalThemeOverrides = {
       InternalSelection: {
         borderRadius:    '6px',
         border:          '1px solid #D3D9E0',
-        borderHover:     '1px solid #E8590C',
-        borderFocus:     '1px solid #E8590C',
+        borderHover:     '1px solid #CD5B20',
+        borderFocus:     '1px solid #CD5B20',
       },
       InternalSelectMenu: {
         borderRadius:    '8px',
@@ -109,11 +109,10 @@ const themeOverrides: GlobalThemeOverrides = {
     borderRadius:          '4px',
   },
   Steps: {
-    headerTextColorProcess: '#E8590C',
-    splitorColorProcess:    '#E8590C',
-    indicatorColorProcess:  '#E8590C',
+    headerTextColorProcess: '#CD5B20',
+    splitorColorProcess:    '#CD5B20',
     indicatorTextColorProcess: '#fff',
-    indicatorBorderColorProcess: '#E8590C',
+    indicatorBorderColorProcess: '#CD5B20',
   },
 }
 </script>

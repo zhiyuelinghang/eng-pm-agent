@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>项目小管家 - Dobby</title>
+    <link rel="icon" type="image/png" href="assets/project-butler-dobby-simple.png">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body class="locked">
+    <section id="authGate" class="auth-gate" aria-label="登录">
+      <div class="auth-layout">
+        <aside class="auth-hero" aria-label="项目小管家介绍">
+          <img class="auth-mascot" src="assets/project-butler-dobby.png" alt="项目小管家 Dobby">
+          <div class="auth-hero-copy">
+            <span>Dobby 已在项目现场待命</span>
+            <h1>项目小管家</h1>
+            <p>盯资料、推任务、查风险，把工程过程里的事项一件件管起来。</p>
+            <div class="auth-badges" aria-label="核心能力">
+              <strong>资料归档</strong>
+              <strong>任务闭环</strong>
+              <strong>风险提醒</strong>
+            </div>
+          </div>
+        </aside>
+        <form id="authForm" class="auth-card">
+          <div class="auth-form-head">
+            <div class="brand-mark" aria-hidden="true"><img src="assets/project-butler-dobby-simple.png" alt=""></div>
+            <div>
+              <h1>登录项目小管家</h1>
+              <p>进入 Dobby 互动台</p>
+            </div>
+          </div>
+          <label>
+            用户名
+            <input id="authUser" type="text" autocomplete="username" required>
+          </label>
+          <label>
+            密码
+            <input id="authPassword" type="password" autocomplete="current-password" required>
+          </label>
+          <button type="submit">进入系统</button>
+          <div id="authError" class="auth-error" role="alert"></div>
+        </form>
+      </div>
+    </section>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true"><img src="assets/project-butler-dobby-simple.png" alt=""></div>
+          <div>
+            <h1>项目小管家</h1>
+            <p>Dobby · 盯资料 · 推任务 · 查风险</p>
+          </div>
+        </div>
+        <nav class="nav">
+          <button class="nav-item active" data-view="chat">Dobby互动</button>
+          <button class="nav-item" data-view="status">项目状态</button>
+          <button class="nav-item" data-view="tasks">任务管理</button>
+          <button class="nav-item" data-view="docs">知识管理</button>
+          <button class="nav-item" data-view="tools">业务工具</button>
+          <button class="nav-item" data-view="discussion">AI群讨论</button>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="settings-menu-wrap">
+            <button id="settingsLauncher" class="settings-launch" aria-label="打开设置菜单" aria-haspopup="menu" aria-expanded="false">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path>
+                <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.04.04a2.05 2.05 0 0 1-2.9 2.9l-.04-.04A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2.1 2.1 0 0 1-4.2 0v-.06A1.7 1.7 0 0 0 8 19.4a1.7 1.7 0 0 0-1.88.34l-.04.04a2.05 2.05 0 0 1-2.9-2.9l.04-.04A1.7 1.7 0 0 0 3.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H1.8a2.1 2.1 0 0 1 0-4.2h.06A1.7 1.7 0 0 0 3.6 8a1.7 1.7 0 0 0-.34-1.88l-.04-.04a2.05 2.05 0 0 1 2.9-2.9l.04.04A1.7 1.7 0 0 0 8 3.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V1.8a2.1 2.1 0 0 1 4.2 0v.06A1.7 1.7 0 0 0 15 3.6a1.7 1.7 0 0 0 1.88-.34l.04-.04a2.05 2.05 0 0 1 2.9 2.9l-.04.04A1.7 1.7 0 0 0 19.4 8a1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.1.4h.1a2.1 2.1 0 0 1 0 4.2h-.06a1.7 1.7 0 0 0-1.74 1.4Z"></path>
+              </svg>
+              <span>设置</span>
+            </button>
+            <div id="settingsMenu" class="settings-menu" role="menu" aria-label="设置菜单">
+              <button type="button" role="menuitem" data-settings-section="personal">
+                <strong>个人</strong>
+                <span>账号与平台连接配置</span>
+              </button>
+              <button type="button" role="menuitem" data-settings-section="engineering">
+                <strong>工程</strong>
+                <span>工程初建与工程概况配置</span>
+              </button>
+              <button type="button" role="menuitem" data-settings-section="logout">
+                <strong>退出</strong>
+                <span>退出当前访问会话</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <div>
+            <h2 id="view-title">Dobby互动台</h2>
+          </div>
+          <div class="topbar-controls">
+            <span id="currentUserGreeting" class="user-greeting">欢迎赵安全</span>
+            <div class="project-select">
+              <label for="projectSelect">当前项目</label>
+              <select id="projectSelect"></select>
+            </div>
+          </div>
+        </header>
+
+        <section id="settings" class="view settings-page">
+          <div class="section-heading">
+            <div>
+              <h3 id="settingsTitle">设置</h3>
+              <p id="settingsSubtitle">管理个人信息、工程初始化与工程基础配置。</p>
+            </div>
+            <button id="projectConfigLauncher" type="button" hidden>项目基础配置</button>
+          </div>
+          <div class="settings-tabs" id="settingsTabs" aria-label="设置分类"></div>
+          <div id="settingsContent" class="settings-content"></div>
+        </section>
+
+        <section id="chat" class="view active">
+          <div class="interaction-layout">
+            <section class="ai-workbench">
+              <div class="section-heading">
+                <div>
+                  <h3>Dobby推推</h3>
+                </div>
+                <button id="refreshAiQuestions">刷新</button>
+              </div>
+              <div class="push-workspace">
+                <div id="aiQuestionQueue" class="question-queue"></div>
+                <aside id="taskDispositionPanel" class="disposition-panel"></aside>
+              </div>
+            </section>
+
+            <section class="chat-panel user-command-panel">
+              <div class="section-heading compact">
+                <div>
+                  <h3>问问Dobby</h3>
+                </div>
+              </div>
+              <div id="chatMessages" class="chat-messages"></div>
+              <form id="chatForm" class="chat-form">
+                <select id="agentSelect" aria-label="选择智能体">
+                  <option value="默认助手">默认助手</option>
+                  <option value="数据分析">数据分析</option>
+                  <option value="安全隐患">安全隐患</option>
+                  <option value="趋势预测">趋势预测</option>
+                  <option value="风险诊断">风险诊断</option>
+                  <option value="报告撰写">报告撰写</option>
+                  <option value="报告审核">报告审核</option>
+                </select>
+                <label class="file-action">
+                  <input id="chatAttachment" type="file" multiple>
+                  <span id="attachmentLabel">附件</span>
+                </label>
+                <input id="chatInput" type="text" autocomplete="off" placeholder="例如：让AI明天上午问施工单位隐蔽验收资料是否补齐">
+                <button type="submit">发送</button>
+              </form>
+            </section>
+          </div>
+        </section>
+
+        <section id="status" class="view">
+          <div class="metric-grid" id="metrics"></div>
+          <section class="surface project-brief">
+            <h3>项目摘要</h3>
+            <div id="projectSummary"></div>
+          </section>
+          <div class="tab-strip" id="statusTabs">
+            <button class="tab-button active" data-status-tab="latest">最新信息</button>
+            <button class="tab-button" data-status-tab="process">过程监管</button>
+            <button class="tab-button" data-status-tab="execution">任务执行</button>
+            <button class="tab-button" data-status-tab="changes">工程变更</button>
+          </div>
+          <div id="statusPanel" class="status-panel"></div>
+        </section>
+
+        <section id="tasks" class="view">
+          <div class="tab-strip" id="taskTabs">
+            <button class="tab-button active" data-task-tab="mine">我的任务</button>
+            <button class="tab-button" data-task-tab="history">历史任务</button>
+            <button class="tab-button" data-task-tab="assign">布置任务</button>
+          </div>
+          <div id="taskPanel" class="task-panel"></div>
+        </section>
+
+        <section id="docs" class="view">
+          <div class="tab-strip" id="docsTabs">
+            <button class="tab-button active" data-docs-tab="upload">资料入库</button>
+            <button class="tab-button" data-docs-tab="project">文件查询</button>
+          </div>
+          <div id="docsPanel"></div>
+        </section>
+
+        <section id="tools" class="view">
+          <div id="toolGrid"></div>
+        </section>
+
+        <section id="discussion" class="view">
+          <div class="discussion-workspace">
+            <aside id="discussionSetup" class="discussion-setup surface"></aside>
+            <section id="discussionThread" class="discussion-thread surface"></section>
+            <aside id="discussionAiPanel" class="discussion-ai-panel surface"></aside>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="assets/zhiru-project-import.js"></script>
+    <script src="src/browser-app.js?v=20260619-task-topbar"></script>
+  </body>
+</html>

@@ -2,8 +2,6 @@
   <div class="login-page">
     <div class="login-bg">
       <div class="bg-grid"></div>
-      <div class="bg-glow bg-glow-1"></div>
-      <div class="bg-glow bg-glow-2"></div>
     </div>
 
     <div class="login-card">
@@ -16,7 +14,7 @@
         </div>
         <div class="logo-text">
           <span class="logo-name">工程智管家</span>
-          <span class="logo-sub">Engineering PM · MVP</span>
+          <span class="logo-sub">工程管理平台</span>
         </div>
         <!-- step 2 back button -->
         <button v-if="step === 2" class="back-btn" @click="step = 1" title="切换业务端">
@@ -33,8 +31,8 @@
           <div class="slider-track" :style="{ transform: `translateX(${step === 1 ? '0%' : '-50%'})` }">
             <!-- Step 1: selection of terminal -->
             <div class="slide-pane">
-              <h1 class="login-title">欢迎回来</h1>
-              <p class="login-desc">请选择要登录管理的工程模块终端</p>
+              <h1 class="login-title">进入工程管理平台</h1>
+              <p class="login-desc">选择身份后进入项目任务、进度、资料和协同会话。</p>
 
               <div class="role-selector">
                 <button type="button" class="role-btn hover-card" @click="selectRole('site')">
@@ -42,8 +40,8 @@
                     <svg class="role-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-3M9 9h2M9 13h2M9 17h2M15 13h2M15 17h2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                   </div>
                   <div class="role-inner">
-                    <span class="role-title">工地现场端</span>
-                    <span class="role-desc">工程数据解析、填报与施工进度等智能管控</span>
+                    <span class="role-title">项目工作台</span>
+                    <span class="role-desc">参与任务、风险确认、资料协同和智能跟进</span>
                   </div>
                   <div class="arrow-indicator">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
@@ -54,8 +52,8 @@
                     <svg class="role-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 16a4 4 0 100-8 4 4 0 000 8z" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 8v4" stroke-linecap="round" stroke-linejoin="round"/></svg>
                   </div>
                   <div class="role-inner">
-                    <span class="role-title">系统运维端</span>
-                    <span class="role-desc">全局工程注册、WBS数据底座与底层规则配置</span>
+                    <span class="role-title">管理视角</span>
+                    <span class="role-desc">查看项目状态、资料流和工程数据底座</span>
                   </div>
                   <div class="arrow-indicator">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
@@ -67,10 +65,10 @@
             <!-- Step 2: input account and password -->
             <div class="slide-pane">
               <h1 class="login-title">
-                登录到 <span :class="role === 'site' ? 'site-text' : 'ops-text'">{{ role === 'site' ? '工地现场端' : '系统运维端' }}</span>
+                登录到 <span :class="role === 'site' ? 'site-text' : 'ops-text'">{{ role === 'site' ? '项目工作台' : '管理视角' }}</span>
               </h1>
               <p class="login-desc">
-                {{ role === 'site' ? '请使用现场班组/执行人权限凭证进行登入' : '使用系统管理员赋予的顶级运维密钥进入治理' }}
+                {{ role === 'site' ? '请使用现场负责人或执行人账号进入' : '使用管理账号进入统一工作平台' }}
               </p>
 
               <form class="login-form" @submit.prevent="handleLogin">
@@ -118,7 +116,7 @@
 
       <div class="login-footer">
         <span class="project-tag">总管标</span>
-        <span>合流污水一期复线工程</span>
+        <span>智能化工程管理工作平台</span>
       </div>
     </div>
   </div>
@@ -158,11 +156,7 @@ const handleLogin = async () => {
   sessionStorage.setItem('logged_in', '1')
   sessionStorage.setItem('user_role', role.value)
   message.success('登录成功')
-  if (role.value === 'site') {
-    router.push('/dashboard')
-  } else {
-    router.push('/admin/project')
-  }
+  router.push('/workbench')
 }
 </script>
 
@@ -180,26 +174,14 @@ const handleLogin = async () => {
 .bg-grid {
   position: absolute;
   inset: 0;
+  background-color: rgba(246, 247, 243, 0.92);
   background-image:
+    linear-gradient(rgba(246,247,243,0.62), rgba(246,247,243,0.76)),
+    url('https://picsum.photos/seed/engineering-command-login/1800/1200'),
     linear-gradient(rgba(27,36,48,0.035) 1px, transparent 1px),
     linear-gradient(90deg, rgba(27,36,48,0.035) 1px, transparent 1px);
-  background-size: 40px 40px;
-}
-.bg-glow {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(90px);
-  opacity: 0.16;
-}
-.bg-glow-1 {
-  width: 500px; height: 500px;
-  background: radial-gradient(circle, #E8590C 0%, transparent 70%);
-  top: -120px; left: -120px;
-}
-.bg-glow-2 {
-  width: 400px; height: 400px;
-  background: radial-gradient(circle, #64748B 0%, transparent 70%);
-  bottom: -100px; right: -100px;
+  background-size: cover, cover, 40px 40px, 40px 40px;
+  background-position: center;
 }
 
 .login-card {
@@ -326,19 +308,6 @@ const handleLogin = async () => {
   color: #475569;
 }
 
-.gradient-hover:hover {
-  border-color: var(--color-primary);
-  background: var(--color-primary-soft);
-  box-shadow: 0 6px 14px rgba(232, 89, 12, 0.08);
-  transform: translateY(-2px);
-}
-.gradient-hover2:hover {
-  border-color: var(--text-primary);
-  background: #f8fafc;
-  box-shadow: 0 6px 14px rgba(100, 116, 139, 0.08);
-  transform: translateY(-2px);
-}
-
 .role-inner {
   display: flex;
   flex-direction: column;
@@ -366,10 +335,6 @@ const handleLogin = async () => {
   opacity: 1;
   transform: translateX(0);
 }
-.gradient-hover:hover .arrow-indicator {
-  color: var(--color-primary);
-}
-
 /* 主题字颜色高亮 */
 .site-text {
   color: var(--color-primary);
