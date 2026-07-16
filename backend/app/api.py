@@ -413,6 +413,26 @@ def create_draft(project_id: int, payload: DraftInput, db: Session = Depends(get
     return ok(serialize(row), "草稿已生成")
 
 
+@router.post("/projects/{project_id}/risk-drafts/assist/{risk_id}")
+def assist_risk_draft(project_id: int, risk_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    project_or_404(db, project_id); risk = entity_or_404(db, RiskSource, risk_id, "风险源不存在")
+    attachments = db.scalars(select(Attachment).where(Attachment.project_id == project_id)).all()
+    names = [attachment.file_name for attachment in attachments]
+    missing = [material for material in risk.material_requirements if not any(material.lower() in name.lower() or name.lower() in material.lower() for name in names)]
+    source_refs = names[-8:]
+    content = f"风险源：{risk.name}\n风险等级：{risk.level}\n控制要求：{risk.control_requirements or '待补充'}\n已关联资料：{'、'.join(source_refs) or '暂无'}\n缺项资料：{'、'.join(missing) or '无'}\n建议：请核对风险现场状态和资料完整性后提交审核。"
+    draft = RiskDraft(project_id=project_id, risk_source_id=risk.id, title=f"{risk.name}风险上报草稿", content=content, source_refs=source_refs, missing_items=missing)
+    db.add(draft); db.flush()
+    task_id = None
+    if missing:
+        task = Task(project_id=project_id, title=f"补齐风险资料 — {risk.name}", task_type="material_missing", risk_level=risk.level, assignee_user_id=risk.responsible_user_id, confirmer_user_id=risk.confirmer_user_id, risk_source_id=risk.id, trigger_reason="智能草稿生成时发现风险资料缺项", required_materials=missing)
+        db.add(task); db.flush(); task_id = task.id
+        db.add(TaskStatusHistory(task_id=task.id, to_status="pending", changed_by=user.id, note="智能资料缺项校验自动创建"))
+    audit(db, user, "智能生成风险草稿", f"为风险源「{risk.name}」生成草稿" + ("并创建缺项任务" if task_id else ""), project_id, "risk_draft", draft.id)
+    db.commit(); db.refresh(draft)
+    return ok({"draft": serialize(draft), "task_id": task_id}, "风险草稿与缺项校验已完成")
+
+
 @router.post("/risk-drafts/{draft_id}/submit-review")
 def submit_draft_review(draft_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
     row = entity_or_404(db, RiskDraft, draft_id, "草稿不存在"); row.status = "pending_review"

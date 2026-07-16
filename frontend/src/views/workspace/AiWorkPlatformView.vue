@@ -657,6 +657,7 @@
           <select v-model="draftCreateForm.risk_source_id" required><option value="">关联风险源</option><option v-for="risk in store.riskSources" :key="risk.id" :value="risk.id">{{ risk.name }}</option></select>
           <input v-model.trim="draftCreateForm.title" required placeholder="草稿标题">
           <textarea v-model.trim="draftCreateForm.content" required placeholder="填写风险说明、处置建议和资料依据"></textarea>
+          <button type="button" class="document-action" :disabled="!draftCreateForm.risk_source_id" @click="assistRiskDraft">智能生成</button>
           <button type="submit" class="document-action confirm">保存草稿</button>
         </form>
         <div class="document-list">
@@ -1328,6 +1329,11 @@ async function createRiskDraft() {
   if (!draftCreateForm.value.risk_source_id || !draftCreateForm.value.title || !draftCreateForm.value.content) return
   await store.createRiskDraft(draftCreateForm.value)
   draftCreateForm.value = { risk_source_id: '', title: '', content: '' }
+  draftCreateOpen.value = false
+}
+async function assistRiskDraft() {
+  if (!draftCreateForm.value.risk_source_id) return
+  await store.assistRiskDraft(draftCreateForm.value.risk_source_id)
   draftCreateOpen.value = false
 }
 function createDefaultFillPackage(draftId: string, title: string, content: string) {
