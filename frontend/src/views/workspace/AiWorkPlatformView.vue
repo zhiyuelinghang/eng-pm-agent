@@ -554,7 +554,8 @@
           </div>
         </section>
         <section class="panel">
-          <div class="panel-head"><div><h2>通知与工程变更</h2><p>风险、日报确认及变更事项统一留痕。</p></div></div>
+          <div class="panel-head"><div><h2>通知与工程变更</h2><p>风险、日报确认及变更事项统一留痕。</p></div><button class="document-action" type="button" @click="changeCreateOpen = !changeCreateOpen">{{ changeCreateOpen ? '收起' : '登记变更' }}</button></div>
+          <form v-if="changeCreateOpen" class="change-create-form" @submit.prevent="createProjectChange"><select v-model="changeCreateForm.category"><option>工程内容变更</option><option>计划变更</option><option>资料归档变更</option><option>风险处置变更</option></select><input v-model.trim="changeCreateForm.title" required placeholder="变更事项"><input v-model.trim="changeCreateForm.content" required placeholder="变更说明"><button type="submit">保存</button></form>
           <div class="risk-list"><article v-for="item in store.notifications.slice(0, 3)" :key="item.id"><span :class="['risk-indicator', item.priority === 'high' ? 'high' : 'low']"></span><div><strong>{{ item.title }}</strong><p>{{ item.content }}</p></div><button v-if="!item.is_read" class="document-action" @click="store.readNotification(item.id)">已读</button></article><article v-for="item in store.projectChanges.slice(0, 2)" :key="`change-${item.id}`"><span class="risk-indicator medium"></span><div><strong>{{ item.title }}</strong><p>{{ item.category }} · {{ item.status }}</p></div></article></div>
         </section>
       </div>
@@ -1280,6 +1281,8 @@ async function startNewSession() {
 }
 
 const taskFilter = ref<'all' | TaskStatus>('all')
+const changeCreateOpen = ref(false)
+const changeCreateForm = ref({ category: '工程内容变更', title: '', content: '' })
 const taskHistoryOpenId = ref('')
 const taskHistories = ref<Record<string, Array<{ id: number; from_status?: string; to_status: string; note?: string; created_at: string }>>>({})
 const taskCreateOpen = ref(false)
@@ -1299,6 +1302,12 @@ async function toggleTaskHistory(taskId: string) {
   if (taskHistoryOpenId.value === taskId) { taskHistoryOpenId.value = ''; return }
   taskHistoryOpenId.value = taskId
   taskHistories.value = { ...taskHistories.value, [taskId]: await store.getTaskHistory(taskId) }
+}
+async function createProjectChange() {
+  if (!changeCreateForm.value.title || !changeCreateForm.value.content) return
+  await store.createProjectChange(changeCreateForm.value)
+  changeCreateForm.value = { category: '工程内容变更', title: '', content: '' }
+  changeCreateOpen.value = false
 }
 
 async function createManualTask() {
@@ -4010,6 +4019,7 @@ function nowStr() {
 .task-step-list li > span { display: grid; width: 19px; height: 19px; place-items: center; border-radius: 50%; background: #dce6e2; color: #48625e; font-size: 10px; font-weight: 800; }.task-step-list li.completed > span { background: #0f766e; color: #fff; }.task-step-list li.blocked { background: #fff5ed; }.task-step-list em { font-style: normal; color: var(--text-muted); }.task-step-list button { border: 0; border-radius: 4px; padding: 4px 6px; background: #e9f3f0; color: #0f766e; font-size: 11px; font-weight: 700; cursor: pointer; }
 .task-history-list { display: grid; gap: 5px; margin: 12px 0 0; padding: 10px; border-radius: 6px; background: #f6f8f7; list-style: none; }.task-history-list li { display: grid; grid-template-columns: 135px 104px 1fr; gap: 8px; font-size: 11px; color: var(--text-secondary); }.task-history-list time,.task-history-list em { color: var(--text-muted); font-style: normal; }
 .meeting-minute { margin: 0 16px 12px; padding: 11px 13px; border: 1px solid rgba(15,118,110,.18); border-radius: 7px; background: #f3faf7; color: var(--text-secondary); font-size: 12px; }.meeting-minute strong { color: #173235; }.meeting-minute p { margin: 5px 0; line-height: 1.55; }.meeting-minute span { color: #0f766e; font-weight: 700; }
+.change-create-form { display: grid; grid-template-columns: .8fr 1fr 1.2fr auto; gap: 7px; margin: 0 0 12px; }.change-create-form input,.change-create-form select { min-width: 0; padding: 7px 8px; border: 1px solid var(--border-emphasis); border-radius: 5px; font: inherit; font-size: 12px; }.change-create-form button { border: 0; border-radius: 5px; padding: 7px 10px; background: var(--color-primary); color: #fff; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
 
 .filter-tabs button.active {
   background: #173235;
