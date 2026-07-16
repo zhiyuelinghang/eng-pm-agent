@@ -264,6 +264,7 @@
             </div>
           </div>
           <div class="chat-head-actions">
+            <button title="生成会议纪要" :disabled="!activeSessionId" @click="createMeetingMinute">纪要</button>
             <button title="邀请参与人">
               <n-icon :size="18"><UserPlus /></n-icon>
             </button>
@@ -272,6 +273,7 @@
             </button>
           </div>
         </div>
+        <div v-if="meetingMinute" class="meeting-minute"><strong>{{ meetingMinute.title }}</strong><p>{{ meetingMinute.summary }}</p><span>行动项 {{ meetingMinute.action_items?.length || 0 }} 项</span></div>
 
         <div class="messages collab-messages">
           <article
@@ -1098,6 +1100,7 @@ const homeQuickChatMessages = computed<ChatMessage[]>(() =>
 )
 const activeChatMessages = computed(() => sessionMessages.value[activeSessionId.value] ?? [])
 const activeChatSuggestions = computed(() => generatedChatSuggestions.value[activeSessionId.value] ?? [])
+const meetingMinute = ref<{ title: string; summary: string; action_items?: unknown[] } | null>(null)
 
 function mapSession(row: ApiCollaborationSession): CollaborationSession { return { id: String(row.id), title: row.title, desc: row.summary || '暂无会话摘要', time: row.updated_at || row.created_at, participantIds: (row.participant_ids || []).map(String), taskIds: (row.task_ids || []).map(String) } }
 function mapMessage(row: ApiCollaborationMessage): ChatMessage { return { id: String(row.id), role: row.role, content: row.content, generatedTaskIds: (row.generated_task_ids || []).map(String) } }
@@ -1112,6 +1115,11 @@ async function loadCollaborationSessions() {
   sessions.value = response.data.data.map(mapSession)
   if (!activeSessionId.value || !sessions.value.some(item => item.id === activeSessionId.value)) activeSessionId.value = sessions.value[0]?.id || ''
   if (activeSessionId.value) await loadSessionMessages(activeSessionId.value)
+}
+async function createMeetingMinute() {
+  if (!activeSessionId.value) return
+  const response = await api.post<ApiEnvelope<{ title: string; summary: string; action_items?: unknown[] }>>(`/collaboration-sessions/${activeSessionId.value}/minutes`)
+  meetingMinute.value = response.data.data
 }
 
 watch(activeSessionId, () => {
@@ -4001,6 +4009,7 @@ function nowStr() {
 .task-step-list li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto auto; align-items: center; gap: 7px; padding: 7px 8px; border-radius: 5px; background: #f6f8f7; color: var(--text-secondary); font-size: 12px; }
 .task-step-list li > span { display: grid; width: 19px; height: 19px; place-items: center; border-radius: 50%; background: #dce6e2; color: #48625e; font-size: 10px; font-weight: 800; }.task-step-list li.completed > span { background: #0f766e; color: #fff; }.task-step-list li.blocked { background: #fff5ed; }.task-step-list em { font-style: normal; color: var(--text-muted); }.task-step-list button { border: 0; border-radius: 4px; padding: 4px 6px; background: #e9f3f0; color: #0f766e; font-size: 11px; font-weight: 700; cursor: pointer; }
 .task-history-list { display: grid; gap: 5px; margin: 12px 0 0; padding: 10px; border-radius: 6px; background: #f6f8f7; list-style: none; }.task-history-list li { display: grid; grid-template-columns: 135px 104px 1fr; gap: 8px; font-size: 11px; color: var(--text-secondary); }.task-history-list time,.task-history-list em { color: var(--text-muted); font-style: normal; }
+.meeting-minute { margin: 0 16px 12px; padding: 11px 13px; border: 1px solid rgba(15,118,110,.18); border-radius: 7px; background: #f3faf7; color: var(--text-secondary); font-size: 12px; }.meeting-minute strong { color: #173235; }.meeting-minute p { margin: 5px 0; line-height: 1.55; }.meeting-minute span { color: #0f766e; font-weight: 700; }
 
 .filter-tabs button.active {
   background: #173235;

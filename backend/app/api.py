@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import get_db
-from .models import (Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, FillPackage, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectMember, ProjectSettings,
+from .models import (Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectMember, ProjectSettings,
                      QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsRiskLink)
 from .schemas import (DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
                       LoginRequest, MemberInput, ProjectInput, RiskInput, TaskInput, TaskTransitionInput,
@@ -559,6 +559,19 @@ def create_collaboration_message(session_id: int, payload: CollaborationMessageI
     audit(db, user, "协同会话处理", f"会话「{session.title}」处理新消息", session.project_id, "collaboration_session", session.id)
     db.commit(); db.refresh(assistant); db.refresh(session)
     return ok({"session": serialize(session), "message": serialize(assistant)}, "协同建议已生成")
+
+
+@router.post("/collaboration-sessions/{session_id}/minutes")
+def create_meeting_minute(session_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    session = session_or_404(db, session_id)
+    messages = db.scalars(select(CollaborationMessage).where(CollaborationMessage.session_id == session_id).order_by(CollaborationMessage.created_at)).all()
+    task_ids = list(dict.fromkeys([*(session.task_ids or []), *(item for message in messages for item in (message.generated_task_ids or []))]))
+    tasks = [db.get(Task, task_id) for task_id in task_ids]
+    actions = [{"task_id": task.id, "title": task.title, "status": task.status, "assignee_user_id": task.assignee_user_id, "due_at": task.due_at} for task in tasks if task]
+    discussion = "；".join(message.content[:120] for message in messages[-6:]) or "暂无会话消息"
+    row = MeetingMinute(project_id=session.project_id, session_id=session.id, title=f"会议纪要 — {session.title}", summary=f"会话结论：{discussion}", action_items=actions)
+    db.add(row); db.flush(); audit(db, user, "生成会议纪要", f"从会话「{session.title}」生成会议纪要", session.project_id, "meeting_minute", row.id); db.commit(); db.refresh(row)
+    return ok(serialize(row), "会议纪要已生成")
 
 
 @router.post("/projects/{project_id}/attachments")

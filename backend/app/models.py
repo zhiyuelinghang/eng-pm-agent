@@ -217,6 +217,16 @@ class CollaborationMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class MeetingMinute(TimestampMixin, Base):
+    __tablename__ = "meeting_minutes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("collaboration_sessions.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(300))
+    summary: Mapped[str] = mapped_column(Text)
+    action_items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+
+
 class ProjectChange(TimestampMixin, Base):
     __tablename__ = "project_changes"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
