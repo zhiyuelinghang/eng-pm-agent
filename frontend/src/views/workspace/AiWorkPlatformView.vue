@@ -481,6 +481,7 @@
           </ol>
           <div class="task-actions">
             <router-link to="/ai">协同处理</router-link>
+            <button type="button" @click="toggleTaskHistory(task.id)">{{ taskHistoryOpenId === task.id ? '收起记录' : '处理记录' }}</button>
             <button v-if="task.status === 'pending' || task.status === 'overdue'" @click="store.updateTaskStatus(task.id, 'processing')">开始处理</button>
             <button v-if="task.status === 'processing'" @click="store.updateTaskStatus(task.id, 'waiting_confirm')">提交确认</button>
             <button v-if="task.status === 'processing'" @click="store.updateTaskStatus(task.id, 'need_more_info')">需要补充</button>
@@ -488,6 +489,7 @@
             <button v-if="task.status === 'waiting_confirm'" class="done" @click="store.updateTaskStatus(task.id, 'done')">确认完成</button>
             <button v-if="task.status === 'need_more_info'" @click="store.updateTaskStatus(task.id, 'processing')">已补充，继续处理</button>
           </div>
+          <ol v-if="taskHistoryOpenId === task.id" class="task-history-list"><li v-for="item in taskHistories[task.id] || []" :key="item.id"><time>{{ formatDateTime(item.created_at) }}</time><span>{{ item.from_status ? `${statusLabel(item.from_status)} → ` : '' }}{{ statusLabel(item.to_status) }}</span><em>{{ item.note || '状态更新' }}</em></li><li v-if="!(taskHistories[task.id] || []).length">暂无处理记录。</li></ol>
         </article>
       </div>
     </section>
@@ -1269,6 +1271,8 @@ async function startNewSession() {
 }
 
 const taskFilter = ref<'all' | TaskStatus>('all')
+const taskHistoryOpenId = ref('')
+const taskHistories = ref<Record<string, Array<{ id: number; from_status?: string; to_status: string; note?: string; created_at: string }>>>({})
 const taskCreateOpen = ref(false)
 const taskCreateForm = ref<{ title: string; task_type: Task['type']; assignee_user_id: string; risk_source_id: string; due_at: string; workflow: string }>({ title: '', task_type: 'risk_alert', assignee_user_id: '', risk_source_id: '', due_at: '', workflow: '' })
 const taskTabs: Array<{ key: 'all' | TaskStatus, label: string }> = [
@@ -1281,6 +1285,12 @@ const taskTabs: Array<{ key: 'all' | TaskStatus, label: string }> = [
   { key: 'done', label: '已完成' },
 ]
 const filteredTasks = computed(() => taskFilter.value === 'all' ? store.tasks : store.tasks.filter(task => task.status === taskFilter.value))
+
+async function toggleTaskHistory(taskId: string) {
+  if (taskHistoryOpenId.value === taskId) { taskHistoryOpenId.value = ''; return }
+  taskHistoryOpenId.value = taskId
+  taskHistories.value = { ...taskHistories.value, [taskId]: await store.getTaskHistory(taskId) }
+}
 
 async function createManualTask() {
   if (!taskCreateForm.value.title) return
@@ -3984,6 +3994,7 @@ function nowStr() {
 .task-step-list { display: grid; gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; }
 .task-step-list li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto auto; align-items: center; gap: 7px; padding: 7px 8px; border-radius: 5px; background: #f6f8f7; color: var(--text-secondary); font-size: 12px; }
 .task-step-list li > span { display: grid; width: 19px; height: 19px; place-items: center; border-radius: 50%; background: #dce6e2; color: #48625e; font-size: 10px; font-weight: 800; }.task-step-list li.completed > span { background: #0f766e; color: #fff; }.task-step-list li.blocked { background: #fff5ed; }.task-step-list em { font-style: normal; color: var(--text-muted); }.task-step-list button { border: 0; border-radius: 4px; padding: 4px 6px; background: #e9f3f0; color: #0f766e; font-size: 11px; font-weight: 700; cursor: pointer; }
+.task-history-list { display: grid; gap: 5px; margin: 12px 0 0; padding: 10px; border-radius: 6px; background: #f6f8f7; list-style: none; }.task-history-list li { display: grid; grid-template-columns: 135px 104px 1fr; gap: 8px; font-size: 11px; color: var(--text-secondary); }.task-history-list time,.task-history-list em { color: var(--text-muted); font-style: normal; }
 
 .filter-tabs button.active {
   background: #173235;
