@@ -5,7 +5,7 @@ setlocal
 set "ROOT=%~dp0"
 set "FRONTEND_DIR=%ROOT%frontend"
 set "BACKEND_DIR=%ROOT%backend"
-set "PYTHON_EXE=D:\ProgramData\anaconda3\python.exe"
+set "PYTHON_EXE=%ROOT%python-3.13.14\python.exe"
 set "URL=http://127.0.0.1:38429/"
 set "API_URL=http://127.0.0.1:38430/health"
 
@@ -26,8 +26,9 @@ if not exist "%BACKEND_DIR%\app\main.py" (
 )
 
 if not exist "%PYTHON_EXE%" (
-  echo Anaconda Python was not found:
+  echo Portable Python runtime was not found:
   echo %PYTHON_EXE%
+  echo Extract the python-3.13.14 folder to the project root before starting.
   pause
   exit /b 1
 )
