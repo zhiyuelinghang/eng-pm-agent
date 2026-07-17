@@ -6,7 +6,7 @@
 
 ```powershell
 D:\ProgramData\anaconda3\Scripts\conda.exe run -n base pip install -r backend/requirements.txt
-D:\ProgramData\anaconda3\Scripts\conda.exe run -n base uvicorn app.main:app --app-dir backend --reload --port 8000
+D:\ProgramData\anaconda3\Scripts\conda.exe run -n base uvicorn app.main:app --app-dir backend --reload --port 38430
 ```
 
 首次启动会创建开发管理员：`admin / ChangeMe123!`。部署前必须通过环境变量和初始化流程替换该账号与 `JWT_SECRET`。
