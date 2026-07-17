@@ -106,7 +106,7 @@
                 {{ message.role === 'assistant' ? '管' : '我' }}
               </div>
               <div class="message-stack">
-                <div v-if="message.role === 'assistant'" class="message-role">工程智管家</div>
+                <div v-if="message.role === 'assistant'" class="message-role">Dobby</div>
                 <div class="message-bubble">
                   <p>{{ message.content }}</p>
                   <div v-if="message.generatedTaskIds?.length" class="generated-work">
@@ -286,7 +286,7 @@
             </div>
             <div class="message-stack">
               <div v-if="message.role === 'assistant'" class="message-role">
-                <span>工程智管家</span>
+                <span>Dobby</span>
                 <time>{{ message.role === 'assistant' ? '09:43' : '' }}</time>
               </div>
               <div class="message-bubble">
@@ -423,44 +423,80 @@
     </section>
 
     <section v-else-if="section === 'tasks'" class="page-stack task-page">
-      <div class="task-hero">
-        <div class="task-summary-strip">
-          <article>
-            <span>逾期</span>
-            <strong>{{ store.overdueTasks.length }}</strong>
-          </article>
-          <article>
-            <span>待处理</span>
-            <strong>{{ store.pendingTasks.length }}</strong>
-          </article>
-          <article>
-            <span>处理中</span>
-            <strong>{{ store.processingTasks.length }}</strong>
-          </article>
-          <article>
-            <span>待确认</span>
-            <strong>{{ store.waitingConfirmTasks.length }}</strong>
-          </article>
-        </div>
-      </div>
       <div class="task-filterbar">
         <span>当前显示 {{ filteredTasks.length }} / {{ store.tasks.length }} 条</span>
-        <button class="task-create-button" @click="taskCreateOpen = !taskCreateOpen">{{ taskCreateOpen ? '收起新建任务' : '新建任务' }}</button>
         <div class="filter-tabs">
           <button v-for="tab in taskTabs" :key="tab.key" :class="{ active: taskFilter === tab.key }" @click="taskFilter = tab.key">
-            {{ tab.label }}
+            <span>{{ tab.label }}</span><b class="task-filter-count">{{ taskTabCounts[tab.key] }}</b>
           </button>
         </div>
+        <button class="task-create-button" type="button" @click="taskCreateOpen = true">新建任务</button>
       </div>
-      <form v-if="taskCreateOpen" class="task-create-form" @submit.prevent="createManualTask">
-        <input v-model.trim="taskCreateForm.title" required placeholder="任务名称，例如：基坑开挖条件核查">
-        <select v-model="taskCreateForm.task_type"><option value="risk_alert">风险预警</option><option value="material_missing">资料缺项</option><option value="daily_confirm">日报确认</option><option value="draft_review">草稿审核</option><option value="fill_platform">平台填报</option></select>
-        <select v-model="taskCreateForm.assignee_user_id"><option value="">选择负责人</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }}</option></select>
-        <select v-model="taskCreateForm.risk_source_id"><option value="">关联风险源（可选）</option><option v-for="risk in store.riskSources" :key="risk.id" :value="risk.id">{{ risk.name }}</option></select>
-        <input v-model="taskCreateForm.due_at" type="date" aria-label="截止日期">
-        <input v-model.trim="taskCreateForm.workflow" class="task-workflow-input" placeholder="处理步骤，用顿号或逗号分隔（可选）">
-        <button type="submit">创建并分派</button>
-      </form>
+      <div v-if="taskCreateOpen" class="workflow-modal-backdrop" @click.self="taskCreateOpen = false">
+        <section class="workflow-modal task-flow-modal" role="dialog" aria-modal="true" aria-labelledby="task-create-title">
+          <div class="workflow-modal-head">
+            <div><h2 id="task-create-title">新建任务流</h2></div>
+            <button type="button" class="modal-close" aria-label="关闭新建任务窗口" @click="taskCreateOpen = false">关闭</button>
+          </div>
+          <form class="task-flow-form" @submit.prevent="createManualTask">
+            <section class="task-flow-global-settings">
+              <div class="task-flow-global-head">
+                <div class="task-flow-global-copy"><div><span>任务全局配置</span><strong>执行与触发设置</strong></div><p>以下设置作用于整个任务流，不属于任何单个节点。</p></div>
+                <output class="task-flow-trigger-preview" aria-live="polite"><span>触发说明</span><strong>{{ taskTriggerSummary }}</strong></output>
+              </div>
+              <div class="task-flow-trigger-grid">
+                <label class="form-field">执行方式<select v-model="taskCreateForm.run_mode"><option value="single">单次执行</option><option value="scheduled">定时执行</option></select></label>
+                <label class="form-field">{{ taskCreateForm.run_mode === 'single' ? '执行日期与时间' : '首次触发日期与时间' }}<input v-model="taskExecutionAt" type="datetime-local" required></label>
+                <label v-if="taskCreateForm.run_mode === 'scheduled'" class="form-field task-flow-interval-field">触发间隔<span><input v-model.number="taskCreateForm.trigger_interval_value" type="number" min="1" max="365" required><select v-model="taskCreateForm.trigger_interval_unit"><option value="hour">小时</option><option value="day">天</option><option value="week">周</option><option value="month">个月</option></select></span></label>
+                <label class="form-field task-flow-cc-field">抄送人<input v-model.trim="taskCreateForm.cc" placeholder="输入姓名，多个用逗号分隔"></label>
+              </div>
+            </section>
+            <div class="task-flow-body">
+              <aside class="task-flow-brief">
+                <div class="task-flow-mode-switch" aria-label="任务流生成方式">
+                  <button type="button" :class="{ active: taskCreateMode === 'dobby' }" @click="taskCreateMode = 'dobby'">Dobby 生成</button>
+                  <button type="button" :class="{ active: taskCreateMode === 'template' }" @click="taskCreateMode = 'template'">模板生成</button>
+                </div>
+                <section v-if="taskCreateMode === 'dobby'" class="task-flow-generator dobby-generator">
+                  <div class="task-flow-section-title"><div><span>Dobby 任务流助手</span><strong>描述你想完成的工作</strong></div><em>自动解析</em></div>
+                  <textarea v-model.trim="taskFlowRequirement" placeholder="例如：每周一检查基坑监测数据；接近预警值时由监测员复核，项目负责人确认，最后归档监测报告。"></textarea>
+                  <div class="task-flow-examples"><button v-for="example in taskFlowExamples" :key="example" type="button" @click="taskFlowRequirement = example">{{ example }}</button></div>
+                  <button type="button" class="task-flow-generate-button" :disabled="taskFlowGenerating || taskFlowRequirement.length < 4" @click="generateTaskFlowWithDobby">{{ taskFlowGenerating ? 'Dobby 正在设计流程…' : '让 Dobby 生成任务流' }}</button>
+                  <p v-if="taskFlowGenerationNote" class="task-flow-generation-note">{{ taskFlowGenerationNote }}</p>
+                </section>
+                <section v-else class="task-flow-generator template-generator">
+                  <div class="task-flow-section-title"><div><span>标准流程模板</span><strong>选择场景并生成基础节点</strong></div><em>可编辑</em></div>
+                  <label class="form-field">任务场景<select v-model="taskTemplateType"><option v-for="item in taskTemplateOptions" :key="item" :value="item">{{ item }}</option></select></label>
+                  <label class="form-field">任务主题<input v-model.trim="taskTemplateTopic" placeholder="例如：整改现场隐患并完成复核闭环"></label>
+                  <button type="button" class="task-flow-generate-button" @click="generateTemplateTaskFlow">按模板生成流程</button>
+                </section>
+              </aside>
+              <main class="task-flow-canvas">
+                <div class="task-flow-canvas-head"><div><span>流程画布</span><h3>{{ taskCreateForm.title || '未命名任务流' }}</h3></div><p>{{ taskFlowSteps.length }} 个节点 · {{ taskCreateForm.run_mode === 'scheduled' ? '定时执行' : '单次执行' }}</p></div>
+                <div class="task-flow-canvas-body">
+                  <section class="task-flow-editor-panel">
+                    <div class="task-flow-editor-head"><div><span>节点配置</span><strong>维护责任人、时间与交付物</strong></div><div class="task-flow-editor-actions"><em>使用上下按钮调整顺序</em><button type="button" class="task-flow-add-button" @click="addTaskFlowStep">＋ 添加节点</button></div></div>
+                    <div class="task-flow-node-grid">
+                      <article v-for="(step, index) in taskFlowSteps" :key="step.id" class="task-flow-node-card" :class="{ active: selectedTaskFlowStepIndex === index }" @click="selectedTaskFlowStepIndex = index">
+                        <header><span>{{ String(index + 1).padStart(2, '0') }}</span><strong>{{ step.name || `节点 ${index + 1}` }}</strong><div><button type="button" :disabled="index === 0" title="上移" @click.stop="moveTaskFlowStep(index, -1)">↑</button><button type="button" :disabled="index === taskFlowSteps.length - 1" title="下移" @click.stop="moveTaskFlowStep(index, 1)">↓</button><button type="button" class="danger" :disabled="taskFlowSteps.length <= 2" title="删除" @click.stop="removeTaskFlowStep(index)">删除</button></div></header>
+                        <div class="task-flow-node-fields"><label class="form-field">节点名称<input v-model.trim="step.name" required></label><label class="form-field">负责人<select v-model="step.owner_user_id"><option value="">待指定</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }}</option></select></label><label class="form-field">截止日期<input v-model="step.due_at" type="date"></label><label class="form-field">所需资料<input v-model.trim="step.material" placeholder="该节点的交付物或依据"></label></div>
+                      </article>
+                    </div>
+                  </section>
+                  <aside class="task-flow-preview-panel">
+                    <div class="task-flow-preview-head"><span>节点预览</span><strong>流转顺序</strong><em>点击节点可定位配置</em></div>
+                    <div class="task-flow-strip" aria-label="任务流转顺序">
+                      <template v-for="(step, index) in taskFlowSteps" :key="step.id"><button type="button" class="task-flow-node" :class="{ active: selectedTaskFlowStepIndex === index }" @click="selectedTaskFlowStepIndex = index"><span>{{ index + 1 }}</span><strong>{{ step.name || `节点 ${index + 1}` }}</strong><em>{{ memberNameById(step.owner_user_id) }}</em></button><span v-if="index < taskFlowSteps.length - 1" class="task-flow-arrow" aria-hidden="true">↓</span></template>
+                      <div v-if="!taskFlowSteps.length" class="task-flow-empty">从左侧生成任务流，或点击“添加节点”手动开始。</div>
+                    </div>
+                  </aside>
+                </div>
+              </main>
+            </div>
+            <div class="task-flow-footer"><p><strong>{{ taskFlowSteps.length }}</strong> 个流程节点，将按当前顺序依次执行并留痕。</p><div class="workflow-modal-actions"><button type="button" class="modal-secondary" @click="taskCreateOpen = false">取消</button><button type="submit" class="modal-primary" :disabled="!taskCreateForm.title || taskFlowSteps.length < 2">创建任务流</button></div></div>
+          </form>
+        </section>
+      </div>
       <div class="task-board">
         <article v-for="task in filteredTasks" :key="task.id" class="task-card">
           <div class="task-top">
@@ -483,7 +519,7 @@
           </ol>
           <div class="task-actions">
             <router-link to="/ai">协同处理</router-link>
-            <button type="button" @click="toggleTaskHistory(task.id)">{{ taskHistoryOpenId === task.id ? '收起记录' : '处理记录' }}</button>
+            <button type="button" @click="openTaskHistory(task.id)">处理记录</button>
             <button v-if="task.status === 'pending' || task.status === 'overdue'" @click="store.updateTaskStatus(task.id, 'processing')">开始处理</button>
             <button v-if="task.status === 'processing'" @click="store.updateTaskStatus(task.id, 'waiting_confirm')">提交确认</button>
             <button v-if="task.status === 'processing'" @click="store.updateTaskStatus(task.id, 'need_more_info')">需要补充</button>
@@ -491,72 +527,87 @@
             <button v-if="task.status === 'waiting_confirm'" class="done" @click="store.updateTaskStatus(task.id, 'done')">确认完成</button>
             <button v-if="task.status === 'need_more_info'" @click="store.updateTaskStatus(task.id, 'processing')">已补充，继续处理</button>
           </div>
-          <ol v-if="taskHistoryOpenId === task.id" class="task-history-list"><li v-for="item in taskHistories[task.id] || []" :key="item.id"><time>{{ formatDateTime(item.created_at) }}</time><span>{{ item.from_status ? `${statusLabel(item.from_status)} → ` : '' }}{{ statusLabel(item.to_status) }}</span><em>{{ item.note || '状态更新' }}</em></li><li v-if="!(taskHistories[task.id] || []).length">暂无处理记录。</li></ol>
         </article>
+      </div>
+      <div v-if="taskHistoryOpenId && selectedTaskHistoryTask" class="workflow-modal-backdrop" @click.self="closeTaskHistory">
+        <section class="workflow-modal task-history-modal" role="dialog" aria-modal="true" aria-labelledby="task-history-title">
+          <div class="workflow-modal-head">
+            <div><h2 id="task-history-title">任务记录 - {{ selectedTaskHistoryTask.title }}</h2></div>
+            <button type="button" class="modal-close" aria-label="关闭处理记录" @click="closeTaskHistory">关闭</button>
+          </div>
+          <div class="task-history-summary">
+            <div><span>当前状态</span><strong>{{ statusLabel(selectedTaskHistoryTask.status) }}</strong></div>
+            <div><span>负责人</span><strong>{{ store.getMemberName(selectedTaskHistoryTask.responsibleId) }}</strong></div>
+            <div><span>截止时间</span><strong>{{ formatDateTime(selectedTaskHistoryTask.deadline, 'end') }}</strong></div>
+          </div>
+          <div class="task-history-body">
+            <div v-if="taskHistoryLoading" class="task-history-loading">正在加载处理记录…</div>
+            <ol v-else-if="(taskHistories[taskHistoryOpenId] || []).length" class="task-history-timeline">
+              <li v-for="item in taskHistories[taskHistoryOpenId] || []" :key="item.id">
+                <i aria-hidden="true"></i>
+                <div><header><strong>{{ item.from_status ? `${statusLabel(item.from_status)} → ` : '' }}{{ statusLabel(item.to_status) }}</strong><time>{{ formatDateTime(item.created_at) }}</time></header><p>{{ item.note || '状态更新' }}</p></div>
+              </li>
+            </ol>
+            <div v-else class="task-history-empty"><strong>暂无处理记录</strong><p>开始处理或更新任务状态后，系统会在这里自动留痕。</p></div>
+          </div>
+          <div class="workflow-modal-actions task-history-actions"><button type="button" class="modal-primary" @click="closeTaskHistory">完成查看</button></div>
+        </section>
       </div>
     </section>
 
-    <section v-else-if="section === 'project'" class="page-stack project-page">
-      <div class="task-summary-strip supervision-strip">
-        <article><span>总体进度</span><strong>{{ store.dashboard?.progress_rate ?? 0 }}%</strong></article><article><span>风险预警</span><strong>{{ store.dashboard?.risk_warnings ?? 0 }}</strong></article><article><span>质量待核查</span><strong>{{ store.dashboard?.quality_issues ?? 0 }}</strong></article><article><span>未读通知</span><strong>{{ store.dashboard?.unread_notifications ?? 0 }}</strong></article>
-      </div>
-      <div class="project-focus-strip">
-        <article class="focus-card focus-card-main">
-          <span>当前施工重点</span>
-          <strong>{{ activeWbs?.name ?? '暂无进行中工序' }}</strong>
-          <p>{{ activeWbs ? `负责人：${store.getMemberName(activeWbs.responsibleId)} · 计划 ${activeWbs.planStart} 至 ${activeWbs.planEnd}` : '当前项目没有进行中的 WBS 工序。' }}</p>
-          <div class="progress-track compact"><span :style="{ width: `${activeWbs?.progress ?? 0}%` }"></span></div>
+    <section v-else-if="section === 'project'" class="page-stack project-page project-status-view">
+      <section class="project-kpi-strip" aria-label="项目状态指标">
+        <article v-for="metric in projectStatusMetrics" :key="metric.label" :class="metric.tone">
+          <div class="project-kpi-icon"><n-icon :size="22"><component :is="metric.icon" /></n-icon></div>
+          <div><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong><small>{{ metric.hint }}</small></div>
         </article>
-        <article class="focus-card">
-          <span>风险关注</span>
-          <strong>{{ criticalRisks.length }} 个重大风险</strong>
-          <p>{{ criticalRisks[0]?.name ?? '当前无重大风险源。' }}</p>
+      </section>
+
+      <section class="project-health-band" aria-label="项目健康度概览">
+        <article class="project-health-summary">
+          <div class="project-health-gauge" :style="{ '--health-progress': `${projectHealth.actual}%` }"><div><strong>{{ projectHealthGrade }}</strong><small>项目健康度</small></div></div>
+          <div class="project-health-copy"><span>项目健康度评估</span><p>{{ projectHealth.conclusion }}</p><small>根据进度、风险、质量和任务闭环状态综合判断。</small></div>
         </article>
-        <article class="focus-card">
-          <span>需协调事项</span>
-          <strong>{{ focusTasks.length }} 件待处理</strong>
-          <p>{{ focusTasks[0]?.title ?? '暂无待处理任务。' }}</p>
-        </article>
-      </div>
-      <div class="status-grid">
-        <section class="panel span-2">
-          <div class="panel-head">
-            <div>
-              <h2>WBS 进度</h2>
-              <p>工序、责任人和完成率</p>
-            </div>
-          </div>
-          <div class="wbs-table">
-            <div v-for="item in store.wbsItems" :key="item.id" class="wbs-row">
-              <span class="wbs-code">{{ item.code }}</span>
-              <strong>{{ item.name }}</strong>
-              <span>{{ store.getMemberName(item.responsibleId) }}</span>
-              <div class="mini-track"><i :style="{ width: `${item.progress}%` }"></i></div>
-              <b>{{ item.progress }}%</b>
-            </div>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head">
-            <div>
-              <h2>风险热区</h2>
-              <p>当前项目风险源</p>
-            </div>
-          </div>
-          <div class="risk-list">
-            <article v-for="risk in store.riskSources.slice(0, 5)" :key="risk.id">
-              <span :class="['risk-indicator', risk.level]"></span>
-              <div>
-                <strong>{{ risk.name }}</strong>
-                <p>{{ risk.type }} · {{ store.getMemberName(risk.responsibleId) }}</p>
-              </div>
-            </article>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head"><div><h2>通知与工程变更</h2><p>风险、日报确认及变更事项统一留痕。</p></div><button class="document-action" type="button" @click="changeCreateOpen = !changeCreateOpen">{{ changeCreateOpen ? '收起' : '登记变更' }}</button></div>
-          <form v-if="changeCreateOpen" class="change-create-form" @submit.prevent="createProjectChange"><select v-model="changeCreateForm.category"><option>工程内容变更</option><option>计划变更</option><option>资料归档变更</option><option>风险处置变更</option></select><input v-model.trim="changeCreateForm.title" required placeholder="变更事项"><input v-model.trim="changeCreateForm.content" required placeholder="变更说明"><button type="submit">保存</button></form>
-          <div class="risk-list"><article v-for="item in store.notifications.slice(0, 3)" :key="item.id"><span :class="['risk-indicator', item.priority === 'high' ? 'high' : 'low']"></span><div><strong>{{ item.title }}</strong><p>{{ item.content }}</p></div><button v-if="!item.is_read" class="document-action" @click="store.readNotification(item.id)">已读</button></article><article v-for="item in store.projectChanges.slice(0, 2)" :key="`change-${item.id}`"><span class="risk-indicator medium"></span><div><strong>{{ item.title }}</strong><p>{{ item.category }} · {{ item.status }}</p></div></article></div>
+        <dl class="project-health-data">
+          <div class="project-progress-compare"><dt>进度对比</dt><div class="progress-compare-values"><span><small>计划</small><b>{{ projectHealth.planned }}%</b></span><span><small>实际</small><b>{{ projectHealth.actual }}%</b></span></div><dd :class="projectHealth.delta >= 0 ? 'positive' : 'negative'"><small>差异</small><strong>{{ projectHealth.delta >= 0 ? '+' : '' }}{{ projectHealth.delta }}%</strong></dd></div>
+          <div><dt>任务完成率</dt><dd>{{ projectHealth.taskCompletion }}%</dd><div class="project-health-progress"><i><em :style="{ width: `${projectHealth.taskCompletion}%` }" /></i><small>已完成 {{ projectHealth.doneTasks }} / {{ projectHealth.totalTasks }}</small></div></div>
+          <div class="project-health-conclusion"><dt>关键结论</dt><dd>{{ projectHealth.label }}</dd><small>{{ projectHealth.summary }}</small></div>
+        </dl>
+      </section>
+
+      <nav class="project-status-tabs" aria-label="项目状态视图">
+        <button v-for="tab in projectStatusTabs" :key="tab.key" type="button" :class="{ active: projectStatusTab === tab.key }" @click="projectStatusTab = tab.key"><strong>{{ tab.label }}</strong><span>{{ tab.hint }}</span></button>
+      </nav>
+
+      <section class="project-status-content">
+        <main class="project-status-main">
+          <section v-if="projectStatusTab === 'latest'" class="status-workspace status-latest-workspace">
+            <header class="status-workspace-head"><div><span>最新动态</span><h2>项目多源信息</h2><p>汇集群消息、日报、照片、平台导出、会议纪要和工程文件；待确认信息在此完成处置。</p></div><small>{{ statusLatestItems.length }} 条</small></header>
+            <div v-if="statusLatestItems.length" class="status-latest-list"><article v-for="item in statusLatestItems" :key="item.id"><i :class="['status-event-dot', item.tone]" /><div><strong>{{ item.title }}</strong><p>{{ item.sourceType }} · {{ item.content }}</p></div><em :class="item.tone">{{ item.status }}</em><time>{{ item.time }}</time><button v-if="item.canDispose" type="button" class="status-row-action" @click="openInformationDisposition(item.recordId)">处置</button><span v-else class="status-row-placeholder" /></article></div><p v-else class="status-empty">当前还没有项目最新信息。接入群消息、日报、照片或平台导出后，将在此等待核验和处置。</p>
+          </section>
+
+          <section v-else-if="projectStatusTab === 'process'" class="status-workspace status-process-workspace">
+            <header class="status-workspace-head"><div><span>过程监管</span><h2>当前工序过程监管</h2><p>逐项核对今日进度、质量验收数据、关联风险和现场关注点。</p></div><small>{{ processSupervisionRows.length }} 项</small></header>
+            <div v-if="processSupervisionRows.length" class="process-supervision-table"><div class="process-supervision-head"><span>工序</span><span>状态</span><span>今日进度</span><span>质量验收</span><span>关联风险</span><span>关注点</span></div><article v-for="item in processSupervisionRows" :key="item.id"><div><small>{{ item.code }}</small><strong>{{ item.name }}</strong></div><div class="process-progress"><b>{{ item.progressStatus }}</b><i><em :style="{ width: `${item.progress}%` }" /></i><small>{{ item.progress }}% · 昨日：{{ item.yesterday }}</small></div><div>{{ item.today }}</div><div>{{ item.quality }}</div><div :class="['process-risk', item.riskTone]">{{ item.risk }}</div><div>{{ item.focus }}</div></article></div><p v-else class="status-empty">尚未维护 WBS 工序。可在“工程配置 → 人工配置”中补充项目工序。</p>
+          </section>
+
+          <section v-else-if="projectStatusTab === 'execution'" class="status-workspace status-execution-workspace">
+            <header class="status-workspace-head"><div><span>任务执行</span><h2>项目任务执行状态</h2><p>聚焦项目任务的当前阶段、关联 WBS 或风险、负责人和计划闭环节点。</p></div><small>{{ projectExecutionTasks.length }} 项</small></header>
+            <div v-if="projectExecutionTasks.length" class="status-execution-table"><div class="status-execution-head"><span>状态</span><span>任务标题</span><span>关联 WBS / 风险</span><span>负责人</span><span>计划完成</span><span>闭环阶段</span></div><article v-for="task in projectExecutionTasks" :key="task.id"><div><span :class="['execution-status', task.status]">{{ projectTaskStatusLabel(task.status) }}</span></div><div><strong>{{ task.title }}</strong><small>{{ taskPhaseLabel(task) }} · 所需材料：{{ taskMaterialLabel(task) }}</small></div><div>{{ taskRelationLabel(task) }}</div><div>{{ store.getMemberName(task.responsibleId) }}</div><div><strong :class="{ overdue: task.status === 'overdue' }">{{ task.deadline }}</strong><small>{{ task.status === 'overdue' ? '已逾期，需优先处理' : task.triggerReason || '按计划推进' }}</small></div><div><span :class="['closure-status', taskClosureTone(task)]">{{ taskClosureLabel(task) }}</span></div></article></div><p v-else class="status-empty">当前没有项目任务。</p>
+          </section>
+
+          <section v-else class="status-workspace status-change-workspace">
+            <header class="status-workspace-head"><div><span>工程变更</span><h2>工程变更记录</h2><p>保留项目已记录变更及其对应的证据文件，便于快速追溯。</p></div><small>{{ store.projectChanges.length }} 条</small></header>
+            <div v-if="store.projectChanges.length" class="status-change-list"><article v-for="item in store.projectChanges" :key="item.id"><div><span>{{ item.category }}</span><strong>{{ item.title }}</strong><p>{{ item.content }}</p></div><em>{{ item.source_refs?.join('、') || '未关联证据' }}</em><time>{{ statusTimeLabel(item.created_at) }}</time></article></div><p v-else class="status-empty">当前没有工程变更记录。</p>
+          </section>
+        </main>
+      </section>
+
+      <div v-if="informationDispositionOpen && selectedInformationRecord" class="workflow-modal-backdrop" @click.self="closeInformationDisposition">
+        <section class="workflow-modal information-disposition-modal" role="dialog" aria-modal="true" aria-labelledby="information-disposition-title">
+          <div class="workflow-modal-head"><div><h2 id="information-disposition-title">信息处置</h2></div><button type="button" class="modal-close" aria-label="关闭信息处置窗口" @click="closeInformationDisposition">关闭</button></div>
+          <div class="information-disposition-content"><strong>{{ selectedInformationRecord.sourceName }}</strong><div class="information-disposition-meta"><span>{{ selectedInformationRecord.sourceType }}</span><span>{{ selectedInformationRecord.status }}</span><span>置信度 {{ selectedInformationRecord.confidence }}</span><span>{{ selectedInformationRecord.author || '来源待补充' }}</span></div><p>{{ selectedInformationRecord.content }}</p><label class="form-field">修订信息<textarea v-model.trim="informationRevision" placeholder="修订信息，例如：S3测斜位移需以监测单位原始记录为准"></textarea></label></div>
+          <div class="workflow-modal-actions"><button type="button" class="modal-secondary" @click="disposeInformation('confirm')">确认</button><button type="button" class="modal-secondary" @click="disposeInformation('deny')">否认</button><button type="button" class="modal-primary" :disabled="!informationRevision" @click="disposeInformation('revise')">修订</button></div>
         </section>
       </div>
     </section>
@@ -654,15 +705,8 @@
       <section class="panel document-review-panel">
         <div class="panel-head">
           <div><h2>风险草稿与填报</h2><p>将风险材料整理为可审核草稿，确认后生成平台填报包并留存状态。</p></div>
-          <button type="button" class="document-action confirm" @click="draftCreateOpen = !draftCreateOpen">{{ draftCreateOpen ? '收起草稿' : '新建草稿' }}</button>
+          <button type="button" class="document-action confirm" @click="draftCreateOpen = true">新建草稿</button>
         </div>
-        <form v-if="draftCreateOpen" class="draft-create-form" @submit.prevent="createRiskDraft">
-          <select v-model="draftCreateForm.risk_source_id" required><option value="">关联风险源</option><option v-for="risk in store.riskSources" :key="risk.id" :value="risk.id">{{ risk.name }}</option></select>
-          <input v-model.trim="draftCreateForm.title" required placeholder="草稿标题">
-          <textarea v-model.trim="draftCreateForm.content" required placeholder="填写风险说明、处置建议和资料依据"></textarea>
-          <button type="button" class="document-action" :disabled="!draftCreateForm.risk_source_id" @click="assistRiskDraft">智能生成</button>
-          <button type="submit" class="document-action confirm">保存草稿</button>
-        </form>
         <div class="document-list">
           <article v-for="draft in store.riskDrafts" :key="draft.id">
             <span>草稿</span>
@@ -679,6 +723,20 @@
             </div>
           </article>
           <p v-if="!store.riskDrafts.length" class="empty-document-note">暂无风险草稿。请先在工程配置中建立风险源，或直接新建草稿。</p>
+        </div>
+        <div v-if="draftCreateOpen" class="workflow-modal-backdrop" @click.self="draftCreateOpen = false">
+          <section class="workflow-modal draft-create-modal" role="dialog" aria-modal="true" aria-labelledby="draft-create-title">
+            <div class="workflow-modal-head">
+              <div><h2 id="draft-create-title">新建风险草稿</h2></div>
+              <button type="button" class="modal-close" aria-label="关闭新建风险草稿窗口" @click="draftCreateOpen = false">关闭</button>
+            </div>
+            <form class="draft-create-form" @submit.prevent="createRiskDraft">
+              <label class="form-field">关联风险源<select v-model="draftCreateForm.risk_source_id" required><option value="">请选择风险源</option><option v-for="risk in store.riskSources" :key="risk.id" :value="risk.id">{{ risk.name }}</option></select></label>
+              <label class="form-field">草稿标题<input v-model.trim="draftCreateForm.title" required placeholder="例如：深基坑支护施工风险上报"></label>
+              <label class="form-field draft-form-content">草稿内容<textarea v-model.trim="draftCreateForm.content" required placeholder="填写风险说明、处置建议和资料依据"></textarea></label>
+              <div class="workflow-modal-actions"><button type="button" class="modal-secondary" @click="draftCreateOpen = false">取消</button><button type="button" class="modal-assist" :disabled="!draftCreateForm.risk_source_id" @click="assistRiskDraft">智能生成</button><button type="submit" class="modal-primary">保存草稿</button></div>
+            </form>
+          </section>
         </div>
         <div v-if="store.fillPackages.length" class="document-list fill-package-list">
           <article v-for="item in store.fillPackages" :key="item.id">
@@ -700,7 +758,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { NIcon } from 'naive-ui'
+import { NIcon, useMessage } from 'naive-ui'
 import {
   AdjustmentsHorizontal, At, CalendarEvent, ChartBar, ChevronDown, ChevronLeft, ChevronRight,
   Dots, FileText, Folder, ListCheck, Notes, Paperclip, Pin, Plus, Refresh, Robot,
@@ -720,15 +778,39 @@ type ChatMessage = {
 type CollaborationSession = { id: string; title: string; desc: string; time: string; participantIds: string[]; taskIds: string[] }
 type ApiCollaborationSession = { id: number; title: string; summary?: string; participant_ids: number[]; task_ids: number[]; created_at: string; updated_at: string }
 type ApiCollaborationMessage = { id: number; role: 'assistant' | 'user'; content: string; generated_task_ids: number[]; created_at: string }
+type TaskFlowStepDraft = { id: string; name: string; owner_user_id: string; due_at: string; material: string }
+type TriggerIntervalUnit = 'hour' | 'day' | 'week' | 'month'
+type GeneratedTaskFlow = {
+  title: string
+  task_type: Task['type']
+  risk_level: RiskLevel
+  assignee_user_id?: number | null
+  confirmer_user_id?: number | null
+  wbs_item_id?: number | null
+  risk_source_id?: number | null
+  run_mode: 'single' | 'scheduled'
+  trigger_date: string
+  trigger_time: string
+  trigger_rule: string
+  trigger_interval_value: number
+  trigger_interval_unit: TriggerIntervalUnit
+  cc: string
+  steps: Array<{ name: string; owner_user_id?: number | null; due_at?: string; material?: string }>
+  generated_by: 'ai' | 'rules'
+  generation_note: string
+}
 
 type ChatSuggestion = {
   label: string
   desc: string
   prompt: string
 }
+type ProjectStatusTab = 'latest' | 'process' | 'execution' | 'changes'
+type ProjectStatusEvent = { id: string; recordId: string; tone: 'teal' | 'orange' | 'red' | 'blue'; sourceType: string; status: string; confidence: string; title: string; content: string; time: string; canDispose: boolean }
 
 const route = useRoute()
 const store = useAppStore()
+const message = useMessage()
 
 const section = computed(() => {
   const name = String(route.name || '')
@@ -749,6 +831,87 @@ const focusTasks = computed(() => store.tasks.filter(task => ['overdue', 'pendin
 const importantWbs = computed(() => store.wbsItems.filter(item => item.level <= 2).slice(0, 5))
 const activeWbs = computed(() => store.wbsItems.find(item => item.status === 'in_progress' && item.level > 1) ?? store.wbsItems.find(item => item.status === 'in_progress') ?? importantWbs.value[0])
 const criticalRisks = computed(() => store.riskSources.filter(risk => risk.level === 'critical' || risk.level === 'high'))
+const projectStatusTab = ref<ProjectStatusTab>('execution')
+const projectStatusTabs: Array<{ key: ProjectStatusTab; label: string; hint: string }> = [
+  { key: 'latest', label: '最新信息', hint: '采集记录与处理' },
+  { key: 'process', label: '过程监管', hint: '工序、质量与风险' },
+  { key: 'execution', label: '任务执行', hint: '阶段、材料与闭环' },
+  { key: 'changes', label: '工程变更', hint: '变更留痕' },
+]
+const actualProgress = computed(() => store.dashboard?.progress_rate ?? projectProgress.value)
+const plannedProgress = computed(() => {
+  const planned = store.wbsItems.filter(item => item.planStart && item.planEnd).map(item => {
+    const start = Date.parse(item.planStart)
+    const end = Date.parse(item.planEnd)
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return item.progress
+    return Math.max(0, Math.min(100, Math.round(((Date.now() - start) / (end - start)) * 100)))
+  })
+  return planned.length ? Math.round(planned.reduce((sum, value) => sum + value, 0) / planned.length) : actualProgress.value
+})
+const projectHealth = computed(() => {
+  const totalTasks = store.tasks.length
+  const doneTasks = store.tasks.filter(task => task.status === 'done').length
+  const taskCompletion = store.dashboard?.task_completion_rate ?? (totalTasks ? Math.round((doneTasks / totalTasks) * 100) : 0)
+  const delta = actualProgress.value - plannedProgress.value
+  const needsAttention = store.tasks.some(task => task.status === 'overdue') || criticalRisks.value.some(risk => risk.level === 'critical')
+  const label = store.dashboard?.overall || (needsAttention ? '需重点跟进' : criticalRisks.value.length ? '风险可控' : '整体平稳')
+  const safetyIssues = store.dashboard?.safety_issues ?? 0
+  const qualityIssues = store.dashboard?.quality_issues ?? store.qualityMetrics.filter(item => item.status === 'failed').length
+  const mainRisk = store.dashboard?.main_risk || criticalRisks.value[0]?.name || '暂无新增风险预警'
+  const mainSafety = store.dashboard?.main_safety || (safetyIssues ? `有 ${safetyIssues} 项安全事项待核查` : '暂无新增安全隐患')
+  const mainQuality = store.dashboard?.main_quality || (qualityIssues ? `有 ${qualityIssues} 项质量事项待复核` : '暂无待复核质量问题')
+  const plannedDelta = store.dashboard?.planned_delta || (delta >= 0 ? `超前 ${delta}%` : `滞后 ${Math.abs(delta)}%`)
+  const summary = `目前进度 ${actualProgress.value}%，与周计划进度相比${plannedDelta}。主要风险关注：${mainRisk}。主要安全问题：${mainSafety}。存在的质量问题：${mainQuality}。任务完成率 ${taskCompletion}%，总体评价：${label}。`
+  const conclusion = criticalRisks.value.length
+    ? `重点关注 ${criticalRisks.value.slice(0, 2).map(item => item.name).join('、')}。`
+    : focusTasks.value.length
+      ? `当前有 ${focusTasks.value.length} 项待办需要持续推进。`
+      : '暂无未闭环的重点事项。'
+  return { label, summary, planned: plannedProgress.value, actual: actualProgress.value, delta, taskCompletion, doneTasks, totalTasks, conclusion }
+})
+const projectHealthGrade = computed(() => {
+  if (criticalRisks.value.some(item => item.level === 'critical') || store.tasks.some(task => task.status === 'overdue')) return '关注'
+  if (criticalRisks.value.length || (store.dashboard?.safety_issues ?? 0) || (store.dashboard?.quality_issues ?? 0)) return '可控'
+  return '良好'
+})
+const projectStatusMetrics = computed(() => [
+  { label: '进度完成率', value: `${actualProgress.value}%`, hint: `计划 ${plannedProgress.value}%`, icon: ChartBar, tone: actualProgress.value >= plannedProgress.value ? 'teal' : 'orange' },
+  { label: '风险预警数', value: store.dashboard?.risk_warnings ?? criticalRisks.value.length, hint: criticalRisks.value.length ? '当前存在重点风险' : '当前无重点风险', icon: Pin, tone: criticalRisks.value.length ? 'orange' : 'teal' },
+  { label: '安全隐患数', value: store.dashboard?.safety_issues ?? 0, hint: (store.dashboard?.safety_issues ?? 0) ? '待核查安全事项' : '暂无新增安全隐患', icon: UserPlus, tone: (store.dashboard?.safety_issues ?? 0) ? 'orange' : 'teal' },
+  { label: '质量问题数', value: store.dashboard?.quality_issues ?? store.qualityMetrics.filter(item => item.status === 'failed').length, hint: (store.dashboard?.quality_issues ?? 0) ? '待复核质量事项' : '暂无待复核质量问题', icon: Notes, tone: (store.dashboard?.quality_issues ?? 0) ? 'orange' : 'teal' },
+  { label: '待办任务数', value: focusTasks.value.length, hint: focusTasks.value.length ? '未完成事项' : '暂无待办事项', icon: ListCheck, tone: focusTasks.value.length ? 'blue' : 'teal' },
+  { label: '逾期任务', value: store.tasks.filter(task => task.status === 'overdue').length, hint: store.tasks.some(task => task.status === 'overdue') ? '需要优先处置' : '当前无逾期任务', icon: CalendarEvent, tone: store.tasks.some(task => task.status === 'overdue') ? 'red' : 'teal' },
+])
+const statusLatestItems = computed<ProjectStatusEvent[]>(() => {
+  const records = store.informationRecords || []
+  return records.map(item => ({
+    id: `information-${item.id}`,
+    recordId: item.id,
+    tone: item.status === '待确认' || item.status === '待复核' ? 'orange' : item.status === '已否认' ? 'red' : item.sourceType === '平台导出' ? 'blue' : 'teal',
+    sourceType: item.sourceType,
+    status: item.status,
+    confidence: item.confidence,
+    title: item.sourceName,
+    content: item.content,
+    time: item.recordedAt,
+    canDispose: item.status === '待确认' || item.status === '待复核',
+  }))
+})
+const processSupervisionRows = computed(() => store.wbsItems.slice().sort((a, b) => a.code.localeCompare(b.code, 'zh-CN')).slice(0, 12).map(item => {
+  const metric = store.qualityMetrics.find(candidate => candidate.wbsId === item.id)
+  const link = store.wbsRiskLinks.find(candidate => candidate.wbsId === item.id)
+  const risk = link ? store.riskSources.find(candidate => candidate.id === link.riskId) : undefined
+  const task = store.tasks.find(candidate => candidate.linkedWbsIds.includes(item.id) && candidate.status !== 'done')
+  const supervision = item.supervision
+  const quality = supervision?.quality || (metric ? `${metric.name}：${metric.requirement || qualityStatusLabel(metric.status)}` : '暂未配置质量验收数据')
+  const riskText = supervision?.risk || (risk ? `${riskLabel(risk.level)}风险：${risk.name}${risk.controlMeasures ? `；${risk.controlMeasures}` : ''}` : '暂无关联风险数据')
+  const key = supervision?.key ?? (Boolean(risk && ['critical', 'high'].includes(risk.level)) || task?.status === 'overdue' || item.status === 'delayed')
+  return { id: item.id, code: item.code, name: item.name, progress: item.progress, yesterday: supervision?.yesterday || (item.actualStart ? `已于 ${item.actualStart} 开工，累计完成 ${item.progress}%` : '暂无昨日日报记录'), today: supervision?.today || (item.status === 'in_progress' ? `按计划推进，当前累计完成 ${item.progress}%` : item.status === 'done' ? '工序已完成，等待资料归档或复核' : item.status === 'delayed' ? '当前进度滞后，需核对计划与处置措施' : '尚未启动，待满足开工条件'), quality, risk: riskText, focus: supervision?.focus || task?.title || '暂无待办事项', riskTone: risk?.level || (item.status === 'delayed' ? 'high' : 'low'), progressStatus: item.status === 'delayed' ? '滞后' : item.status === 'done' ? '已完成' : item.status === 'in_progress' ? '正常' : '待启动', key }
+}))
+const projectExecutionTasks = computed(() => {
+  const rank: Record<string, number> = { overdue: 0, need_more_info: 1, pending: 2, processing: 3, waiting_confirm: 4, done: 5, cancelled: 6 }
+  return store.tasks.slice().sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || a.deadline.localeCompare(b.deadline)).slice(0, 20)
+})
 
 const myAttentionTasks = computed(() =>
   focusTasks.value.filter(task =>
@@ -1281,12 +1444,38 @@ async function startNewSession() {
 }
 
 const taskFilter = ref<'all' | TaskStatus>('all')
-const changeCreateOpen = ref(false)
-const changeCreateForm = ref({ category: '工程内容变更', title: '', content: '' })
+const informationDispositionOpen = ref(false)
+const selectedInformationRecordId = ref('')
+const informationRevision = ref('')
+const selectedInformationRecord = computed(() => (store.informationRecords || []).find(item => item.id === selectedInformationRecordId.value))
 const taskHistoryOpenId = ref('')
 const taskHistories = ref<Record<string, Array<{ id: number; from_status?: string; to_status: string; note?: string; created_at: string }>>>({})
+const taskHistoryLoading = ref(false)
+const selectedTaskHistoryTask = computed(() => store.tasks.find(task => task.id === taskHistoryOpenId.value))
 const taskCreateOpen = ref(false)
-const taskCreateForm = ref<{ title: string; task_type: Task['type']; assignee_user_id: string; risk_source_id: string; due_at: string; workflow: string }>({ title: '', task_type: 'risk_alert', assignee_user_id: '', risk_source_id: '', due_at: '', workflow: '' })
+const taskCreateMode = ref<'dobby' | 'template'>('template')
+const taskFlowRequirement = ref('')
+const taskFlowGenerating = ref(false)
+const taskFlowGenerationNote = ref('')
+const taskTemplateOptions = ['条件核查', '隐患整改', '资料补全', '风险处置', '报告审核', '自定义'] as const
+const taskTemplateType = ref<(typeof taskTemplateOptions)[number]>('隐患整改')
+const taskTemplateTopic = ref('整改现场隐患并完成复核闭环')
+const selectedTaskFlowStepIndex = ref(0)
+const taskFlowExamples = ['每周核查基坑监测数据并完成复核归档', '发现临边防护缺失后发起整改并闭环', '补齐日报缺失资料并由资料员复核']
+const taskCreateForm = ref({ title: taskTemplateTopic.value, task_type: 'risk_alert' as Task['type'], run_mode: 'single' as 'single' | 'scheduled', trigger_date: todayDateString(), trigger_time: '09:00', trigger_interval_value: 1, trigger_interval_unit: 'week' as TriggerIntervalUnit, cc: '项目经理' })
+const taskExecutionAt = computed({
+  get: () => `${taskCreateForm.value.trigger_date}T${taskCreateForm.value.trigger_time}`,
+  set: (value: string) => {
+    const [triggerDate, triggerTime] = value.split('T')
+    taskCreateForm.value.trigger_date = triggerDate || todayDateString()
+    taskCreateForm.value.trigger_time = triggerTime || '09:00'
+  },
+})
+const triggerIntervalUnitLabel = computed(() => ({ hour: '小时', day: '天', week: '周', month: '个月' })[taskCreateForm.value.trigger_interval_unit])
+const taskTriggerSummary = computed(() => taskCreateForm.value.run_mode === 'single'
+  ? `${taskCreateForm.value.trigger_date} ${taskCreateForm.value.trigger_time} 单次执行`
+  : `${taskCreateForm.value.trigger_date} ${taskCreateForm.value.trigger_time} 首次执行，之后每 ${taskCreateForm.value.trigger_interval_value} ${triggerIntervalUnitLabel.value}执行一次`)
+const taskFlowSteps = ref<TaskFlowStepDraft[]>(createTemplateFlowSteps('隐患整改'))
 const taskTabs: Array<{ key: 'all' | TaskStatus, label: string }> = [
   { key: 'all', label: '全部' },
   { key: 'overdue', label: '逾期' },
@@ -1296,27 +1485,165 @@ const taskTabs: Array<{ key: 'all' | TaskStatus, label: string }> = [
   { key: 'waiting_confirm', label: '待确认' },
   { key: 'done', label: '已完成' },
 ]
+const taskTabCounts = computed<Record<'all' | TaskStatus, number>>(() => ({
+  all: store.tasks.length,
+  overdue: store.tasks.filter(task => task.status === 'overdue').length,
+  pending: store.tasks.filter(task => task.status === 'pending').length,
+  processing: store.tasks.filter(task => task.status === 'processing').length,
+  need_more_info: store.tasks.filter(task => task.status === 'need_more_info').length,
+  waiting_confirm: store.tasks.filter(task => task.status === 'waiting_confirm').length,
+  done: store.tasks.filter(task => task.status === 'done').length,
+  cancelled: store.tasks.filter(task => task.status === 'cancelled').length,
+}))
 const filteredTasks = computed(() => taskFilter.value === 'all' ? store.tasks : store.tasks.filter(task => task.status === taskFilter.value))
 
-async function toggleTaskHistory(taskId: string) {
-  if (taskHistoryOpenId.value === taskId) { taskHistoryOpenId.value = ''; return }
+async function openTaskHistory(taskId: string) {
   taskHistoryOpenId.value = taskId
-  taskHistories.value = { ...taskHistories.value, [taskId]: await store.getTaskHistory(taskId) }
+  taskHistoryLoading.value = true
+  try {
+    taskHistories.value = { ...taskHistories.value, [taskId]: await store.getTaskHistory(taskId) }
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '处理记录加载失败，请检查后端服务后重试。')
+    taskHistoryOpenId.value = ''
+  } finally {
+    taskHistoryLoading.value = false
+  }
 }
-async function createProjectChange() {
-  if (!changeCreateForm.value.title || !changeCreateForm.value.content) return
-  await store.createProjectChange(changeCreateForm.value)
-  changeCreateForm.value = { category: '工程内容变更', title: '', content: '' }
-  changeCreateOpen.value = false
+
+function closeTaskHistory() {
+  taskHistoryOpenId.value = ''
+}
+function openInformationDisposition(recordId: string) {
+  selectedInformationRecordId.value = recordId
+  informationRevision.value = selectedInformationRecord.value?.content || ''
+  informationDispositionOpen.value = true
+}
+
+function closeInformationDisposition() {
+  informationDispositionOpen.value = false
+  selectedInformationRecordId.value = ''
+  informationRevision.value = ''
+}
+
+async function disposeInformation(action: 'confirm' | 'deny' | 'revise') {
+  const record = selectedInformationRecord.value
+  if (!record || (action === 'revise' && !informationRevision.value.trim())) return
+  try {
+    await store.disposeInformationRecord(record.id, action, action === 'revise' ? informationRevision.value.trim() : undefined)
+    message.success(action === 'confirm' ? '信息已确认' : action === 'deny' ? '信息已否认' : '信息已修订')
+    closeInformationDisposition()
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '信息处置失败，请检查服务连接后重试。')
+  }
+}
+
+function todayDateString(offsetDays = 0) {
+  const value = new Date()
+  value.setDate(value.getDate() + offsetDays)
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function createTemplateFlowSteps(type: (typeof taskTemplateOptions)[number]): TaskFlowStepDraft[] {
+  const templates: Record<(typeof taskTemplateOptions)[number], Array<[string, string]>> = {
+    条件核查: [['发起核查', '核查清单'], ['现场复核', '现场记录与照片'], ['负责人确认', '复核意见'], ['资料归档', '闭环资料']],
+    隐患整改: [['发现隐患', '隐患记录'], ['派单整改', '整改方案与照片'], ['安全员复核', '复核记录'], ['闭环归档', '闭环证明']],
+    资料补全: [['识别缺失', '缺失项清单'], ['补齐资料', '待补资料'], ['复核资料', '复核意见'], ['资料归档', '完整资料包']],
+    风险处置: [['风险触发', '风险依据'], ['数据复核', '监测或核验数据'], ['处置确认', '处置记录'], ['风险关闭', '关闭依据']],
+    报告审核: [['提交报告', '报告文件'], ['依据审核', '审核意见'], ['问题修订', '修订稿'], ['审核通过', '定稿文件']],
+    自定义: [['发起任务', '任务依据'], ['执行处理', '过程资料'], ['复核确认', '复核意见'], ['闭环归档', '闭环资料']],
+  }
+  return templates[type].map(([name, material], index) => ({ id: `flow-${Date.now()}-${index}`, name, owner_user_id: store.members[index % Math.max(store.members.length, 1)]?.id || '', due_at: todayDateString(index + 1), material }))
+}
+
+function taskTypeFromTemplate(type: (typeof taskTemplateOptions)[number]): Task['type'] {
+  if (type === '资料补全') return 'material_missing'
+  if (type === '报告审核') return 'draft_review'
+  return 'risk_alert'
+}
+
+function memberNameById(memberId: string) {
+  return store.members.find(member => member.id === memberId)?.name || '待指定'
+}
+
+function generateTemplateTaskFlow() {
+  taskCreateForm.value.title = taskTemplateTopic.value || `${taskTemplateType.value}任务`
+  taskCreateForm.value.task_type = taskTypeFromTemplate(taskTemplateType.value)
+  taskFlowSteps.value = createTemplateFlowSteps(taskTemplateType.value)
+  selectedTaskFlowStepIndex.value = 0
+  taskFlowGenerationNote.value = `已按“${taskTemplateType.value}”模板生成 ${taskFlowSteps.value.length} 个可编辑节点。`
+}
+
+function applyGeneratedTaskFlow(flow: GeneratedTaskFlow) {
+  taskCreateForm.value.title = flow.title
+  taskCreateForm.value.task_type = flow.task_type
+  taskFlowSteps.value = flow.steps.map((step, index) => ({ id: `generated-${Date.now()}-${index}`, name: step.name, owner_user_id: step.owner_user_id ? String(step.owner_user_id) : '', due_at: step.due_at?.slice(0, 10) || todayDateString(index + 1), material: step.material || '' }))
+  selectedTaskFlowStepIndex.value = 0
+  taskFlowGenerationNote.value = flow.generation_note
+}
+
+async function generateTaskFlowWithDobby() {
+  if (!store.currentProjectId || taskFlowRequirement.value.length < 4) return
+  taskFlowGenerating.value = true
+  taskFlowGenerationNote.value = ''
+  try {
+    const response = await api.post<ApiEnvelope<GeneratedTaskFlow>>(`/projects/${store.currentProjectId}/tasks/generate-flow`, { requirement: taskFlowRequirement.value }, { timeout: 35_000 })
+    applyGeneratedTaskFlow(response.data.data)
+    message.success(response.data.data.generated_by === 'ai' ? 'Dobby 已生成任务流' : '已生成可编辑的模板任务流')
+  } catch (error: any) {
+    taskFlowGenerationNote.value = error.response?.data?.detail || '生成失败，请检查后端服务或模型配置后重试。'
+    message.error(taskFlowGenerationNote.value)
+  } finally {
+    taskFlowGenerating.value = false
+  }
+}
+
+function addTaskFlowStep() {
+  taskFlowSteps.value.push({ id: `manual-${Date.now()}`, name: `新节点 ${taskFlowSteps.value.length + 1}`, owner_user_id: '', due_at: todayDateString(taskFlowSteps.value.length + 1), material: '' })
+  selectedTaskFlowStepIndex.value = taskFlowSteps.value.length - 1
+}
+
+function moveTaskFlowStep(index: number, direction: -1 | 1) {
+  const nextIndex = index + direction
+  if (nextIndex < 0 || nextIndex >= taskFlowSteps.value.length) return
+  const [step] = taskFlowSteps.value.splice(index, 1)
+  taskFlowSteps.value.splice(nextIndex, 0, step)
+  selectedTaskFlowStepIndex.value = nextIndex
+}
+
+function removeTaskFlowStep(index: number) {
+  if (taskFlowSteps.value.length <= 2) return
+  taskFlowSteps.value.splice(index, 1)
+  selectedTaskFlowStepIndex.value = Math.min(selectedTaskFlowStepIndex.value, taskFlowSteps.value.length - 1)
+}
+
+function resetTaskFlowCreator() {
+  taskCreateMode.value = 'template'
+  taskFlowRequirement.value = ''
+  taskFlowGenerationNote.value = ''
+  taskTemplateType.value = '隐患整改'
+  taskTemplateTopic.value = '整改现场隐患并完成复核闭环'
+  taskCreateForm.value = { title: taskTemplateTopic.value, task_type: 'risk_alert', run_mode: 'single', trigger_date: todayDateString(), trigger_time: '09:00', trigger_interval_value: 1, trigger_interval_unit: 'week', cc: '项目经理' }
+  taskFlowSteps.value = createTemplateFlowSteps('隐患整改')
+  selectedTaskFlowStepIndex.value = 0
 }
 
 async function createManualTask() {
-  if (!taskCreateForm.value.title) return
-  const { workflow, ...payload } = taskCreateForm.value
-  const workflow_steps = workflow.split(/[、,，]/).map(name => name.trim()).filter(Boolean).map(name => ({ name, status: 'pending' as const }))
-  await store.createTask({ ...payload, workflow_steps, trigger_reason: '由项目成员在任务中心创建' })
-  taskCreateForm.value = { title: '', task_type: 'risk_alert', assignee_user_id: '', risk_source_id: '', due_at: '', workflow: '' }
-  taskCreateOpen.value = false
+  if (!taskCreateForm.value.title || taskFlowSteps.value.length < 2) return
+  const form = taskCreateForm.value
+  const requiredMaterials = Array.from(new Set(taskFlowSteps.value.map(step => step.material.trim()).filter(Boolean)))
+  const workflow_steps = taskFlowSteps.value.map((step, index) => ({ name: step.name.trim(), owner: memberNameById(step.owner_user_id), owner_user_id: step.owner_user_id || undefined, due_at: step.due_at || undefined, material: step.material.trim(), order: index + 1, next_step: index < taskFlowSteps.value.length - 1 ? index + 2 : undefined, status: 'pending' as const })) as Task['workflowSteps']
+  const triggerParts = [taskTriggerSummary.value, form.cc ? `抄送：${form.cc}` : ''].filter(Boolean)
+  try {
+    await store.createTask({ title: form.title, task_type: form.task_type, risk_level: 'medium', assignee_user_id: taskFlowSteps.value[0]?.owner_user_id, due_at: taskFlowSteps.value[taskFlowSteps.value.length - 1]?.due_at, trigger_reason: triggerParts.join(' · '), required_materials: requiredMaterials, workflow_steps })
+    message.success('任务流已创建并进入任务看板')
+    taskCreateOpen.value = false
+    resetTaskFlowCreator()
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '任务流创建失败，请检查填写内容后重试。')
+  }
 }
 
 const documentCards = computed(() => [
@@ -1402,6 +1729,61 @@ const recentDocuments = computed(() => [
 
 function riskLabel(level: RiskLevel) {
   return ({ critical: '重大', high: '高', medium: '中', low: '低' } as Record<RiskLevel, string>)[level]
+}
+
+function wbsStatusLabel(status: string) {
+  return ({ not_started: '未开始', in_progress: '进行中', done: '已完成', delayed: '已延期' } as Record<string, string>)[status] || status
+}
+
+function qualityStatusLabel(status: string) {
+  return ({ pending: '待配置', processing: '进行中', passed: '已通过', failed: '未通过' } as Record<string, string>)[status] || status
+}
+
+function dailyStatusLabel(status: string) {
+  return ({ pending_confirm: '待确认', confirmed: '已确认', failed: '解析失败', reparse: '待重新解析' } as Record<string, string>)[status] || status
+}
+
+function projectTaskStatusLabel(status: TaskStatus) {
+  return ({ pending: '待处理', processing: '进行中', need_more_info: '待补充', waiting_confirm: '待确认', done: '已完成', overdue: '逾期', cancelled: '已取消' } as Record<TaskStatus, string>)[status]
+}
+
+function taskClosureLabel(task: Task) {
+  const currentStep = task.workflowSteps.find(step => step.status !== 'completed') ?? task.workflowSteps[task.workflowSteps.length - 1]
+  return currentStep?.closure || ({ pending: '未闭环', processing: '未闭环', need_more_info: '待补充', waiting_confirm: '待复核', done: '已闭环', overdue: '待复核', cancelled: '已取消' } as Record<TaskStatus, string>)[task.status]
+}
+
+function taskClosureTone(task: Task) {
+  const label = taskClosureLabel(task)
+  if (label === '已闭环') return 'closed'
+  if (label.includes('复核')) return 'review'
+  if (label.includes('补充')) return 'supplement'
+  if (label.includes('取消')) return 'cancelled'
+  return 'open'
+}
+
+function taskPhaseLabel(task: Task) {
+  const currentStep = task.workflowSteps.find(step => step.status !== 'completed')
+  return currentStep?.phase || task.workflowSteps[0]?.phase || (task.status === 'done' ? '归档' : '处理中')
+}
+
+function taskMaterialLabel(task: Task) {
+  const currentStep = task.workflowSteps.find(step => step.status !== 'completed')
+  const material = currentStep?.material || currentStep?.note || task.workflowSteps[task.workflowSteps.length - 1]?.material
+  return material || (task.missingCount > 0 ? `待补齐 ${task.missingCount} 项资料` : '暂无待补充材料')
+}
+
+function taskRelationLabel(task: Task) {
+  const wbsNames = task.linkedWbsIds.map(id => store.getWbsName(id)).filter(Boolean)
+  const riskName = task.linkedRiskId ? store.getRiskName(task.linkedRiskId) : ''
+  return [wbsNames.join('、'), riskName].filter(Boolean).join(' · ') || '未关联'
+}
+
+function statusTimeLabel(value: string) {
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return value || '刚刚'
+  const delta = Date.now() - timestamp
+  if (delta >= 0 && delta < 86400000) return '今天 ' + new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+  return new Date(timestamp).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
 }
 
 function taskTypeLabel(type: Task['type']) {
@@ -3967,23 +4349,60 @@ function nowStr() {
 }
 
 .task-filterbar {
+  position: sticky;
+  top: 0;
+  z-index: 12;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: nowrap;
+  gap: 10px;
   padding: 10px 12px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, .86);
+  background: #fff;
   border: 1px solid rgba(42, 52, 62, 0.09);
+  box-shadow: 0 8px 20px rgba(24, 54, 51, .07);
 }
 
 .task-filterbar > span {
+  flex: 0 0 auto;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 760;
+  white-space: nowrap;
+}
+.task-filterbar .filter-tabs {
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  margin-left: auto;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.task-filterbar .filter-tabs::-webkit-scrollbar { display: none; }
+.task-filterbar .filter-tabs button { flex: 0 0 auto; gap: 7px; }
+.task-filter-count {
+  display: inline-grid;
+  min-width: 20px;
+  height: 20px;
+  box-sizing: border-box;
+  place-items: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #edf3f1;
+  color: #48635d;
+  font-size: 11px;
+  font-weight: 820;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.task-filterbar .filter-tabs button.active .task-filter-count {
+  background: rgba(255, 255, 255, .16);
+  color: #fff;
 }
 .task-create-button {
-  margin-left: auto;
+  flex: 0 0 auto;
+  margin-left: 0;
   padding: 7px 11px;
   border: 1px solid var(--border-emphasis);
   border-radius: 6px;
@@ -3994,32 +4413,181 @@ function nowStr() {
   font-weight: 700;
   cursor: pointer;
 }
+.workflow-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 32, 35, .42);
+  backdrop-filter: blur(2px);
+}
+.workflow-modal {
+  width: min(100%, 760px);
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+  padding: 20px;
+  border: 1px solid rgba(28, 56, 57, .18);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 22px 56px rgba(15, 39, 42, .26);
+}
+.workflow-modal-head { display:flex; justify-content:space-between; align-items:center; gap:14px; min-width:0; margin-bottom:12px; }
+.workflow-modal-head > div { display:flex; flex:1 1 auto; align-items:baseline; gap:10px; min-width:0; }
+.workflow-modal-head span { flex:0 0 auto; color:var(--color-primary); font-size:12px; font-weight:800; letter-spacing:.04em; white-space:nowrap; }
+.workflow-modal-head h2 { flex:0 1 auto; overflow:hidden; min-width:0; margin:0; color:#173235; font-size:17px; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
+.workflow-modal-head p { flex:1 1 18rem; overflow:hidden; min-width:6rem; max-width:none; margin:0; color:var(--text-muted); font-size:12px; line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }
+.workflow-modal-head .modal-close { flex:0 0 auto; }
+.information-disposition-modal { width: min(560px, 100%); }
+.information-disposition-content { display: grid; gap: 10px; padding: 2px 0 8px; }
+.information-disposition-content > strong { color: #173235; font-size: 14px; line-height: 1.45; }
+.information-disposition-meta { display:flex; flex-wrap:wrap; align-items:center; gap:5px; color:var(--text-muted); font-size:12px; line-height:1.4; }
+.information-disposition-meta span+span::before { margin-right:5px; color:#9baca8; content:'·'; }
+.information-disposition-content > p { margin: 0; padding: 11px 12px; border: 1px solid #e2ebe8; border-radius: 7px; color: #385b56; background: #f7faf9; font-size: 13px; line-height: 1.65; }
+.modal-close,.modal-secondary,.modal-assist,.modal-primary { border: 0; border-radius: 6px; padding: 8px 12px; font: inherit; font-size: 12px; font-weight: 750; cursor: pointer; transition: transform .16s ease, box-shadow .16s ease, background .16s ease; }
+.modal-close,.modal-secondary { border: 1px solid var(--border-emphasis); color: var(--text-secondary); background: #fff; }
+.modal-primary { color: #fff; background: var(--color-primary); box-shadow: 0 4px 10px rgba(205, 91, 32, .18); }
+.modal-assist { color: #0c5d58; background: #e7f4f0; }
+.modal-assist:disabled { opacity: .5; cursor: not-allowed; }
+.modal-close:hover,.modal-secondary:hover,.modal-assist:hover,.modal-primary:hover { transform: translateY(-1px); }
+.modal-close:active,.modal-secondary:active,.modal-assist:active,.modal-primary:active { transform: translateY(0); }
+.form-field { display: grid; gap: 6px; color: var(--text-secondary); font-size: 12px; font-weight: 750; }
+.form-field input,.form-field select,.form-field textarea { width: 100%; min-width: 0; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--border-emphasis); border-radius: 6px; background: #fff; color: var(--text-primary); font: inherit; font-size: 13px; }
+.form-field textarea { min-height: 106px; resize: vertical; line-height: 1.55; }
+.form-field input:focus,.form-field select:focus,.form-field textarea:focus { outline: 2px solid rgba(205, 91, 32, .2); outline-offset: 1px; border-color: var(--color-primary); }
+.workflow-modal-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .task-create-form {
   display: grid;
-  grid-template-columns: 1.3fr .85fr .9fr 1.1fr .75fr 1.2fr auto;
-  gap: 8px;
-  padding: 12px;
-  margin: -2px 0 14px;
-  border: 1px solid var(--border-default);
-  border-radius: 8px;
-  background: #fff;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px 12px;
 }
-.task-create-form input, .task-create-form select {
-  min-width: 0;
-  padding: 7px 9px;
-  border: 1px solid var(--border-emphasis);
-  border-radius: 5px;
-  font: inherit;
-  font-size: 12px;
-  background: #fff;
+.task-form-title,.task-form-workflow { grid-column: 1 / -1; }
+.task-flow-modal {
+  display: flex;
+  flex-direction: column;
+  width: 90vw;
+  max-width: none;
+  height: 90dvh;
+  max-height: 90dvh;
+  padding: 0;
+  overflow: hidden;
 }
-.task-create-form button { border: 0; border-radius: 5px; padding: 7px 11px; color: #fff; background: var(--color-primary); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.task-flow-modal > .workflow-modal-head {
+  flex: 0 0 auto;
+  align-items: center;
+  margin: 0;
+  padding: 10px 18px;
+  border-bottom: 1px solid #e1e9e7;
+}
+.task-flow-form { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
+.task-flow-global-settings { display:grid; flex:0 0 auto; gap:11px; padding:12px 18px 14px; border-bottom:1px solid #dfe8e6; background:#f8faf9; }
+.task-flow-global-head { display:flex; align-items:center; justify-content:space-between; gap:24px; }
+.task-flow-global-copy { display:flex; min-width:0; align-items:center; gap:16px; }
+.task-flow-global-copy>div { display:flex; flex:0 0 auto; align-items:baseline; gap:10px; }
+.task-flow-global-head span { color:#0f766e; font-size:12px; font-weight:850; letter-spacing:.04em; }
+.task-flow-global-head strong { color:#173235; font-size:14px; }
+.task-flow-global-copy p { overflow:hidden; margin:0; color:#6c827e; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.task-flow-global-settings .form-field { gap:5px; font-size:12px; }
+.task-flow-global-settings .form-field input,.task-flow-global-settings .form-field select { min-height:36px; padding:7px 9px; font-size:12px; }
+.task-flow-trigger-grid { display:flex; align-items:end; gap:9px; }
+.task-flow-trigger-grid>.form-field { flex:0 1 190px; }
+.task-flow-trigger-grid>.form-field:nth-child(2) { flex-basis:230px; }
+.task-flow-trigger-grid>.task-flow-cc-field { flex:1 1 240px; }
+.task-flow-interval-field { flex-basis:230px !important; }
+.task-flow-interval-field>span { display:grid; grid-template-columns:minmax(72px,.65fr) minmax(100px,1fr); gap:6px; }
+.task-flow-trigger-preview { display:flex; flex:0 1 auto; min-width:0; align-items:center; gap:8px; padding:6px 10px; border-left:2px solid #58a698; background:#eef6f3; }
+.task-flow-trigger-preview span { flex:0 0 auto; color:#64817b; font-size:12px; }
+.task-flow-trigger-preview strong { overflow:hidden; color:#164a43; font-size:12px; font-variant-numeric:tabular-nums; text-overflow:ellipsis; white-space:nowrap; }
+.task-flow-body { display: grid; flex: 1 1 auto; min-height: 0; grid-template-columns: minmax(330px, 31%) minmax(0, 1fr); }
+.task-flow-brief { min-height: 0; overflow-y: auto; padding: 16px; border-right: 1px solid #e1e9e7; background: #f7faf9; }
+.task-flow-mode-switch { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border: 1px solid #dbe6e2; border-radius: 8px; background: #eaf1ef; }
+.task-flow-mode-switch button { border: 0; border-radius: 6px; padding: 9px 12px; color: #5b716e; background: transparent; font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; }
+.task-flow-mode-switch button.active { color: #fff; background: #173f3e; box-shadow: 0 3px 8px rgba(23,63,62,.17); }
+.task-flow-generator { margin-top: 12px; padding: 14px; border: 1px solid #dde8e5; border-radius: 9px; background: #fff; }
+.dobby-generator { border-color: rgba(15,118,110,.26); background: linear-gradient(145deg, #f2fbf8, #fff 58%); }
+.task-flow-section-title,.task-flow-editor-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.task-flow-section-title > div,.task-flow-editor-head > div { display: grid; gap: 3px; }
+.task-flow-section-title span,.task-flow-editor-head span,.task-flow-canvas-head span { color: #0f766e; font-size: 12px; font-weight: 850; letter-spacing: .04em; }
+.task-flow-section-title strong,.task-flow-editor-head strong { color: #173235; font-size: 14px; }
+.task-flow-section-title em,.task-flow-editor-head em { color: #76908b; font-size: 12px; font-style: normal; white-space: nowrap; }
+.task-flow-generator textarea { width: 100%; min-height: 100px; box-sizing: border-box; padding: 10px 11px; border: 1px solid #cadbd6; border-radius: 7px; color: #173235; background: #fff; font: inherit; font-size: 13px; line-height: 1.6; resize: vertical; }
+.task-flow-generator textarea:focus { outline: 2px solid rgba(15,118,110,.18); border-color: #0f766e; }
+.task-flow-examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.task-flow-examples button { max-width: 100%; overflow: hidden; border: 1px solid #d7e7e2; border-radius: 999px; padding: 6px 9px; color: #54706b; background: #fff; font: inherit; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.task-flow-examples button:hover { border-color: #7eb5aa; color: #0f766e; }
+.task-flow-generate-button { width: 100%; margin-top: 10px; border: 0; border-radius: 7px; padding: 10px 12px; color: #fff; background: #0f766e; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; box-shadow: 0 5px 12px rgba(15,118,110,.16); }
+.task-flow-generate-button:disabled { opacity: .52; cursor: not-allowed; box-shadow: none; }
+.task-flow-generation-note { margin: 9px 0 0; color: #52706b; font-size: 12px; line-height: 1.55; }
+.template-generator { display: grid; gap: 10px; }
+.template-generator .task-flow-section-title { margin-bottom: 0; }
+.task-flow-canvas { display: flex; min-width: 0; min-height: 0; flex-direction: column; padding: 16px 18px 0; overflow: hidden; background: #fff; }
+.task-flow-canvas-head { display: flex; flex: 0 0 auto; min-width:0; align-items:center; justify-content:space-between; gap:16px; padding-bottom:9px; border-bottom:1px solid #e5ecea; }
+.task-flow-canvas-head>div { display:flex; min-width:0; align-items:baseline; gap:10px; }
+.task-flow-canvas-head h3 { overflow:hidden; margin:0; color:#173235; font-size:15px; text-overflow:ellipsis; white-space:nowrap; }
+.task-flow-canvas-head p { flex:0 0 auto; margin:0; color:#748984; font-size:12px; white-space:nowrap; }
+.task-flow-add-button { flex: 0 0 auto; border: 1px solid #bbd5cf; border-radius: 6px; padding: 8px 10px; color: #0f766e; background: #f6fbf9; font: inherit; font-size: 12px; font-weight: 750; cursor: pointer; }
+.task-flow-canvas-body { display:grid; flex:1 1 auto; min-height:0; grid-template-columns:minmax(0,1fr) minmax(190px,.42fr); gap:14px; padding-top:10px; }
+.task-flow-editor-panel { display:flex; min-width:0; min-height:0; flex-direction:column; }
+.task-flow-preview-panel { display:flex; min-width:0; min-height:0; flex-direction:column; padding-left:14px; border-left:1px solid #e1e9e7; }
+.task-flow-preview-head { display:grid; flex:0 0 auto; gap:2px; }
+.task-flow-preview-head span { color:#0f766e; font-size:12px; font-weight:850; letter-spacing:.04em; }
+.task-flow-preview-head strong { color:#173235; font-size:14px; }
+.task-flow-preview-head em { color:#76908b; font-size:12px; font-style:normal; }
+.task-flow-strip { display: flex; flex:1 1 auto; min-height:0; flex-direction:column; align-items:stretch; gap:6px; margin:10px 0 16px; padding:12px; overflow-y:auto; border: 1px solid #dfe8e6; border-radius: 9px; background: linear-gradient(180deg, #f7faf9, #fbfcfc); }
+.task-flow-node { position: relative; display: grid; flex:0 0 auto; width:100%; min-height:70px; box-sizing:border-box; align-content: center; gap: 3px; border: 1px solid #cfdedb; border-radius: 8px; padding: 11px 10px 10px 39px; color: #173235; background: #fff; text-align: left; cursor: pointer; box-shadow: 0 3px 9px rgba(23,50,53,.05); }
+.task-flow-node > span { position: absolute; top: 10px; left: 10px; display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; color: #fff; background: #7d9792; font-size: 12px; font-weight: 850; }
+.task-flow-node strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-flow-node em { overflow: hidden; color: #657d78; font-size: 12px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.task-flow-node.active { border-color: #0f766e; background: #eff9f6; box-shadow: 0 0 0 2px rgba(15,118,110,.1); }
+.task-flow-node.active > span { background: #0f766e; }
+.task-flow-arrow { flex: 0 0 auto; height:16px; color: #8da29e; font-size: 17px; line-height:16px; text-align:center; }
+.task-flow-empty { display: grid; width: 100%; min-height: 80px; place-items: center; color: #82938f; font-size: 12px; }
+.task-flow-editor-head { flex: 0 0 auto; margin: 0 0 10px; padding-top: 1px; }
+.task-flow-editor-actions { display:flex; align-items:center; gap:9px; }
+.task-flow-editor-actions .task-flow-add-button { padding:6px 9px; }
+.task-flow-node-grid { display: grid; min-height: 0; flex: 1 1 auto; grid-template-columns:repeat(auto-fill,minmax(min(260px,100%),1fr)); grid-auto-rows:max-content; align-content: start; gap: 10px; padding: 0 5px 16px 0; overflow-y: auto; }
+.task-flow-node-card { border: 1px solid #dce6e3; border-radius: 9px; padding: 12px; background: #fff; transition: border-color .16s ease, box-shadow .16s ease; }
+.task-flow-node-card.active { border-color: #8fbab2; box-shadow: 0 4px 14px rgba(15,118,110,.09); }
+.task-flow-node-card header { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-bottom: 10px; }
+.task-flow-node-card header > span { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 6px; color: #0f766e; background: #e6f3ef; font-size: 12px; font-weight: 850; }
+.task-flow-node-card header > strong { overflow: hidden; color: #173235; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.task-flow-node-card header > div { display: flex; gap: 4px; }
+.task-flow-node-card header button { border: 1px solid #d8e3e0; border-radius: 5px; padding: 5px 7px; color: #48645f; background: #f8faf9; font: inherit; font-size: 12px; cursor: pointer; }
+.task-flow-node-card header button.danger { color: #b24b2b; }
+.task-flow-node-card header button:disabled { opacity: .35; cursor: not-allowed; }
+.task-flow-node-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.task-flow-node-fields .form-field { font-size: 12px; }
+.task-flow-node-fields .form-field input,.task-flow-node-fields .form-field select { padding: 8px 9px; font-size: 12px; }
+.task-flow-footer { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 16px; padding: 11px 18px; border-top: 1px solid #dfe8e6; background: #f8faf9; }
+.task-flow-footer p { margin: 0; color: #647c77; font-size: 12px; }
+.task-flow-footer p strong { color: #0f766e; font-size: 15px; }
+.task-flow-footer .workflow-modal-actions { margin: 0; }
+.task-flow-footer .modal-primary:disabled { opacity: .45; cursor: not-allowed; transform: none; }
 .task-step-list { display: grid; gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; }
 .task-step-list li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto auto; align-items: center; gap: 7px; padding: 7px 8px; border-radius: 5px; background: #f6f8f7; color: var(--text-secondary); font-size: 12px; }
 .task-step-list li > span { display: grid; width: 19px; height: 19px; place-items: center; border-radius: 50%; background: #dce6e2; color: #48625e; font-size: 10px; font-weight: 800; }.task-step-list li.completed > span { background: #0f766e; color: #fff; }.task-step-list li.blocked { background: #fff5ed; }.task-step-list em { font-style: normal; color: var(--text-muted); }.task-step-list button { border: 0; border-radius: 4px; padding: 4px 6px; background: #e9f3f0; color: #0f766e; font-size: 11px; font-weight: 700; cursor: pointer; }
-.task-history-list { display: grid; gap: 5px; margin: 12px 0 0; padding: 10px; border-radius: 6px; background: #f6f8f7; list-style: none; }.task-history-list li { display: grid; grid-template-columns: 135px 104px 1fr; gap: 8px; font-size: 11px; color: var(--text-secondary); }.task-history-list time,.task-history-list em { color: var(--text-muted); font-style: normal; }
+.task-history-modal { width:min(720px,100%); max-height:min(82dvh,760px); overflow:hidden; }
+.task-history-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; overflow:hidden; margin-bottom:16px; border:1px solid #dfe8e5; border-radius:8px; background:#dfe8e5; }
+.task-history-summary>div { display:grid; gap:5px; padding:12px 14px; background:#f7faf9; }
+.task-history-summary span { color:var(--text-muted); font-size:11px; }
+.task-history-summary strong { overflow:hidden; color:#173235; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
+.task-history-body { min-height:250px; max-height:46dvh; overflow-y:auto; padding:2px 4px 2px 0; }
+.task-history-timeline { display:grid; gap:0; margin:0; padding:0; list-style:none; }
+.task-history-timeline li { position:relative; display:grid; grid-template-columns:24px minmax(0,1fr); gap:10px; min-height:72px; }
+.task-history-timeline li:not(:last-child)::after { position:absolute; top:20px; bottom:-2px; left:8px; width:1px; content:''; background:#cbdcd7; }
+.task-history-timeline i { position:relative; z-index:1; display:block; width:17px; height:17px; margin-top:2px; border:4px solid #dff0eb; border-radius:50%; background:#0f766e; box-sizing:border-box; }
+.task-history-timeline li>div { padding:0 2px 15px 0; }
+.task-history-timeline header { display:flex; align-items:center; justify-content:space-between; gap:14px; }
+.task-history-timeline header strong { color:#173235; font-size:13px; }
+.task-history-timeline time { flex:0 0 auto; color:var(--text-muted); font-size:11px; font-variant-numeric:tabular-nums; }
+.task-history-timeline p { margin:7px 0 0; padding:9px 11px; border-radius:6px; color:#506b66; background:#f5f8f7; font-size:12px; line-height:1.55; }
+.task-history-loading,.task-history-empty { display:grid; min-height:250px; place-content:center; justify-items:center; color:var(--text-muted); font-size:12px; text-align:center; }
+.task-history-empty strong { color:#294945; font-size:14px; }
+.task-history-empty p { margin:6px 0 0; }
+.task-history-actions { padding-top:14px; border-top:1px solid #e3ebe9; }
 .meeting-minute { margin: 0 16px 12px; padding: 11px 13px; border: 1px solid rgba(15,118,110,.18); border-radius: 7px; background: #f3faf7; color: var(--text-secondary); font-size: 12px; }.meeting-minute strong { color: #173235; }.meeting-minute p { margin: 5px 0; line-height: 1.55; }.meeting-minute span { color: #0f766e; font-weight: 700; }
-.change-create-form { display: grid; grid-template-columns: .8fr 1fr 1.2fr auto; gap: 7px; margin: 0 0 12px; }.change-create-form input,.change-create-form select { min-width: 0; padding: 7px 8px; border: 1px solid var(--border-emphasis); border-radius: 5px; font: inherit; font-size: 12px; }.change-create-form button { border: 0; border-radius: 5px; padding: 7px 10px; background: var(--color-primary); color: #fff; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.change-create-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px 12px; }.change-form-content { grid-column: 1 / -1; }
 
 .filter-tabs button.active {
   background: #173235;
@@ -4048,9 +4616,7 @@ function nowStr() {
 .document-upload-button input { display: none; }.document-upload-button.disabled { opacity: .6; cursor: wait; }
 .document-search-panel { display: flex; gap: 8px; margin-top: 12px; }.document-search-panel input { flex: 1; min-width: 0; padding: 9px 11px; border: 1px solid var(--border-emphasis); border-radius: 6px; background: #fff; font: inherit; font-size: 12px; }.document-search-panel button { border: 0; border-radius: 6px; padding: 0 13px; background: #173235; color: #fff; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }.document-search-panel button:disabled { opacity: .6; cursor: wait; }.document-search-results { margin-top: 12px; }
 .document-storage-panel, .document-review-panel { margin-top: 18px; }.empty-document-note { padding: 14px 0; color: var(--text-muted); font-size: 13px; }
-.draft-create-form { display: grid; grid-template-columns: minmax(160px, .7fr) minmax(180px, 1fr) minmax(240px, 1.7fr) auto; gap: 9px; margin: 12px 0; }
-.draft-create-form input, .draft-create-form select, .draft-create-form textarea { min-width: 0; padding: 8px 9px; border: 1px solid var(--border-color); border-radius: 5px; background: #fff; color: var(--text-main); font: inherit; font-size: 12px; }
-.draft-create-form textarea { min-height: 36px; resize: vertical; }
+.draft-create-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px 12px; }.draft-form-content { grid-column: 1 / -1; }
 
 .project-focus-strip {
   grid-template-columns: minmax(0, 1.2fr) minmax(240px, .62fr) minmax(240px, .62fr);
@@ -4149,10 +4715,12 @@ function nowStr() {
 
 .task-board {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  grid-auto-rows: minmax(360px, auto);
+  align-items: stretch;
   gap: 12px;
 }
-.task-card { padding: 16px; }
+.task-card { display: flex; min-width: 0; height: 100%; box-sizing: border-box; flex-direction: column; padding: 16px; }
 .task-top,
 .task-meta {
   display: flex;
@@ -4160,7 +4728,7 @@ function nowStr() {
   flex-wrap: wrap;
   align-items: center;
 }
-.task-card h2 { margin: 12px 0 6px; font-size: 17px; }
+.task-card h2 { display: -webkit-box; min-height: 48px; overflow: hidden; -webkit-box-orient: vertical; margin: 12px 0 6px; font-size: 17px; line-height: 1.4; -webkit-line-clamp: 2; }
 .task-source {
   width: fit-content;
   margin-bottom: 8px;
@@ -4179,7 +4747,7 @@ function nowStr() {
   font-size: 11px;
   font-weight: 750;
 }
-.task-actions { margin-top: 14px; }
+.task-actions { margin-top: auto; padding-top: 14px; }
 .task-actions button { padding: 7px 10px; font-size: 12px; }
 
 .status-grid {
@@ -4234,6 +4802,344 @@ function nowStr() {
 .document-action.confirm { border-color: transparent; background: var(--color-primary); color: #fff; }
 .document-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }.fill-package-list { margin-top: 10px; }
 
+/* Project status — operating dashboard layout */
+.project-status-view {
+  min-height: calc(100dvh - var(--header-height, 56px) - 36px);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 12px;
+}
+.project-status-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding: 1px 2px 0; }
+.project-status-heading > div { min-width: 0; }
+.project-status-heading span,
+.status-workspace-head > div > span,
+.status-side-panel header span { display: block; color: #0f766e; font-size: 11px; font-weight: 800; letter-spacing: .05em; }
+.project-status-heading h1 { margin: 4px 0; color: #173235; font-size: 21px; line-height: 1.25; }
+.project-status-heading p { max-width: 68ch; margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.55; }
+.project-status-heading > small { flex: 0 0 auto; margin-bottom: 3px; color: var(--text-muted); font-size: 11px; }
+
+.project-kpi-strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--border-default); border-radius: 9px; background: #fff; box-shadow: 0 7px 20px rgba(20, 49, 48, .035); }
+.project-kpi-strip article { position: relative; min-width: 0; padding: 14px 15px 13px; border-right: 1px solid #edf1ef; }
+.project-kpi-strip article:last-child { border-right: 0; }
+.project-kpi-strip article::before { content: ''; position: absolute; top: 13px; bottom: 13px; left: 0; width: 3px; border-radius: 0 999px 999px 0; background: #0f766e; opacity: .9; }
+.project-kpi-strip article.orange::before { background: #d97706; }
+.project-kpi-strip article.red::before { background: #c2410c; }
+.project-kpi-strip article.blue::before { background: #2563eb; }
+.project-kpi-strip span { display: block; overflow: hidden; color: var(--text-secondary); font-size: 11px; font-weight: 760; text-overflow: ellipsis; white-space: nowrap; }
+.project-kpi-strip strong { display: block; margin: 7px 0 3px; color: #173235; font-size: 23px; line-height: 1; font-variant-numeric: tabular-nums; }
+.project-kpi-strip small { display: block; overflow: hidden; color: var(--text-muted); font-size: 11px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+
+.project-health-band { display: grid; grid-template-columns: minmax(250px, .78fr) minmax(0, 2.22fr); overflow: hidden; border: 1px solid var(--border-default); border-radius: 9px; background: #fff; }
+.project-health-summary { padding: 15px 17px; border-right: 1px solid #edf1ef; background: #f8fbfa; }
+.project-health-summary span { display: block; color: #0f766e; font-size: 11px; font-weight: 800; letter-spacing: .04em; }
+.project-health-summary strong { display: block; margin: 6px 0 5px; color: #173235; font-size: 17px; }
+.project-health-summary p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.55; }
+.project-health-data { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
+.project-health-data > div { min-width: 0; padding: 15px 17px; border-right: 1px solid #edf1ef; }
+.project-health-data > div:last-child { border-right: 0; }
+.project-health-data dt { overflow: hidden; color: var(--text-secondary); font-size: 11px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.project-health-data dd { margin: 7px 0 4px; color: #173235; font-size: 20px; font-weight: 830; font-variant-numeric: tabular-nums; }
+.project-health-data dd.positive { color: #0f766e; }.project-health-data dd.negative { color: #c2410c; }
+.project-health-data small { display: block; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.project-health-data .project-health-conclusion { overflow: hidden; min-height: 24px; margin-top: 5px; color: #0f4c49; font-size: 13px; line-height: 1.45; }
+
+.project-status-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+.project-status-tabs button { min-width: 0; padding: 10px 12px; border: 1px solid var(--border-default); border-radius: 7px; background: #fff; color: var(--text-secondary); font: inherit; text-align: left; cursor: pointer; transition: border-color .16s ease, background .16s ease, color .16s ease, transform .16s ease; }
+.project-status-tabs button:hover { border-color: rgba(15, 118, 110, .42); transform: translateY(-1px); }
+.project-status-tabs button.active { border-color: #0f766e; background: #f0faf7; color: #0c615b; box-shadow: inset 0 0 0 1px rgba(15, 118, 110, .08); }
+.project-status-tabs strong { display: block; overflow: hidden; font-size: 12px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+.project-status-tabs span { display: block; overflow: hidden; margin-top: 3px; color: var(--text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+
+.project-status-content { display: grid; grid-template-columns: minmax(0, 1.72fr) minmax(286px, .72fr); min-height: 0; gap: 12px; align-items: stretch; }
+.project-status-main, .project-status-aside { min-width: 0; min-height: 0; }
+.project-status-aside { display: grid; gap: 12px; }
+.status-workspace, .status-side-panel { overflow: hidden; border: 1px solid var(--border-default); border-radius: 9px; background: #fff; box-shadow: 0 7px 20px rgba(20, 49, 48, .035); }
+.status-workspace { min-height: 0; }
+.status-workspace-head, .status-side-panel header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 15px 17px 13px; border-bottom: 1px solid #edf1ef; }
+.status-workspace-head h2, .status-side-panel h2 { margin: 5px 0 3px; color: #173235; font-size: 16px; line-height: 1.25; }
+.status-workspace-head p { max-width: 60ch; margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.status-link-action, .status-side-panel header a, .status-side-panel header button, .status-row-action { flex: 0 0 auto; border: 1px solid rgba(15, 118, 110, .25); border-radius: 5px; padding: 6px 9px; background: #fff; color: #0e675f; font: inherit; font-size: 11px; font-weight: 780; line-height: 1.2; text-decoration: none; cursor: pointer; }
+.status-link-action:hover, .status-side-panel header a:hover, .status-side-panel header button:hover, .status-row-action:hover { border-color: #0f766e; background: #f1faf8; }
+.status-empty { display: grid; min-height: 290px; place-items: center; box-sizing: border-box; margin: 0; padding: 34px; color: var(--text-muted); font-size: 13px; line-height: 1.65; text-align: center; }
+
+.status-execution-table, .process-supervision-table { overflow-x: auto; }
+.status-execution-head, .status-execution-table article { display: grid; grid-template-columns: 82px minmax(180px, 1.45fr) minmax(150px, 1.05fr) 92px 96px 92px; min-width: 770px; align-items: center; gap: 13px; padding: 11px 17px; }
+.status-execution-head { color: var(--text-muted); font-size: 11px; font-weight: 760; background: #f8faf9; border-bottom: 1px solid #edf1ef; }
+.status-execution-table article { min-height: 59px; border-bottom: 1px solid #edf1ef; color: var(--text-secondary); font-size: 12px; }
+.status-execution-table article:last-child { border-bottom: 0; }
+.status-execution-table article > div { min-width: 0; }.status-execution-table article strong { display: block; overflow: hidden; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.status-execution-table article small { display: block; margin-top: 3px; color: var(--text-muted); font-size: 10px; }
+.execution-status { width: fit-content; border-radius: 999px; padding: 4px 7px; background: #f0f3f2; color: #536964; font-size: 10px; font-weight: 780; white-space: nowrap; }.execution-status.overdue { background: #fff0e7; color: #b84e18; }.execution-status.processing { background: #e8f6f2; color: #0f766e; }.execution-status.waiting_confirm { background: #eef5ff; color: #2563a8; }.execution-status.done { background: #edf7ef; color: #39834c; }.execution-status.need_more_info { background: #fff8df; color: #9a6700; }.status-execution-table .overdue { color: #bd4d17; font-weight: 750; }
+
+.status-latest-list { padding: 3px 17px; }
+.status-latest-list article { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-height: 61px; border-bottom: 1px solid #edf1ef; }
+.status-latest-list article:last-of-type { border-bottom: 0; }.status-event-dot { width: 7px; height: 7px; border-radius: 50%; background: #0f766e; }.status-event-dot.orange { background: #d97706; }.status-event-dot.red { background: #c2410c; }.status-event-dot.blue { background: #2563eb; }
+.status-latest-list article > div { min-width: 0; }.status-latest-list strong { display: block; overflow: hidden; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.status-latest-list p { overflow: hidden; max-width: 56ch; margin: 3px 0 0; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.status-latest-list time { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+
+.process-supervision-head, .process-supervision-table article { display: grid; grid-template-columns: minmax(185px, 1.18fr) 150px minmax(118px, .82fr) minmax(125px, .9fr) minmax(120px, .88fr) minmax(130px, 1fr); min-width: 920px; gap: 12px; align-items: center; padding: 11px 17px; }
+.process-supervision-head { border-bottom: 1px solid #edf1ef; background: #f8faf9; color: var(--text-muted); font-size: 11px; font-weight: 760; }.process-supervision-table article { min-height: 60px; border-bottom: 1px solid #edf1ef; color: var(--text-secondary); font-size: 11px; }.process-supervision-table article:last-child { border-bottom: 0; }.process-supervision-table article > div { min-width: 0; }.process-supervision-table article strong { display: block; overflow: hidden; margin-top: 2px; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.process-supervision-table article > div:first-child small { color: var(--text-muted); font-family: var(--font-mono, monospace); font-size: 10px; }
+.process-progress { display: grid; grid-template-columns: auto minmax(35px, 1fr); gap: 4px 7px; align-items: center; }.process-progress b { font-size: 12px; color: #173235; }.process-progress i { display: block; height: 5px; overflow: hidden; border-radius: 999px; background: #e6ece9; }.process-progress i em { display: block; height: 100%; border-radius: inherit; background: #0f766e; }.process-progress small { grid-column: 1 / -1; color: var(--text-muted); font-size: 10px; }.process-risk { color: #4e6964; }.process-risk.critical,.process-risk.high { color: #b94b18; font-weight: 760; }.process-risk.medium { color: #b77800; }
+
+.status-change-list { padding: 2px 17px; }.status-change-list article { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-height: 71px; border-bottom: 1px solid #edf1ef; }.status-change-list article:last-child { border-bottom: 0; }.status-change-list article > div { min-width: 0; }.status-change-list span { display: block; color: #0f766e; font-size: 10px; font-weight: 780; }.status-change-list strong { display: block; overflow: hidden; margin-top: 3px; color: #173235; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }.status-change-list p { overflow: hidden; max-width: 58ch; margin: 3px 0 0; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.status-change-list time { color: var(--text-muted); font-size: 11px; white-space: nowrap; }.status-change-list em { border-radius: 999px; padding: 4px 7px; background: #f0f5f3; color: #41615b; font-size: 10px; font-style: normal; font-weight: 760; white-space: nowrap; }
+
+.status-side-panel header { padding: 14px 15px 11px; }.status-side-panel h2 { font-size: 14px; }.status-side-panel header a, .status-side-panel header button { padding: 5px 7px; font-size: 10px; }.risk-window-list { padding: 0 15px 8px; }.risk-window-list article { padding: 12px 0; border-bottom: 1px solid #edf1ef; }.risk-window-list article:last-child { border-bottom: 0; }.risk-window-list article > div { display: flex; align-items: center; gap: 7px; }.risk-indicator { width: 7px; height: 7px; border-radius: 50%; background: #84958f; }.risk-indicator.critical { background: #bd4c1a; }.risk-indicator.high { background: #e08416; }.risk-indicator.medium { background: #d1a000; }.risk-window-list strong { overflow: hidden; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.risk-window-list dl { display: grid; gap: 4px; margin: 8px 0; }.risk-window-list dl div { display: grid; grid-template-columns: 55px minmax(0, 1fr); gap: 7px; }.risk-window-list dt { color: var(--text-muted); font-size: 10px; }.risk-window-list dd { overflow: hidden; margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }.risk-window-list .status-row-action { display: inline-block; padding: 4px 7px; font-size: 10px; }
+.status-side-empty { margin: 0; padding: 24px 15px; color: var(--text-muted); font-size: 12px; line-height: 1.6; }.change-preview-list { padding: 0 15px 8px; }.change-preview-list article { display: grid; gap: 3px; padding: 10px 0; border-bottom: 1px solid #edf1ef; }.change-preview-list article:last-child { border-bottom: 0; }.change-preview-list span { color: #0f766e; font-size: 10px; font-weight: 780; }.change-preview-list strong { overflow: hidden; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.change-preview-list small { color: var(--text-muted); font-size: 10px; }
+
+/* 原型项目状态的内容结构：摘要 + 四个完整业务视图 */
+.project-summary-panel { padding: 14px 17px; border: 1px solid var(--border-default); border-radius: 9px; background: #fff; box-shadow: 0 7px 20px rgba(20, 49, 48, .035); }
+.project-summary-panel header { display: flex; align-items: center; gap: 9px; }.project-summary-panel header span { color: #0f766e; font-size: 11px; font-weight: 800; letter-spacing: .05em; }.project-summary-panel header strong { color: #173235; font-size: 13px; }.project-summary-panel p { margin: 8px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+.project-status-content { display: flex; min-height: 0; }.project-status-main { display: flex; width: 100%; min-height: 0; }.project-status-main > .status-workspace { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.status-latest-card-grid, .process-grid, .status-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; padding: 14px 16px 16px; }
+.status-info-card, .process-card, .task-execution-card { min-width: 0; padding: 13px; border: 1px solid #e4ece9; border-radius: 7px; background: #fbfcfb; }
+.status-info-card { display: flex; flex-direction: column; align-items: flex-start; }.status-info-meta { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 8px; }.status-info-meta > span { overflow: hidden; color: #0f766e; font-size: 11px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }.status-info-meta em { flex: 0 0 auto; border-radius: 999px; padding: 3px 7px; background: #edf7f3; color: #127265; font-size: 10px; font-style: normal; font-weight: 780; }.status-info-meta em.orange { background: #fff5df; color: #a66a00; }.status-info-meta em.red { background: #fff0e9; color: #bf4a1b; }.status-info-meta em.blue { background: #edf5ff; color: #2563a8; }.status-info-meta em.pending { background: #f0f3f2; color: #536964; }.status-info-meta em.processing { background: #e8f6f2; color: #0f766e; }.status-info-meta em.overdue { background: #fff0e7; color: #b84e18; }.status-info-meta em.waiting_confirm { background: #eef5ff; color: #2563a8; }.status-info-meta em.done { background: #edf7ef; color: #39834c; }.status-info-card > small { display: block; margin-top: 8px; color: var(--text-muted); font-size: 10px; }.status-info-card > strong, .task-execution-card > strong { display: block; overflow: hidden; width: 100%; margin-top: 7px; color: #173235; font-size: 13px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }.status-info-card > p, .task-execution-card > p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; margin: 6px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.55; -webkit-line-clamp: 2; }.status-info-card .status-row-action, .task-execution-card .status-row-action { margin-top: 11px; }
+.process-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.process-card { border-left: 3px solid #b8d8d1; }.process-card.key-process { border-color: #d97706; background: #fffdf8; }.process-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; margin-bottom: 9px; }.process-card-head > div { min-width: 0; }.process-card-head small { display: block; color: var(--text-muted); font-size: 10px; font-family: var(--font-mono, monospace); }.process-card-head strong { display: block; overflow: hidden; margin-top: 2px; color: #173235; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }.process-card-head > span { flex: 0 0 auto; border-radius: 999px; padding: 3px 7px; background: #edf7f3; color: #0f766e; font-size: 10px; font-weight: 780; }.process-card-head > span.high, .process-card-head > span.critical { background: #fff0e9; color: #b84e18; }.process-card-head > span.medium { background: #fff5df; color: #9a6700; }.process-card p { margin: 5px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.52; }.process-card p b { color: #45635d; font-weight: 780; }.process-card-note { display: block; margin-top: 9px; color: #0f766e; font-size: 10px; font-weight: 750; }
+.task-execution-card { border-top: 3px solid #0f766e; }.task-execution-card > p b { color: #45635d; }.status-source-ref { color: #0f766e !important; font-weight: 700; }
+.status-workspace > .status-latest-card-grid, .status-workspace > .process-grid, .status-workspace > .status-card-grid, .status-workspace > .status-empty { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* 项目状态沿用已确认的「指标—健康度—执行主表＋风险侧栏」信息架构 */
+.project-status-view {
+  height: calc(100dvh - var(--header-height, 56px) - 36px);
+  min-height: 680px;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  gap: 12px;
+}
+.project-kpi-strip { border-radius: 8px; box-shadow: 0 8px 24px rgba(24, 54, 51, .045); }
+.project-kpi-strip article { display: flex; align-items: center; gap: 13px; padding: 15px 16px; }
+.project-kpi-strip article::before { display: none; }
+.project-kpi-icon { display: grid; flex: 0 0 46px; width: 46px; height: 46px; place-items: center; border-radius: 50%; background: #e8f7f4; color: #0f8c82; }
+.project-kpi-strip article.orange .project-kpi-icon { background: #fff1e9; color: #ec6b21; }
+.project-kpi-strip article.red .project-kpi-icon { background: #ffefef; color: #d83232; }
+.project-kpi-strip article.blue .project-kpi-icon { background: #edf4ff; color: #3182ce; }
+.project-kpi-strip article > div { min-width: 0; }
+.project-kpi-strip span { font-size: 11px; font-weight: 720; }
+.project-kpi-strip strong { margin: 4px 0 3px; font-size: 24px; letter-spacing: -.03em; }
+.project-kpi-strip small { font-size: 10px; }
+
+.project-health-band { grid-template-columns: minmax(320px, 1.1fr) minmax(0, 2.55fr); border-radius: 8px; box-shadow: 0 8px 24px rgba(24, 54, 51, .045); }
+.project-health-summary { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: center; gap: 15px; padding: 18px; background: #fff; }
+.project-health-gauge { position: relative; display: grid; width: 104px; height: 104px; place-items: center; border-radius: 50%; background: conic-gradient(#0f9d92 var(--health-progress), #e5eeeb 0); }
+.project-health-gauge::after { position: absolute; inset: 11px; border-radius: inherit; background: #fff; content: ''; }
+.project-health-gauge > div { position: relative; z-index: 1; display: grid; gap: 3px; place-items: center; text-align: center; }
+.project-health-gauge strong { margin: 0; color: #0b786f; font-size: 16px; line-height: 1.15; }
+.project-health-gauge small { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+.project-health-copy span { color: #193b39; font-size: 14px; font-weight: 800; }
+.project-health-copy p { margin: 9px 0 6px; color: var(--text-secondary); font-size: 12px; line-height: 1.65; }
+.project-health-copy small { display: block; color: var(--text-muted); font-size: 10px; line-height: 1.5; }
+.project-health-data > div { display: flex; min-height: 134px; flex-direction: column; justify-content: center; padding: 17px 20px; }
+.project-health-data dt { font-size: 12px; }
+.project-health-data dd { margin: 9px 0 5px; font-size: 25px; letter-spacing: -.035em; }
+.project-health-data small { line-height: 1.6; }
+.project-health-progress { display: grid; gap: 7px; }
+.project-health-progress i { display: block; height: 7px; overflow: hidden; border-radius: 999px; background: #e8efed; }
+.project-health-progress i em { display: block; height: 100%; border-radius: inherit; background: #0f9d92; }
+.project-health-conclusion dd { margin: 8px 0 6px; color: #173235; font-size: 15px; line-height: 1.35; letter-spacing: 0; }
+.project-health-conclusion small { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; max-width: 42ch; -webkit-line-clamp: 3; }
+
+.project-status-tabs { gap: 0; overflow: hidden; border: 1px solid var(--border-default); border-radius: 8px; background: #fff; box-shadow: 0 7px 18px rgba(24, 54, 51, .03); }
+.project-status-tabs button { position: relative; padding: 12px 16px; border: 0; border-right: 1px solid #edf1ef; border-radius: 0; background: transparent; text-align: left; }
+.project-status-tabs button:last-child { border-right: 0; }
+.project-status-tabs button::after { position: absolute; right: 16px; bottom: 0; left: 16px; height: 3px; border-radius: 999px 999px 0 0; background: transparent; content: ''; }
+.project-status-tabs button:hover { border-color: #edf1ef; transform: none; background: #f8fbfa; }
+.project-status-tabs button.active { border-color: #edf1ef; background: #fff; box-shadow: none; color: #0d766e; }
+.project-status-tabs button.active::after { background: #0f9d92; }
+.project-status-tabs strong { font-size: 13px; }.project-status-tabs span { margin-top: 2px; font-size: 10px; }
+
+.project-status-content { display: grid; grid-template-columns: minmax(0, 1.82fr) minmax(300px, .78fr); min-height: 0; gap: 12px; }
+.project-status-main { display: flex; width: auto; min-width: 0; min-height: 0; }
+.project-status-main > .status-workspace { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+.project-status-aside { display: grid; grid-template-rows: minmax(0, 1fr) minmax(160px, .52fr); min-height: 0; gap: 12px; }
+.status-workspace, .status-side-panel { border-radius: 8px; box-shadow: 0 8px 22px rgba(24, 54, 51, .04); }
+.status-workspace-head, .status-side-panel header { align-items: center; padding: 15px 17px 13px; }
+.status-workspace-head > div, .status-side-panel header > div { min-width: 0; }
+.status-workspace-head h2, .status-side-panel h2 { margin: 3px 0 2px; font-size: 16px; }
+.status-workspace-head p { max-width: 72ch; font-size: 11px; }
+.status-workspace-head > small, .status-side-panel header > small { flex: 0 0 auto; color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.status-execution-table, .process-supervision-table, .status-latest-list, .status-change-list { flex: 1; min-height: 0; overflow: auto; }
+.status-execution-head, .status-execution-table article { grid-template-columns: 76px minmax(195px, 1.46fr) minmax(155px, 1fr) 82px 118px 98px; min-width: 820px; padding: 11px 16px; }
+.status-execution-table article { min-height: 66px; }
+.status-execution-table article:hover, .process-supervision-table article:hover, .status-latest-list article:hover, .status-change-list article:hover { background: #fbfdfc; }
+.status-execution-table article > div { overflow: hidden; }
+.status-execution-table article > div:not(:nth-child(2)):not(:nth-child(5)) { display: -webkit-box; -webkit-box-orient: vertical; color: #5b706b; font-size: 11px; line-height: 1.5; -webkit-line-clamp: 2; }
+.status-execution-table article > div:nth-child(4) { color: #173235; font-weight: 700; }
+.status-execution-table article > div:last-child { color: #46645e; }
+.status-execution-table article small { line-height: 1.4; }
+.execution-status { padding: 4px 8px; }
+.status-latest-list { padding: 2px 17px; }
+.status-latest-list article { grid-template-columns: 10px minmax(0, 1fr) auto auto 42px; gap: 10px; min-height: 64px; }
+.status-latest-list p { max-width: 54ch; }
+.status-latest-list em { border-radius: 999px; padding: 3px 7px; background: #edf7f3; color: #127265; font-size: 10px; font-style: normal; font-weight: 780; white-space: nowrap; }
+.status-latest-list em.orange { background: #fff5df; color: #a66a00; }.status-latest-list em.red { background: #fff0e9; color: #bf4a1b; }.status-latest-list em.blue { background: #edf5ff; color: #2563a8; }
+.status-row-placeholder { width: 42px; }
+.status-row-action { padding: 5px 7px; font-size: 10px; }
+.process-supervision-head, .process-supervision-table article { grid-template-columns: minmax(175px, 1.12fr) minmax(165px, 1.06fr) minmax(145px, 1fr) minmax(150px, 1fr) minmax(135px, .92fr) minmax(145px, 1fr); min-width: 1000px; padding: 11px 16px; }
+.process-supervision-table article > div:not(:first-child) { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; line-height: 1.5; -webkit-line-clamp: 3; }
+.process-progress { display: grid !important; -webkit-line-clamp: unset !important; }
+.process-progress small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-change-list { padding: 2px 17px; }
+.status-change-list article { min-height: 73px; }
+.status-side-panel { display: flex; min-height: 0; flex-direction: column; }
+.status-side-panel header { flex: 0 0 auto; }.risk-window-list, .change-preview-list { flex: 1; min-height: 0; overflow-y: auto; }
+.risk-window-list article { padding: 12px 0; }.risk-window-list p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; margin: 0; color: #5c726d; font-size: 10px; line-height: 1.5; -webkit-line-clamp: 2; }
+.risk-window-list dl { margin: 7px 0; }.risk-window-list dl div { grid-template-columns: 54px minmax(0, 1fr); }.risk-window-list dd { white-space: normal; }
+.change-preview-list article { padding: 11px 0; }
+
+/* 可读性优先：页面允许纵向展开，业务表格保持正常字号与行高。 */
+.project-status-view {
+  height: auto;
+  min-height: 920px;
+  grid-template-rows: auto auto auto minmax(600px, 1fr);
+  gap: 16px;
+}
+
+.project-kpi-strip article { gap: 14px; min-height: 88px; padding: 17px 18px; }
+.project-kpi-icon { flex-basis: 50px; width: 50px; height: 50px; }
+.project-kpi-strip span { font-size: 13px; }
+.project-kpi-strip strong { margin: 5px 0 4px; font-size: 27px; }
+.project-kpi-strip small { font-size: 12px; }
+
+.project-health-summary { grid-template-columns: 122px minmax(0, 1fr); gap: 18px; min-height: 158px; padding: 20px; }
+.project-health-gauge { width: 114px; height: 114px; }
+.project-health-gauge strong { font-size: 18px; }
+.project-health-gauge small { font-size: 12px; }
+.project-health-copy span { font-size: 16px; }
+.project-health-copy p { margin: 10px 0 7px; font-size: 14px; }
+.project-health-copy small { font-size: 12px; }
+.project-health-data { grid-template-columns: 206px 206px minmax(0, 1fr); }
+.project-health-data > div { min-height: 158px; padding: 20px 22px; }
+.project-health-data > div:nth-child(-n + 2) { padding-right: 20px; padding-left: 20px; }
+.project-health-data dt { overflow: visible; font-size: 13px; line-height: 1.35; text-overflow: clip; white-space: normal; }
+.project-progress-compare { display: grid !important; width: 100%; grid-template-rows: auto auto auto; align-content: center; justify-items: stretch; padding-top: 18px !important; padding-bottom: 16px !important; }
+.project-progress-compare dt { width: 100%; color: #496761; font-weight: 800; letter-spacing: .01em; text-align: left; }
+.progress-compare-values { position: relative; display: grid; width: 100%; box-sizing: border-box; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; margin-top: 13px; padding: 0 2px 13px; border-bottom: 1px solid #bcd1ca; }
+.progress-compare-values span { display: grid; min-width: 0; gap: 4px; justify-items: center; text-align: center; }
+.progress-compare-values small { color: #78908a; font-size: 12px; font-weight: 720; line-height: 1.25; }
+.progress-compare-values b { color: #27433f; font-size: 24px; font-variant-numeric: tabular-nums; line-height: 1.1; letter-spacing: -.035em; }
+.progress-compare-values span:last-child b { color: #0d8278; }
+.project-progress-compare dd { position: relative; display: grid; gap: 2px; justify-self: center; justify-items: center; margin: 12px 0 0; padding: 0; line-height: 1; }
+.project-progress-compare dd::before { position: absolute; top: -13px; left: 50%; width: 1px; height: 10px; background: #83aaa0; content: ''; }
+.project-progress-compare dd small { color: #78908a; font-size: 10px; font-weight: 740; line-height: 1; }
+.project-progress-compare dd strong { color: currentColor; font-size: 22px; font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: -.03em; }
+.project-health-data dd { margin: 10px 0 6px; font-size: 28px; }
+.project-progress-compare dd { margin: 12px 0 0; font-size: inherit; }
+.project-health-data small { font-size: 12px; }
+.project-health-conclusion dd { font-size: 17px; }
+
+.project-status-tabs button { min-height: 70px; padding: 14px 18px; }
+.project-status-tabs strong { font-size: 14px; }
+.project-status-tabs span { margin-top: 3px; font-size: 12px; }
+
+.project-status-content { grid-template-columns: minmax(0, 1fr); min-height: 600px; gap: 16px; }
+.project-status-aside { grid-template-rows: minmax(360px, 1fr) minmax(220px, .58fr); min-height: 600px; gap: 16px; }
+.status-workspace-head, .status-side-panel header { padding: 18px 20px 16px; }
+.status-workspace-head h2, .status-side-panel h2 { margin: 4px 0 3px; font-size: 18px; }
+.status-workspace-head p { font-size: 13px; }
+.status-workspace-head > small, .status-side-panel header > small { font-size: 12px; }
+
+.status-execution-head, .status-execution-table article {
+  grid-template-columns: 82px minmax(205px, 1.46fr) minmax(170px, 1fr) 90px 128px 106px;
+  min-width: 885px;
+  padding: 14px 18px;
+}
+.status-execution-head { font-size: 12px; }
+.status-execution-table article { min-height: 78px; font-size: 13px; }
+.status-execution-table article strong { font-size: 14px; }
+.status-execution-table article small { font-size: 12px; }
+.status-execution-table article > div:not(:nth-child(2)):not(:nth-child(5)) { font-size: 12px; }
+.execution-status { padding: 5px 9px; font-size: 11px; }
+.closure-status { display: inline-flex; align-items: center; width: fit-content; border: 1px solid transparent; border-radius: 5px; padding: 5px 9px; background: #f2f5f4; color: #557069; font-size: 11px; font-weight: 780; line-height: 1.2; white-space: nowrap; }
+.closure-status.open { border-color: #dce5e2; background: #f3f6f5; color: #62746f; }
+.closure-status.review { border-color: #f1d6ad; background: #fff7e8; color: #a46600; }
+.closure-status.supplement { border-color: #e7d7a6; background: #fff9e8; color: #927100; }
+.closure-status.closed { border-color: #b9e2cd; background: #ecf8f0; color: #247449; }
+.closure-status.cancelled { border-color: #e0e3e2; background: #f4f5f5; color: #78837f; }
+
+.status-latest-list article { grid-template-columns: 10px minmax(0, 1fr) auto auto 48px; gap: 12px; min-height: 74px; }
+.status-latest-list strong { font-size: 14px; }
+.status-latest-list p, .status-latest-list time { font-size: 12px; }
+.status-latest-list em { padding: 4px 8px; font-size: 11px; }
+.status-row-placeholder { width: 48px; }
+.status-row-action { padding: 6px 9px; font-size: 11px; }
+
+.process-supervision-head, .process-supervision-table article {
+  grid-template-columns: minmax(195px, 1.12fr) minmax(180px, 1.06fr) minmax(155px, 1fr) minmax(165px, 1fr) minmax(150px, .92fr) minmax(160px, 1fr);
+  min-width: 1100px;
+  padding: 14px 18px;
+}
+.process-supervision-head { font-size: 12px; }
+.process-supervision-table article { min-height: 76px; font-size: 13px; }
+.process-supervision-table article strong, .process-progress b { font-size: 14px; }
+.process-supervision-table article > div:first-child small { color: #5f7771; font-size: 13px; font-weight: 720; line-height: 1.4; letter-spacing: .01em; }
+.process-progress small { font-size: 11px; }
+
+.status-change-list article { min-height: 82px; }
+.status-change-list span { font-size: 11px; }
+.status-change-list strong { font-size: 14px; }
+.status-change-list p, .status-change-list time, .status-change-list em { font-size: 12px; }
+
+.risk-window-list article { padding: 15px 0; }
+.risk-window-list p { font-size: 12px; line-height: 1.55; }
+.risk-window-list strong { font-size: 14px; }
+.risk-window-list dl { margin: 8px 0; }
+.risk-window-list dl div { grid-template-columns: 60px minmax(0, 1fr); }
+.risk-window-list dt { font-size: 11px; }
+.risk-window-list dd { font-size: 12px; white-space: normal; }
+.change-preview-list article { padding: 13px 0; }
+.change-preview-list strong { font-size: 13px; }
+.change-preview-list span, .change-preview-list small { font-size: 11px; }
+
+/* 信息类页签沿用原型的固定宽度卡片栅格，空间不足时自动换行。 */
+.status-latest-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-auto-rows: minmax(176px, auto);
+  align-content: start;
+  gap: 14px;
+  padding: 16px 18px 20px;
+}
+.status-latest-list article {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  grid-template-rows: auto 1fr auto;
+  align-items: start;
+  min-height: 0;
+  padding: 16px;
+  border: 1px solid #e0eae6;
+  border-radius: 8px;
+  background: #fbfdfc;
+  gap: 0 10px;
+}
+.status-latest-list article:hover { border-color: rgba(15, 118, 110, .32); background: #f7fbf9; }
+.status-latest-list .status-event-dot { grid-column: 1; grid-row: 1; margin-top: 6px; }
+.status-latest-list article > div { grid-column: 2; grid-row: 1 / span 2; }
+.status-latest-list strong { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; font-size: 14px; line-height: 1.45; text-overflow: clip; white-space: normal; -webkit-line-clamp: 2; }
+.status-latest-list p { display: -webkit-box; overflow: hidden; max-width: none; -webkit-box-orient: vertical; margin-top: 8px; font-size: 12px; line-height: 1.65; text-overflow: clip; white-space: normal; -webkit-line-clamp: 4; }
+.status-latest-list em { grid-column: 3; grid-row: 1; margin-left: 4px; }
+.status-latest-list time { grid-column: 2; grid-row: 3; align-self: end; margin-top: 12px; }
+.status-latest-list .status-row-action, .status-latest-list .status-row-placeholder { grid-column: 3; grid-row: 3; align-self: end; }
+
+.status-change-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-auto-rows: minmax(168px, auto);
+  align-content: start;
+  gap: 14px;
+  padding: 16px 18px 20px;
+}
+.status-change-list article {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-height: 0;
+  padding: 17px;
+  border: 1px solid #e0eae6;
+  border-radius: 8px;
+  background: #fbfdfc;
+}
+.status-change-list article:hover { border-color: rgba(15, 118, 110, .32); background: #f7fbf9; }
+.status-change-list article > div { grid-column: 1 / -1; grid-row: 1; }
+.status-change-list strong { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; margin-top: 7px; font-size: 15px; line-height: 1.4; text-overflow: clip; white-space: normal; -webkit-line-clamp: 2; }
+.status-change-list p { display: -webkit-box; overflow: hidden; max-width: 60ch; -webkit-box-orient: vertical; margin-top: 8px; font-size: 13px; line-height: 1.7; text-overflow: clip; white-space: normal; -webkit-line-clamp: 4; }
+.status-change-list em { grid-column: 1; grid-row: 2; align-self: end; margin-top: 14px; }
+.status-change-list time { grid-column: 2; grid-row: 2; align-self: end; margin-left: 12px; }
+
 @media (max-width: 1180px) {
   .workspace-grid,
   .chat-layout,
@@ -4247,13 +5153,23 @@ function nowStr() {
   .docs-work-grid {
     grid-template-columns: 1fr;
   }
+  .project-kpi-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .project-kpi-strip article:nth-child(3n) { border-right: 0; }
+  .project-kpi-strip article:nth-child(-n + 3) { border-bottom: 1px solid #edf1ef; }
+  .project-health-band { grid-template-columns: 1fr; }
+  .project-health-summary { border-right: 0; border-bottom: 1px solid #edf1ef; }
+  .project-status-content { grid-template-columns: 1fr; }
+  .project-status-aside { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .status-latest-card-grid, .process-grid, .status-card-grid { grid-template-columns: 1fr; }
   .task-create-form { grid-template-columns: 1fr 1fr; }
+  .task-flow-trigger-grid { flex-wrap:wrap; }
+  .task-flow-trigger-preview { min-width:280px; }
+  .task-flow-body { grid-template-columns: minmax(300px, 34%) minmax(0, 1fr); }
   .chat-layout { height: auto; }
   .conversation-list,
   .realtime-panel { max-height: none; }
   .doc-grid,
-  .metric-row,
-  .task-board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 720px) {
@@ -4269,15 +5185,70 @@ function nowStr() {
   .task-summary-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .project-status-heading { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .project-status-heading > small { margin: 0; }
+  .project-kpi-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .project-kpi-strip article { border-bottom: 1px solid #edf1ef; }
+  .project-kpi-strip article:nth-child(2n) { border-right: 0; }
+  .project-kpi-strip article:nth-last-child(-n + 2) { border-bottom: 0; }
+  .project-health-data { grid-template-columns: 1fr; }
+  .project-health-data > div { border-right: 0; border-bottom: 1px solid #edf1ef; }
+  .project-health-data > div:last-child { border-bottom: 0; }
+  .project-status-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .project-status-aside { grid-template-columns: 1fr; }
+  .status-latest-card-grid, .process-grid, .status-card-grid { padding: 12px; }
+  .status-workspace-head { align-items: flex-start; }
+  .status-latest-list { grid-template-columns: 1fr; grid-auto-rows: minmax(165px, auto); padding: 12px; }
+  .status-latest-list article { grid-template-columns: 8px minmax(0, 1fr) auto; gap: 0 8px; padding: 14px; }
+  .status-latest-list article .status-row-action { grid-column: 3; width: fit-content; }
+  .status-latest-list p { max-width: none; }
+  .status-change-list { grid-template-columns: 1fr; grid-template-rows: none; padding: 12px; }
+  .status-change-list article, .status-change-list article:first-child { grid-row: auto; padding: 16px; }
+  .status-change-list em { grid-column: 1; grid-row: 2; }
   .task-filterbar {
-    display: grid;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 10px;
   }
+  .task-filterbar > span { flex-basis: 100%; }
+  .task-create-button { margin-left: 0; }
+  .task-filterbar .filter-tabs { order: 3; flex: 1 1 100%; margin-left: 0; }
+  .workflow-modal-backdrop { padding: 12px; }
+  .workflow-modal { max-height: calc(100dvh - 24px); padding: 16px; border-radius: 10px; }
+  .task-flow-modal { width: calc(100vw - 24px); height: calc(100dvh - 24px); max-height: calc(100dvh - 24px); padding: 0; }
+  .task-flow-modal > .workflow-modal-head { margin: 0; padding: 10px 14px; }
+  .task-flow-modal > .workflow-modal-head span,.task-flow-modal > .workflow-modal-head p { display:none; }
+  .task-flow-form { overflow-y:auto; }
+  .task-flow-global-head { align-items:flex-start; flex-direction:column; gap:4px; }
+  .task-flow-global-copy { width:100%; align-items:flex-start; flex-direction:column; gap:4px; }
+  .task-flow-global-copy p { white-space:normal; }
+  .task-flow-trigger-preview { width:100%; min-width:0; box-sizing:border-box; }
+  .task-flow-trigger-grid { display:grid; grid-template-columns:1fr; }
+  .task-flow-trigger-grid>.form-field,.task-flow-trigger-grid>.form-field:nth-child(2),.task-flow-trigger-grid>.task-flow-cc-field,.task-flow-interval-field { width:100%; min-width:0; }
+  .task-flow-body { display: block; overflow-y: auto; }
+  .task-flow-brief { overflow: visible; border-right: 0; border-bottom: 1px solid #e1e9e7; }
+  .task-flow-canvas { min-height: 720px; overflow: visible; }
+  .task-flow-canvas-body { grid-template-columns:1fr; }
+  .task-flow-preview-panel { padding:14px 0 0; border-top:1px solid #e1e9e7; border-left:0; }
+  .task-flow-strip { max-height:none; overflow:visible; }
+  .task-flow-node-grid { overflow: visible; }
+  .task-flow-footer { padding: 10px 14px; }
+  .task-flow-footer > p { display: none; }
+  .workflow-modal-head { gap:12px; margin-bottom:10px; }
+  .workflow-modal-head span,.workflow-modal-head p { display:none; }
+  .workflow-modal-head h2 { font-size: 17px; }
+  .workflow-modal-actions { justify-content: stretch; }
+  .workflow-modal-actions button { flex: 1 1 auto; }
+  .task-history-summary { grid-template-columns:1fr; }
+  .task-history-body { max-height:50dvh; }
+  .task-history-timeline header { align-items:flex-start; flex-direction:column; gap:4px; }
   .work-hero { min-height: 260px; align-items: end; }
   .wbs-row,
   .document-list article {
     grid-template-columns: 1fr;
   }
-  .task-create-form { grid-template-columns: 1fr; }
+  .task-create-form,.change-create-form,.draft-create-form { grid-template-columns: 1fr; }
+  .task-form-title,.task-form-workflow,.change-form-content,.draft-form-content { grid-column: auto; }
   .message-row { max-width: 100%; }
 }
 </style>

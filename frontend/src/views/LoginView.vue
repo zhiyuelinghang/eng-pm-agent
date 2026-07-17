@@ -13,67 +13,19 @@
           </svg>
         </div>
         <div class="logo-text">
-          <span class="logo-name">工程智管家</span>
+          <span class="logo-name">Dobby</span>
           <span class="logo-sub">工程管理平台</span>
         </div>
-        <!-- step 2 back button -->
-        <button v-if="step === 2" class="back-btn" @click="step = 1" title="切换业务端">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="19" y1="12" x2="5" y2="12"></line>
-            <polyline points="12 19 5 12 12 5"></polyline>
-          </svg>
-          重新选择
-        </button>
       </div>
 
       <div class="login-body">
-        <div class="slider-wrapper">
-          <div class="slider-track" :style="{ transform: `translateX(${step === 1 ? '0%' : '-50%'})` }">
-            <!-- Step 1: selection of terminal -->
-            <div class="slide-pane">
-              <h1 class="login-title">进入工程管理平台</h1>
-              <p class="login-desc">选择身份后进入项目任务、进度、资料和协同会话。</p>
+        <div class="login-panel">
+          <h1 class="login-title">登录 Dobby</h1>
+          <p class="login-desc">使用账号和密码进入工程管理平台。</p>
 
-              <div class="role-selector">
-                <button type="button" class="role-btn hover-card" @click="selectRole('site')">
-                  <div class="role-icon-box site-color">
-                    <svg class="role-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-3M9 9h2M9 13h2M9 17h2M15 13h2M15 17h2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                  </div>
-                  <div class="role-inner">
-                    <span class="role-title">项目工作台</span>
-                    <span class="role-desc">参与任务、风险确认、资料协同和智能跟进</span>
-                  </div>
-                  <div class="arrow-indicator">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-                  </div>
-                </button>
-                <button type="button" class="role-btn hover-card" @click="selectRole('ops')">
-                  <div class="role-icon-box ops-color">
-                    <svg class="role-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 16a4 4 0 100-8 4 4 0 000 8z" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 8v4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                  </div>
-                  <div class="role-inner">
-                    <span class="role-title">管理视角</span>
-                    <span class="role-desc">查看项目状态、资料流和工程数据底座</span>
-                  </div>
-                  <div class="arrow-indicator">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-                  </div>
-                </button>
-              </div>
-            </div>
-
-            <!-- Step 2: input account and password -->
-            <div class="slide-pane">
-              <h1 class="login-title">
-                登录到 <span :class="role === 'site' ? 'site-text' : 'ops-text'">{{ role === 'site' ? '项目工作台' : '管理视角' }}</span>
-              </h1>
-              <p class="login-desc">
-                {{ role === 'site' ? '请使用现场负责人或执行人账号进入' : '使用管理账号进入统一工作平台' }}
-              </p>
-
-              <form class="login-form" @submit.prevent="handleLogin">
+          <form class="login-form" @submit.prevent="handleLogin">
                 <div class="form-group">
-                  <label class="form-label">账号 ({{ role === 'site' ? '现场账号' : '运维账号' }})</label>
+                  <label class="form-label">账号</label>
                   <div class="input-wrap">
                     <svg class="input-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
                     <input v-model="form.username" type="text" class="form-input" placeholder="请输入账号" autocomplete="username" />
@@ -104,19 +56,16 @@
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" class="spin-icon">
                       <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2" stroke-dasharray="60" stroke-dashoffset="15" />
                     </svg>
-                    身份验证中...
+                    登录中...
                   </span>
                 </button>
-              </form>
-
-            </div>
-          </div>
+          </form>
         </div>
       </div>
 
       <div class="login-footer">
         <span class="project-tag">总管标</span>
-        <span>智能化工程管理工作平台</span>
+        <span>Dobby 工程管理平台</span>
       </div>
     </div>
   </div>
@@ -127,21 +76,14 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import api, { type ApiEnvelope } from '@/api/client'
+import { useAppStore } from '@/stores/app'
 const router = useRouter()
 const message = useMessage()
+const store = useAppStore()
 
-const step = ref(1)
-const role = ref<'site' | 'ops'>('site')
 const form = reactive({ username: 'admin', password: 'ChangeMe123!', remember: false })
 const showPwd = ref(false)
 const isLoading = ref(false)
-
-const selectRole = (newRole: 'site' | 'ops') => {
-  role.value = newRole
-  form.username = 'admin'
-  form.password = 'ChangeMe123!'
-  step.value = 2
-}
 
 const handleLogin = async () => {
   if (!form.username || !form.password) {
@@ -160,6 +102,7 @@ const handleLogin = async () => {
     sessionStorage.setItem('user_role', ['admin', 'superadmin'].includes(user.role) ? 'ops' : 'site')
     sessionStorage.setItem('current_user_id', String(user.id))
     sessionStorage.setItem('current_user_name', user.real_name)
+    await store.initialize()
     message.success('登录成功')
     router.push('/workbench')
   } catch (error: any) {
@@ -251,11 +194,7 @@ const handleLogin = async () => {
   color: var(--text-primary);
 }
 
-.login-body { 
-  padding: 0; 
-  overflow: hidden; 
-  position: relative;
-}
+.login-body { padding: 28px 28px 20px; }
 
 /* 轨道滑块视图 */
 .slider-wrapper {

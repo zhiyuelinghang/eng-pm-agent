@@ -1,8 +1,9 @@
 import hashlib
 import io
+import json
 import re
 import shutil
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -14,12 +15,12 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import get_db
-from .models import (Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectMember, ProjectSettings,
+from .models import (Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectMember, ProjectSettings, ProjectStatusSnapshot,
                      QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsRiskLink)
-from .schemas import (DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
-                      LoginRequest, MemberInput, ProjectInput, RiskInput, TaskInput, TaskTransitionInput,
+from .schemas import (AttachmentUpdate, DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
+                      LoginRequest, MemberInput, ProjectInput, RiskInput, TaskFlowGenerateInput, TaskInput, TaskTransitionInput,
                       WbsInput, WbsRiskLinkInput, OperationLogInput, PlatformFieldMappingInput, ProjectSettingsInput,
-                      CollaborationMessageInput, CollaborationSessionInput, ProjectChangeInput, QualityMetricInput, TaskStepUpdate)
+                      CollaborationMessageInput, CollaborationSessionInput, DocumentFolderInput, ProjectChangeInput, ProjectInformationDispositionInput, QualityMetricInput, TaskStepUpdate)
 from .security import create_access_token, decode_access_token, hash_password, verify_password
 
 
@@ -70,6 +71,145 @@ def entity_or_404(db: Session, model: type[ModelType], item_id: int, message: st
     if not entity:
         raise HTTPException(status_code=404, detail=message)
     return entity
+
+
+TASK_FLOW_TEMPLATES: dict[str, list[tuple[str, str]]] = {
+    "条件核查": [("发起核查", "核查清单"), ("现场复核", "现场记录与照片"), ("负责人确认", "复核意见"), ("资料归档", "闭环资料")],
+    "隐患整改": [("发现隐患", "隐患记录"), ("派单整改", "整改方案与照片"), ("安全员复核", "复核记录"), ("闭环归档", "闭环证明")],
+    "资料补全": [("识别缺失", "缺失项清单"), ("补齐资料", "待补资料"), ("复核资料", "复核意见"), ("资料归档", "完整资料包")],
+    "风险处置": [("风险触发", "风险依据"), ("数据复核", "监测或核验数据"), ("处置确认", "处置记录"), ("风险关闭", "关闭依据")],
+    "报告审核": [("提交报告", "报告文件"), ("依据审核", "审核意见"), ("问题修订", "修订稿"), ("审核通过", "定稿文件")],
+    "自定义": [("发起任务", "任务依据"), ("执行处理", "过程资料"), ("复核确认", "复核意见"), ("闭环归档", "闭环资料")],
+}
+
+
+def infer_task_flow_type(requirement: str, requested_type: str | None = None) -> str:
+    if requested_type in TASK_FLOW_TEMPLATES:
+        return requested_type
+    if any(word in requirement for word in ("资料", "文件", "上传", "补全", "缺失")):
+        return "资料补全"
+    if any(word in requirement for word in ("整改", "隐患", "安全")):
+        return "隐患整改"
+    if any(word in requirement for word in ("风险", "监测", "预警")):
+        return "风险处置"
+    if any(word in requirement for word in ("报告", "审核", "审查")):
+        return "报告审核"
+    return "条件核查"
+
+
+def build_fallback_task_flow(requirement: str, requested_type: str | None, member_ids: list[int]) -> dict[str, Any]:
+    template_type = infer_task_flow_type(requirement, requested_type)
+    task_type = {
+        "资料补全": "material_missing",
+        "报告审核": "draft_review",
+        "条件核查": "risk_alert",
+        "隐患整改": "risk_alert",
+        "风险处置": "risk_alert",
+        "自定义": "risk_alert",
+    }[template_type]
+    interval_match = re.search(r"每(?P<value>\d+|[一二三四五六七八九十两]+)?(?:个)?(?P<unit>小时|天|日|周|月)", requirement)
+    run_mode = "scheduled" if interval_match or "定时" in requirement else "single"
+    trigger_rule = "手动发起"
+    trigger_interval_value = 1
+    trigger_interval_unit = "week"
+    if interval_match:
+        raw_value = interval_match.group("value") or "1"
+        chinese_numbers = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+        trigger_interval_value = int(raw_value) if raw_value.isdigit() else chinese_numbers.get(raw_value, 1)
+        unit = interval_match.group("unit")
+        trigger_interval_unit = {"小时": "hour", "天": "day", "日": "day", "周": "week", "月": "month"}[unit]
+        trigger_rule = f"每{trigger_interval_value}{unit}按设定时间执行"
+    elif "监测" in requirement or "预警" in requirement:
+        trigger_rule = "监测数据达到触发条件时执行"
+    title = re.sub(r"[。；;\n].*$", "", requirement).strip()[:40] or f"{template_type}任务"
+    steps = []
+    for index, (name, material) in enumerate(TASK_FLOW_TEMPLATES[template_type]):
+        owner_user_id = member_ids[index % len(member_ids)] if member_ids else None
+        steps.append({
+            "name": name,
+            "owner_user_id": owner_user_id,
+            "due_at": (date.today() + timedelta(days=index + 1)).isoformat(),
+            "material": material,
+        })
+    return {
+        "title": title,
+        "task_type": task_type,
+        "risk_level": "high" if any(word in requirement for word in ("重大", "紧急", "高风险")) else "medium",
+        "run_mode": run_mode,
+        "trigger_date": date.today().isoformat(),
+        "trigger_time": "09:00",
+        "trigger_rule": trigger_rule,
+        "trigger_interval_value": trigger_interval_value,
+        "trigger_interval_unit": trigger_interval_unit,
+        "cc": "",
+        "steps": steps,
+    }
+
+
+def extract_json_object(content: str) -> dict[str, Any]:
+    fenced = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", content, re.IGNORECASE)
+    candidate = fenced.group(1) if fenced else content[content.find("{"):content.rfind("}") + 1]
+    if not candidate:
+        raise ValueError("模型未返回 JSON")
+    parsed = json.loads(candidate)
+    if not isinstance(parsed, dict):
+        raise ValueError("模型返回格式错误")
+    return parsed
+
+
+def normalize_task_flow(data: dict[str, Any], fallback: dict[str, Any], members: list[dict[str, Any]], wbs_ids: set[int], risk_ids: set[int]) -> dict[str, Any]:
+    member_map = {member["id"]: member["name"] for member in members}
+    valid_task_types = {"risk_alert", "material_missing", "daily_confirm", "draft_review", "fill_platform"}
+    valid_risk_levels = {"low", "medium", "high", "critical"}
+
+    def valid_id(value: Any, valid_ids: set[int]) -> int | None:
+        try:
+            item_id = int(value)
+        except (TypeError, ValueError):
+            return None
+        return item_id if item_id in valid_ids else None
+
+    def interval_value(value: Any) -> int:
+        try:
+            return max(1, min(int(value), 365))
+        except (TypeError, ValueError):
+            return int(fallback["trigger_interval_value"])
+
+    raw_steps = data.get("steps") if isinstance(data.get("steps"), list) else fallback["steps"]
+    steps: list[dict[str, Any]] = []
+    for index, raw_step in enumerate(raw_steps[:8]):
+        if not isinstance(raw_step, dict):
+            continue
+        owner_user_id = valid_id(raw_step.get("owner_user_id"), set(member_map))
+        steps.append({
+            "name": str(raw_step.get("name") or f"流程节点 {index + 1}")[:60],
+            "owner_user_id": owner_user_id,
+            "owner": member_map.get(owner_user_id, str(raw_step.get("owner") or "待指定")),
+            "due_at": str(raw_step.get("due_at") or (date.today() + timedelta(days=index + 1)).isoformat())[:32],
+            "material": str(raw_step.get("material") or "过程记录")[:200],
+            "order": index + 1,
+            "next_step": index + 2 if index + 1 < len(raw_steps[:8]) else None,
+            "status": "pending",
+        })
+    if len(steps) < 2:
+        return normalize_task_flow(fallback, fallback, members, wbs_ids, risk_ids)
+    return {
+        "title": str(data.get("title") or fallback["title"])[:120],
+        "task_type": data.get("task_type") if data.get("task_type") in valid_task_types else fallback["task_type"],
+        "risk_level": data.get("risk_level") if data.get("risk_level") in valid_risk_levels else fallback["risk_level"],
+        "assignee_user_id": valid_id(data.get("assignee_user_id"), set(member_map)) or steps[0]["owner_user_id"],
+        "confirmer_user_id": valid_id(data.get("confirmer_user_id"), set(member_map)),
+        "wbs_item_id": valid_id(data.get("wbs_item_id"), wbs_ids),
+        "risk_source_id": valid_id(data.get("risk_source_id"), risk_ids),
+        "run_mode": data.get("run_mode") if data.get("run_mode") in {"single", "scheduled"} else fallback["run_mode"],
+        "trigger_date": str(data.get("trigger_date") or fallback["trigger_date"])[:10],
+        "trigger_time": str(data.get("trigger_time") or fallback["trigger_time"])[:5],
+        "trigger_rule": str(data.get("trigger_rule") or fallback["trigger_rule"])[:300],
+        "trigger_interval_value": interval_value(data.get("trigger_interval_value") or fallback["trigger_interval_value"]),
+        "trigger_interval_unit": data.get("trigger_interval_unit") if data.get("trigger_interval_unit") in {"hour", "day", "week", "month"} else fallback["trigger_interval_unit"],
+        "cc": str(data.get("cc") or fallback["cc"])[:300],
+        "steps": steps,
+    }
 
 
 def audit(db: Session, user: User, action: str, detail: str, project_id: int | None = None, target_type: str | None = None, target_id: int | None = None) -> None:
@@ -155,8 +295,35 @@ def project_dashboard(project_id: int, db: Session = Depends(get_db), _: User = 
     metrics = db.scalars(select(QualityMetric).where(QualityMetric.project_id == project_id)).all()
     changes = db.scalars(select(ProjectChange).where(ProjectChange.project_id == project_id, ProjectChange.status != "closed")).all()
     notifications = db.scalars(select(Notification).where(Notification.project_id == project_id, Notification.is_read.is_(False))).all()
+    snapshot = db.get(ProjectStatusSnapshot, project_id)
+    if snapshot:
+        return ok({"progress_rate": snapshot.progress_rate, "progress_status": snapshot.progress_status, "planned_delta": snapshot.planned_delta,
+                   "risk_warnings": snapshot.risk_warnings, "safety_issues": snapshot.safety_issues, "quality_issues": snapshot.quality_issues,
+                   "task_completion_rate": snapshot.task_completion_rate, "open_changes": len(changes), "unread_notifications": len(notifications),
+                   "main_risk": snapshot.main_risk, "main_safety": snapshot.main_safety, "main_quality": snapshot.main_quality, "overall": snapshot.overall})
     done = sum(1 for task in tasks if task.status == "completed")
-    return ok({"progress_rate": round(sum(item.progress for item in wbs) / len(wbs)) if wbs else 0, "risk_warnings": sum(1 for risk in risks if risk.level in {"critical", "high"}), "safety_issues": sum(1 for risk in risks if "安全" in risk.risk_type), "quality_issues": sum(1 for metric in metrics if metric.status != "passed"), "task_completion_rate": round(done * 100 / len(tasks)) if tasks else 0, "open_changes": len(changes), "unread_notifications": len(notifications), "main_risk": next((risk.name for risk in risks if risk.level in {"critical", "high"}), "暂无重大风险"), "main_quality": next((metric.name for metric in metrics if metric.status != "passed"), "暂无待核查质量项")})
+    return ok({"progress_rate": round(sum(item.progress for item in wbs) / len(wbs)) if wbs else 0, "progress_status": "正常", "planned_delta": "基本一致", "risk_warnings": sum(1 for risk in risks if risk.level in {"critical", "high"}), "safety_issues": sum(1 for risk in risks if "安全" in risk.risk_type), "quality_issues": sum(1 for metric in metrics if metric.status != "passed"), "task_completion_rate": round(done * 100 / len(tasks)) if tasks else 0, "open_changes": len(changes), "unread_notifications": len(notifications), "main_risk": next((risk.name for risk in risks if risk.level in {"critical", "high"}), "暂无重大风险"), "main_safety": "暂无新增安全隐患", "main_quality": next((metric.name for metric in metrics if metric.status != "passed"), "暂无待核查质量项"), "overall": "项目整体状态待核对"})
+
+
+@router.get("/projects/{project_id}/information-records")
+def list_information_records(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+    project_or_404(db, project_id)
+    rows = db.scalars(select(ProjectInformationRecord).where(ProjectInformationRecord.project_id == project_id).order_by(ProjectInformationRecord.recorded_at.desc(), ProjectInformationRecord.id.desc())).all()
+    return ok([serialize(row) for row in rows])
+
+
+@router.post("/information-records/{record_id}/dispose")
+def dispose_information_record(record_id: int, payload: ProjectInformationDispositionInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    row = entity_or_404(db, ProjectInformationRecord, record_id, "信息记录不存在")
+    action_status = {"confirm": "已确认", "deny": "已否认", "revise": "已修订"}
+    if payload.action == "revise" and not (payload.content or "").strip():
+        raise HTTPException(status_code=422, detail="修订信息不能为空")
+    row.status = action_status[payload.action]
+    if payload.action == "revise":
+        row.content = payload.content.strip()
+    audit(db, user, f"信息{action_status[payload.action]}", f"处置项目最新信息「{row.source_name}」", row.project_id, "project_information_record", row.id)
+    db.commit(); db.refresh(row)
+    return ok(serialize(row), f"信息已{action_status[payload.action]}")
 
 
 @router.get("/projects/{project_id}/changes")
@@ -208,6 +375,25 @@ def add_member(project_id: int, payload: MemberInput, db: Session = Depends(get_
     return ok(serialize(member), "成员已添加")
 
 
+@router.patch("/projects/{project_id}/members/{user_id}")
+def update_member(project_id: int, user_id: int, payload: MemberInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
+    project_or_404(db, project_id)
+    member = db.scalar(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == user_id))
+    if not member: raise HTTPException(status_code=404, detail="项目成员不存在")
+    account = entity_or_404(db, User, user_id, "用户不存在")
+    account.real_name = payload.real_name
+    account.phone = payload.phone
+    account.email = payload.email
+    account.title = payload.title
+    member.display_name = payload.real_name
+    member.phone = payload.phone
+    member.member_role = payload.member_role
+    member.responsibilities = payload.responsibilities
+    audit(db, user, "更新项目成员", f"更新成员「{payload.real_name}」", project_id, "project_member", member.id)
+    db.commit(); db.refresh(member)
+    return ok(serialize(member), "成员已更新")
+
+
 def list_for_project(model: type[ModelType], project_id: int, db: Session) -> list[dict[str, Any]]:
     project_or_404(db, project_id)
     return [serialize(row) for row in db.scalars(select(model).where(model.project_id == project_id).order_by(model.id.desc())).all()]
@@ -228,7 +414,7 @@ def create_wbs(project_id: int, payload: WbsInput, db: Session = Depends(get_db)
 @router.patch("/wbs/{item_id}")
 def update_wbs(item_id: int, payload: WbsInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
     item = entity_or_404(db, WbsItem, item_id, "WBS工序不存在")
-    for key, value in payload.model_dump().items(): setattr(item, key, value)
+    for key, value in payload.model_dump(exclude_unset=True).items(): setattr(item, key, value)
     audit(db, user, "更新WBS工序", f"更新工序「{item.name}」", item.project_id, "wbs", item.id); db.commit(); db.refresh(item)
     return ok(serialize(item), "WBS工序已更新")
 
@@ -248,7 +434,7 @@ def create_risk(project_id: int, payload: RiskInput, db: Session = Depends(get_d
 @router.patch("/risks/{risk_id}")
 def update_risk(risk_id: int, payload: RiskInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
     item = entity_or_404(db, RiskSource, risk_id, "风险源不存在")
-    for key, value in payload.model_dump().items(): setattr(item, key, value)
+    for key, value in payload.model_dump(exclude_unset=True).items(): setattr(item, key, value)
     audit(db, user, "更新风险源", f"更新风险源「{item.name}」", item.project_id, "risk", item.id); db.commit(); db.refresh(item)
     return ok(serialize(item), "风险源已更新")
 
@@ -270,7 +456,7 @@ def create_quality_metric(project_id: int, payload: QualityMetricInput, db: Sess
 @router.patch("/quality-metrics/{metric_id}")
 def update_quality_metric(metric_id: int, payload: QualityMetricInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
     item = entity_or_404(db, QualityMetric, metric_id, "质量指标不存在")
-    for key, value in payload.model_dump().items(): setattr(item, key, value)
+    for key, value in payload.model_dump(exclude_unset=True).items(): setattr(item, key, value)
     audit(db, user, "更新质量指标", f"更新质量指标「{item.name}」", item.project_id, "quality_metric", item.id); db.commit(); db.refresh(item)
     return ok(serialize(item), "质量指标已更新")
 
@@ -285,6 +471,15 @@ def create_platform_mapping(project_id: int, payload: PlatformFieldMappingInput,
     project_or_404(db, project_id); item = PlatformFieldMapping(project_id=project_id, **payload.model_dump()); db.add(item); db.flush()
     audit(db, user, "新增平台字段映射", f"新增「{item.platform_name}」字段映射", project_id, "platform_mapping", item.id); db.commit(); db.refresh(item)
     return ok(serialize(item), "字段映射已添加")
+
+
+@router.patch("/platform-field-mappings/{mapping_id}")
+def update_platform_mapping(mapping_id: int, payload: PlatformFieldMappingInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
+    item = entity_or_404(db, PlatformFieldMapping, mapping_id, "字段映射不存在")
+    for key, value in payload.model_dump(exclude_unset=True).items(): setattr(item, key, value)
+    audit(db, user, "更新平台字段映射", f"更新「{item.platform_name}」字段映射", item.project_id, "platform_mapping", item.id)
+    db.commit(); db.refresh(item)
+    return ok(serialize(item), "字段映射已更新")
 
 
 @router.delete("/platform-field-mappings/{mapping_id}")
@@ -327,6 +522,53 @@ def list_tasks(project_id: int, status_filter: str | None = None, db: Session = 
     stmt = select(Task).where(Task.project_id == project_id)
     if status_filter: stmt = stmt.where(Task.status == status_filter)
     return ok([serialize(row) for row in db.scalars(stmt.order_by(Task.updated_at.desc())).all()])
+
+
+@router.post("/projects/{project_id}/tasks/generate-flow")
+def generate_task_flow(project_id: int, payload: TaskFlowGenerateInput, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+    project = project_or_404(db, project_id)
+    project_members = db.scalars(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.status == "active")).all()
+    users = {row.id: row for row in db.scalars(select(User).where(User.id.in_([member.user_id for member in project_members]))).all()} if project_members else {}
+    members = [{"id": member.user_id, "name": member.display_name or users.get(member.user_id).real_name if users.get(member.user_id) else member.display_name or f"成员{member.user_id}"} for member in project_members]
+    wbs_items = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id)).all()
+    risks = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id, RiskSource.status == "active")).all()
+    fallback = build_fallback_task_flow(payload.requirement, payload.template_type, [member["id"] for member in members])
+    settings = get_settings()
+    generated: dict[str, Any] = fallback
+    generated_by = "rules"
+    model_error = ""
+
+    if settings.ai_api_key:
+        context = {
+            "project": {"id": project.id, "name": project.project_name, "description": project.description},
+            "members": members,
+            "wbs_items": [{"id": item.id, "code": item.code, "name": item.name, "progress": item.progress, "status": item.status} for item in wbs_items],
+            "risk_sources": [{"id": risk.id, "name": risk.name, "level": risk.level, "type": risk.risk_type} for risk in risks],
+        }
+        prompt = f"""你是 Dobby 工程项目任务流设计助手。根据用户需求和项目上下文，生成一个可执行、可追溯的任务流。
+用户需求：{payload.requirement}
+项目上下文：{json.dumps(context, ensure_ascii=False)}
+
+只返回一个 JSON 对象，不要使用 Markdown。字段必须为：
+title；task_type（仅 risk_alert/material_missing/daily_confirm/draft_review/fill_platform）；risk_level（仅 low/medium/high/critical）；assignee_user_id；confirmer_user_id；wbs_item_id；risk_source_id；run_mode（single/scheduled）；trigger_date（YYYY-MM-DD）；trigger_time（HH:mm）；trigger_rule；trigger_interval_value（正整数）；trigger_interval_unit（仅 hour/day/week/month）；cc；steps。
+steps 必须有 2 至 8 个节点，每个节点字段为 name、owner_user_id、due_at（YYYY-MM-DD）、material。人员、WBS、风险只能使用上下文中存在的 id；不确定时返回 null。节点要按真实流转顺序排列，并包含执行、复核和闭环。"""
+        try:
+            response = httpx.post(
+                f"{settings.ai_base_url.rstrip('/')}/chat/completions",
+                headers={"Authorization": f"Bearer {settings.ai_api_key}"},
+                json={"model": settings.ai_model, "response_format": {"type": "json_object"}, "messages": [{"role": "system", "content": "你负责把工程任务需求转换为结构化任务流。"}, {"role": "user", "content": prompt}]},
+                timeout=30,
+            )
+            response.raise_for_status()
+            generated = extract_json_object(response.json()["choices"][0]["message"]["content"])
+            generated_by = "ai"
+        except Exception as exc:  # 模型连接异常时仍返回可编辑的规则流程，避免中断用户工作。
+            model_error = str(exc)[:180]
+
+    normalized = normalize_task_flow(generated, fallback, members, {item.id for item in wbs_items}, {risk.id for risk in risks})
+    normalized["generated_by"] = generated_by
+    normalized["generation_note"] = "Dobby 已根据需求和当前项目数据生成流程" if generated_by == "ai" else "当前使用规则模板生成，可继续手动调整" + (f"（模型暂不可用：{model_error}）" if model_error else "")
+    return ok(normalized, "任务流已生成")
 
 
 @router.post("/projects/{project_id}/tasks")
@@ -484,13 +726,43 @@ def transition_fill_package(package_id: int, payload: TaskTransitionInput, db: S
 
 
 def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str, list[int]]:
+    project = project_or_404(db, project_id)
     tasks = db.scalars(select(Task).where(Task.project_id == project_id, Task.status.in_(["overdue", "pending", "processing", "need_more_info", "pending_confirm"])).order_by(Task.updated_at.desc())).all()
+    wbs_items = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id).order_by(WbsItem.code).limit(30)).all()
+    risk_sources = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id).order_by(RiskSource.updated_at.desc()).limit(30)).all()
+    quality_metrics = db.scalars(select(QualityMetric).where(QualityMetric.project_id == project_id).order_by(QualityMetric.updated_at.desc()).limit(30)).all()
+    daily_reports = db.scalars(select(DailyReport).where(DailyReport.project_id == project_id).order_by(DailyReport.updated_at.desc()).limit(20)).all()
+    field_mappings = db.scalars(select(PlatformFieldMapping).where(PlatformFieldMapping.project_id == project_id).order_by(PlatformFieldMapping.platform_name, PlatformFieldMapping.target_field).limit(30)).all()
+    materials = db.execute(
+        select(Attachment.file_name, Attachment.category, AttachmentText.content)
+        .outerjoin(AttachmentText, AttachmentText.attachment_id == Attachment.id)
+        .where(Attachment.project_id == project_id)
+        .order_by(Attachment.created_at.desc())
+        .limit(12)
+    ).all()
+    material_context = "；".join(
+        f"{file_name}（{category}）" + (f"：{(text or '')[:360]}" if text else "")
+        for file_name, category, text in materials
+    ) or "暂无已入库资料"
+    project_context = (
+        f"项目：{project.project_name}；所属单位：{project.owner_unit or '未填写'}；说明：{(project.description or '未填写')[:360]}\n"
+        + "WBS：" + ("；".join(f"{item.code} {item.name}（{item.progress}%/{item.status}）" for item in wbs_items) or "暂无") + "\n"
+        + "风险源：" + ("；".join(f"{item.name}（{item.level}/{item.status}）" for item in risk_sources) or "暂无") + "\n"
+        + "质量指标：" + ("；".join(f"{item.name}（{item.status}）" for item in quality_metrics) or "暂无") + "\n"
+        + "日报：" + ("；".join(f"{item.file_name}（{item.report_date or '日期待确认'}/{item.status}）" for item in daily_reports) or "暂无") + "\n"
+        + "字段映射：" + ("；".join(f"{item.platform_name}:{item.source_field}→{item.target_field}" for item in field_mappings) or "暂无")
+    )
     related = [task.id for task in tasks[:4]]
     settings = get_settings()
     if settings.ai_api_key:
-        prompt = f"你是工程项目协同助手。用户问题：{content}\n待办任务：" + "；".join(f"{task.title}（{task.status}，截止{task.due_at or '未设置'}）" for task in tasks[:8])
+        prompt = (
+            "你是工程项目资料智能体。请只依据已入库资料和项目待办给出简洁、可执行、可追溯的建议。"
+            "优先说明：资料可归入的类别、可补全的项目字段、仍缺少的资料；未知内容必须明确标注为待确认，不能编造。"
+            f"\n用户请求：{content}\n项目当前数据：{project_context}\n已入库资料：{material_context}\n待办任务："
+            + "；".join(f"{task.title}（{task.status}，截止{task.due_at or '未设置'}）" for task in tasks[:8])
+        )
         try:
-            response = httpx.post(f"{settings.ai_base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {settings.ai_api_key}"}, json={"model": settings.ai_model, "messages": [{"role": "system", "content": "给出简洁、可执行、可追溯的工程协同建议。"}, {"role": "user", "content": prompt}]}, timeout=30)
+            response = httpx.post(f"{settings.ai_base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {settings.ai_api_key}"}, json={"model": settings.ai_model, "messages": [{"role": "system", "content": "给出简洁、可执行、可追溯的工程资料补全建议。"}, {"role": "user", "content": prompt}]}, timeout=30)
             response.raise_for_status()
             answer = response.json()["choices"][0]["message"]["content"]
             return answer, related
@@ -499,8 +771,14 @@ def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str
     overdue = next((task for task in tasks if task.status == "overdue"), None)
     focus = overdue or (tasks[0] if tasks else None)
     if focus:
-        return f"已基于当前项目真实数据记录协同意见：优先处理「{focus.title}」，状态为{focus.status}，截止日期{focus.due_at or '未设置'}。建议明确责任人、补齐所需资料后提交复核。", related
-    return "当前项目暂无未闭环任务。可先补充工程资料、WBS、风险源或质量指标，再生成协同计划。", []
+        return f"已基于当前项目的 {len(materials)} 份已入库资料和待办记录生成建议：优先处理「{focus.title}」，状态为{focus.status}，截止日期{focus.due_at or '未设置'}。请核对资料类别、明确对应 WBS/风险项，再补齐缺少材料后提交复核。", related
+    return f"当前项目已入库 {len(materials)} 份资料，暂无未闭环任务。可先让智能体核对资料类别与资料缺口，再补充 WBS、风险源或质量指标。", []
+
+
+@router.post("/projects/{project_id}/material-assistant")
+def material_assistant_reply(project_id: int, payload: CollaborationMessageInput, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+    answer, _ = collaboration_reply(project_id, payload.content, db)
+    return ok({"content": answer}, "Dobby 已生成临时资料建议")
 
 
 def extract_attachment_text(content: bytes, suffix: str) -> str:
@@ -536,6 +814,18 @@ def create_collaboration_session(project_id: int, payload: CollaborationSessionI
 
 def session_or_404(db: Session, session_id: int) -> CollaborationSession:
     return entity_or_404(db, CollaborationSession, session_id, "协同会话不存在")
+
+
+@router.delete("/collaboration-sessions/{session_id}")
+def delete_collaboration_session(session_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    session = session_or_404(db, session_id)
+    project_id, title = session.project_id, session.title
+    db.query(MeetingMinute).filter(MeetingMinute.session_id == session_id).delete(synchronize_session=False)
+    db.query(CollaborationMessage).filter(CollaborationMessage.session_id == session_id).delete(synchronize_session=False)
+    db.delete(session)
+    audit(db, user, "删除协同会话", f"删除会话「{title}」；会话生成的任务保留", project_id, "collaboration_session", session_id)
+    db.commit()
+    return ok(None, "协同会话已删除")
 
 
 @router.get("/collaboration-sessions/{session_id}/messages")
@@ -576,9 +866,39 @@ def create_meeting_minute(session_id: int, db: Session = Depends(get_db), user: 
     return ok(serialize(row), "会议纪要已生成")
 
 
-@router.post("/projects/{project_id}/attachments")
-def upload_attachment(project_id: int, file: UploadFile = File(...), category: str = "未分类", db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+@router.get("/projects/{project_id}/document-folders")
+def list_document_folders(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
     project_or_404(db, project_id)
+    rows = db.scalars(select(DocumentFolder).where(DocumentFolder.project_id == project_id).order_by(DocumentFolder.created_at, DocumentFolder.id)).all()
+    return ok([serialize(row) for row in rows])
+
+
+@router.post("/projects/{project_id}/document-folders")
+def create_document_folder(project_id: int, payload: DocumentFolderInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    project_or_404(db, project_id)
+    name = payload.name.strip()
+    if payload.parent_id:
+        parent = entity_or_404(db, DocumentFolder, payload.parent_id, "上级文件夹不存在")
+        if parent.project_id != project_id:
+            raise HTTPException(status_code=422, detail="上级文件夹不属于当前项目")
+    stmt = select(DocumentFolder).where(DocumentFolder.project_id == project_id, DocumentFolder.name == name)
+    stmt = stmt.where(DocumentFolder.parent_id == payload.parent_id) if payload.parent_id else stmt.where(DocumentFolder.parent_id.is_(None))
+    if db.scalar(stmt):
+        raise HTTPException(status_code=409, detail="同级目录下已存在同名文件夹")
+    row = DocumentFolder(project_id=project_id, parent_id=payload.parent_id, name=name)
+    db.add(row); db.flush()
+    audit(db, user, "新建资料文件夹", f"新建资料文件夹「{name}」", project_id, "document_folder", row.id)
+    db.commit(); db.refresh(row)
+    return ok(serialize(row), "文件夹已创建")
+
+
+@router.post("/projects/{project_id}/attachments")
+def upload_attachment(project_id: int, file: UploadFile = File(...), category: str = "未分类", folder_id: int | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    project_or_404(db, project_id)
+    if folder_id:
+        target_folder = entity_or_404(db, DocumentFolder, folder_id, "目标文件夹不存在")
+        if target_folder.project_id != project_id:
+            raise HTTPException(status_code=422, detail="目标文件夹不属于当前项目")
     settings = get_settings(); folder = settings.upload_dir / str(project_id); folder.mkdir(parents=True, exist_ok=True)
     safe_name = Path(file.filename or "attachment").name; target = folder / f"{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}_{safe_name}"
     with target.open("wb") as output: shutil.copyfileobj(file.file, output)
@@ -589,6 +909,8 @@ def upload_attachment(project_id: int, file: UploadFile = File(...), category: s
     previous_version = db.scalar(select(func.max(Attachment.version)).where(Attachment.project_id == project_id, Attachment.file_name == safe_name)) or 0
     row = Attachment(project_id=project_id, file_name=safe_name, storage_path=str(target), content_type=file.content_type, file_size=len(content), file_hash=digest, category=category, version=previous_version + 1)
     db.add(row); db.flush()
+    if folder_id:
+        db.add(DocumentFolderItem(attachment_id=row.id, folder_id=folder_id, project_id=project_id))
     db.add(AttachmentText(attachment_id=row.id, project_id=project_id, content=extract_attachment_text(content, target.suffix.lower())))
     audit(db, user, "上传资料", f"上传资料「{safe_name}」", project_id, "attachment", row.id); db.commit(); db.refresh(row)
     return ok(serialize(row), "资料已上传")
@@ -596,19 +918,30 @@ def upload_attachment(project_id: int, file: UploadFile = File(...), category: s
 
 @router.get("/projects/{project_id}/attachments")
 def list_attachments(project_id: int, keyword: str | None = None, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    project_or_404(db, project_id); stmt = select(Attachment).where(Attachment.project_id == project_id)
+    project_or_404(db, project_id); stmt = select(Attachment, DocumentFolderItem.folder_id).outerjoin(DocumentFolderItem, DocumentFolderItem.attachment_id == Attachment.id).where(Attachment.project_id == project_id)
     if keyword: stmt = stmt.where(Attachment.file_name.contains(keyword))
-    return ok([serialize(row) for row in db.scalars(stmt.order_by(Attachment.created_at.desc())).all()])
+    rows = db.execute(stmt.order_by(Attachment.created_at.desc())).all()
+    return ok([{**serialize(attachment), "folder_id": folder_id} for attachment, folder_id in rows])
+
+
+@router.patch("/attachments/{attachment_id}")
+def update_attachment(attachment_id: int, payload: AttachmentUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    attachment = entity_or_404(db, Attachment, attachment_id, "资料不存在")
+    attachment.category = payload.category.strip()
+    audit(db, user, "更新资料分类", f"资料「{attachment.file_name}」分类更新为「{attachment.category}」", attachment.project_id, "attachment", attachment.id)
+    db.commit(); db.refresh(attachment)
+    return ok(serialize(attachment), "资料分类已更新")
 
 
 @router.get("/projects/{project_id}/document-search")
 def search_documents(project_id: int, keyword: str, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
     project_or_404(db, project_id)
     if not keyword.strip(): return ok([])
-    rows = db.execute(select(Attachment, AttachmentText.content).outerjoin(AttachmentText, AttachmentText.attachment_id == Attachment.id).where(Attachment.project_id == project_id, (Attachment.file_name.contains(keyword) | AttachmentText.content.contains(keyword))).order_by(Attachment.created_at.desc())).all()
+    rows = db.execute(select(Attachment, AttachmentText.content, DocumentFolderItem.folder_id).outerjoin(AttachmentText, AttachmentText.attachment_id == Attachment.id).outerjoin(DocumentFolderItem, DocumentFolderItem.attachment_id == Attachment.id).where(Attachment.project_id == project_id, (Attachment.file_name.contains(keyword) | AttachmentText.content.contains(keyword))).order_by(Attachment.created_at.desc())).all()
     result = []
-    for attachment, content in rows:
+    for attachment, content, folder_id in rows:
         item = serialize(attachment)
+        item["folder_id"] = folder_id
         if content:
             index = content.lower().find(keyword.lower())
             item["snippet"] = content[max(0, index - 40): index + len(keyword) + 80] if index >= 0 else ""

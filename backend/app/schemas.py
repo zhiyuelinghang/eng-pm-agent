@@ -26,6 +26,15 @@ class ProjectSettingsInput(BaseModel):
     reminder_rules: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class DocumentFolderInput(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    parent_id: int | None = None
+
+
+class AttachmentUpdate(BaseModel):
+    category: str = Field(min_length=1, max_length=100)
+
+
 class MemberInput(BaseModel):
     username: str | None = None
     real_name: str
@@ -105,6 +114,11 @@ class TaskInput(BaseModel):
     workflow_steps: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class TaskFlowGenerateInput(BaseModel):
+    requirement: str = Field(min_length=4, max_length=4000)
+    template_type: str | None = None
+
+
 class TaskTransitionInput(BaseModel):
     status: str
     note: str | None = None
@@ -167,6 +181,11 @@ class ProjectChangeInput(BaseModel):
     content: str = Field(min_length=1)
     status: str = "pending"
     source_refs: list[str] = Field(default_factory=list)
+
+
+class ProjectInformationDispositionInput(BaseModel):
+    action: str = Field(pattern="^(confirm|deny|revise)$")
+    content: str | None = None
 
 
 class OperationLogInput(BaseModel):

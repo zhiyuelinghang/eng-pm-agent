@@ -35,6 +35,40 @@ class Project(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), default="active")
 
 
+class ProjectStatusSnapshot(TimestampMixin, Base):
+    """项目状态页的管理口径快照；实际业务数据仍保存在工序、风险、任务等表中。"""
+
+    __tablename__ = "project_status_snapshots"
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
+    progress_rate: Mapped[int] = mapped_column(Integer, default=0)
+    progress_status: Mapped[str] = mapped_column(String(32), default="正常")
+    planned_delta: Mapped[str] = mapped_column(String(64), default="基本一致")
+    risk_warnings: Mapped[int] = mapped_column(Integer, default=0)
+    safety_issues: Mapped[int] = mapped_column(Integer, default=0)
+    quality_issues: Mapped[int] = mapped_column(Integer, default=0)
+    task_completion_rate: Mapped[int] = mapped_column(Integer, default=0)
+    main_risk: Mapped[str] = mapped_column(Text, default="暂无新增风险预警")
+    main_safety: Mapped[str] = mapped_column(Text, default="暂无新增安全隐患")
+    main_quality: Mapped[str] = mapped_column(Text, default="暂无待核查质量项")
+    overall: Mapped[str] = mapped_column(Text, default="项目整体状态待核对")
+
+
+class ProjectInformationRecord(TimestampMixin, Base):
+    """项目接收到的多源信息，独立于工程资料库，供项目状态页核验和处置。"""
+
+    __tablename__ = "project_information_records"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    source_type: Mapped[str] = mapped_column(String(50))
+    source_name: Mapped[str] = mapped_column(String(300))
+    author: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    recorded_at: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(32), default="待确认")
+    confidence: Mapped[str] = mapped_column(String(16), default="中")
+    content: Mapped[str] = mapped_column(Text)
+    source_refs: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+
 class ProjectSettings(TimestampMixin, Base):
     __tablename__ = "project_settings"
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
@@ -264,6 +298,21 @@ class Attachment(TimestampMixin, Base):
     source_type: Mapped[str] = mapped_column(String(50), default="manual")
     source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     file_hash: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+
+
+class DocumentFolder(TimestampMixin, Base):
+    __tablename__ = "document_folders"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("document_folders.id", ondelete="SET NULL"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(200))
+
+
+class DocumentFolderItem(Base):
+    __tablename__ = "document_folder_items"
+    attachment_id: Mapped[int] = mapped_column(ForeignKey("attachments.id", ondelete="CASCADE"), primary_key=True)
+    folder_id: Mapped[int] = mapped_column(ForeignKey("document_folders.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
 
 
 class AttachmentText(Base):

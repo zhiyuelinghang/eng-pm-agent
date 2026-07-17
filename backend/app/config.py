@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    app_name: str = "工程智管家 API"
+    app_name: str = "Dobby API"
     environment: str = "development"
     database_url: str = "sqlite:///./data/engpm.db"
     jwt_secret: str = "change-this-in-production"

@@ -5,7 +5,7 @@
         <n-icon :size="20"><Robot /></n-icon>
       </div>
       <div class="logo-text-wrapper">
-        <span class="logo-name">工程智管家</span>
+        <span class="logo-name">Dobby</span>
         <span class="logo-tag">工程管理平台</span>
       </div>
     </div>

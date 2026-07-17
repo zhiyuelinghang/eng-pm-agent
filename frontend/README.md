@@ -1,6 +1,6 @@
 # Frontend
 
-工程智管家前端采用独立 Web 工程，不使用 Python 前端。
+Dobby 前端采用独立 Web 工程，不使用 Python 前端。
 
 推荐技术栈：
 

@@ -15,8 +15,12 @@ api.interceptors.response.use(
   response => response,
   (error) => {
     if (error.response?.status === 401) {
-      sessionStorage.removeItem('access_token')
-      sessionStorage.removeItem('logged_in')
+      const requestToken = String(error.config?.headers?.Authorization || '').replace(/^Bearer\s+/i, '')
+      // 登录切换期间，旧请求可能比新登录响应更晚返回；不能用旧请求的 401 清掉新令牌。
+      if (!requestToken || requestToken === sessionStorage.getItem('access_token')) {
+        sessionStorage.removeItem('access_token')
+        sessionStorage.removeItem('logged_in')
+      }
     }
     return Promise.reject(error)
   },

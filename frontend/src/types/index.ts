@@ -41,6 +41,14 @@ export interface WbsItem {
   status: 'not_started' | 'in_progress' | 'done' | 'delayed'
   responsibleId: string
   projectId: string
+  supervision?: {
+    yesterday: string
+    today: string
+    quality: string
+    risk: string
+    focus: string
+    key: boolean
+  }
 }
 
 export interface RiskSource {
@@ -104,8 +112,21 @@ export interface Task {
   status: TaskStatus
   missingCount: number
   triggerReason: string
-  workflowSteps: Array<{ name: string; owner?: string; status: 'pending' | 'processing' | 'completed' | 'blocked'; note?: string }>
+  workflowSteps: Array<{ name: string; owner?: string; owner_user_id?: string; due_at?: string; order?: number; next_step?: number; status: 'pending' | 'processing' | 'completed' | 'blocked'; note?: string; material?: string; phase?: string; closure?: string }>
   createdAt: string
+}
+
+export interface ProjectInformationRecord {
+  id: string
+  projectId: string
+  sourceType: string
+  sourceName: string
+  author: string
+  recordedAt: string
+  status: string
+  confidence: string
+  content: string
+  sourceRefs: string[]
 }
 
 export interface DailyReport {

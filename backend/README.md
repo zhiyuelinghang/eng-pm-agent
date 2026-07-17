@@ -1,4 +1,4 @@
-# 工程智管家后端
+# Dobby 后端
 
 后端使用 FastAPI + SQLAlchemy，默认以 SQLite 启动，部署时通过 `DATABASE_URL` 切换到 PostgreSQL。
 
