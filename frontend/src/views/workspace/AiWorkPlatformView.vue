@@ -831,7 +831,7 @@ const focusTasks = computed(() => store.tasks.filter(task => ['overdue', 'pendin
 const importantWbs = computed(() => store.wbsItems.filter(item => item.level <= 2).slice(0, 5))
 const activeWbs = computed(() => store.wbsItems.find(item => item.status === 'in_progress' && item.level > 1) ?? store.wbsItems.find(item => item.status === 'in_progress') ?? importantWbs.value[0])
 const criticalRisks = computed(() => store.riskSources.filter(risk => risk.level === 'critical' || risk.level === 'high'))
-const projectStatusTab = ref<ProjectStatusTab>('execution')
+const projectStatusTab = ref<ProjectStatusTab>('latest')
 const projectStatusTabs: Array<{ key: ProjectStatusTab; label: string; hint: string }> = [
   { key: 'latest', label: '最新信息', hint: '采集记录与处理' },
   { key: 'process', label: '过程监管', hint: '工序、质量与风险' },

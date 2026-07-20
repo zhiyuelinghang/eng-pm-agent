@@ -17,6 +17,7 @@
       <n-dropdown
         :options="projectOptions"
         :theme-overrides="dropdownTheme"
+        :menu-props="projectMenuProps"
         @select="handleProjectChange"
         trigger="click"
       >
@@ -61,22 +62,26 @@ const pageTitle = computed(() => {
 })
 
 const projectOptions = computed(() =>
-  store.projects.map((p: any) => ({
-    label: () => h('div', { style: 'display:flex;align-items:center;gap:10px;min-width:190px;padding:3px 0' }, [
-      h('div', { style: 'width:6px;height:6px;border-radius:50%;background:#047857;flex-shrink:0;margin-top:2px' }),
-      h('div', { style: 'flex:1;min-width:0' }, [
-        h('div', { style: 'font-size:13px;font-weight:500;color:#1B2430;line-height:1.4' }, p.name),
-        h('div', { style: 'font-size:11px;color:#8792A2;line-height:1.4' }, p.ownerUnit),
+  store.projects.flatMap((p: any, index: number) => [
+    ...(index > 0 ? [{ type: 'divider' as const, key: `project-divider-${p.id}` }] : []),
+    {
+      label: () => h('div', { style: 'display:flex;align-items:center;gap:10px;min-width:190px;padding:3px 0' }, [
+        h('div', { style: 'width:6px;height:6px;border-radius:50%;background:#047857;flex-shrink:0;margin-top:2px' }),
+        h('div', { style: 'flex:1;min-width:0' }, [
+          h('div', { style: 'font-size:13px;font-weight:500;color:#1B2430;line-height:1.4' }, p.name),
+          h('div', { style: 'font-size:11px;color:#8792A2;line-height:1.4' }, p.ownerUnit),
+        ]),
+        p.id === store.currentProjectId
+          ? h(NIcon, { size: 14, color: '#E8590C' }, { default: () => h(Check) })
+          : h('div', { style: 'width:14px' }),
       ]),
-      p.id === store.currentProjectId
-        ? h(NIcon, { size: 14, color: '#E8590C' }, { default: () => h(Check) })
-        : h('div', { style: 'width:14px' }),
-    ]),
-    key: p.id,
-  }))
+      key: p.id,
+    },
+  ])
 )
 
 const handleProjectChange = (id: string) => { void store.selectProject(id) }
+const projectMenuProps = () => ({ class: 'project-switcher-dropdown' })
 
 const dropdownTheme = {
   borderRadius: '8px',
@@ -184,6 +189,10 @@ const dropdownTheme = {
 .proj-info { display: flex; flex-direction: column; align-items: flex-start; flex: 1; min-width: 0; }
 .proj-name { font-size: 12px; font-weight: 600; color: var(--text-primary); white-space: nowrap; }
 .proj-meta { font-size: 11px; color: var(--text-muted); }
+
+:global(.project-switcher-dropdown .n-dropdown-divider) {
+  margin: 9px 0;
+}
 
 @media (max-width: 860px) {
   .global-search { display: none; }
