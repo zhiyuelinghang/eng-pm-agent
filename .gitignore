@@ -3,7 +3,9 @@ __pycache__/
 .env
 .venv/
 node_modules/
+frontend/dist/
 data/
+/更新文件/
 
 # Hermes 第三方项目（NousResearch/hermes-agent，2.2G），从上游获取，不纳入本仓库
 /hermes/*
