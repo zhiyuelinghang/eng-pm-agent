@@ -168,7 +168,7 @@ const handleLogin = async () => {
   flex-shrink: 0;
 }
 .logo-name { display: block; font-size: 15px; font-weight: 700; color: var(--text-primary); }
-.logo-sub { display: block; font-size: 11px; color: var(--text-muted); margin-top: 2px; font-family: 'JetBrains Mono', monospace; }
+.logo-sub { display: block; font-size: 12px; color: var(--text-muted); margin-top: 2px; font-family: 'JetBrains Mono', monospace; }
 
 /* back button stage 2 */
 .back-btn {
@@ -184,7 +184,7 @@ const handleLogin = async () => {
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   transition: var(--transition);
@@ -269,7 +269,7 @@ const handleLogin = async () => {
   color: var(--text-primary);
 }
 .role-desc {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   line-height: 1.4;
 }
@@ -361,7 +361,7 @@ const handleLogin = async () => {
   background: var(--color-primary-dim);
   color: var(--color-primary);
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
 }
 

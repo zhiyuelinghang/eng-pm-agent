@@ -18,9 +18,9 @@ from .db import get_db
 from .models import (Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectMember, ProjectSettings, ProjectStatusSnapshot,
                      QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsRiskLink)
 from .schemas import (AttachmentUpdate, DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
-                      LoginRequest, MemberInput, ProjectInput, RiskInput, TaskFlowGenerateInput, TaskInput, TaskTransitionInput,
+                      LoginRequest, MemberInput, PasswordChangeInput, ProfileUpdate, ProjectInput, RiskInput, TaskFlowGenerateInput, TaskInput, TaskTransitionInput,
                       WbsInput, WbsRiskLinkInput, OperationLogInput, PlatformFieldMappingInput, ProjectSettingsInput,
-                      CollaborationMessageInput, CollaborationSessionInput, DocumentFolderInput, ProjectChangeInput, ProjectInformationDispositionInput, QualityMetricInput, TaskStepUpdate)
+                      CollaborationMessageInput, CollaborationSessionInput, DocumentFolderInput, ProjectChangeInput, ProjectInformationDispositionInput, QualityMetricInput, TaskNoteInput, TaskReassignInput, TaskStepUpdate)
 from .security import create_access_token, decode_access_token, hash_password, verify_password
 
 
@@ -229,6 +229,29 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict[str, Any
 @router.get("/me")
 def me(user: User = Depends(get_current_user)) -> dict[str, Any]:
     return ok(serialize(user))
+
+
+@router.patch("/me")
+def update_me(payload: ProfileUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    user.real_name = payload.real_name.strip()
+    user.phone = payload.phone.strip() if payload.phone and payload.phone.strip() else None
+    user.email = payload.email.strip() if payload.email and payload.email.strip() else None
+    user.title = payload.title.strip() if payload.title and payload.title.strip() else None
+    user.org_name = payload.org_name.strip() if payload.org_name and payload.org_name.strip() else None
+    db.commit()
+    db.refresh(user)
+    return ok(serialize(user), "个人资料已保存")
+
+
+@router.post("/me/password")
+def change_my_password(payload: PasswordChangeInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    if not verify_password(payload.current_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前密码不正确")
+    if verify_password(payload.new_password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与当前密码相同")
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
+    return ok(None, "登录密码已更新")
 
 
 @router.get("/projects")
@@ -617,6 +640,39 @@ def update_task_step(task_id: int, step_index: int, payload: TaskStepUpdate, db:
     return ok(serialize(task), "任务步骤已更新")
 
 
+@router.post("/tasks/{task_id}/reassign")
+def reassign_task(task_id: int, payload: TaskReassignInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    task = entity_or_404(db, Task, task_id, "任务不存在")
+    project_member = db.scalar(select(ProjectMember).where(ProjectMember.project_id == task.project_id, ProjectMember.user_id == payload.assignee_user_id))
+    if not project_member:
+        raise HTTPException(status_code=422, detail="转交人不属于当前项目")
+    previous_assignee = task.assignee_user_id
+    task.assignee_user_id = payload.assignee_user_id
+    steps = list(task.workflow_steps or [])
+    for index, step in enumerate(steps):
+        if step.get("status") != "completed":
+            steps[index] = {**step, "owner_user_id": str(payload.assignee_user_id)}
+            break
+    task.workflow_steps = steps
+    note = payload.note or f"任务由用户 {previous_assignee or '未指派'} 转交给用户 {payload.assignee_user_id}"
+    db.add(TaskStatusHistory(task_id=task.id, from_status=task.status, to_status=task.status, note=note, changed_by=user.id))
+    audit(db, user, "转交任务", f"任务「{task.title}」转交给用户 {payload.assignee_user_id}", task.project_id, "task", task.id)
+    db.commit(); db.refresh(task)
+    return ok(serialize(task), "任务已转交")
+
+
+@router.post("/tasks/{task_id}/notes")
+def add_task_note(task_id: int, payload: TaskNoteInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    task = entity_or_404(db, Task, task_id, "任务不存在")
+    note = payload.note.strip()
+    if not note:
+        raise HTTPException(status_code=422, detail="任务处理说明不能为空")
+    db.add(TaskStatusHistory(task_id=task.id, from_status=task.status, to_status=task.status, note=note, changed_by=user.id))
+    audit(db, user, "记录任务处置", f"任务「{task.title}」新增处理说明", task.project_id, "task", task.id)
+    db.commit()
+    return ok({"task_id": task.id}, "任务处理说明已记录")
+
+
 @router.get("/projects/{project_id}/daily-reports")
 def list_daily_reports(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
     return ok(list_for_project(DailyReport, project_id, db))
@@ -777,8 +833,49 @@ def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str
 
 @router.post("/projects/{project_id}/material-assistant")
 def material_assistant_reply(project_id: int, payload: CollaborationMessageInput, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    answer, _ = collaboration_reply(project_id, payload.content, db)
-    return ok({"content": answer}, "Dobby 已生成临时资料建议")
+    project = project_or_404(db, project_id)
+    members = db.scalars(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.status == "active")).all()
+    wbs_items = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id).order_by(WbsItem.code).limit(50)).all()
+    risk_sources = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id).order_by(RiskSource.updated_at.desc()).limit(50)).all()
+    quality_metrics = db.scalars(select(QualityMetric).where(QualityMetric.project_id == project_id).order_by(QualityMetric.updated_at.desc()).limit(50)).all()
+    field_mappings = db.scalars(select(PlatformFieldMapping).where(PlatformFieldMapping.project_id == project_id).order_by(PlatformFieldMapping.platform_name, PlatformFieldMapping.target_field).limit(50)).all()
+
+    missing: list[str] = []
+    if not project.owner_unit: missing.append("所属单位")
+    if not project.description: missing.append("工程说明")
+    if not members: missing.append("项目成员与岗位")
+    if not wbs_items: missing.append("WBS 工序基线")
+    if not risk_sources: missing.append("风险源")
+    if not quality_metrics: missing.append("质量指标")
+    if not field_mappings: missing.append("填报字段映射")
+
+    setup_context = (
+        f"项目名称：{project.project_name}；所属单位：{project.owner_unit or '未填写'}；工程说明：{(project.description or '未填写')[:360]}\n"
+        f"项目成员：{len(members)} 人；WBS 工序：{len(wbs_items)} 项；风险源：{len(risk_sources)} 项；"
+        f"质量指标：{len(quality_metrics)} 项；字段映射：{len(field_mappings)} 项\n"
+        "当前缺失项：" + ("、".join(missing) if missing else "无")
+    )
+    settings = get_settings()
+    if settings.ai_api_key:
+        prompt = (
+            "你是工程项目初始化与基础配置助手。职责仅限检查和补全项目基本信息、项目成员与责任、WBS 工序基线、"
+            "风险源、质量指标、填报字段映射等基础配置。不得声称连接、读取或管理项目资料库，不得承担资料归档、"
+            "资料识别、任务协同或项目状态分析。未知内容必须标为待确认，不能编造。请给出简洁、可执行的配置建议。"
+            f"\n用户请求：{payload.content}\n当前基础配置：{setup_context}"
+        )
+        try:
+            response = httpx.post(f"{settings.ai_base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {settings.ai_api_key}"}, json={"model": settings.ai_model, "messages": [{"role": "system", "content": "仅协助工程项目初始化与基础数据补全，并明确功能边界。"}, {"role": "user", "content": prompt}]}, timeout=30)
+            response.raise_for_status()
+            answer = response.json()["choices"][0]["message"]["content"]
+            return ok({"content": answer}, "Dobby 已生成基础配置建议")
+        except (httpx.HTTPError, KeyError, IndexError, TypeError):
+            pass
+
+    if missing:
+        answer = f"当前项目初始化仍缺少：{'、'.join(missing)}。建议先补齐项目基本信息和成员责任，再依次维护 WBS、风险源、质量指标与字段映射；不涉及工程资料库连接或资料归档。"
+    else:
+        answer = "当前项目的基础配置项已具备。建议继续核对成员责任、WBS 编码与日期、风险等级、质量要求及字段映射是否准确；资料管理和任务协同请在对应模块中处理。"
+    return ok({"content": answer}, "Dobby 已生成基础配置建议")
 
 
 def extract_attachment_text(content: bytes, suffix: str) -> str:

@@ -22,6 +22,8 @@ const router = createRouter({
         { path: 'tasks', name: 'TaskManagement', component: AiWorkPlatformView, meta: { title: '任务管理', group: 'workspace' } },
         { path: 'project', name: 'ProjectStatus', component: AiWorkPlatformView, meta: { title: '项目状态', group: 'workspace' } },
         { path: 'docs', name: 'EngineeringDocs', component: () => import('@/views/workspace/DocumentLibraryView.vue'), meta: { title: '工程资料', group: 'workspace' } },
+        { path: 'tools', name: 'BusinessTools', component: () => import('@/views/workspace/BusinessToolsView.vue'), meta: { title: '业务工具', group: 'workspace' } },
+        { path: 'profile', name: 'PersonalSettings', component: () => import('@/views/workspace/PersonalSettingsView.vue'), meta: { title: '个人设置', group: 'workspace' } },
         { path: 'settings', name: 'ProjectSetup', component: ProjectSetupView, meta: { title: '工程配置', group: 'workspace' } },
         { path: 'dashboard', redirect: '/workbench' },
         { path: 'risks', redirect: '/tasks' },

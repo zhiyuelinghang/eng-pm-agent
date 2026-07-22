@@ -19,12 +19,12 @@
     </nav>
 
     <div class="sidebar-footer">
-      <div class="user-ava">张</div>
+      <div class="user-ava">{{ userInitial }}</div>
       <div class="user-info">
-        <div class="user-name">张伟</div>
-        <div class="user-role">项目现场负责人</div>
+        <div class="user-name">{{ currentUserName }}</div>
+        <div class="user-role">{{ currentUserTitle }}</div>
       </div>
-      <button class="logout-btn" @click="handleLogout" title="退出登录">
+      <button class="logout-btn" title="退出登录" @click="handleLogout">
         <n-icon :size="15"><Logout /></n-icon>
       </button>
     </div>
@@ -37,11 +37,16 @@ import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { NIcon } from 'naive-ui'
 import {
-  ChartBar, Folder, Home, ListCheck, Logout, MessageCircle, Robot, Settings,
+  ChartBar, Folder, Home, ListCheck, Logout, MessageCircle, Robot, Settings, Tools, UserCircle,
 } from '@vicons/tabler'
 
 const router = useRouter()
 const store = useAppStore()
+const currentUserId = computed(() => sessionStorage.getItem('current_user_id') || '')
+const currentMember = computed(() => store.members.find(member => member.id === currentUserId.value))
+const currentUserName = computed(() => sessionStorage.getItem('current_user_name') || currentMember.value?.name || '当前用户')
+const currentUserTitle = computed(() => currentMember.value?.title || '项目成员')
+const userInitial = computed(() => currentUserName.value.trim().slice(0, 1) || '用')
 
 const menus = computed(() => [
   { path: '/workbench', title: '工作首页', icon: Home, badge: store.overdueTasks.length + store.waitingConfirmTasks.length },
@@ -49,12 +54,17 @@ const menus = computed(() => [
   { path: '/tasks', title: '任务管理', icon: ListCheck, badge: store.pendingTasks.length + store.processingTasks.length },
   { path: '/project', title: '项目状态', icon: ChartBar, badge: 0 },
   { path: '/docs', title: '工程资料', icon: Folder, badge: store.pendingDailyReports.length + store.pendingFills.length },
+  { path: '/tools', title: '业务工具', icon: Tools, badge: 0 },
+  { path: '/profile', title: '个人设置', icon: UserCircle, badge: 0 },
   { path: '/settings', title: '工程配置', icon: Settings, badge: 0 },
 ])
 
 const handleLogout = () => {
   sessionStorage.removeItem('logged_in')
+  sessionStorage.removeItem('access_token')
   sessionStorage.removeItem('user_role')
+  sessionStorage.removeItem('current_user_id')
+  sessionStorage.removeItem('current_user_name')
   router.push('/login')
 }
 </script>
@@ -95,7 +105,7 @@ const handleLogout = () => {
   flex-direction: column;
 }
 .logo-name { font-size: 14px; font-weight: 750; color: #fff; letter-spacing: 0; line-height: 1.2; }
-.logo-tag { font-size: 10px; color: rgba(255,255,255,0.55); margin-top: 2px; font-weight: 500; }
+.logo-tag { font-size: 12px; color: rgba(255,255,255,0.68); margin-top: 3px; font-weight: 500; line-height: 1.4; }
 
 .nav-list {
   flex: 1;
@@ -107,11 +117,12 @@ const handleLogout = () => {
   display: flex;
   align-items: center;
   gap: 9px;
+  min-height: 42px;
   padding: 10px 10px;
   border-radius: 7px;
   color: rgba(255,255,255,0.68);
   text-decoration: none;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   transition: var(--transition);
   margin-bottom: 4px;
@@ -130,10 +141,10 @@ const handleLogout = () => {
   margin-left: auto;
   background: var(--color-primary);
   color: #fff;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
-  min-width: 18px;
-  height: 18px;
+  min-width: 20px;
+  height: 20px;
   border-radius: 4px;
   display: flex;
   align-items: center;
@@ -162,22 +173,24 @@ const handleLogout = () => {
   color: #fff;
   flex-shrink: 0;
 }
-.user-name  { font-size: 12px; font-weight: 650; color: #fff; }
-.user-role  { font-size: 11px; color: rgba(255,255,255,0.52); margin-top: 1px; }
+.user-name  { font-size: 13px; font-weight: 650; color: #fff; line-height: 1.4; }
+.user-role  { font-size: 12px; color: rgba(255,255,255,0.66); margin-top: 2px; line-height: 1.4; }
+.user-info { display: grid; flex: 1 1 auto; min-width: 0; }
+.user-name,.user-role { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .logout-btn {
-  margin-left: auto;
-  width: 28px;
-  height: 28px;
   display: flex;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  background: transparent;
-  border: none;
+  border: 0;
   border-radius: var(--radius-sm);
   color: rgba(255,255,255,0.56);
+  background: transparent;
   cursor: pointer;
   transition: var(--transition);
 }
-.logout-btn:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.logout-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
 </style>
 

@@ -13,67 +13,160 @@
               {{ mode.label }}
             </button>
           </div>
-          <div class="home-actions">
-            <router-link :to="homePrimaryAction.to" class="home-primary-button">
-              <n-icon :size="17"><component :is="homePrimaryAction.icon" /></n-icon>
-              {{ homePrimaryAction.label }}
-            </router-link>
-          </div>
         </div>
 
-        <div v-if="homeMode === 'work'" class="home-controlbar">
-          <div class="home-filter-tabs">
-            <button
-              v-for="tab in homeFilterTabs"
-              :key="tab.key"
-              :class="{ active: homeFilter === tab.key }"
-              @click="homeFilter = tab.key"
-            >
-              {{ tab.label }}
-              <span>{{ tab.count }}</span>
-            </button>
-          </div>
-          <div class="home-pager">
-            <span class="home-page-state">{{ homePageRangeText }}</span>
-            <button class="home-page-arrow" :disabled="homePageIndex === 0" @click="goHomePage(-1)">
-              <n-icon :size="18"><ChevronLeft /></n-icon>
-            </button>
-            <button class="home-page-arrow" :disabled="homePageIndex >= homePageCount - 1" @click="goHomePage(1)">
-              <n-icon :size="18"><ChevronRight /></n-icon>
-            </button>
-          </div>
-        </div>
+        <div v-if="homeMode === 'work'" class="home-workbench">
+          <aside class="home-queue-pane" aria-label="Dobby 推送的待处理工作">
+            <div class="home-controlbar">
+              <div class="home-status-tabs" role="tablist" aria-label="工作处理状态">
+                <button
+                  v-for="tab in homeStatusTabs"
+                  :key="tab.key"
+                  type="button"
+                  role="tab"
+                  :aria-selected="homeStatus === tab.key"
+                  :class="{ active: homeStatus === tab.key }"
+                  @click="homeStatus = tab.key"
+                >
+                  {{ tab.label }}
+                  <span>{{ tab.count }}</span>
+                </button>
+              </div>
+            </div>
 
-        <div v-if="homeMode === 'work'" ref="homeQueueViewport" class="home-queue-list">
-          <article v-for="item in pagedHomeWorkItems" :key="item.id" class="home-queue-card">
-            <div class="home-rank" :class="item.tone">{{ item.rank }}</div>
-            <div class="home-work-icon" :class="item.tone">
-              <n-icon :size="25"><component :is="item.icon" /></n-icon>
+            <div class="home-queue-list" role="listbox" :aria-label="`${homeStatusTabs.find(tab => tab.key === homeStatus)?.label || '任务'}列表`">
+              <button
+                v-for="(item, index) in pagedHomeWorkItems"
+                :key="item.id"
+                type="button"
+                :class="['home-queue-card', { active: selectedHomeWorkItemId === item.id }]"
+                :aria-selected="selectedHomeWorkItemId === item.id"
+                role="option"
+                @click="selectedHomeWorkItemId = item.id"
+              >
+                <span class="home-rank" :class="item.tone">{{ homePageIndex * homePageSize + index + 1 }}</span>
+                <span class="home-work-icon" :class="item.tone">
+                  <n-icon :size="22"><component :is="item.icon" /></n-icon>
+                </span>
+                <span class="home-work-main">
+                  <span class="home-chip-row">
+                    <span class="home-chip" :class="item.tone">{{ item.label }}</span>
+                  </span>
+                  <strong class="home-work-title">{{ item.title }}</strong>
+                  <span class="home-work-reason">{{ item.reason }}</span>
+                  <span class="home-work-meta">
+                    <span><n-icon :size="14"><User /></n-icon>{{ item.owner }}</span>
+                    <time>{{ item.deadline }}</time>
+                  </span>
+                </span>
+              </button>
             </div>
-            <div class="home-work-main">
-              <div class="home-chip-row">
-                <span class="home-chip" :class="item.tone">{{ item.label }}</span>
+            <nav class="home-pagination" aria-label="工作列表分页">
+              <span>{{ homePageRangeText }}</span>
+              <div>
+                <button type="button" :disabled="homePageIndex === 0" aria-label="上一页" @click="goHomePage(-1)">
+                  <n-icon :size="17"><ChevronLeft /></n-icon>
+                </button>
+                <button
+                  v-for="page in homePageCount"
+                  :key="page"
+                  type="button"
+                  :class="{ active: homePageIndex === page - 1 }"
+                  :aria-current="homePageIndex === page - 1 ? 'page' : undefined"
+                  @click="homePageIndex = page - 1"
+                >
+                  {{ page }}
+                </button>
+                <button type="button" :disabled="homePageIndex >= homePageCount - 1" aria-label="下一页" @click="goHomePage(1)">
+                  <n-icon :size="17"><ChevronRight /></n-icon>
+                </button>
               </div>
-              <h2>{{ item.title }}</h2>
-              <p>{{ item.reason }}</p>
-              <div class="home-tag-row">
-                <span v-for="tag in item.tags" :key="tag">{{ tag }}</span>
+            </nav>
+          </aside>
+
+          <section v-if="selectedHomeWorkItem" class="home-work-ai" aria-label="当前工作的 Dobby 交互">
+            <header class="home-work-ai-head">
+              <div class="home-work-ai-title">
+                <span class="home-ai-presence"><n-icon :size="16"><Robot /></n-icon>Dobby 正在跟进</span>
+                <h2>{{ selectedHomeWorkItem.title }}</h2>
+                <p>{{ selectedHomeWorkItem.owner }} · {{ selectedHomeWorkItem.role }} · {{ selectedHomeWorkItem.deadline }}</p>
+              </div>
+            </header>
+
+            <div ref="homeWorkThreadViewport" class="home-work-ai-thread">
+              <article
+                v-for="messageItem in homeWorkConversationMessages"
+                :key="messageItem.id"
+                :class="['message-row', messageItem.role]"
+              >
+                <div class="message-avatar" aria-hidden="true">{{ messageItem.role === 'assistant' ? '管' : '我' }}</div>
+                <div class="message-stack">
+                  <div v-if="messageItem.role === 'assistant'" class="message-role">Dobby</div>
+                  <div class="message-bubble">
+                    <p>{{ messageItem.content }}</p>
+                    <div v-if="messageItem.attachments?.length" class="message-attachments" aria-label="消息附件">
+                      <span v-for="attachment in messageItem.attachments" :key="attachment.id">
+                        <n-icon :size="16"><FileText /></n-icon>
+                        <b :title="attachment.name">{{ attachment.name }}</b>
+                        <small>{{ formatFileSize(attachment.size) }}</small>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </article>
+
+              <section class="home-work-context" aria-label="当前工作关联信息">
+                <div>
+                  <span>关联信息</span>
+                  <strong>{{ selectedHomeWorkItem.label }}</strong>
+                </div>
+                <div class="home-work-context-tags">
+                  <span v-for="tag in selectedHomeWorkItem.tags" :key="tag">{{ tag }}</span>
+                </div>
+              </section>
+
+              <div class="home-work-suggestions" aria-label="快捷提问">
+                <button
+                  v-for="suggestion in homeWorkSuggestions"
+                  :key="suggestion"
+                  type="button"
+                  @click="dispatchHomeWorkSuggestion(suggestion)"
+                >
+                  {{ suggestion }}
+                </button>
               </div>
             </div>
-            <div class="home-owner">
-              <div class="home-owner-name">
-                <n-icon :size="17"><User /></n-icon>
-                <strong>{{ item.owner }}</strong>
+
+            <form class="chat-composer home-work-composer" @submit.prevent="dispatchHomeWorkCommand">
+              <div class="composer-entry">
+                <div v-if="homeWorkFiles.length" class="composer-attachment-list" aria-label="待发送附件">
+                  <span v-for="(file, index) in homeWorkFiles" :key="`${file.name}-${file.lastModified}`">
+                    <n-icon :size="16"><FileText /></n-icon>
+                    <b :title="file.name">{{ file.name }}</b>
+                    <small>{{ formatFileSize(file.size) }}</small>
+                    <button type="button" :aria-label="`移除附件 ${file.name}`" @click="removeComposerFile('work', index)">×</button>
+                  </span>
+                </div>
+                <div class="composer-input-row">
+                  <label class="composer-attach-button" title="上传图片、PDF、表格或其他工程资料">
+                    <input type="file" multiple @change="selectComposerFiles('work', $event)">
+                    <n-icon :size="18"><Paperclip /></n-icon>
+                    <span>添加附件</span>
+                  </label>
+                  <textarea
+                    v-model="homeWorkCommand"
+                    :placeholder="`围绕“${selectedHomeWorkItem.title}”继续交互，也可以直接上传资料`"
+                    @keydown.enter.exact.prevent="dispatchHomeWorkCommand"
+                  ></textarea>
+                </div>
               </div>
-              <span>{{ item.role }}</span>
-              <time>{{ item.deadline }}</time>
-            </div>
-            <div class="home-card-actions">
-              <router-link :to="item.to" :class="['home-card-primary', item.tone]">{{ item.action }}</router-link>
-            </div>
-          </article>
+              <button type="submit" :disabled="homeWorkUploading || (!homeWorkCommand.trim() && !homeWorkFiles.length)">
+                <n-icon :size="17"><Send /></n-icon>
+                {{ homeWorkUploading ? '上传中…' : '发送' }}
+              </button>
+            </form>
+          </section>
         </div>
-        <button v-if="homeMode === 'work'" class="home-expand-button">展开已完成工作（12）</button>
 
         <section v-else class="home-chat-panel">
           <div class="chat-head home-chat-head" :class="{ 'is-empty': !homeQuickSession }">
@@ -109,6 +202,13 @@
                 <div v-if="message.role === 'assistant'" class="message-role">Dobby</div>
                 <div class="message-bubble">
                   <p>{{ message.content }}</p>
+                  <div v-if="message.attachments?.length" class="message-attachments" aria-label="消息附件">
+                    <span v-for="attachment in message.attachments" :key="attachment.id">
+                      <n-icon :size="16"><FileText /></n-icon>
+                      <b :title="attachment.name">{{ attachment.name }}</b>
+                      <small>{{ formatFileSize(attachment.size) }}</small>
+                    </span>
+                  </div>
                   <div v-if="message.generatedTaskIds?.length" class="generated-work">
                     <div class="generated-work-head">
                       <span>已生成工作</span>
@@ -129,84 +229,35 @@
             </article>
           </div>
           <form class="chat-composer home-chat-composer" @submit.prevent="dispatchQuickCommand">
-            <textarea
-              v-model="quickCommand"
-              placeholder="输入消息"
-              @keydown.enter.prevent="dispatchQuickCommand"
-            ></textarea>
-            <button type="submit">
+            <div class="composer-entry">
+              <div v-if="quickFiles.length" class="composer-attachment-list" aria-label="待发送附件">
+                <span v-for="(file, index) in quickFiles" :key="`${file.name}-${file.lastModified}`">
+                  <n-icon :size="16"><FileText /></n-icon>
+                  <b :title="file.name">{{ file.name }}</b>
+                  <small>{{ formatFileSize(file.size) }}</small>
+                  <button type="button" :aria-label="`移除附件 ${file.name}`" @click="removeComposerFile('quick', index)">×</button>
+                </span>
+              </div>
+              <div class="composer-input-row">
+                <label class="composer-attach-button" title="上传图片、PDF、表格或其他工程资料">
+                  <input type="file" multiple @change="selectComposerFiles('quick', $event)">
+                  <n-icon :size="18"><Paperclip /></n-icon>
+                  <span>添加附件</span>
+                </label>
+                <textarea
+                  v-model="quickCommand"
+                  placeholder="输入问题，也可以上传资料让 Dobby 识别和分析"
+                  @keydown.enter.exact.prevent="dispatchQuickCommand"
+                ></textarea>
+              </div>
+            </div>
+            <button type="submit" :disabled="quickUploading || (!quickCommand.trim() && !quickFiles.length)">
               <n-icon :size="17"><Send /></n-icon>
-              发送
+              {{ quickUploading ? '上传中…' : '发送' }}
             </button>
           </form>
         </section>
       </main>
-
-      <aside class="home-side">
-        <section class="home-side-panel collaborators">
-          <div class="home-side-head">
-            <h2>待协同对象 <span>（{{ homeCollaborators.length }} 人）</span></h2>
-            <router-link to="/ai">查看全部</router-link>
-          </div>
-          <div class="home-collaborator-list">
-            <article v-for="person in homeCollaborators" :key="person.name" class="home-collaborator">
-              <div class="home-avatar">{{ person.name.slice(0, 1) }}</div>
-              <div>
-                <strong>{{ person.name }}</strong>
-                <p>{{ person.role }} · 协同事项：{{ person.task }}</p>
-              </div>
-              <span>在线</span>
-            </article>
-          </div>
-        </section>
-
-        <section class="home-side-panel">
-          <div class="home-side-head">
-            <h2>建议处理顺序</h2>
-            <button class="home-regenerate" @click="openHomePriorityRegenerate">
-              <n-icon :size="15"><Refresh /></n-icon>
-              重新生成
-            </button>
-          </div>
-          <form v-if="showHomePriorityBasisInput" class="home-priority-basis-form" @submit.prevent="submitHomePriorityBasis">
-            <input
-              v-model="homePriorityBasisInput"
-              type="text"
-              placeholder="输入建议依据，如风险等级、资料缺口、截止时间"
-            />
-            <button type="submit">生成</button>
-            <button type="button" @click="cancelHomePriorityBasis">取消</button>
-          </form>
-          <ol class="home-priority-list">
-            <li v-for="item in homePriorityItems" :key="item.rank">
-              <b :class="item.tone">{{ item.rank }}</b>
-              <div>
-                <strong>{{ item.title }}</strong>
-                <p>影响：{{ item.effect }}</p>
-              </div>
-              <em :class="item.tone">{{ item.tag }}</em>
-            </li>
-          </ol>
-        </section>
-
-        <section class="home-side-panel home-activity-panel">
-          <div class="home-side-head home-activity-head">
-            <h2>协同动态</h2>
-            <router-link to="/ai">更多</router-link>
-          </div>
-          <ol class="home-ai-feed">
-            <li v-for="item in homeActivityFeed" :key="item.text">
-              <span></span>
-              <p>{{ item.text }}</p>
-              <time>{{ item.time }}</time>
-            </li>
-          </ol>
-          <div class="home-activity-foot">
-            <span>更新于 2026-06-10 09:42:30</span>
-            <b>自动刷新中</b>
-          </div>
-        </section>
-      </aside>
     </section>
 
     <section v-else-if="section === 'ai'" class="chat-layout collaboration-screen">
@@ -422,22 +473,155 @@
       </aside>
     </section>
 
-    <section v-else-if="section === 'tasks'" class="page-stack task-page">
-      <div class="task-filterbar">
-        <span>当前显示 {{ filteredTasks.length }} / {{ store.tasks.length }} 条</span>
-        <div class="filter-tabs">
-          <button v-for="tab in taskTabs" :key="tab.key" :class="{ active: taskFilter === tab.key }" @click="taskFilter = tab.key">
-            <span>{{ tab.label }}</span><b class="task-filter-count">{{ taskTabCounts[tab.key] }}</b>
+    <section v-else-if="section === 'tasks'" class="task-page task-management-page">
+      <header class="task-management-nav">
+        <nav aria-label="任务管理模块">
+          <button v-for="tab in taskManagementTabs" :key="tab.key" type="button" :class="{ active: taskManagementTab === tab.key }" @click="taskManagementTab = tab.key">
+            <span><n-icon :size="17"><component :is="tab.icon" /></n-icon>{{ tab.label }}</span>
+            <small>{{ tab.hint }}</small>
+            <b>{{ tab.count }}</b>
           </button>
+        </nav>
+        <div class="task-management-scope"><span>当前项目</span><strong>{{ currentProject?.name || '未选择项目' }}</strong></div>
+      </header>
+
+      <main v-if="taskManagementTab === 'mine'" class="task-mine-view">
+        <div class="home-workbench task-mine-workbench">
+          <aside class="home-queue-pane" aria-label="我的任务列表">
+            <div class="home-controlbar">
+              <div class="home-status-tabs" role="tablist" aria-label="我的任务状态">
+                <button
+                  v-for="tab in taskMineStatusTabs"
+                  :key="tab.key"
+                  type="button"
+                  role="tab"
+                  :aria-selected="taskMineStatus === tab.key"
+                  :class="{ active: taskMineStatus === tab.key }"
+                  @click="taskMineStatus = tab.key"
+                >
+                  {{ tab.label }}
+                  <span>{{ tab.count }}</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="home-queue-list" role="listbox" :aria-label="`${taskMineStatusTabs.find(tab => tab.key === taskMineStatus)?.label || '任务'}列表`">
+              <button
+                v-for="(item, index) in pagedTaskMineWorkItems"
+                :key="item.id"
+                type="button"
+                :class="['home-queue-card', { active: selectedTaskMineWorkItemId === item.id }]"
+                :aria-selected="selectedTaskMineWorkItemId === item.id"
+                role="option"
+                @click="selectedTaskMineWorkItemId = item.id"
+              >
+                <span class="home-rank" :class="item.tone">{{ taskMinePageIndex * taskMinePageSize + index + 1 }}</span>
+                <span class="home-work-icon" :class="item.tone">
+                  <n-icon :size="22"><component :is="item.icon" /></n-icon>
+                </span>
+                <span class="home-work-main">
+                  <span class="home-chip-row"><span class="home-chip" :class="item.tone">{{ item.label }}</span></span>
+                  <strong class="home-work-title">{{ item.title }}</strong>
+                  <span class="home-work-reason">{{ item.reason }}</span>
+                  <span class="home-work-meta">
+                    <span><n-icon :size="14"><User /></n-icon>{{ item.owner }}</span>
+                    <time>{{ item.deadline }}</time>
+                  </span>
+                </span>
+              </button>
+              <div v-if="!pagedTaskMineWorkItems.length" class="task-mine-queue-empty">
+                <ListCheck :size="30" />
+                <strong>{{ taskMineEmptyText }}</strong>
+                <p>切换其他状态，或等待 Dobby 推送新的流程节点。</p>
+              </div>
+            </div>
+
+            <nav class="home-pagination" aria-label="我的任务分页">
+              <span>{{ taskMinePageRangeText }}</span>
+              <div>
+                <button type="button" :disabled="taskMinePageIndex === 0" aria-label="上一页" @click="goTaskMinePage(-1)"><n-icon :size="17"><ChevronLeft /></n-icon></button>
+                <button v-for="page in taskMinePageCount" :key="page" type="button" :class="{ active: taskMinePageIndex === page - 1 }" :aria-current="taskMinePageIndex === page - 1 ? 'page' : undefined" @click="taskMinePageIndex = page - 1">{{ page }}</button>
+                <button type="button" :disabled="taskMinePageIndex >= taskMinePageCount - 1" aria-label="下一页" @click="goTaskMinePage(1)"><n-icon :size="17"><ChevronRight /></n-icon></button>
+              </div>
+            </nav>
+          </aside>
+
+          <section v-if="selectedTaskMineWorkItem" class="home-work-ai" aria-label="当前任务的 Dobby 交互">
+            <header class="home-work-ai-head">
+              <div class="home-work-ai-title">
+                <span class="home-ai-presence"><n-icon :size="16"><Robot /></n-icon>Dobby 正在跟进</span>
+                <h2>{{ selectedTaskMineWorkItem.title }}</h2>
+                <p>{{ selectedTaskMineWorkItem.owner }} · {{ selectedTaskMineWorkItem.role }} · {{ selectedTaskMineWorkItem.deadline }}</p>
+              </div>
+            </header>
+
+            <div ref="taskMineThreadViewport" class="home-work-ai-thread">
+              <article v-for="messageItem in taskMineConversationMessages" :key="messageItem.id" :class="['message-row', messageItem.role]">
+                <div class="message-avatar" aria-hidden="true">{{ messageItem.role === 'assistant' ? '管' : '我' }}</div>
+                <div class="message-stack">
+                  <div v-if="messageItem.role === 'assistant'" class="message-role">Dobby</div>
+                  <div class="message-bubble">
+                    <p>{{ messageItem.content }}</p>
+                    <div v-if="messageItem.attachments?.length" class="message-attachments" aria-label="消息附件">
+                      <span v-for="attachment in messageItem.attachments" :key="attachment.id"><n-icon :size="16"><FileText /></n-icon><b :title="attachment.name">{{ attachment.name }}</b><small>{{ formatFileSize(attachment.size) }}</small></span>
+                    </div>
+                  </div>
+                </div>
+              </article>
+
+              <section class="home-work-context" aria-label="当前任务关联信息">
+                <div><span>关联信息</span><strong>{{ selectedTaskMineWorkItem.label }}</strong></div>
+                <div class="home-work-context-tags">
+                  <span v-for="tag in selectedTaskMineWorkItem.tags" :key="tag">{{ tag }}</span>
+                </div>
+              </section>
+
+              <div class="home-work-suggestions" aria-label="快捷提问">
+                <button v-for="suggestion in taskMineSuggestions" :key="suggestion" type="button" @click="dispatchTaskMineSuggestion(suggestion)">{{ suggestion }}</button>
+              </div>
+            </div>
+
+            <form class="chat-composer home-work-composer" @submit.prevent="dispatchTaskMineCommand">
+              <div class="composer-entry">
+                <div v-if="taskMineFiles.length" class="composer-attachment-list" aria-label="待发送附件">
+                  <span v-for="(file, index) in taskMineFiles" :key="`${file.name}-${file.lastModified}`"><n-icon :size="16"><FileText /></n-icon><b :title="file.name">{{ file.name }}</b><small>{{ formatFileSize(file.size) }}</small><button type="button" :aria-label="`移除附件 ${file.name}`" @click="removeComposerFile('task', index)">×</button></span>
+                </div>
+                <div class="composer-input-row">
+                  <label class="composer-attach-button" title="上传任务证明材料或工程资料"><input type="file" multiple @change="selectComposerFiles('task', $event)"><n-icon :size="18"><Paperclip /></n-icon><span>添加附件</span></label>
+                  <textarea v-model="taskMineCommand" :placeholder="`围绕“${selectedTaskMineWorkItem.title}”继续交互，也可以直接上传资料`" @keydown.enter.exact.prevent="dispatchTaskMineCommand"></textarea>
+                </div>
+              </div>
+              <button type="submit" :disabled="taskMineUploading || (!taskMineCommand.trim() && !taskMineFiles.length)"><n-icon :size="17"><Send /></n-icon>{{ taskMineUploading ? '上传中…' : '发送' }}</button>
+            </form>
+          </section>
+
+          <section v-else class="home-work-ai task-mine-ai-empty" aria-label="暂无任务">
+            <ListCheck :size="38" />
+            <h2>{{ taskMineEmptyText }}</h2>
+            <p>选择其他状态后，可在右侧直接与 Dobby 继续处理。</p>
+          </section>
         </div>
-        <button class="task-create-button" type="button" @click="taskCreateOpen = true">新建任务</button>
-      </div>
-      <div v-if="taskCreateOpen" class="workflow-modal-backdrop" @click.self="taskCreateOpen = false">
-        <section class="workflow-modal task-flow-modal" role="dialog" aria-modal="true" aria-labelledby="task-create-title">
-          <div class="workflow-modal-head">
-            <div><h2 id="task-create-title">新建任务流</h2></div>
-            <button type="button" class="modal-close" aria-label="关闭新建任务窗口" @click="taskCreateOpen = false">关闭</button>
-          </div>
+      </main>
+
+      <main v-else-if="taskManagementTab === 'history'" class="task-history-view">
+        <form class="task-history-search" @submit.prevent>
+          <label><span>任务名称</span><input v-model.trim="taskHistoryKeyword" placeholder="输入任务名称或触发原因"></label>
+          <label><span>开始日期</span><input v-model="taskHistoryStart" type="date"></label>
+          <label><span>结束日期</span><input v-model="taskHistoryEnd" type="date"></label>
+          <button type="button" @click="clearTaskHistoryFilters">清除筛选</button>
+        </form>
+        <section class="task-history-results">
+          <div class="task-history-table-head"><span>任务</span><span>类型</span><span>负责人</span><span>完成时间</span><span>闭环状态</span><span></span></div>
+          <article v-for="task in filteredHistoryTasks" :key="task.id">
+            <div><strong>{{ task.title }}</strong><small>{{ task.triggerReason || '无补充说明' }}</small></div><span>{{ taskTypeLabel(task.type) }}</span><span>{{ store.getMemberName(task.responsibleId) }}</span><time>{{ formatDateTime(task.deadline, 'end') }}</time><em :class="taskClosureTone(task)">{{ taskClosureLabel(task) }}</em><button type="button" @click="openTaskHistory(task.id)">查看记录</button>
+          </article>
+          <div v-if="!filteredHistoryTasks.length" class="task-history-no-result"><Notes :size="30" /><strong>没有匹配的历史任务</strong><p>调整名称或日期范围后再试。</p></div>
+        </section>
+      </main>
+
+      <main v-else class="task-assign-view">
+        <div class="task-flow-scroll" tabindex="0" aria-label="任务流编辑画布，可横向或纵向滚动">
+          <section class="task-flow-modal task-flow-inline" aria-label="布置任务流">
           <form class="task-flow-form" @submit.prevent="createManualTask">
             <section class="task-flow-global-settings">
               <div class="task-flow-global-head">
@@ -493,41 +677,22 @@
                 </div>
               </main>
             </div>
-            <div class="task-flow-footer"><p><strong>{{ taskFlowSteps.length }}</strong> 个流程节点，将按当前顺序依次执行并留痕。</p><div class="workflow-modal-actions"><button type="button" class="modal-secondary" @click="taskCreateOpen = false">取消</button><button type="submit" class="modal-primary" :disabled="!taskCreateForm.title || taskFlowSteps.length < 2">创建任务流</button></div></div>
+            <div class="task-flow-footer"><p><strong>{{ taskFlowSteps.length }}</strong> 个流程节点，将按当前顺序依次执行并留痕。</p><div class="workflow-modal-actions"><button type="button" class="modal-secondary" @click="taskManagementTab = 'mine'">返回我的任务</button><button type="submit" class="modal-primary" :disabled="!taskCreateForm.title || taskFlowSteps.length < 2">创建任务流</button></div></div>
           </form>
-        </section>
-      </div>
-      <div class="task-board">
-        <article v-for="task in filteredTasks" :key="task.id" class="task-card">
-          <div class="task-top">
-            <span :class="['level-tag', task.riskLevel]">{{ riskLabel(task.riskLevel) }}</span>
-            <span class="status-pill">{{ statusLabel(task.status) }}</span>
+          </section>
+        </div>
+      </main>
+
+      <div v-if="taskDispositionOpen && selectedTask" class="task-disposition-backdrop" @click.self="closeTaskDisposition">
+        <aside class="task-disposition-drawer" role="dialog" aria-modal="true" aria-labelledby="task-disposition-title">
+          <header><div><span>{{ taskTypeLabel(selectedTask.type) }} · {{ statusLabel(selectedTask.status) }}</span><h2 id="task-disposition-title">{{ selectedTask.title }}</h2><p>{{ taskCurrentOwnerName(selectedTask) }} · 截止 {{ taskCurrentStep(selectedTask)?.due_at || selectedTask.deadline }}</p></div><button type="button" aria-label="关闭任务处置" @click="closeTaskDisposition">关闭</button></header>
+          <div class="task-disposition-body">
+            <section class="task-disposition-ai"><span class="task-disposition-bot"><Robot :size="18" /></span><div><strong>Dobby 处置提示</strong><p>{{ selectedTaskConclusion }}</p><small>依据：{{ selectedTask.triggerReason }}</small></div></section>
+            <section class="task-disposition-flow"><div class="task-disposition-section-title"><span>任务流程</span><strong>{{ selectedTaskCompletedSteps }}/{{ selectedTask.workflowSteps.length || 1 }} 个节点已完成</strong></div><ol><li v-for="(step, index) in selectedTask.workflowSteps" :key="`${selectedTask.id}-dispose-${index}`" :class="step.status"><span>{{ index + 1 }}</span><div><strong>{{ step.name }}</strong><small>{{ step.owner || store.getMemberName(step.owner_user_id || '') || '待指定负责人' }} · {{ step.due_at || '未设置截止时间' }}</small></div><em>{{ taskStepLabel(step.status) }}</em><button v-if="selectedTask.status === 'processing' && step.status !== 'completed'" type="button" @click="store.updateTaskStep(selectedTask.id, index, 'completed')">完成节点</button></li></ol></section>
+            <section class="task-disposition-form"><div class="task-disposition-section-title"><span>回复与材料</span><strong>结果将进入任务处理记录</strong></div><textarea v-model.trim="taskDispositionReply" rows="5" placeholder="回复 Dobby，例如：已完成复核，照片符合闭环要求"></textarea><label class="task-disposition-files"><input type="file" multiple @change="handleTaskDispositionFiles"><span><Paperclip :size="16" />选择文件或图片</span><small>{{ taskDispositionFiles.length ? `已选择 ${taskDispositionFiles.length} 个文件` : '支持提交本节点的证明材料' }}</small></label><label class="task-disposition-forward"><span>转交当前节点</span><select v-model="taskDispositionForwardId"><option value="">不转交</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }} · {{ member.title }}</option></select></label></section>
           </div>
-          <h2>{{ task.title }}</h2>
-          <div class="task-source">来源：{{ taskSourceLabel(task.type) }}</div>
-          <p>{{ task.triggerReason }}</p>
-          <div class="task-meta">
-            <span>负责人：{{ store.getMemberName(task.responsibleId) }}</span>
-            <span>截止：{{ formatDateTime(task.deadline, 'end') }}</span>
-            <span>缺项：{{ task.missingCount }}</span>
-          </div>
-          <ol v-if="task.workflowSteps.length" class="task-step-list">
-            <li v-for="(step, index) in task.workflowSteps" :key="`${task.id}-${index}`" :class="step.status">
-              <span>{{ index + 1 }}</span><strong>{{ step.name }}</strong><em>{{ taskStepLabel(step.status) }}</em>
-              <button v-if="task.status === 'processing' && step.status !== 'completed'" type="button" @click="store.updateTaskStep(task.id, index, 'completed')">完成步骤</button>
-            </li>
-          </ol>
-          <div class="task-actions">
-            <router-link to="/ai">协同处理</router-link>
-            <button type="button" @click="openTaskHistory(task.id)">处理记录</button>
-            <button v-if="task.status === 'pending' || task.status === 'overdue'" @click="store.updateTaskStatus(task.id, 'processing')">开始处理</button>
-            <button v-if="task.status === 'processing'" @click="store.updateTaskStatus(task.id, 'waiting_confirm')">提交确认</button>
-            <button v-if="task.status === 'processing'" @click="store.updateTaskStatus(task.id, 'need_more_info')">需要补充</button>
-            <button v-if="task.status === 'waiting_confirm'" @click="store.updateTaskStatus(task.id, 'processing')">退回处理</button>
-            <button v-if="task.status === 'waiting_confirm'" class="done" @click="store.updateTaskStatus(task.id, 'done')">确认完成</button>
-            <button v-if="task.status === 'need_more_info'" @click="store.updateTaskStatus(task.id, 'processing')">已补充，继续处理</button>
-          </div>
-        </article>
+          <footer><button type="button" class="task-disposition-history" @click="openTaskHistory(selectedTask.id)">查看处理记录</button><router-link to="/ai">发起讨论</router-link><button type="button" class="task-disposition-submit" :disabled="taskDispositionSubmitting" @click="submitTaskDisposition">{{ taskDispositionSubmitting ? '正在提交…' : '回复并推进' }}</button></footer>
+        </aside>
       </div>
       <div v-if="taskHistoryOpenId && selectedTaskHistoryTask" class="workflow-modal-backdrop" @click.self="closeTaskHistory">
         <section class="workflow-modal task-history-modal" role="dialog" aria-modal="true" aria-labelledby="task-history-title">
@@ -571,7 +736,22 @@
         <dl class="project-health-data">
           <div class="project-progress-compare"><dt>进度对比</dt><div class="progress-compare-values"><span><small>计划</small><b>{{ projectHealth.planned }}%</b></span><span><small>实际</small><b>{{ projectHealth.actual }}%</b></span></div><dd :class="projectHealth.delta >= 0 ? 'positive' : 'negative'"><small>差异</small><strong>{{ projectHealth.delta >= 0 ? '+' : '' }}{{ projectHealth.delta }}%</strong></dd></div>
           <div><dt>任务完成率</dt><dd>{{ projectHealth.taskCompletion }}%</dd><div class="project-health-progress"><i><em :style="{ width: `${projectHealth.taskCompletion}%` }" /></i><small>已完成 {{ projectHealth.doneTasks }} / {{ projectHealth.totalTasks }}</small></div></div>
-          <div class="project-health-conclusion"><dt>关键结论</dt><dd>{{ projectHealth.label }}</dd><small>{{ projectHealth.summary }}</small></div>
+          <div class="project-health-conclusion">
+            <div class="project-conclusion-head">
+              <dt>关键结论</dt>
+              <em>{{ projectHealthGrade }}</em>
+            </div>
+            <dd>{{ projectHealth.label }}</dd>
+            <div class="project-conclusion-points">
+              <p><b>风险</b><span>{{ projectHealth.mainRisk }}</span></p>
+              <p><b>安全</b><span>{{ projectHealth.mainSafety }}</span></p>
+              <p><b>质量</b><span>{{ projectHealth.mainQuality }}</span></p>
+            </div>
+            <div class="project-conclusion-meta">
+              <span>实际 {{ projectHealth.actual }}% · 计划 {{ projectHealth.planned }}% · 差异 {{ projectHealth.delta >= 0 ? '+' : '' }}{{ projectHealth.delta }}%</span>
+              <strong>任务闭环 {{ projectHealth.doneTasks }}/{{ projectHealth.totalTasks }}</strong>
+            </div>
+          </div>
         </dl>
       </section>
 
@@ -756,12 +936,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { NIcon, useMessage } from 'naive-ui'
 import {
   AdjustmentsHorizontal, At, CalendarEvent, ChartBar, ChevronDown, ChevronLeft, ChevronRight,
-  Dots, FileText, Folder, ListCheck, Notes, Paperclip, Pin, Plus, Refresh, Robot,
+  Dots, FileText, Folder, ListCheck, Notes, Paperclip, Pin, Plus, Robot,
   Search, Send, Settings, Table, User, UserPlus,
 } from '@vicons/tabler'
 import { useAppStore, type AttachmentRecord } from '@/stores/app'
@@ -773,6 +953,14 @@ type ChatMessage = {
   role: 'assistant' | 'user'
   content: string
   generatedTaskIds?: string[]
+  attachments?: ChatAttachment[]
+}
+
+type ChatAttachment = {
+  id: string
+  name: string
+  size: number
+  type: string
 }
 
 type CollaborationSession = { id: string; title: string; desc: string; time: string; participantIds: string[]; taskIds: string[] }
@@ -822,7 +1010,7 @@ const section = computed(() => {
 })
 
 const currentProject = computed(() => store.currentProject)
-const currentUserId = 'm1'
+const currentUserId = computed(() => sessionStorage.getItem('current_user_id') || store.members[0]?.id || '')
 const projectProgress = computed(() => {
   if (!store.wbsItems.length) return 0
   return Math.round(store.wbsItems.reduce((sum, item) => sum + item.progress, 0) / store.wbsItems.length)
@@ -860,14 +1048,24 @@ const projectHealth = computed(() => {
   const mainRisk = store.dashboard?.main_risk || criticalRisks.value[0]?.name || '暂无新增风险预警'
   const mainSafety = store.dashboard?.main_safety || (safetyIssues ? `有 ${safetyIssues} 项安全事项待核查` : '暂无新增安全隐患')
   const mainQuality = store.dashboard?.main_quality || (qualityIssues ? `有 ${qualityIssues} 项质量事项待复核` : '暂无待复核质量问题')
-  const plannedDelta = store.dashboard?.planned_delta || (delta >= 0 ? `超前 ${delta}%` : `滞后 ${Math.abs(delta)}%`)
-  const summary = `目前进度 ${actualProgress.value}%，与周计划进度相比${plannedDelta}。主要风险关注：${mainRisk}。主要安全问题：${mainSafety}。存在的质量问题：${mainQuality}。任务完成率 ${taskCompletion}%，总体评价：${label}。`
   const conclusion = criticalRisks.value.length
     ? `重点关注 ${criticalRisks.value.slice(0, 2).map(item => item.name).join('、')}。`
     : focusTasks.value.length
       ? `当前有 ${focusTasks.value.length} 项待办需要持续推进。`
       : '暂无未闭环的重点事项。'
-  return { label, summary, planned: plannedProgress.value, actual: actualProgress.value, delta, taskCompletion, doneTasks, totalTasks, conclusion }
+  return {
+    label,
+    planned: plannedProgress.value,
+    actual: actualProgress.value,
+    delta,
+    taskCompletion,
+    doneTasks,
+    totalTasks,
+    conclusion,
+    mainRisk,
+    mainSafety,
+    mainQuality,
+  }
 })
 const projectHealthGrade = computed(() => {
   if (criticalRisks.value.some(item => item.level === 'critical') || store.tasks.some(task => task.status === 'overdue')) return '关注'
@@ -915,8 +1113,8 @@ const projectExecutionTasks = computed(() => {
 
 const myAttentionTasks = computed(() =>
   focusTasks.value.filter(task =>
-    task.responsibleId === currentUserId ||
-    task.confirmatorId === currentUserId ||
+    task.responsibleId === currentUserId.value ||
+    task.confirmatorId === currentUserId.value ||
     task.status === 'overdue'
   ).slice(0, 4)
 )
@@ -937,17 +1135,27 @@ const myWorkQueue = computed(() =>
 
 const homeMode = ref<'work' | 'quick'>('work')
 const homeModeTabs = [
-  { key: 'work' as const, label: '待处理工作' },
-  { key: 'quick' as const, label: '快捷协同' },
+  { key: 'work' as const, label: 'Dobby推推' },
+  { key: 'quick' as const, label: '问问Dobby' },
 ]
-const homeFilter = ref<'all' | 'decision' | 'upload' | 'generated'>('all')
+type WorkQueueStatus = 'pending' | 'overdue' | 'processing'
+
+const homeStatus = ref<WorkQueueStatus>('pending')
 const homePageIndex = ref(0)
-const homePageSize = ref(5)
-const homeQueueViewport = ref<HTMLElement | null>(null)
+const homePageSize = 5
+const homeWorkThreadViewport = ref<HTMLElement | null>(null)
+const selectedHomeWorkItemId = ref('home-1')
+const homeWorkCommand = ref('')
+const homeWorkFiles = ref<File[]>([])
+const homeWorkUploading = ref(false)
+const quickFiles = ref<File[]>([])
+const quickUploading = ref(false)
+const homeWorkThreads = ref<Record<string, ChatMessage[]>>({})
 const homeWorkItems = computed(() => [
   {
     id: 'home-1',
     rank: 1,
+    workflowStatus: 'pending' as const,
     category: 'decision',
     label: '需我决策',
     title: '深基坑风险草稿审核',
@@ -964,6 +1172,7 @@ const homeWorkItems = computed(() => [
   {
     id: 'home-2',
     rank: 2,
+    workflowStatus: 'overdue' as const,
     category: 'upload',
     label: '需我上传资料',
     title: '地面沉降监测材料缺项',
@@ -980,6 +1189,7 @@ const homeWorkItems = computed(() => [
   {
     id: 'home-3',
     rank: 3,
+    workflowStatus: 'processing' as const,
     category: 'generated',
     label: '需我协同',
     title: '日报解析确认（2026-06-09 施工日报）',
@@ -996,6 +1206,7 @@ const homeWorkItems = computed(() => [
   {
     id: 'home-4',
     rank: 4,
+    workflowStatus: 'overdue' as const,
     category: 'upload',
     label: '需我上传资料',
     title: '顶管推进偏差预警相关资料',
@@ -1012,6 +1223,7 @@ const homeWorkItems = computed(() => [
   {
     id: 'home-5',
     rank: 5,
+    workflowStatus: 'processing' as const,
     category: 'generated',
     label: '需我协同',
     title: '重大风险动态管控月报填报启动',
@@ -1028,6 +1240,7 @@ const homeWorkItems = computed(() => [
   {
     id: 'home-6',
     rank: 6,
+    workflowStatus: 'pending' as const,
     category: 'decision',
     label: '需我协调',
     title: '接收井施工验收准备会',
@@ -1042,37 +1255,58 @@ const homeWorkItems = computed(() => [
     icon: ListCheck,
   },
 ])
-const filteredHomeWorkItems = computed(() =>
-  homeFilter.value === 'all'
-    ? homeWorkItems.value
-    : homeWorkItems.value.filter(item => item.category === homeFilter.value)
-)
+const filteredHomeWorkItems = computed(() => homeWorkItems.value.filter(item => item.workflowStatus === homeStatus.value))
 const homePageCount = computed(() =>
-  Math.max(1, Math.ceil(filteredHomeWorkItems.value.length / homePageSize.value))
+  Math.max(1, Math.ceil(filteredHomeWorkItems.value.length / homePageSize))
 )
 const pagedHomeWorkItems = computed(() => {
-  const start = homePageIndex.value * homePageSize.value
-  return filteredHomeWorkItems.value.slice(start, start + homePageSize.value)
+  const start = homePageIndex.value * homePageSize
+  return filteredHomeWorkItems.value.slice(start, start + homePageSize)
+})
+const selectedHomeWorkItem = computed(() =>
+  homeWorkItems.value.find(item => item.id === selectedHomeWorkItemId.value)
+  ?? pagedHomeWorkItems.value[0]
+  ?? null
+)
+const selectedHomeWorkRank = computed(() => Math.max(1, filteredHomeWorkItems.value.findIndex(item => item.id === selectedHomeWorkItemId.value) + 1))
+const homeWorkAssistantIntro = computed(() => {
+  const item = selectedHomeWorkItem.value
+  if (!item) return ''
+  const reason = item.reason.replace(/^(原因|结果)：/, '')
+  const statusText = homeStatus.value === 'overdue' ? '已逾期工作' : homeStatus.value === 'processing' ? '执行中工作' : '待处理工作'
+  return `我已把“${item.title}”列为第 ${selectedHomeWorkRank.value} 项${statusText}。${reason} 当前涉及${item.owner}（${item.role}），你可以直接让我核对依据、整理协同内容或继续推进。`
+})
+const homeWorkConversationMessages = computed<ChatMessage[]>(() => {
+  const item = selectedHomeWorkItem.value
+  if (!item) return []
+  return [
+    { id: `${item.id}-intro`, role: 'assistant', content: homeWorkAssistantIntro.value },
+    ...(homeWorkThreads.value[item.id] ?? []),
+  ]
+})
+const homeWorkSuggestions = computed(() => {
+  const item = selectedHomeWorkItem.value
+  if (!item) return []
+  if (item.category === 'upload') {
+    return ['列出还缺哪些资料', '生成资料催办消息', '判断对后续流程的影响']
+  }
+  if (item.category === 'generated') {
+    return ['说明 AI 生成依据', '拆解下一步协同动作', '生成给责任人的消息']
+  }
+  return ['整理需要确认的关键结论', '检查关联资料是否齐全', '生成协同处理说明']
 })
 const homePageRangeText = computed(() => {
   const total = filteredHomeWorkItems.value.length
   if (!total) return '0 / 0'
-  const start = homePageIndex.value * homePageSize.value + 1
-  const end = Math.min(start + homePageSize.value - 1, total)
-  return `${start}-${end} / ${total}`
+  const start = homePageIndex.value * homePageSize + 1
+  const end = Math.min(start + homePageSize - 1, total)
+  return `第 ${start}-${end} 项，共 ${total} 项`
 })
-const homeFilterTabs = computed(() => [
-  { key: 'all' as const, label: '全部', count: homeWorkItems.value.length },
-  { key: 'decision' as const, label: '需我决策', count: homeWorkItems.value.filter(item => item.category === 'decision').length },
-  { key: 'upload' as const, label: '需我上传资料', count: homeWorkItems.value.filter(item => item.category === 'upload').length },
-  { key: 'generated' as const, label: '需我协同', count: homeWorkItems.value.filter(item => item.category === 'generated').length },
+const homeStatusTabs = computed(() => [
+  { key: 'pending' as const, label: '待处理', count: homeWorkItems.value.filter(item => item.workflowStatus === 'pending').length },
+  { key: 'overdue' as const, label: '已逾期', count: homeWorkItems.value.filter(item => item.workflowStatus === 'overdue').length },
+  { key: 'processing' as const, label: '执行中', count: homeWorkItems.value.filter(item => item.workflowStatus === 'processing').length },
 ])
-const homePrimaryAction = computed(() =>
-  homeMode.value === 'work'
-    ? { label: '进入任务管理', to: '/tasks', icon: ListCheck }
-    : { label: '进入智能协同', to: '/ai', icon: Send }
-)
-
 function clampHomePageIndex() {
   homePageIndex.value = Math.min(homePageIndex.value, homePageCount.value - 1)
 }
@@ -1081,124 +1315,137 @@ function goHomePage(direction: number) {
   homePageIndex.value = Math.min(Math.max(homePageIndex.value + direction, 0), homePageCount.value - 1)
 }
 
-function updateHomePageSize() {
-  const measuredHeight = homeQueueViewport.value?.clientHeight ?? 0
-  const fallbackHeight = typeof window === 'undefined' ? 560 : Math.max(320, window.innerHeight - 340)
-  const availableHeight = measuredHeight > 0 ? measuredHeight : fallbackHeight
-  homePageSize.value = Math.max(2, Math.min(6, Math.floor(availableHeight / 112)))
-  clampHomePageIndex()
+const composerFileLimit = 8
+const composerFileSizeLimit = 50 * 1024 * 1024
+
+function selectComposerFiles(mode: 'work' | 'quick' | 'task', event: Event) {
+  const input = event.target as HTMLInputElement
+  const target = mode === 'work' ? homeWorkFiles : mode === 'quick' ? quickFiles : taskMineFiles
+  const selected = Array.from(input.files || [])
+  const rejected = selected.filter(file => file.size > composerFileSizeLimit)
+  const accepted = selected.filter(file => file.size <= composerFileSizeLimit)
+  const merged = [...target.value, ...accepted].filter((file, index, files) =>
+    files.findIndex(candidate => candidate.name === file.name && candidate.size === file.size && candidate.lastModified === file.lastModified) === index
+  )
+  target.value = merged.slice(0, composerFileLimit)
+  input.value = ''
+  if (rejected.length) message.warning(`有 ${rejected.length} 个文件超过 50 MB，未加入发送列表。`)
+  if (merged.length > composerFileLimit) message.warning(`单次最多发送 ${composerFileLimit} 个附件。`)
 }
 
-watch(homeFilter, () => {
+function removeComposerFile(mode: 'work' | 'quick' | 'task', index: number) {
+  const target = mode === 'work' ? homeWorkFiles : mode === 'quick' ? quickFiles : taskMineFiles
+  target.value = target.value.filter((_, fileIndex) => fileIndex !== index)
+}
+
+function createChatAttachments(files: File[]): ChatAttachment[] {
+  return files.map(file => ({
+    id: `${file.name}-${file.size}-${file.lastModified}`,
+    name: file.name,
+    size: file.size,
+    type: file.type || 'application/octet-stream',
+  }))
+}
+
+async function uploadComposerFiles(files: File[], category: string) {
+  for (const file of files) await store.uploadAttachment(file, category)
+}
+
+function buildHomeWorkReply(content: string, attachments: ChatAttachment[] = []) {
+  const item = selectedHomeWorkItem.value
+  if (!item) return ''
+  const attachmentLead = attachments.length
+    ? `已收到 ${attachments.length} 个附件（${attachments.map(file => file.name).join('、')}），并归入当前项目资料库。`
+    : ''
+  if (/资料|依据|附件/.test(content)) {
+    return `${attachmentLead}已围绕“${item.title}”整理关联信息：${item.tags.join('、')}。建议先核对关键资料是否完整，再决定是否进入${item.action}。`
+  }
+  if (/协同|责任人|消息/.test(content)) {
+    return `${attachmentLead}建议由${item.owner}继续负责当前事项，我可以根据“${item.title}”生成协同说明，并把截止要求同步给相关人员。`
+  }
+  if (/影响|流程|顺序/.test(content)) {
+    return `${attachmentLead}这项工作当前排在第 ${selectedHomeWorkRank.value} 位。主要影响是：${item.reason.replace(/^原因：/, '')}处理完成后再推进后续任务，可以减少重复确认。`
+  }
+  return `${attachmentLead}我已结合“${item.title}”的当前状态记录你的要求：${content}。下一步可以继续补充依据，或直接进入${item.action}。`
+}
+
+async function dispatchHomeWorkCommand() {
+  const item = selectedHomeWorkItem.value
+  const files = [...homeWorkFiles.value]
+  const content = homeWorkCommand.value.trim() || (files.length ? '请识别并分析我上传的资料' : '')
+  if (!item || !content || homeWorkUploading.value) return
+  homeWorkUploading.value = true
+  try {
+    if (files.length) await uploadComposerFiles(files, 'Dobby工作附件')
+    const attachments = createChatAttachments(files)
+    const messages = [...(homeWorkThreads.value[item.id] ?? [])]
+    const timestamp = Date.now()
+    messages.push({ id: `${item.id}-user-${timestamp}`, role: 'user', content, attachments: attachments.length ? attachments : undefined })
+    messages.push({ id: `${item.id}-assistant-${timestamp + 1}`, role: 'assistant', content: buildHomeWorkReply(content, attachments) })
+    homeWorkThreads.value = { ...homeWorkThreads.value, [item.id]: messages }
+    homeWorkCommand.value = ''
+    homeWorkFiles.value = []
+    await nextTick()
+    const viewport = homeWorkThreadViewport.value
+    if (viewport) viewport.scrollTop = viewport.scrollHeight
+  } catch {
+    message.error('附件上传失败，请检查文件或网络后重试。')
+  } finally {
+    homeWorkUploading.value = false
+  }
+}
+
+function dispatchHomeWorkSuggestion(content: string) {
+  homeWorkCommand.value = content
+  dispatchHomeWorkCommand()
+}
+
+watch(homeStatus, () => {
   homePageIndex.value = 0
-  nextTick(updateHomePageSize)
 })
+
+watch(pagedHomeWorkItems, items => {
+  if (!items.some(item => item.id === selectedHomeWorkItemId.value)) {
+    selectedHomeWorkItemId.value = items[0]?.id ?? ''
+  }
+}, { immediate: true })
 
 watch(homePageCount, clampHomePageIndex)
 
-watch(homeMode, () => {
-  nextTick(updateHomePageSize)
-})
-
-watch(section, () => {
-  nextTick(updateHomePageSize)
+watch(selectedHomeWorkItemId, () => {
+  homeWorkFiles.value = []
 })
 
 onMounted(() => {
-  nextTick(updateHomePageSize)
-  window.addEventListener('resize', updateHomePageSize, { passive: true })
   void loadCollaborationSessions()
 })
-
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', updateHomePageSize)
-})
 watch(() => store.currentProjectId, () => { void loadCollaborationSessions() })
-const currentUserName = computed(() => store.getMemberName(currentUserId))
-const homeCollaborators = computed(() =>
-  [
-    { name: '李明', role: '项目执行人', task: '补齐沉降监测与顶管测量资料' },
-    { name: '王芳', role: '资料与填报负责人', task: '确认风险草稿与日报解析' },
-  ].filter(person => person.name !== currentUserName.value)
-)
-const showHomePriorityBasisInput = ref(false)
-const homePriorityBasisInput = ref('')
-const homePriorityBasis = ref('')
-const baseHomePriorityItems = [
-  { title: '深基坑风险草稿审核', effect: '风险管控闭环', tag: '重大风险', tone: 'danger', group: 'risk' },
-  { title: '地面沉降监测材料缺项', effect: '草稿确认前置条件', tag: '资料缺项', tone: 'upload', group: 'material' },
-  { title: '日报解析确认（2026-06-09）', effect: '进度同步与风险引用', tag: '进度同步', tone: 'warning', group: 'progress' },
-  { title: '顶管偏差预警资料补充', effect: '预警有效性', tag: '安全预警', tone: 'info', group: 'risk' },
-  { title: '月报填报启动', effect: '合规填报时效', tag: '合规要求', tone: 'info', group: 'deadline' },
-]
-const homePriorityItems = computed(() => {
-  const basis = homePriorityBasis.value.trim()
-  const preferredGroup = basis.includes('资料') || basis.includes('缺项') || basis.includes('附件')
-    ? 'material'
-    : basis.includes('截止') || basis.includes('时间') || basis.includes('工期') || basis.includes('合规')
-      ? 'deadline'
-      : basis.includes('进度') || basis.includes('日报') || basis.includes('同步')
-        ? 'progress'
-        : basis.includes('风险') || basis.includes('安全') || basis.includes('重大')
-          ? 'risk'
-          : ''
-
-  const orderedItems = preferredGroup
-    ? [...baseHomePriorityItems].sort((a, b) => Number(b.group === preferredGroup) - Number(a.group === preferredGroup))
-    : baseHomePriorityItems
-
-  return orderedItems.map((item, index) => ({ ...item, rank: index + 1 }))
-})
-
-function openHomePriorityRegenerate() {
-  homePriorityBasisInput.value = homePriorityBasis.value
-  showHomePriorityBasisInput.value = true
-}
-
-function submitHomePriorityBasis() {
-  homePriorityBasis.value = homePriorityBasisInput.value.trim()
-  showHomePriorityBasisInput.value = false
-}
-
-function cancelHomePriorityBasis() {
-  showHomePriorityBasisInput.value = false
-  homePriorityBasisInput.value = homePriorityBasis.value
-}
-const homeActivityFeed = [
-  { text: '解析完成：2026-06-09 施工日报', time: '09:42' },
-  { text: '生成任务：深基坑风险草稿审核', time: '09:42' },
-  { text: '检测到资料缺项：地表沉降监测报告', time: '09:41' },
-  { text: '更新：4 项工作已同步到你的队列', time: '09:41' },
-]
-
-const aiBriefItems = computed(() => [
-  { title: '先补齐地面沉降监测报告', reason: '已逾期，且会阻塞深基坑风险上报。' },
-  { title: '确认深基坑风险草稿', reason: '草稿确认后才能生成填报包并启动平台填报。' },
-  { title: '核对 2026-06-09 施工日报', reason: '日报内容会影响 WBS 进度和风险材料引用。' },
-])
-
-const collaborationPeople = computed(() =>
-  store.members.slice(0, 5).map(member => ({
-    ...member,
-    taskCount: store.tasks.filter(task => task.responsibleId === member.id || task.confirmatorId === member.id).length,
-    nextAction: store.tasks.find(task => task.responsibleId === member.id || task.confirmatorId === member.id)?.title ?? '暂无新的跟进事项',
-  })).sort((a, b) => b.taskCount - a.taskCount)
-)
 
 const quickCommand = ref('')
-function dispatchQuickCommand() {
-  const content = quickCommand.value.trim()
-  if (!content) return
-  syncHomeQuickCommand(content)
-  store.addLog({
-    id: `log${Date.now()}`,
-    time: nowStr(),
-    operator: '张伟',
-    action: '任务下发',
-    detail: content,
-    level: 'info',
-  })
-  quickCommand.value = ''
+async function dispatchQuickCommand() {
+  const files = [...quickFiles.value]
+  const content = quickCommand.value.trim() || (files.length ? '请识别并分析我上传的资料' : '')
+  if (!content || quickUploading.value) return
+  quickUploading.value = true
+  try {
+    if (files.length) await uploadComposerFiles(files, 'Dobby问答附件')
+    const attachments = createChatAttachments(files)
+    syncHomeQuickCommand(content, attachments)
+    store.addLog({
+      id: `log${Date.now()}`,
+      time: nowStr(),
+      operator: '张伟',
+      action: files.length ? '资料问答' : '任务下发',
+      detail: files.length ? `${content}；附件：${files.map(file => file.name).join('、')}` : content,
+      level: 'info',
+    })
+    quickCommand.value = ''
+    quickFiles.value = []
+  } catch {
+    message.error('附件上传失败，请检查文件或网络后重试。')
+  } finally {
+    quickUploading.value = false
+  }
 }
 
 const sessions = ref<CollaborationSession[]>([])
@@ -1301,7 +1548,7 @@ function buildChatSuggestions(): ChatSuggestion[] {
   const overdueTask = tasks.find(task => task.status === 'overdue')
   const waitingTask = tasks.find(task => task.status === 'waiting_confirm')
   const missingItem = activeSessionMissingItems.value[0]
-  const collaborator = activeSessionPeople.value.find(member => member.id !== currentUserId)
+  const collaborator = activeSessionPeople.value.find(member => member.id !== currentUserId.value)
 
   if (overdueTask) {
     suggestions.push({
@@ -1406,7 +1653,7 @@ function ensureHomeQuickSession(content: string) {
   return id
 }
 
-function syncHomeQuickCommand(content: string) {
+function syncHomeQuickCommand(content: string, attachments: ChatAttachment[] = []) {
   const id = ensureHomeQuickSession(content)
   const now = nowStr()
   const messages = sessionMessages.value[id] ?? []
@@ -1415,13 +1662,15 @@ function syncHomeQuickCommand(content: string) {
     : content.includes('风险')
       ? ['t4', 't6']
       : []
-  messages.push({ id: `hq-u-${Date.now()}`, role: 'user', content })
+  messages.push({ id: `hq-u-${Date.now()}`, role: 'user', content, attachments: attachments.length ? attachments : undefined })
   messages.push({
     id: `hq-a-${Date.now() + 1}`,
     role: 'assistant',
-    content: generatedTaskIds.length
-      ? `已根据当前任务、资料缺口和风险状态生成相关工作：${content}`
-      : `已进入当前项目协同：${content}`,
+    content: attachments.length
+      ? `已收到 ${attachments.length} 个附件（${attachments.map(file => file.name).join('、')}），文件已归入当前项目资料库。我会结合资料内容和项目上下文继续处理：${content}`
+      : generatedTaskIds.length
+        ? `已根据当前任务、资料缺口和风险状态生成相关工作：${content}`
+        : `已进入当前项目协同：${content}`,
     generatedTaskIds: generatedTaskIds.length ? generatedTaskIds : undefined,
   })
   sessionMessages.value[id] = messages
@@ -1443,7 +1692,27 @@ async function startNewSession() {
   activeSessionId.value = session.id
 }
 
-const taskFilter = ref<'all' | TaskStatus>('all')
+type TaskManagementTab = 'mine' | 'history' | 'assign'
+
+const taskManagementTab = ref<TaskManagementTab>('mine')
+const taskMineStatus = ref<WorkQueueStatus>('pending')
+const taskMinePageIndex = ref(0)
+const taskMinePageSize = 5
+const selectedTaskMineWorkItemId = ref('home-1')
+const taskMineThreadViewport = ref<HTMLElement | null>(null)
+const taskMineCommand = ref('')
+const taskMineFiles = ref<File[]>([])
+const taskMineUploading = ref(false)
+const taskMineThreads = ref<Record<string, ChatMessage[]>>({})
+const selectedTaskId = ref('')
+const taskDispositionOpen = ref(false)
+const taskDispositionReply = ref('')
+const taskDispositionForwardId = ref('')
+const taskDispositionFiles = ref<File[]>([])
+const taskDispositionSubmitting = ref(false)
+const taskHistoryKeyword = ref('')
+const taskHistoryStart = ref('')
+const taskHistoryEnd = ref('')
 const informationDispositionOpen = ref(false)
 const selectedInformationRecordId = ref('')
 const informationRevision = ref('')
@@ -1452,8 +1721,7 @@ const taskHistoryOpenId = ref('')
 const taskHistories = ref<Record<string, Array<{ id: number; from_status?: string; to_status: string; note?: string; created_at: string }>>>({})
 const taskHistoryLoading = ref(false)
 const selectedTaskHistoryTask = computed(() => store.tasks.find(task => task.id === taskHistoryOpenId.value))
-const taskCreateOpen = ref(false)
-const taskCreateMode = ref<'dobby' | 'template'>('template')
+const taskCreateMode = ref<'dobby' | 'template'>('dobby')
 const taskFlowRequirement = ref('')
 const taskFlowGenerating = ref(false)
 const taskFlowGenerationNote = ref('')
@@ -1476,15 +1744,6 @@ const taskTriggerSummary = computed(() => taskCreateForm.value.run_mode === 'sin
   ? `${taskCreateForm.value.trigger_date} ${taskCreateForm.value.trigger_time} 单次执行`
   : `${taskCreateForm.value.trigger_date} ${taskCreateForm.value.trigger_time} 首次执行，之后每 ${taskCreateForm.value.trigger_interval_value} ${triggerIntervalUnitLabel.value}执行一次`)
 const taskFlowSteps = ref<TaskFlowStepDraft[]>(createTemplateFlowSteps('隐患整改'))
-const taskTabs: Array<{ key: 'all' | TaskStatus, label: string }> = [
-  { key: 'all', label: '全部' },
-  { key: 'overdue', label: '逾期' },
-  { key: 'pending', label: '待处理' },
-  { key: 'processing', label: '处理中' },
-  { key: 'need_more_info', label: '待补充' },
-  { key: 'waiting_confirm', label: '待确认' },
-  { key: 'done', label: '已完成' },
-]
 const taskTabCounts = computed<Record<'all' | TaskStatus, number>>(() => ({
   all: store.tasks.length,
   overdue: store.tasks.filter(task => task.status === 'overdue').length,
@@ -1495,7 +1754,205 @@ const taskTabCounts = computed<Record<'all' | TaskStatus, number>>(() => ({
   done: store.tasks.filter(task => task.status === 'done').length,
   cancelled: store.tasks.filter(task => task.status === 'cancelled').length,
 }))
-const filteredTasks = computed(() => taskFilter.value === 'all' ? store.tasks : store.tasks.filter(task => task.status === taskFilter.value))
+const selectedTask = computed(() => store.tasks.find(task => task.id === selectedTaskId.value))
+const selectedTaskCompletedSteps = computed(() => selectedTask.value?.workflowSteps.filter(step => step.status === 'completed').length ?? 0)
+
+function taskCurrentStep(task: Task) {
+  return task.workflowSteps.find(step => step.status !== 'completed') || task.workflowSteps[task.workflowSteps.length - 1]
+}
+
+function taskCurrentOwnerId(task: Task) {
+  return taskCurrentStep(task)?.owner_user_id || task.responsibleId
+}
+
+function taskCurrentOwnerName(task: Task) {
+  const step = taskCurrentStep(task)
+  return step?.owner || store.getMemberName(step?.owner_user_id || task.responsibleId)
+}
+
+const taskMineStatusTabs = computed(() => [
+  { key: 'pending' as const, label: '待处理', count: homeWorkItems.value.filter(item => item.workflowStatus === 'pending').length },
+  { key: 'overdue' as const, label: '已逾期', count: homeWorkItems.value.filter(item => item.workflowStatus === 'overdue').length },
+  { key: 'processing' as const, label: '执行中', count: homeWorkItems.value.filter(item => item.workflowStatus === 'processing').length },
+])
+const filteredTaskMineWorkItems = computed(() => homeWorkItems.value.filter(item => item.workflowStatus === taskMineStatus.value))
+const taskMinePageCount = computed(() => Math.max(1, Math.ceil(filteredTaskMineWorkItems.value.length / taskMinePageSize)))
+const pagedTaskMineWorkItems = computed(() => {
+  const start = taskMinePageIndex.value * taskMinePageSize
+  return filteredTaskMineWorkItems.value.slice(start, start + taskMinePageSize)
+})
+const selectedTaskMineWorkItem = computed(() => pagedTaskMineWorkItems.value.find(item => item.id === selectedTaskMineWorkItemId.value) ?? pagedTaskMineWorkItems.value[0] ?? null)
+const taskMinePageRangeText = computed(() => {
+  const total = filteredTaskMineWorkItems.value.length
+  if (!total) return '0 / 0'
+  const start = taskMinePageIndex.value * taskMinePageSize + 1
+  const end = Math.min(start + taskMinePageSize - 1, total)
+  return `第 ${start}-${end} 项，共 ${total} 项`
+})
+const taskMineEmptyText = computed(() => ({
+  pending: '当前没有需要立即处理的任务',
+  overdue: '当前没有已逾期任务',
+  processing: '当前没有执行中的任务',
+})[taskMineStatus.value])
+const closedTasks = computed(() => store.tasks.filter(task => ['done', 'cancelled'].includes(task.status)))
+const filteredHistoryTasks = computed(() => closedTasks.value.filter(task => {
+  const keyword = taskHistoryKeyword.value.toLowerCase()
+  const searchMatched = !keyword || `${task.title} ${task.triggerReason} ${taskTypeLabel(task.type)}`.toLowerCase().includes(keyword)
+  const date = (task.deadline || task.createdAt).slice(0, 10)
+  return searchMatched && (!taskHistoryStart.value || date >= taskHistoryStart.value) && (!taskHistoryEnd.value || date <= taskHistoryEnd.value)
+}))
+const taskManagementTabs = computed(() => [
+  { key: 'mine' as const, label: '我的任务', hint: '处理当前责任节点', count: homeWorkItems.value.length, icon: ListCheck },
+  { key: 'history' as const, label: '历史任务', hint: '查询闭环与流转记录', count: closedTasks.value.length, icon: Notes },
+  { key: 'assign' as const, label: '布置任务', hint: '模板或语言生成流程', count: 'AI', icon: Plus },
+])
+const selectedTaskConclusion = computed(() => {
+  const task = selectedTask.value
+  if (!task) return ''
+  if (task.status === 'overdue') return `任务已超过截止时间，建议立即联系 ${store.getMemberName(task.responsibleId)}，确认新的完成时间，并先处理阻塞节点。`
+  if (task.status === 'waiting_confirm') return '执行动作已经完成，当前只等待你的确认。建议先核对交付物和流程记录，再决定通过或退回。'
+  if (task.status === 'need_more_info') return `当前流程被资料缺口阻断，还需要补齐 ${taskMaterialLabel(task)}。补充后可直接恢复原流程。`
+  if (task.status === 'pending') return '任务尚未启动，但风险和截止时间都已进入关注窗口。现在启动可以避免后续节点集中等待。'
+  if (task.status === 'processing') return '任务正在推进。建议先完成当前节点，再由 Dobby 生成下一责任人的推进消息。'
+  if (task.status === 'done') return '任务节点和状态已经闭环。建议核对处理记录，确认相关资料已同步归档。'
+  return '任务当前不需要继续推进，可在处理记录中核对原因。'
+})
+
+const taskMineConversationMessages = computed<ChatMessage[]>(() => {
+  const item = selectedTaskMineWorkItem.value
+  if (!item) return []
+  const reason = item.reason.replace(/^(原因|结果)：/, '')
+  const intro = `我正在跟进“${item.title}”。${reason} 当前涉及${item.owner}（${item.role}），你可以直接让我核对依据、整理协同内容或继续推进。`
+  return [
+    { id: `${item.id}-intro`, role: 'assistant', content: intro },
+    ...(taskMineThreads.value[item.id] ?? []),
+  ]
+})
+
+const taskMineSuggestions = computed(() => {
+  const item = selectedTaskMineWorkItem.value
+  if (!item) return []
+  if (item.category === 'upload') return ['列出还缺哪些资料', '生成资料催办消息', '判断对后续流程的影响']
+  if (item.category === 'generated') return ['说明 AI 生成依据', '拆解下一步协同动作', '生成给责任人的消息']
+  return ['整理需要确认的关键结论', '检查关联资料是否齐全', '生成协同处理说明']
+})
+
+function buildTaskMineReply(content: string, attachments: ChatAttachment[] = []) {
+  const item = selectedTaskMineWorkItem.value
+  if (!item) return ''
+  const attachmentLead = attachments.length
+    ? `已收到 ${attachments.length} 个附件（${attachments.map(file => file.name).join('、')}），并归入当前项目资料库。`
+    : ''
+  if (/资料|依据|附件/.test(content)) return `${attachmentLead}已围绕“${item.title}”整理关联信息：${item.tags.join('、')}。建议先核对关键资料是否完整，再决定是否进入${item.action}。`
+  if (/协同|责任人|消息/.test(content)) return `${attachmentLead}建议由${item.owner}继续负责当前事项，我可以根据“${item.title}”生成协同说明，并把截止要求同步给相关人员。`
+  if (/影响|流程|顺序/.test(content)) return `${attachmentLead}主要影响是：${item.reason.replace(/^原因：/, '')}处理完成后再推进后续任务，可以减少重复确认。`
+  return `${attachmentLead}我已结合“${item.title}”的当前状态记录你的要求：${content}。下一步可以继续补充依据，或直接进入${item.action}。`
+}
+
+async function dispatchTaskMineCommand() {
+  const item = selectedTaskMineWorkItem.value
+  const files = [...taskMineFiles.value]
+  const content = taskMineCommand.value.trim() || (files.length ? '请识别并分析我上传的资料' : '')
+  if (!item || !content || taskMineUploading.value) return
+  taskMineUploading.value = true
+  try {
+    if (files.length) await uploadComposerFiles(files, 'Dobby工作附件')
+    const attachments = createChatAttachments(files)
+    const messages = [...(taskMineThreads.value[item.id] ?? [])]
+    const timestamp = Date.now()
+    messages.push({ id: `${item.id}-user-${timestamp}`, role: 'user', content, attachments: attachments.length ? attachments : undefined })
+    messages.push({ id: `${item.id}-assistant-${timestamp + 1}`, role: 'assistant', content: buildTaskMineReply(content, attachments) })
+    taskMineThreads.value = { ...taskMineThreads.value, [item.id]: messages }
+    taskMineCommand.value = ''
+    taskMineFiles.value = []
+    await nextTick()
+    const viewport = taskMineThreadViewport.value
+    if (viewport) viewport.scrollTop = viewport.scrollHeight
+  } catch {
+    message.error('附件上传失败，请检查文件或网络后重试。')
+  } finally {
+    taskMineUploading.value = false
+  }
+}
+
+function dispatchTaskMineSuggestion(content: string) {
+  taskMineCommand.value = content
+  void dispatchTaskMineCommand()
+}
+
+function goTaskMinePage(direction: number) {
+  taskMinePageIndex.value = Math.min(Math.max(taskMinePageIndex.value + direction, 0), taskMinePageCount.value - 1)
+}
+
+watch(taskMineStatus, () => {
+  taskMinePageIndex.value = 0
+})
+
+watch(taskMinePageCount, count => {
+  taskMinePageIndex.value = Math.min(taskMinePageIndex.value, count - 1)
+})
+
+watch(pagedTaskMineWorkItems, items => {
+  if (!items.some(item => item.id === selectedTaskMineWorkItemId.value)) selectedTaskMineWorkItemId.value = items[0]?.id ?? ''
+}, { immediate: true })
+
+watch(selectedTaskMineWorkItemId, () => {
+  taskMineFiles.value = []
+})
+
+function openTaskDisposition(taskId: string) {
+  selectedTaskId.value = taskId
+  taskDispositionReply.value = ''
+  taskDispositionForwardId.value = ''
+  taskDispositionFiles.value = []
+  taskDispositionOpen.value = true
+}
+
+function closeTaskDisposition() {
+  taskDispositionOpen.value = false
+}
+
+function handleTaskDispositionFiles(event: Event) {
+  taskDispositionFiles.value = Array.from((event.target as HTMLInputElement).files || [])
+}
+
+async function submitTaskDisposition() {
+  const task = selectedTask.value
+  if (!task) return
+  if (!taskDispositionReply.value && !taskDispositionForwardId.value && !taskDispositionFiles.value.length) {
+    message.warning('请填写回复、选择材料或指定转交人。')
+    return
+  }
+  taskDispositionSubmitting.value = true
+  try {
+    for (const file of taskDispositionFiles.value) await store.uploadAttachment(file, '任务处置')
+    let dispositionRecorded = false
+    if (taskDispositionForwardId.value && taskDispositionForwardId.value !== taskCurrentOwnerId(task)) {
+      await store.reassignTask(task.id, taskDispositionForwardId.value, taskDispositionReply.value || '转交当前任务节点')
+      dispositionRecorded = true
+    }
+    if (task.status === 'pending' || task.status === 'overdue') {
+      await store.updateTaskStatus(task.id, 'processing', taskDispositionReply.value || '开始处理任务')
+      dispositionRecorded = true
+    } else if (task.status === 'need_more_info' && (taskDispositionReply.value || taskDispositionFiles.value.length)) {
+      await store.updateTaskStatus(task.id, 'processing', taskDispositionReply.value || '已补充材料，继续处理')
+      dispositionRecorded = true
+    }
+    if (!dispositionRecorded) await store.addTaskNote(task.id, taskDispositionReply.value || `已提交 ${taskDispositionFiles.value.length} 个任务材料`)
+    message.success('任务处置结果已记录。')
+    closeTaskDisposition()
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '任务处置提交失败，请稍后重试。')
+  } finally {
+    taskDispositionSubmitting.value = false
+  }
+}
+
+function clearTaskHistoryFilters() {
+  taskHistoryKeyword.value = ''
+  taskHistoryStart.value = ''
+  taskHistoryEnd.value = ''
+}
 
 async function openTaskHistory(taskId: string) {
   taskHistoryOpenId.value = taskId
@@ -1638,8 +2095,8 @@ async function createManualTask() {
   const triggerParts = [taskTriggerSummary.value, form.cc ? `抄送：${form.cc}` : ''].filter(Boolean)
   try {
     await store.createTask({ title: form.title, task_type: form.task_type, risk_level: 'medium', assignee_user_id: taskFlowSteps.value[0]?.owner_user_id, due_at: taskFlowSteps.value[taskFlowSteps.value.length - 1]?.due_at, trigger_reason: triggerParts.join(' · '), required_materials: requiredMaterials, workflow_steps })
-    message.success('任务流已创建并进入任务看板')
-    taskCreateOpen.value = false
+    message.success('任务流已创建并进入我的任务。')
+    taskManagementTab.value = 'mine'
     resetTaskFlowCreator()
   } catch (error: any) {
     message.error(error.response?.data?.detail || '任务流创建失败，请检查填写内容后重试。')
@@ -1890,22 +2347,18 @@ function nowStr() {
   border-radius: 6px;
   background: rgba(247, 236, 228, 0.86);
   color: var(--color-primary-dark);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 760;
   line-height: 1;
 }
 
 .home-console {
-  display: grid;
-  grid-template-columns: minmax(760px, 1fr) 330px;
-  gap: 16px;
-  align-items: start;
+  display: block;
   height: calc(100dvh - var(--header-height, 56px) - 36px);
   min-height: 600px;
 }
 
-.home-workspace,
-.home-side-panel {
+.home-workspace {
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(20, 45, 54, 0.1);
   border-radius: 8px;
@@ -1927,57 +2380,6 @@ function nowStr() {
   gap: 18px;
   padding: 14px 22px;
   border-bottom: 1px solid rgba(20, 45, 54, 0.08);
-}
-
-.home-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  min-width: 132px;
-}
-
-.home-primary-button,
-.home-card-primary,
-.home-expand-button,
-.home-regenerate {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  border: 1px solid rgba(20, 45, 54, 0.14);
-  border-radius: 6px;
-  background: #fff;
-  color: #152d34;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 760;
-  text-decoration: none;
-  cursor: pointer;
-  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease, background .18s ease;
-}
-
-.home-primary-button {
-  height: 40px;
-  min-width: 100px;
-  padding: 0 16px;
-}
-
-.home-primary-button {
-  border-color: #cd5b20;
-  background: linear-gradient(180deg, #e46722, #c84e12);
-  color: #fff;
-  box-shadow: 0 10px 20px rgba(205, 91, 32, 0.18);
-}
-
-.home-primary-button:hover,
-.home-card-primary:hover,
-.home-expand-button:hover,
-.home-regenerate:hover {
-  transform: translateY(-1px);
-  border-color: rgba(15, 118, 110, 0.34);
-  box-shadow: 0 12px 24px rgba(28, 48, 44, 0.11);
 }
 
 .home-mode-tabs {
@@ -2020,26 +2422,44 @@ function nowStr() {
   border-color: rgba(15, 118, 110, 0.28);
 }
 
+.home-workbench {
+  display: grid;
+  grid-template-columns: minmax(430px, 42%) minmax(520px, 58%);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.home-queue-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid rgba(20, 45, 54, 0.1);
+  background: rgba(251, 253, 252, 0.74);
+}
+
 .home-controlbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  padding: 14px 22px;
+  gap: 8px;
+  padding: 12px 14px;
   border-bottom: 1px solid rgba(20, 45, 54, 0.08);
 }
 
-.home-filter-tabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  min-width: 0;
+.home-status-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  width: 100%;
 }
 
-.home-filter-tabs button {
+.home-status-tabs button {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 6px;
   height: 36px;
   padding: 0 14px;
   border: 1px solid rgba(20, 45, 54, 0.12);
@@ -2047,13 +2467,13 @@ function nowStr() {
   background: #fff;
   color: #455b63;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 780;
   cursor: pointer;
   box-shadow: 0 1px 0 rgba(255, 255, 255, .7) inset;
 }
 
-.home-filter-tabs button span {
+.home-status-tabs button span {
   min-width: 20px;
   height: 20px;
   padding: 0 6px;
@@ -2065,90 +2485,80 @@ function nowStr() {
   font-variant-numeric: tabular-nums;
 }
 
-.home-filter-tabs button.active {
+.home-status-tabs button.active {
   border-color: #08383e;
   background: #08383e;
   color: #fff;
   box-shadow: 0 10px 22px rgba(8, 56, 62, 0.18);
 }
 
-.home-filter-tabs button.active span {
+.home-status-tabs button.active span {
   background: rgba(255, 255, 255, 0.16);
   color: #fff;
 }
 
-.home-pager {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-}
-
-.home-page-state {
-  display: inline-flex;
-  align-items: center;
-  min-width: 70px;
-  height: 32px;
-  justify-content: center;
-  color: #647783;
-  font-size: 12px;
-  font-weight: 760;
-  font-variant-numeric: tabular-nums;
-}
-
-.home-page-arrow {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border: 1px solid rgba(20, 45, 54, 0.13);
-  border-radius: 6px;
-  background: #fff;
-  color: #153138;
-  cursor: pointer;
-  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease, background .18s ease, opacity .18s ease;
-}
-
-.home-page-arrow:hover:not(:disabled) {
-  transform: translateY(-1px);
-  border-color: rgba(15, 118, 110, 0.34);
-  box-shadow: 0 10px 20px rgba(28, 48, 44, 0.1);
-}
-
-.home-page-arrow:disabled {
-  cursor: not-allowed;
-  opacity: .36;
-}
-
 .home-queue-list {
   display: grid;
+  grid-template-rows: repeat(5, minmax(0, 1fr));
   flex: 1 1 auto;
   align-content: start;
   min-height: 0;
   overflow: hidden;
-  padding: 0 22px;
+  padding: 0;
 }
 
 .home-queue-card {
+  position: relative;
   display: grid;
-  grid-template-columns: 34px 62px minmax(0, 1fr) 190px 116px;
-  gap: 16px;
+  grid-template-columns: 34px 48px minmax(0, 1fr);
+  gap: 12px;
   align-items: center;
-  min-height: 112px;
-  padding: 16px 0;
-  border-top: 1px solid rgba(20, 45, 54, 0.08);
+  width: 100%;
+  min-height: 110px;
+  padding: 13px 14px 13px 10px;
+  border: 0;
+  border-bottom: 1px solid rgba(20, 45, 54, 0.08);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background .18s ease, box-shadow .18s ease, transform .18s ease;
 }
 
-.home-queue-card:first-child {
-  border-top-color: rgba(205, 91, 32, 0.16);
+.home-queue-card::before {
+  content: "";
+  position: absolute;
+  inset: 10px auto 10px 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: transparent;
+}
+
+.home-queue-card:hover {
+  background: rgba(237, 246, 243, 0.7);
+}
+
+.home-queue-card.active {
+  background: #eef7f4;
+  box-shadow: inset -1px 0 rgba(15, 118, 110, 0.14);
+}
+
+.home-queue-card.active::before {
+  background: #0f766e;
+}
+
+.home-queue-card:focus-visible {
+  z-index: 1;
+  outline: 2px solid rgba(15, 118, 110, 0.55);
+  outline-offset: -3px;
 }
 
 .home-rank {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 52px;
+  width: 32px;
+  height: 46px;
   border-radius: 0 8px 8px 0;
   font-size: 18px;
   font-weight: 860;
@@ -2171,11 +2581,16 @@ function nowStr() {
   color: #2563eb;
 }
 
+.home-rank.success {
+  background: #e8f7f0;
+  color: #16845f;
+}
+
 .home-work-icon {
   display: grid;
   place-items: center;
-  width: 54px;
-  height: 54px;
+  width: 44px;
+  height: 44px;
   border-radius: 8px;
   border: 1px solid transparent;
 }
@@ -2204,7 +2619,15 @@ function nowStr() {
   color: #2563eb;
 }
 
+.home-work-icon.success {
+  border-color: rgba(22, 132, 95, 0.16);
+  background: #edf8f3;
+  color: #16845f;
+}
+
 .home-work-main {
+  display: grid;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -2243,11 +2666,16 @@ function nowStr() {
   color: #2563eb;
 }
 
-.home-work-main h2 {
+.home-chip.success {
+  background: #dcf3e9;
+  color: #16845f;
+}
+
+.home-work-title {
+  display: block;
   overflow: hidden;
-  margin: 0 0 5px;
   color: #122933;
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1.28;
   font-weight: 820;
   letter-spacing: 0;
@@ -2255,14 +2683,42 @@ function nowStr() {
   white-space: nowrap;
 }
 
-.home-work-main p {
+.home-work-reason {
+  display: block;
   overflow: hidden;
-  margin: 0;
   color: #6a7d88;
   font-size: 12px;
   line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.home-work-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  margin-top: 2px;
+  color: #6f7f89;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.home-work-meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: #415b63;
+  font-weight: 760;
+}
+
+.home-work-meta time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .home-tag-row {
@@ -2280,7 +2736,7 @@ function nowStr() {
   border-radius: 4px;
   background: #edf2f4;
   color: #71818b;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 680;
 }
 
@@ -2324,39 +2780,249 @@ function nowStr() {
   min-width: 0;
 }
 
-.home-card-primary {
-  width: 112px;
-  height: 38px;
-  padding: 0 14px;
+.home-pagination {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 54px;
+  padding: 9px 14px;
+  border-top: 1px solid rgba(20, 45, 54, 0.08);
+  background: rgba(255, 255, 255, 0.88);
 }
 
-.home-card-primary.danger,
-.home-card-primary.warning {
-  border-color: #cd5b20;
-  background: linear-gradient(180deg, #e46722, #c84e12);
+.home-pagination > span {
+  color: #6c7e88;
+  font-size: 12px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.home-pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.home-pagination button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid rgba(20, 45, 54, 0.13);
+  border-radius: 6px;
+  background: #fff;
+  color: #3f565e;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 760;
+  cursor: pointer;
+  transition: transform .18s ease, border-color .18s ease, background .18s ease, color .18s ease, opacity .18s ease;
+}
+
+.home-pagination button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(15, 118, 110, 0.38);
+  color: #0f766e;
+}
+
+.home-pagination button.active {
+  border-color: #0f766e;
+  background: #0f766e;
   color: #fff;
 }
 
-.home-card-primary.upload {
-  border-color: #00877f;
-  background: linear-gradient(180deg, #009f96, #007f78);
-  color: #fff;
+.home-pagination button:disabled {
+  cursor: not-allowed;
+  opacity: .34;
 }
 
-.home-card-primary.info {
-  border-color: #2563eb;
-  background: linear-gradient(180deg, #3b82f6, #2563eb);
-  color: #fff;
+.home-pagination button:focus-visible {
+  outline: 2px solid rgba(15, 118, 110, 0.48);
+  outline-offset: 2px;
 }
 
-.home-expand-button {
-  width: calc(100% - 44px);
-  height: 38px;
-  margin: 8px 22px 18px;
-  color: #728491;
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
+.home-work-ai {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 12% 0, rgba(15, 118, 110, 0.08), transparent 18rem),
+    linear-gradient(180deg, rgba(250, 252, 251, 0.94), #fff 52%);
+}
+
+.home-work-ai-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px 16px;
+  border-bottom: 1px solid rgba(20, 45, 54, 0.08);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.home-work-ai-title {
+  min-width: 0;
+}
+
+.home-ai-presence {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.home-ai-presence::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #14a56f;
+  box-shadow: 0 0 0 4px rgba(20, 165, 111, 0.1);
+}
+
+.home-work-ai-title h2 {
+  overflow: hidden;
+  margin: 0;
+  color: #10242a;
+  font-size: 19px;
+  line-height: 1.3;
+  font-weight: 840;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-work-ai-title p {
+  overflow: hidden;
+  margin: 7px 0 0;
+  color: #6b7d87;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.home-work-ai-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.home-work-ai-thread .message-row {
+  max-width: min(650px, 94%);
+}
+
+.home-work-ai-thread .message-bubble {
+  border: 1px solid rgba(20, 45, 54, 0.08);
+  background: #fff;
+  box-shadow: 0 10px 24px rgba(28, 48, 44, 0.055);
+}
+
+.home-work-ai-thread .message-row.user .message-bubble {
+  border-color: rgba(8, 56, 62, 0.24);
+  background: #153336;
+}
+
+.home-work-context {
+  display: grid;
+  gap: 10px;
+  width: min(620px, calc(100% - 37px));
+  margin-left: 37px;
+  padding: 13px 14px;
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  border-radius: 8px;
+  background: rgba(238, 248, 245, 0.82);
+}
+
+.home-work-context > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.home-work-context > div:first-child span {
+  color: #668078;
+  font-size: 12px;
+}
+
+.home-work-context > div:first-child strong {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 820;
+}
+
+.home-work-context-tags,
+.home-work-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.home-work-context-tags span {
+  padding: 5px 7px;
+  border-radius: 5px;
+  background: #fff;
+  color: #536b72;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.home-work-suggestions {
+  margin-left: 37px;
+}
+
+.home-work-suggestions button {
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid rgba(15, 118, 110, 0.2);
+  border-radius: 6px;
+  background: #fff;
+  color: #215e59;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 740;
+  cursor: pointer;
+  transition: transform .18s ease, border-color .18s ease, background .18s ease;
+}
+
+.home-work-suggestions button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(15, 118, 110, 0.42);
+  background: #f1f8f6;
+}
+
+.home-work-suggestions button:focus-visible {
+  outline: 2px solid rgba(15, 118, 110, 0.48);
+  outline-offset: 2px;
+}
+
+.chat-composer.home-work-composer {
+  grid-template-columns: minmax(0, 1fr) 92px;
+  align-items: end;
+  padding: 14px 20px 18px;
+  border-top: 1px solid rgba(20, 45, 54, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.home-work-composer textarea {
+  min-height: 58px;
+  max-height: 104px;
+}
+
+.home-work-composer > button[type="submit"] {
+  min-width: 92px;
 }
 
 .home-chat-panel {
@@ -2472,6 +3138,7 @@ function nowStr() {
 
 .chat-composer.home-chat-composer {
   grid-template-columns: minmax(0, 1fr) 92px;
+  align-items: end;
   padding: 14px 22px 18px;
   border-top: 1px solid rgba(20, 45, 54, 0.08);
   background: rgba(255, 255, 255, 0.84);
@@ -2482,378 +3149,143 @@ function nowStr() {
   max-height: 104px;
 }
 
-.home-chat-composer button {
+.home-chat-composer > button[type="submit"] {
   min-width: 92px;
 }
 
-.home-side {
+.composer-entry {
   display: grid;
-  grid-template-rows: minmax(178px, .82fr) minmax(284px, 1.32fr) minmax(216px, 1fr);
-  gap: 12px;
-  height: 100%;
-  min-height: 0;
-  align-content: stretch;
-  overflow: hidden;
-}
-
-.home-side-panel {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-  padding: 16px;
-}
-
-.home-side-head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-
-.home-side-head h2 {
   min-width: 0;
-  margin: 0;
-  color: #10242a;
-  font-size: 17px;
-  line-height: 1.25;
-  font-weight: 830;
-  letter-spacing: 0;
+  gap: 8px;
 }
 
-.home-side-head h2::before {
-  content: "";
-  display: inline-block;
-  width: 4px;
-  height: 18px;
-  margin-right: 8px;
-  border-radius: 999px;
-  background: #cd5b20;
-  vertical-align: -3px;
-}
-
-.home-side-head h2 span,
-.home-side-head > span,
-.home-side-head a {
-  color: #778996;
-  font-size: 12px;
-  font-weight: 680;
-  text-decoration: none;
-}
-
-.home-side-head > div {
-  min-width: 0;
-}
-
-.home-activity-head {
+.composer-input-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: 8px;
 }
 
-.home-activity-head a {
-  justify-self: end;
-  white-space: nowrap;
-}
-
-.home-activity-foot {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px 9px;
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(20, 45, 54, 0.08);
-  color: #7c8b95;
-  font-size: 12px;
-  line-height: 1.3;
-  font-variant-numeric: tabular-nums;
-}
-
-.home-activity-foot span {
-  white-space: nowrap;
-}
-
-.home-activity-foot b {
-  position: relative;
+.composer-attach-button {
+  min-width: 108px;
+  min-height: 58px;
   display: inline-flex;
   align-items: center;
-  height: 20px;
-  padding: 0 7px 0 17px;
-  border-radius: 5px;
-  background: #edf8f4;
-  color: #278464;
-  font-weight: 720;
-  white-space: nowrap;
-}
-
-.home-activity-foot b::before {
-  content: "";
-  position: absolute;
-  left: 7px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #10a76e;
-}
-
-.home-collaborator-list {
-  display: grid;
-  flex: 1 1 auto;
-  grid-template-rows: repeat(auto-fit, minmax(68px, 1fr));
-  gap: 10px;
-  min-height: 0;
-}
-
-.home-collaborator {
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  min-height: 0;
-  padding: 10px 0;
-  border-top: 1px solid rgba(20, 45, 54, 0.07);
-}
-
-.home-collaborator:first-child {
-  border-top: 0;
-}
-
-.home-avatar {
-  display: grid;
-  place-items: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 30% 18%, #1b7f86, #062f36 68%);
-  color: #fff;
-  font-size: 18px;
-  font-weight: 820;
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.13), 0 10px 18px rgba(6, 47, 54, .14);
-}
-
-.home-collaborator strong {
-  display: block;
-  color: #132930;
-  font-size: 14px;
-  font-weight: 820;
-}
-
-.home-collaborator p {
-  overflow: hidden;
-  margin: 3px 0 0;
-  color: #6d7f89;
-  font-size: 12px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.home-collaborator > span {
-  color: #11a56b;
-  font-size: 12px;
-  font-weight: 760;
-}
-
-.home-priority-list,
-.home-ai-feed {
-  display: grid;
-  min-height: 0;
-  gap: 11px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.home-priority-list {
-  flex: 1 1 auto;
-  align-content: space-between;
-}
-
-.home-ai-feed {
-  flex: 1 1 auto;
-  align-content: start;
-}
-
-.home-priority-list li {
-  display: grid;
-  grid-template-columns: 30px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-}
-
-.home-priority-list b {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid rgba(15, 118, 110, 0.22);
   border-radius: 6px;
-  color: #fff;
-  font-size: 15px;
-  font-variant-numeric: tabular-nums;
-}
-
-.home-priority-list b.danger,
-.home-priority-list b.warning {
-  background: linear-gradient(180deg, #e46722, #c84e12);
-}
-
-.home-priority-list b.upload {
-  background: linear-gradient(180deg, #009f96, #007f78);
-}
-
-.home-priority-list b.info {
-  background: linear-gradient(180deg, #3b82f6, #2563eb);
-}
-
-.home-priority-list strong {
-  display: block;
-  overflow: hidden;
-  color: #152d34;
+  background: #f3f8f6;
+  color: #155f5a;
   font-size: 13px;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.home-priority-list p {
-  overflow: hidden;
-  margin: 2px 0 0;
-  color: #70818b;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.home-priority-list em {
-  display: inline-flex;
-  align-items: center;
-  height: 24px;
-  padding: 0 7px;
-  border-radius: 5px;
-  font-size: 12px;
-  font-style: normal;
-  font-weight: 780;
-  white-space: nowrap;
-}
-
-.home-priority-list em.danger {
-  background: #ffe7e1;
-  color: #df4f2f;
-}
-
-.home-priority-list em.upload {
-  background: #daf6f0;
-  color: #00877f;
-}
-
-.home-priority-list em.warning {
-  background: #fff0cf;
-  color: #cf7600;
-}
-
-.home-priority-list em.info {
-  background: #e6efff;
-  color: #2563eb;
-}
-
-.home-regenerate {
-  height: 30px;
-  margin: 0 0 0 auto;
-  padding: 0 8px;
-  border-color: rgba(20, 45, 54, 0.1);
-  background: #f8faf9;
-  color: #526872;
-  box-shadow: none;
-}
-
-.home-priority-basis-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 48px 44px;
-  gap: 6px;
-  margin: -4px 0 13px;
-}
-
-.home-priority-basis-form input {
-  min-width: 0;
-  height: 34px;
-  border: 1px solid rgba(20, 45, 54, 0.13);
-  border-radius: 6px;
-  background: #fff;
-  color: #153138;
-  font: inherit;
-  font-size: 12px;
-  outline: none;
-  padding: 0 9px;
-  transition: border-color .18s ease, box-shadow .18s ease;
-}
-
-.home-priority-basis-form input:focus {
-  border-color: rgba(15, 118, 110, 0.42);
-  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.09);
-}
-
-.home-priority-basis-form button {
-  height: 34px;
-  border: 1px solid rgba(20, 45, 54, 0.13);
-  border-radius: 6px;
-  background: #fff;
-  color: #153138;
-  font: inherit;
-  font-size: 12px;
   font-weight: 760;
+  cursor: pointer;
+  transition: transform .18s ease, border-color .18s ease, background .18s ease;
+}
+
+.composer-attach-button:hover {
+  transform: translateY(-1px);
+  border-color: rgba(15, 118, 110, 0.5);
+  background: #eaf5f1;
+}
+
+.composer-attach-button:focus-within {
+  outline: 2px solid rgba(15, 118, 110, 0.42);
+  outline-offset: 2px;
+}
+
+.composer-attach-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.composer-attachment-list,
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.composer-attachment-list > span,
+.message-attachments > span {
+  min-width: 0;
+  max-width: min(100%, 320px);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 7px 6px 9px;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: 6px;
+  background: #eef7f4;
+  color: #284f4c;
+}
+
+.composer-attachment-list b,
+.message-attachments b {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment-list small,
+.message-attachments small {
+  color: #667a76;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.composer-attachment-list button {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #6c7f7b;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
   cursor: pointer;
 }
 
-.home-priority-basis-form button[type="submit"] {
-  border-color: #08383e;
-  background: #08383e;
+.composer-attachment-list button:hover {
+  transform: none;
+  background: rgba(205, 91, 32, 0.1);
+  color: var(--color-primary);
+  box-shadow: none;
+}
+
+.message-attachments {
+  margin-top: 9px;
+}
+
+.message-attachments > span {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  background: rgba(255, 255, 255, 0.84);
+}
+
+.message-row.user .message-attachments > span {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.1);
   color: #fff;
 }
 
-.home-ai-feed li {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.home-ai-feed li span {
-  display: grid;
-  place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  background: #0b4a50;
-}
-
-.home-ai-feed li span::after {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.85);
-  border-radius: 50%;
-}
-
-.home-ai-feed p {
-  overflow: hidden;
-  margin: 0;
-  color: #425962;
-  font-size: 12px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.home-ai-feed time {
-  color: #7a8b96;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
+.message-row.user .message-attachments small {
+  color: rgba(255, 255, 255, 0.72);
 }
 
 .workspace-grid {
@@ -2961,7 +3393,7 @@ function nowStr() {
 
 .command-btn,
 .quick-input button,
-.chat-composer button,
+.chat-composer > button[type="submit"],
 .task-actions button,
 .task-actions a,
 .new-session,
@@ -2987,7 +3419,7 @@ function nowStr() {
 
 .command-btn:hover,
 .quick-input button:hover,
-.chat-composer button:hover,
+.chat-composer > button[type="submit"]:hover,
 .task-actions button:hover,
 .task-actions a:hover,
 .new-session:hover,
@@ -3001,7 +3433,7 @@ function nowStr() {
 
 .command-btn:active,
 .quick-input button:active,
-.chat-composer button:active,
+.chat-composer > button[type="submit"]:active,
 .task-actions button:active,
 .task-actions a:active,
 .new-session:active,
@@ -3013,7 +3445,7 @@ function nowStr() {
 
 .command-btn.primary,
 .quick-input button,
-.chat-composer button,
+.chat-composer > button[type="submit"],
 .task-actions a,
 .task-actions .done {
   background: var(--color-primary);
@@ -3176,7 +3608,7 @@ function nowStr() {
   border-radius: 4px;
   background: #eef4f1;
   color: #0f766e;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 780;
 }
 
@@ -3348,7 +3780,7 @@ function nowStr() {
   line-height: 1.55;
 }
 .activity-list time,
-.session-item time { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.session-item time { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 .log-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; background: var(--color-info); }
 .log-dot.success { background: var(--color-success); }
 .log-dot.warning { background: var(--color-warning); }
@@ -3420,7 +3852,7 @@ function nowStr() {
   border-radius: 4px;
   background: rgba(15, 118, 110, .08);
   color: #0f766e;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 760;
 }
 
@@ -3620,6 +4052,16 @@ function nowStr() {
   padding: 14px;
   border-top: 1px solid var(--border-default);
 }
+.chat-composer > button[type="submit"] {
+  min-height: 58px;
+  align-self: end;
+}
+.chat-composer > button[type="submit"]:disabled {
+  opacity: .48;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
 .chat-composer textarea {
   min-height: 58px;
   resize: none;
@@ -3653,7 +4095,7 @@ function nowStr() {
   border-radius: 4px;
   background: #eef4f1;
   color: #173235;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 760;
 }
 
@@ -4227,7 +4669,7 @@ function nowStr() {
   border-radius: 4px;
   background: #eef8f6;
   color: #0f766e;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .collab-side .participant-row small {
@@ -4290,6 +4732,673 @@ function nowStr() {
 .task-page {
   gap: 12px;
 }
+
+/* Task command center — AI-first triage instead of a status card wall */
+.task-command-page {
+  display: grid;
+  height: calc(100dvh - var(--header-height, 56px) - 36px);
+  min-height: 640px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  overflow: hidden;
+}
+
+.task-commandbar {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 22px;
+  min-height: 84px;
+  padding: 15px 18px 16px 20px;
+  overflow: hidden;
+  border: 1px solid rgba(26, 61, 60, .1);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 82% -35%, rgba(15, 118, 110, .15), transparent 18rem),
+    linear-gradient(110deg, rgba(255,255,255,.97), rgba(244,249,247,.95));
+  box-shadow: 0 12px 32px rgba(30, 59, 55, .065);
+}
+
+.task-commandbar::after {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: '';
+  opacity: .24;
+  background-image: radial-gradient(rgba(26, 77, 72, .22) .65px, transparent .65px);
+  background-size: 8px 8px;
+  mask-image: linear-gradient(90deg, transparent 25%, #000 100%);
+}
+
+.task-command-copy,
+.task-command-stats,
+.task-command-create {
+  position: relative;
+  z-index: 1;
+}
+
+.task-command-copy {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 15px;
+}
+
+.task-command-eyebrow {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-left: 3px solid #0f766e;
+  border-radius: 3px 7px 7px 3px;
+  color: #0c625c;
+  background: rgba(224, 241, 236, .82);
+  font-size: 12px;
+  font-weight: 820;
+  letter-spacing: .02em;
+}
+
+.task-command-copy > div { min-width: 0; }
+.task-command-copy h1 {
+  overflow: hidden;
+  margin: 0;
+  color: #102d2d;
+  font-size: clamp(18px, 1.45vw, 23px);
+  font-weight: 850;
+  letter-spacing: -.025em;
+  line-height: 1.18;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-command-copy p {
+  overflow: hidden;
+  margin: 6px 0 0;
+  color: #66807a;
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-command-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(74px, 1fr));
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid rgba(33, 69, 66, .09);
+  border-radius: 8px;
+  background: rgba(32, 69, 66, .09);
+}
+.task-command-stats > div {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 11px;
+  background: rgba(255,255,255,.91);
+}
+.task-command-stats dt { color: #6e827d; font-size: 12px; white-space: nowrap; }
+.task-command-stats dd { margin: 0; color: #173b39; font-size: 19px; font-weight: 850; font-variant-numeric: tabular-nums; }
+.task-command-stats .danger dd { color: #c65126; }
+
+.task-command-create {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 0;
+  color: #fff;
+  background: #c95622;
+  box-shadow: 0 8px 18px rgba(201, 86, 34, .2);
+  transition: transform .2s ease, background .2s ease, box-shadow .2s ease;
+}
+.task-command-create:hover { transform: translateY(-1px); background: #b94a1b; box-shadow: 0 11px 22px rgba(201, 86, 34, .25); }
+.task-command-create:active { transform: translateY(1px) scale(.98); }
+
+.task-ai-workbench {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(330px, .73fr) minmax(0, 1.62fr);
+  overflow: hidden;
+  border: 1px solid rgba(26, 61, 60, .11);
+  border-radius: 10px;
+  background: rgba(255,255,255,.93);
+  box-shadow: 0 16px 38px rgba(24, 53, 50, .07);
+}
+
+.task-command-queue {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  border-right: 1px solid #dfe9e5;
+  background: #f8faf9;
+}
+.task-command-queue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 17px 12px;
+}
+.task-command-queue-head h2 { margin: 0; color: #173735; font-size: 15px; font-weight: 820; }
+.task-command-queue-head p { margin: 4px 0 0; color: #7a8e89; font-size: 12px; }
+.task-live-state { display: inline-flex; align-items: center; gap: 6px; color: #57716b; font-size: 12px; white-space: nowrap; }
+.task-live-state i,
+.task-ai-presence i { display: block; width: 6px; height: 6px; border-radius: 50%; background: #16a277; box-shadow: 0 0 0 4px rgba(22,162,119,.1); }
+
+.task-queue-filters {
+  display: flex;
+  gap: 5px;
+  padding: 0 12px 11px;
+  overflow-x: auto;
+  border-bottom: 1px solid #e3ebe8;
+  scrollbar-width: none;
+}
+.task-queue-filters::-webkit-scrollbar { display: none; }
+.task-queue-filters button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #60766f;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 730;
+  cursor: pointer;
+  transition: color .18s ease, background .18s ease, border-color .18s ease;
+}
+.task-queue-filters button span { min-width: 17px; padding: 2px 5px; border-radius: 4px; color: #5d746d; background: #e8efec; font-size: 12px; font-variant-numeric: tabular-nums; }
+.task-queue-filters button:hover { color: #0f766e; background: #eef6f3; }
+.task-queue-filters button.active { border-color: #214c49; color: #fff; background: #173f3d; }
+.task-queue-filters button.active span { color: #d9efea; background: rgba(255,255,255,.13); }
+
+.task-command-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.task-command-item {
+  position: relative;
+  display: grid;
+  width: 100%;
+  min-height: 116px;
+  grid-template-columns: 32px minmax(0, 1fr) 18px;
+  align-items: start;
+  gap: 10px;
+  padding: 14px 13px 13px;
+  border: 0;
+  border-bottom: 1px solid #e4ebe9;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background .2s ease, box-shadow .2s ease;
+}
+.task-command-item::before { position: absolute; inset: 9px auto 9px 0; width: 3px; border-radius: 0 3px 3px 0; content: ''; background: transparent; transition: background .2s ease; }
+.task-command-item:hover { background: #f1f7f4; }
+.task-command-item.active { background: #eaf4f0; box-shadow: inset -1px 0 #d5e5df; }
+.task-command-item.active::before { background: #0f766e; }
+.task-command-rank {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 7px;
+  color: #607c75;
+  background: #e7efec;
+  font-size: 12px;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+}
+.task-command-item.active .task-command-rank { color: #fff; background: #0f766e; }
+.task-command-item-main { display: block; min-width: 0; }
+.task-command-item-tags { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.task-command-item-tags em,
+.task-dobby-context header > em {
+  padding: 3px 6px;
+  border-radius: 4px;
+  color: #0f766e;
+  background: #dff1eb;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1;
+}
+.task-command-item-tags em.danger,
+.task-dobby-context header > em.danger { color: #bd4822; background: #fae5dc; }
+.task-command-item-tags em.attention,
+.task-dobby-context header > em.attention { color: #9a6509; background: #fff0cd; }
+.task-command-item-tags em.complete,
+.task-dobby-context header > em.complete { color: #527069; background: #e8eeec; }
+.task-command-item-tags small { color: #738983; font-size: 12px; }
+.task-command-item-main > strong { display: block; overflow: hidden; color: #173735; font-size: 14px; line-height: 1.42; text-overflow: ellipsis; white-space: nowrap; }
+.task-command-item-reason { display: block; overflow: hidden; margin-top: 5px; color: #6b7f7a; font-size: 12px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.task-command-item-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; color: #718680; font-size: 12px; font-variant-numeric: tabular-nums; }
+.task-command-item-meta span { display: inline-flex; align-items: center; gap: 4px; }
+.task-command-item-meta time { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-command-chevron { align-self: center; color: #a0b1ac; transition: transform .18s ease, color .18s ease; }
+.task-command-item:hover .task-command-chevron,
+.task-command-item.active .task-command-chevron { transform: translateX(2px); color: #0f766e; }
+
+.task-command-queue-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid #e1e9e6;
+  color: #7a8f89;
+  background: rgba(255,255,255,.75);
+  font-size: 12px;
+}
+.task-command-queue-foot button { border: 0; padding: 3px 0; color: #0f766e; background: transparent; font: inherit; font-size: 12px; font-weight: 760; cursor: pointer; }
+.task-command-empty { display: grid; min-height: 240px; place-content: center; justify-items: center; padding: 24px; color: #78908a; text-align: center; }
+.task-command-empty strong { margin-top: 10px; color: #284a46; font-size: 14px; }
+.task-command-empty p { max-width: 28ch; margin: 6px 0 0; font-size: 12px; line-height: 1.55; }
+
+.task-dobby-panel {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background:
+    radial-gradient(circle at 92% 10%, rgba(15,118,110,.055), transparent 20rem),
+    #fff;
+}
+.task-dobby-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px 15px;
+  border-bottom: 1px solid #e3eae8;
+}
+.task-dobby-head-copy { min-width: 0; }
+.task-ai-presence { display: inline-flex; align-items: center; gap: 6px; color: #0f766e; font-size: 12px; font-weight: 800; }
+.task-dobby-head h2 { overflow: hidden; margin: 7px 0 4px; color: #143431; font-size: 18px; font-weight: 850; letter-spacing: -.015em; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.task-dobby-head p { margin: 0; color: #70857f; font-size: 12px; font-variant-numeric: tabular-nums; }
+.task-dobby-head-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; }
+.task-dobby-head-actions button,
+.task-dobby-head-actions a {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 11px;
+  border: 1px solid #cfddd9;
+  border-radius: 6px;
+  color: #43625c;
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 760;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform .18s ease, border-color .18s ease, background .18s ease;
+}
+.task-dobby-head-actions button:hover,
+.task-dobby-head-actions a:hover { transform: translateY(-1px); border-color: #0f766e; }
+.task-dobby-head-actions .task-primary-action { border-color: #0f766e; color: #fff; background: #0f766e; }
+
+.task-dobby-thread {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px clamp(16px, 2.1vw, 28px) 26px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.task-dobby-message { display: grid; max-width: min(820px, 96%); grid-template-columns: 30px minmax(0, 1fr); align-items: start; gap: 9px; }
+.task-dobby-message.user { align-self: flex-end; grid-template-columns: minmax(0, 1fr) 30px; }
+.task-dobby-message.user .task-dobby-avatar { grid-column: 2; grid-row: 1; color: #fff; background: #c95622; }
+.task-dobby-message.user .task-dobby-bubble { grid-column: 1; grid-row: 1; border-color: #f0d6c9; background: #fff8f4; }
+.task-dobby-avatar { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 7px; color: #dcefeb; background: #173f3d; }
+.task-dobby-bubble {
+  padding: 13px 15px 14px;
+  border: 1px solid #dce7e3;
+  border-radius: 5px 10px 10px 10px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(26, 55, 52, .055);
+}
+.task-dobby-bubble > span { color: #c45528; font-size: 12px; font-weight: 800; }
+.task-dobby-bubble h3 { margin: 6px 0 5px; color: #193c39; font-size: 14px; }
+.task-dobby-bubble p { max-width: 70ch; margin: 5px 0 0; color: #405c57; font-size: 12px; line-height: 1.65; }
+.task-dobby-judgement {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid #e1e9e6;
+  border-radius: 7px;
+  background: #e1e9e6;
+}
+.task-dobby-judgement div { min-width: 0; padding: 9px 10px; background: #f7faf9; }
+.task-dobby-judgement span { display: block; color: #7a8d88; font-size: 12px; }
+.task-dobby-judgement strong { display: block; overflow: hidden; margin-top: 4px; color: #294b47; font-size: 12px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+
+.task-dobby-context,
+.task-dobby-flow {
+  width: min(820px, calc(96% - 39px));
+  box-sizing: border-box;
+  margin-left: 39px;
+  padding: 13px 14px;
+  border-left: 3px solid #0f766e;
+  border-radius: 4px 8px 8px 4px;
+  background: #eff7f4;
+}
+.task-dobby-context header,
+.task-dobby-flow header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.task-dobby-context header span,
+.task-dobby-flow header span { display: block; color: #0f766e; font-size: 12px; font-weight: 800; letter-spacing: .04em; }
+.task-dobby-context header strong,
+.task-dobby-flow header strong { display: block; margin-top: 3px; color: #234a46; font-size: 12px; }
+.task-dobby-context > p { margin: 10px 0; color: #536d68; font-size: 12px; line-height: 1.6; }
+.task-context-facts { display: grid; grid-template-columns: 1.25fr .55fr .55fr; gap: 7px; }
+.task-context-facts > span { min-width: 0; padding: 8px 9px; border-radius: 5px; background: rgba(255,255,255,.78); }
+.task-context-facts small { display: block; color: #7b8e89; font-size: 12px; }
+.task-context-facts strong { display: block; overflow: hidden; margin-top: 4px; color: #31534f; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+
+.task-dobby-flow { border-left-color: #c95622; background: #fff8f3; }
+.task-dobby-flow header > small { color: #8b817a; font-size: 12px; }
+.task-dobby-flow ol { display: grid; gap: 5px; margin: 11px 0 0; padding: 0; list-style: none; }
+.task-dobby-flow li { display: grid; min-height: 39px; grid-template-columns: 24px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 5px 7px; border-radius: 5px; background: rgba(255,255,255,.83); }
+.task-dobby-flow li > span { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 5px; color: #5f7a74; background: #e3ece8; font-size: 12px; font-weight: 820; }
+.task-dobby-flow li.completed > span { color: #fff; background: #0f766e; }
+.task-dobby-flow li.blocked > span { color: #fff; background: #c95622; }
+.task-dobby-flow li div { min-width: 0; }
+.task-dobby-flow li div strong { display: block; overflow: hidden; color: #294945; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-dobby-flow li div small { display: block; overflow: hidden; margin-top: 2px; color: #82918d; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-dobby-flow li > em { color: #758a84; font-size: 12px; font-style: normal; white-space: nowrap; }
+.task-dobby-flow li > button { border: 1px solid #c9dbd5; border-radius: 5px; padding: 5px 7px; color: #0f766e; background: #fff; font: inherit; font-size: 12px; font-weight: 760; cursor: pointer; }
+
+.task-dobby-suggestions { display: flex; flex-wrap: wrap; gap: 6px; width: min(820px, calc(96% - 39px)); margin-left: 39px; }
+.task-dobby-suggestions button { padding: 7px 9px; border: 1px solid #c9ddd7; border-radius: 6px; color: #0e6c65; background: #fff; font: inherit; font-size: 12px; font-weight: 760; cursor: pointer; transition: transform .18s ease, border-color .18s ease, background .18s ease; }
+.task-dobby-suggestions button:hover { transform: translateY(-1px); border-color: #0f766e; background: #f2f9f6; }
+
+.task-dobby-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 82px;
+  gap: 8px;
+  padding: 12px 16px 15px;
+  border-top: 1px solid #e1e9e6;
+  background: rgba(252,253,253,.95);
+}
+.task-dobby-composer textarea { min-height: 46px; max-height: 92px; box-sizing: border-box; padding: 10px 11px; border: 1px solid #cddbd7; border-radius: 7px; color: #23423f; background: #fff; font: inherit; font-size: 12px; line-height: 1.5; resize: none; transition: border-color .18s ease, box-shadow .18s ease; }
+.task-dobby-composer textarea:focus { outline: 0; border-color: #0f766e; box-shadow: 0 0 0 3px rgba(15,118,110,.1); }
+.task-dobby-composer button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 0; border-radius: 7px; color: #fff; background: #c95622; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; transition: transform .18s ease, background .18s ease; }
+.task-dobby-composer button:hover { transform: translateY(-1px); background: #b94a1b; }
+.task-dobby-composer button:disabled { opacity: .42; cursor: not-allowed; transform: none; }
+.task-dobby-empty { place-content: center; justify-items: center; color: #78908a; text-align: center; }
+.task-dobby-empty h2 { margin: 12px 0 0; color: #284a46; font-size: 17px; }
+.task-dobby-empty p { margin: 6px 0 0; font-size: 12px; }
+
+.task-command-page button:focus-visible,
+.task-command-page a:focus-visible,
+.task-command-page textarea:focus-visible { outline: 2px solid #0f766e; outline-offset: 2px; }
+
+/* Task management — lifecycle workspace aligned with the prototype */
+.task-management-page {
+  display: grid;
+  height: calc(100dvh - var(--header-height, 56px) - 36px);
+  min-height: 680px;
+  min-width: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  overflow: hidden;
+  container-name: task-management;
+  container-type: inline-size;
+}
+.task-management-nav {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 8px;
+  border: 1px solid rgba(25, 61, 58, .11);
+  border-radius: 10px;
+  background: rgba(255,255,255,.94);
+  box-shadow: 0 10px 26px rgba(27, 55, 52, .055);
+}
+.task-management-nav nav { display: grid; flex: 1 1 auto; max-width: 780px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.task-management-nav nav button {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: #58716b;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform .2s ease, color .2s ease, border-color .2s ease, background .2s ease;
+}
+.task-management-nav nav button:hover { transform: translateY(-1px); color: #0f766e; background: #f0f7f4; }
+.task-management-nav nav button.active { border-color: #204b47; color: #fff; background: #173f3d; box-shadow: 0 7px 16px rgba(23,63,61,.16); }
+.task-management-nav nav button > span { display: inline-flex; min-width: 0; align-items: center; gap: 7px; font-size: 13px; font-weight: 820; }
+.task-management-nav nav button small { grid-column: 1; overflow: hidden; color: #839590; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-management-nav nav button.active small { color: #c7dcd7; }
+.task-management-nav nav button b { grid-column: 2; grid-row: 1 / 3; align-self: center; min-width: 24px; padding: 4px 6px; border-radius: 5px; color: #49645e; background: #e7efec; font-size: 12px; line-height: 1; text-align: center; font-variant-numeric: tabular-nums; }
+.task-management-nav nav button.active b { color: #173f3d; background: #e1f1ec; }
+.task-management-scope { display: grid; flex: 0 1 300px; min-width: 170px; align-content: center; padding: 3px 12px 3px 17px; border-left: 1px solid #e1e9e6; }
+.task-management-scope span { color: #82938e; font-size: 12px; }
+.task-management-scope strong { overflow: hidden; margin-top: 4px; color: #294b47; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+
+.task-mine-view,
+.task-history-view,
+.task-assign-view { min-height: 0; }
+.task-mine-view { display: grid; grid-template-rows: minmax(0, 1fr); }
+.task-mine-workbench {
+  height: 100%;
+  border: 1px solid rgba(20, 45, 54, .1);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .94);
+  box-shadow: 0 12px 30px rgba(25, 53, 50, .055);
+}
+.task-mine-queue-empty {
+  display: grid;
+  grid-row: 1 / -1;
+  place-content: center;
+  justify-items: center;
+  padding: 30px;
+  color: #81948e;
+  text-align: center;
+}
+.task-mine-queue-empty strong { margin-top: 10px; color: #405f59; font-size: 14px; }
+.task-mine-queue-empty p { max-width: 30ch; margin: 6px 0 0; font-size: 12px; line-height: 1.55; }
+.task-mine-ai-empty { place-content: center; justify-items: center; color: #82958f; text-align: center; }
+.task-mine-ai-empty h2 { margin: 12px 0 0; color: #36554f; font-size: 17px; }
+.task-mine-ai-empty p { margin: 6px 0 0; font-size: 12px; }
+.task-mine-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 15px 18px 16px;
+  overflow: hidden;
+  border-radius: 9px;
+  background:
+    radial-gradient(circle at 86% 5%, rgba(15,118,110,.12), transparent 18rem),
+    linear-gradient(110deg, #fff, #f4f9f7);
+  box-shadow: inset 0 0 0 1px rgba(25, 61, 58, .09);
+}
+.task-mine-intro > div { min-width: 0; }
+.task-mine-intro > div > span,
+.task-assign-head span { color: #0f766e; font-size: 12px; font-weight: 850; letter-spacing: .05em; }
+.task-mine-intro h1,
+.task-assign-head h1 { margin: 4px 0; color: #143531; font-size: 20px; font-weight: 860; letter-spacing: -.02em; line-height: 1.25; }
+.task-mine-intro p,
+.task-assign-head p { max-width: 68ch; margin: 0; color: #6b817b; font-size: 12px; line-height: 1.55; }
+.task-mine-intro dl { display: grid; flex: 0 0 auto; grid-template-columns: repeat(3, minmax(80px, 1fr)); gap: 1px; margin: 0; overflow: hidden; border: 1px solid #dfe8e5; border-radius: 7px; background: #dfe8e5; }
+.task-mine-intro dl div { display: grid; grid-template-columns: auto auto; align-items: baseline; gap: 9px; padding: 9px 11px; background: rgba(255,255,255,.88); }
+.task-mine-intro dt { color: #738680; font-size: 12px; white-space: nowrap; }
+.task-mine-intro dd { margin: 0; color: #214641; font-size: 18px; font-weight: 860; font-variant-numeric: tabular-nums; }
+.task-mine-intro .danger dd { color: #c65327; }
+
+.task-lifecycle-board { display: grid; min-height: 0; grid-template-columns: minmax(0, 1.13fr) minmax(360px, .87fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.task-life-group { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid #dfe8e5; border-radius: 9px; background: rgba(255,255,255,.93); }
+.task-life-group.primary { grid-row: 1 / 3; }
+.task-life-group > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 13px 15px 12px; border-bottom: 1px solid #e4ebe9; background: #f9fbfa; }
+.task-life-group > header span { color: #0f766e; font-size: 12px; font-weight: 850; letter-spacing: .05em; }
+.task-life-group.overdue > header span { color: #bd4a22; }
+.task-life-group > header h2 { margin: 3px 0 2px; color: #21433f; font-size: 14px; }
+.task-life-group > header p { margin: 0; color: #7b8d88; font-size: 12px; }
+.task-life-group > header > strong { display: grid; min-width: 27px; height: 27px; place-items: center; border-radius: 6px; color: #0f766e; background: #e2f1ec; font-size: 12px; font-variant-numeric: tabular-nums; }
+.task-life-group.overdue > header > strong { color: #bd4a22; background: #fae9e1; }
+.task-life-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.task-life-card { position: relative; padding: 13px 14px 12px; border-bottom: 1px solid #e5ecea; background: #fff; transition: background .18s ease; }
+.task-life-card:last-child { border-bottom: 0; }
+.task-life-card:hover { background: #f8fbfa; }
+.task-life-group.primary .task-life-card::before { position: absolute; inset: 12px auto 12px 0; width: 3px; border-radius: 0 3px 3px 0; content: ''; background: #0f766e; }
+.task-life-group.overdue .task-life-card::before { background: #c95622; }
+.task-life-card-top { display: flex; align-items: center; gap: 6px; }
+.task-life-card-top > span { color: #0f766e; font-size: 12px; font-weight: 800; }
+.task-life-card-top em { padding: 3px 6px; border-radius: 4px; color: #0f766e; background: #e4f3ee; font-size: 12px; font-style: normal; font-weight: 800; }
+.task-life-card-top em.danger { color: #bd4822; background: #fae5dc; }
+.task-life-card-top em.attention { color: #976407; background: #fff0cf; }
+.task-life-card-top em.complete { color: #57726b; background: #e8eeec; }
+.task-life-card-top small { margin-left: auto; overflow: hidden; color: #81928e; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-life-card h3 { overflow: hidden; margin: 8px 0 4px; color: #183a37; font-size: 13px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.task-life-card > p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; margin: 0; color: #70837e; font-size: 12px; line-height: 1.5; -webkit-line-clamp: 2; }
+.task-current-node { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 9px; margin-top: 9px; padding: 8px 9px; border-left: 2px solid #8cb8ae; background: #f2f7f5; }
+.task-current-node span { grid-row: 1 / 3; align-self: center; color: #0f766e; font-size: 12px; font-weight: 800; }
+.task-current-node strong { overflow: hidden; color: #31514d; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-current-node small { overflow: hidden; color: #81918d; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-flow-line { display: flex; gap: 0; margin: 9px 0 0; padding: 0; overflow-x: auto; list-style: none; scrollbar-width: none; }
+.task-flow-line::-webkit-scrollbar { display: none; }
+.task-flow-line li { position: relative; display: grid; flex: 1 0 74px; justify-items: center; gap: 4px; color: #84958f; font-size: 12px; text-align: center; }
+.task-flow-line li:not(:last-child)::after { position: absolute; top: 9px; right: -50%; width: 100%; height: 1px; content: ''; background: #d5e1dd; }
+.task-flow-line i { position: relative; z-index: 1; display: grid; width: 19px; height: 19px; place-items: center; border-radius: 5px; color: #6d817b; background: #e6eeeb; font-size: 12px; font-style: normal; font-weight: 800; }
+.task-flow-line li.completed i { color: #fff; background: #0f766e; }
+.task-flow-line li.processing i { color: #fff; background: #c95622; }
+.task-flow-line li span { overflow: hidden; width: 100%; text-overflow: ellipsis; white-space: nowrap; }
+.task-life-card footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+.task-life-card footer > span { overflow: hidden; color: #7a8e88; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-life-card footer button { flex: 0 0 auto; border: 1px solid #bed5cf; border-radius: 5px; padding: 6px 9px; color: #0f766e; background: #fff; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; transition: transform .18s ease, border-color .18s ease, background .18s ease; }
+.task-life-card footer button:hover { transform: translateY(-1px); border-color: #0f766e; background: #eff8f5; }
+.task-life-empty { display: grid; min-height: 120px; place-content: center; justify-items: center; gap: 8px; color: #859690; font-size: 12px; text-align: center; }
+.task-life-empty strong { color: #627872; font-weight: 650; }
+
+.task-history-view { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 12px; }
+.task-assign-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding: 14px 17px; border: 1px solid #dfe8e5; border-radius: 9px; background: #fff; }
+.task-history-search { display: grid; grid-template-columns: minmax(260px, 1fr) 180px 180px auto; align-items: end; gap: 9px; padding: 12px 14px; border: 1px solid #dfe8e5; border-radius: 8px; background: #f8faf9; }
+.task-history-search label { display: grid; gap: 5px; color: #647b75; font-size: 12px; }
+.task-history-search input { width: 100%; min-height: 34px; box-sizing: border-box; border: 1px solid #ccdbd7; border-radius: 5px; padding: 0 9px; color: #294844; background: #fff; font: inherit; font-size: 12px; }
+.task-history-search button { min-height: 34px; border: 1px solid #c9dad5; border-radius: 5px; padding: 0 11px; color: #48665f; background: #fff; font: inherit; font-size: 12px; font-weight: 750; cursor: pointer; }
+.task-history-results { min-height: 0; overflow-y: auto; border: 1px solid #dfe8e5; border-radius: 9px; background: #fff; }
+.task-history-table-head,
+.task-history-results > article { display: grid; grid-template-columns: minmax(260px, 1.5fr) .55fr .55fr .72fr .5fr auto; align-items: center; gap: 12px; }
+.task-history-table-head { position: sticky; top: 0; z-index: 1; padding: 10px 13px; border-bottom: 1px solid #dfe8e5; color: #748983; background: #f4f8f6; font-size: 12px; font-weight: 780; }
+.task-history-results > article { min-height: 66px; padding: 9px 13px; border-bottom: 1px solid #e7edeb; color: #5e756f; font-size: 12px; }
+.task-history-results > article:last-of-type { border-bottom: 0; }
+.task-history-results > article:hover { background: #f8fbfa; }
+.task-history-results article > div { min-width: 0; }
+.task-history-results article strong { display: block; overflow: hidden; color: #284a46; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-history-results article small { display: block; overflow: hidden; margin-top: 4px; color: #85958f; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-history-results article time { font-variant-numeric: tabular-nums; }
+.task-history-results article em { width: fit-content; padding: 4px 6px; border-radius: 4px; color: #55716a; background: #e8efed; font-size: 12px; font-style: normal; }
+.task-history-results article em.closed { color: #0f766e; background: #e4f2ed; }
+.task-history-results article button { border: 0; padding: 5px 0; color: #0f766e; background: transparent; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; }
+.task-history-no-result { display: grid; min-height: 260px; place-content: center; justify-items: center; color: #83958f; text-align: center; }
+.task-history-no-result strong { margin-top: 9px; color: #45615b; font-size: 13px; }
+.task-history-no-result p { margin: 5px 0 0; font-size: 12px; }
+
+.task-assign-view { display: grid; min-width: 0; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
+.task-assign-head { align-items: center; background: radial-gradient(circle at 90% 0%, rgba(15,118,110,.1), transparent 20rem), #fff; }
+.task-assign-head span { display: inline-flex; align-items: center; gap: 6px; }
+.task-assign-head > small { color: #748a84; font-size: 12px; }
+.task-flow-scroll {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border-radius: 9px;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable both-edges;
+}
+.task-flow-scroll:focus-visible { outline: 2px solid rgba(15,118,110,.34); outline-offset: -2px; }
+.task-flow-modal.task-flow-inline { width: 100%; height: 100%; max-height: none; box-sizing: border-box; border: 1px solid #dbe6e2; border-radius: 9px; background: #fff; box-shadow: 0 12px 30px rgba(25,53,50,.055); }
+
+@media (min-width: 721px) {
+  .task-flow-inline { min-width: 1120px; min-height: 720px; }
+  .task-flow-inline .task-flow-body { grid-template-columns: minmax(320px, 32%) minmax(780px, 1fr); }
+  .task-flow-inline .task-flow-canvas-body { grid-template-columns: minmax(540px, 1fr) minmax(210px, .38fr); }
+}
+
+@container task-management (max-width: 1050px) {
+  .task-management-scope { display: none; }
+  .task-management-nav nav { max-width: none; }
+  .task-assign-head > small { display: none; }
+  .task-assign-head h1 { font-size: 18px; }
+}
+
+@container task-management (max-width: 820px) {
+  .task-management-nav nav button small { display: none; }
+  .task-management-nav nav button { align-items: center; }
+  .task-management-nav nav button b { grid-row: 1; }
+  .task-mine-intro { align-items: flex-start; flex-direction: column; }
+  .task-mine-intro dl { width: 100%; }
+}
+
+.task-disposition-backdrop { position: fixed; inset: 0; z-index: 30; background: rgba(17,35,36,.38); backdrop-filter: blur(2px); }
+.task-disposition-drawer { position: absolute; inset: 0 0 0 auto; display: grid; width: min(640px, 94vw); grid-template-rows: auto minmax(0,1fr) auto; background: #fff; box-shadow: -22px 0 55px rgba(14,37,38,.22); animation: task-drawer-in .24s ease both; }
+@keyframes task-drawer-in { from { transform: translateX(32px); opacity: .6; } to { transform: translateX(0); opacity: 1; } }
+.task-disposition-drawer > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 18px 20px 16px; border-bottom: 1px solid #dfe8e5; background: #f8faf9; }
+.task-disposition-drawer > header > div { min-width: 0; }
+.task-disposition-drawer > header span { color: #0f766e; font-size: 12px; font-weight: 800; }
+.task-disposition-drawer > header h2 { margin: 6px 0 4px; color: #173a36; font-size: 18px; line-height: 1.35; }
+.task-disposition-drawer > header p { margin: 0; color: #748983; font-size: 12px; }
+.task-disposition-drawer > header button { border: 1px solid #cddbd7; border-radius: 5px; padding: 6px 9px; color: #536f68; background: #fff; font: inherit; font-size: 12px; cursor: pointer; }
+.task-disposition-body { min-height: 0; padding: 16px 20px 24px; overflow-y: auto; }
+.task-disposition-ai { display: grid; grid-template-columns: 32px minmax(0,1fr); gap: 10px; padding: 13px; border-left: 3px solid #0f766e; border-radius: 4px 8px 8px 4px; background: #eff8f5; }
+.task-disposition-bot { display: grid; width: 31px; height: 31px; place-items: center; border-radius: 7px; color: #e0f1ed; background: #173f3d; }
+.task-disposition-ai strong { color: #214944; font-size: 12px; }
+.task-disposition-ai p { margin: 5px 0; color: #4e6a64; font-size: 12px; line-height: 1.6; }
+.task-disposition-ai small { color: #78908a; font-size: 12px; line-height: 1.5; }
+.task-disposition-flow,
+.task-disposition-form { margin-top: 17px; }
+.task-disposition-section-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.task-disposition-section-title span { color: #0f766e; font-size: 12px; font-weight: 820; }
+.task-disposition-section-title strong { color: #6d837d; font-size: 12px; font-weight: 650; }
+.task-disposition-flow ol { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.task-disposition-flow li { display: grid; grid-template-columns: 26px minmax(0,1fr) auto auto; align-items: center; gap: 8px; min-height: 43px; padding: 5px 8px; border-radius: 6px; background: #f6f8f7; }
+.task-disposition-flow li > span { display: grid; width: 23px; height: 23px; place-items: center; border-radius: 5px; color: #637c75; background: #e1eae7; font-size: 12px; font-weight: 800; }
+.task-disposition-flow li.completed > span { color: #fff; background: #0f766e; }
+.task-disposition-flow li div { min-width: 0; }
+.task-disposition-flow li div strong { display: block; overflow: hidden; color: #35534f; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-disposition-flow li div small { display: block; overflow: hidden; margin-top: 3px; color: #85958f; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-disposition-flow li em { color: #738983; font-size: 12px; font-style: normal; }
+.task-disposition-flow li button { border: 1px solid #c8d9d4; border-radius: 5px; padding: 5px 7px; color: #0f766e; background: #fff; font: inherit; font-size: 12px; cursor: pointer; }
+.task-disposition-form textarea { width: 100%; min-height: 92px; box-sizing: border-box; padding: 10px; border: 1px solid #cddbd7; border-radius: 6px; color: #294844; background: #fff; font: inherit; font-size: 12px; line-height: 1.6; resize: vertical; }
+.task-disposition-files,
+.task-disposition-forward { display: flex; align-items: center; gap: 10px; margin-top: 8px; padding: 9px 10px; border: 1px solid #dde7e4; border-radius: 6px; background: #fafcfb; }
+.task-disposition-files input { display: none; }
+.task-disposition-files > span { display: inline-flex; align-items: center; gap: 5px; color: #0f766e; font-size: 12px; font-weight: 780; cursor: pointer; }
+.task-disposition-files small { margin-left: auto; color: #82948f; font-size: 12px; }
+.task-disposition-forward > span { color: #617871; font-size: 12px; }
+.task-disposition-forward select { flex: 1; min-width: 0; border: 0; color: #31514c; background: transparent; font: inherit; font-size: 12px; }
+.task-disposition-drawer > footer { display: flex; align-items: center; justify-content: flex-end; gap: 7px; padding: 12px 20px 15px; border-top: 1px solid #dfe8e5; background: #f9fbfa; }
+.task-disposition-drawer > footer button,
+.task-disposition-drawer > footer a { display: inline-flex; min-height: 34px; align-items: center; justify-content: center; padding: 0 11px; border: 1px solid #cadad5; border-radius: 5px; color: #4a6861; background: #fff; font: inherit; font-size: 12px; font-weight: 760; text-decoration: none; cursor: pointer; }
+.task-disposition-drawer > footer .task-disposition-submit { border-color: #c95622; color: #fff; background: #c95622; }
+.task-disposition-drawer > footer .task-disposition-submit:disabled { opacity: .5; cursor: wait; }
+
+.task-management-page button:focus-visible,
+.task-management-page a:focus-visible,
+.task-management-page input:focus-visible,
+.task-management-page select:focus-visible,
+.task-management-page textarea:focus-visible { outline: 2px solid #0f766e; outline-offset: 2px; }
 
 .task-hero {
   padding: 12px;
@@ -4391,7 +5500,7 @@ function nowStr() {
   border-radius: 999px;
   background: #edf3f1;
   color: #48635d;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 820;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -4500,18 +5609,19 @@ function nowStr() {
 .task-flow-trigger-preview span { flex:0 0 auto; color:#64817b; font-size:12px; }
 .task-flow-trigger-preview strong { overflow:hidden; color:#164a43; font-size:12px; font-variant-numeric:tabular-nums; text-overflow:ellipsis; white-space:nowrap; }
 .task-flow-body { display: grid; flex: 1 1 auto; min-height: 0; grid-template-columns: minmax(330px, 31%) minmax(0, 1fr); }
-.task-flow-brief { min-height: 0; overflow-y: auto; padding: 16px; border-right: 1px solid #e1e9e7; background: #f7faf9; }
+.task-flow-brief { display: flex; min-height: 0; flex-direction: column; overflow: hidden; padding: 16px; border-right: 1px solid #e1e9e7; background: #f7faf9; }
 .task-flow-mode-switch { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border: 1px solid #dbe6e2; border-radius: 8px; background: #eaf1ef; }
 .task-flow-mode-switch button { border: 0; border-radius: 6px; padding: 9px 12px; color: #5b716e; background: transparent; font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; }
 .task-flow-mode-switch button.active { color: #fff; background: #173f3e; box-shadow: 0 3px 8px rgba(23,63,62,.17); }
 .task-flow-generator { margin-top: 12px; padding: 14px; border: 1px solid #dde8e5; border-radius: 9px; background: #fff; }
-.dobby-generator { border-color: rgba(15,118,110,.26); background: linear-gradient(145deg, #f2fbf8, #fff 58%); }
+.dobby-generator { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; border-color: rgba(15,118,110,.26); background: linear-gradient(145deg, #f2fbf8, #fff 58%); }
 .task-flow-section-title,.task-flow-editor-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .task-flow-section-title > div,.task-flow-editor-head > div { display: grid; gap: 3px; }
 .task-flow-section-title span,.task-flow-editor-head span,.task-flow-canvas-head span { color: #0f766e; font-size: 12px; font-weight: 850; letter-spacing: .04em; }
 .task-flow-section-title strong,.task-flow-editor-head strong { color: #173235; font-size: 14px; }
 .task-flow-section-title em,.task-flow-editor-head em { color: #76908b; font-size: 12px; font-style: normal; white-space: nowrap; }
-.task-flow-generator textarea { width: 100%; min-height: 100px; box-sizing: border-box; padding: 10px 11px; border: 1px solid #cadbd6; border-radius: 7px; color: #173235; background: #fff; font: inherit; font-size: 13px; line-height: 1.6; resize: vertical; }
+.task-flow-generator textarea { width: 100%; min-height: 100px; box-sizing: border-box; padding: 10px 11px; border: 1px solid #cadbd6; border-radius: 7px; color: #173235; background: #fff; font: inherit; font-size: 13px; line-height: 1.6; resize: none; }
+.dobby-generator textarea { flex: 1 1 auto; min-height: 0; }
 .task-flow-generator textarea:focus { outline: 2px solid rgba(15,118,110,.18); border-color: #0f766e; }
 .task-flow-examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .task-flow-examples button { max-width: 100%; overflow: hidden; border: 1px solid #d7e7e2; border-radius: 999px; padding: 6px 9px; color: #54706b; background: #fff; font: inherit; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
@@ -4566,11 +5676,11 @@ function nowStr() {
 .task-flow-footer .modal-primary:disabled { opacity: .45; cursor: not-allowed; transform: none; }
 .task-step-list { display: grid; gap: 6px; margin: 12px 0 0; padding: 0; list-style: none; }
 .task-step-list li { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto auto; align-items: center; gap: 7px; padding: 7px 8px; border-radius: 5px; background: #f6f8f7; color: var(--text-secondary); font-size: 12px; }
-.task-step-list li > span { display: grid; width: 19px; height: 19px; place-items: center; border-radius: 50%; background: #dce6e2; color: #48625e; font-size: 10px; font-weight: 800; }.task-step-list li.completed > span { background: #0f766e; color: #fff; }.task-step-list li.blocked { background: #fff5ed; }.task-step-list em { font-style: normal; color: var(--text-muted); }.task-step-list button { border: 0; border-radius: 4px; padding: 4px 6px; background: #e9f3f0; color: #0f766e; font-size: 11px; font-weight: 700; cursor: pointer; }
+.task-step-list li > span { display: grid; width: 19px; height: 19px; place-items: center; border-radius: 50%; background: #dce6e2; color: #48625e; font-size: 12px; font-weight: 800; }.task-step-list li.completed > span { background: #0f766e; color: #fff; }.task-step-list li.blocked { background: #fff5ed; }.task-step-list em { font-style: normal; color: var(--text-muted); }.task-step-list button { border: 0; border-radius: 4px; padding: 4px 6px; background: #e9f3f0; color: #0f766e; font-size: 12px; font-weight: 700; cursor: pointer; }
 .task-history-modal { width:min(720px,100%); max-height:min(82dvh,760px); overflow:hidden; }
 .task-history-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1px; overflow:hidden; margin-bottom:16px; border:1px solid #dfe8e5; border-radius:8px; background:#dfe8e5; }
 .task-history-summary>div { display:grid; gap:5px; padding:12px 14px; background:#f7faf9; }
-.task-history-summary span { color:var(--text-muted); font-size:11px; }
+.task-history-summary span { color:var(--text-muted); font-size: 12px; }
 .task-history-summary strong { overflow:hidden; color:#173235; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
 .task-history-body { min-height:250px; max-height:46dvh; overflow-y:auto; padding:2px 4px 2px 0; }
 .task-history-timeline { display:grid; gap:0; margin:0; padding:0; list-style:none; }
@@ -4580,7 +5690,7 @@ function nowStr() {
 .task-history-timeline li>div { padding:0 2px 15px 0; }
 .task-history-timeline header { display:flex; align-items:center; justify-content:space-between; gap:14px; }
 .task-history-timeline header strong { color:#173235; font-size:13px; }
-.task-history-timeline time { flex:0 0 auto; color:var(--text-muted); font-size:11px; font-variant-numeric:tabular-nums; }
+.task-history-timeline time { flex:0 0 auto; color:var(--text-muted); font-size: 12px; font-variant-numeric:tabular-nums; }
 .task-history-timeline p { margin:7px 0 0; padding:9px 11px; border-radius:6px; color:#506b66; background:#f5f8f7; font-size:12px; line-height:1.55; }
 .task-history-loading,.task-history-empty { display:grid; min-height:250px; place-content:center; justify-items:center; color:var(--text-muted); font-size:12px; text-align:center; }
 .task-history-empty strong { color:#294945; font-size:14px; }
@@ -4609,7 +5719,7 @@ function nowStr() {
   border-radius: 10px;
   background: linear-gradient(100deg, rgba(255,247,242,.96), #fff);
 }
-.document-intake-panel span { color: var(--color-primary); font-size: 11px; font-weight: 800; letter-spacing: .06em; }
+.document-intake-panel span { color: var(--color-primary); font-size: 12px; font-weight: 800; letter-spacing: .06em; }
 .document-intake-panel h2 { margin: 4px 0; font-size: 16px; }
 .document-intake-panel p { margin: 0; color: var(--text-muted); font-size: 12px; }
 .document-upload-button { flex: 0 0 auto; padding: 9px 13px; border-radius: 6px; color: #fff; background: var(--color-primary); font-size: 12px; font-weight: 750; cursor: pointer; }
@@ -4736,7 +5846,7 @@ function nowStr() {
   border-radius: 4px;
   background: rgba(15, 118, 110, .08);
   color: #0f766e;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 760;
 }
 .status-pill {
@@ -4744,7 +5854,7 @@ function nowStr() {
   border-radius: 4px;
   background: #eef4f1;
   color: #173235;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 750;
 }
 .task-actions { margin-top: auto; padding-top: 14px; }
@@ -4812,10 +5922,10 @@ function nowStr() {
 .project-status-heading > div { min-width: 0; }
 .project-status-heading span,
 .status-workspace-head > div > span,
-.status-side-panel header span { display: block; color: #0f766e; font-size: 11px; font-weight: 800; letter-spacing: .05em; }
+.status-side-panel header span { display: block; color: #0f766e; font-size: 12px; font-weight: 800; letter-spacing: .05em; }
 .project-status-heading h1 { margin: 4px 0; color: #173235; font-size: 21px; line-height: 1.25; }
 .project-status-heading p { max-width: 68ch; margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.55; }
-.project-status-heading > small { flex: 0 0 auto; margin-bottom: 3px; color: var(--text-muted); font-size: 11px; }
+.project-status-heading > small { flex: 0 0 auto; margin-bottom: 3px; color: var(--text-muted); font-size: 12px; }
 
 .project-kpi-strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); overflow: hidden; border: 1px solid var(--border-default); border-radius: 9px; background: #fff; box-shadow: 0 7px 20px rgba(20, 49, 48, .035); }
 .project-kpi-strip article { position: relative; min-width: 0; padding: 14px 15px 13px; border-right: 1px solid #edf1ef; }
@@ -4824,22 +5934,22 @@ function nowStr() {
 .project-kpi-strip article.orange::before { background: #d97706; }
 .project-kpi-strip article.red::before { background: #c2410c; }
 .project-kpi-strip article.blue::before { background: #2563eb; }
-.project-kpi-strip span { display: block; overflow: hidden; color: var(--text-secondary); font-size: 11px; font-weight: 760; text-overflow: ellipsis; white-space: nowrap; }
+.project-kpi-strip span { display: block; overflow: hidden; color: var(--text-secondary); font-size: 12px; font-weight: 760; text-overflow: ellipsis; white-space: nowrap; }
 .project-kpi-strip strong { display: block; margin: 7px 0 3px; color: #173235; font-size: 23px; line-height: 1; font-variant-numeric: tabular-nums; }
-.project-kpi-strip small { display: block; overflow: hidden; color: var(--text-muted); font-size: 11px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.project-kpi-strip small { display: block; overflow: hidden; color: var(--text-muted); font-size: 12px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 
 .project-health-band { display: grid; grid-template-columns: minmax(250px, .78fr) minmax(0, 2.22fr); overflow: hidden; border: 1px solid var(--border-default); border-radius: 9px; background: #fff; }
 .project-health-summary { padding: 15px 17px; border-right: 1px solid #edf1ef; background: #f8fbfa; }
-.project-health-summary span { display: block; color: #0f766e; font-size: 11px; font-weight: 800; letter-spacing: .04em; }
+.project-health-summary span { display: block; color: #0f766e; font-size: 12px; font-weight: 800; letter-spacing: .04em; }
 .project-health-summary strong { display: block; margin: 6px 0 5px; color: #173235; font-size: 17px; }
 .project-health-summary p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.55; }
 .project-health-data { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; }
 .project-health-data > div { min-width: 0; padding: 15px 17px; border-right: 1px solid #edf1ef; }
 .project-health-data > div:last-child { border-right: 0; }
-.project-health-data dt { overflow: hidden; color: var(--text-secondary); font-size: 11px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.project-health-data dt { overflow: hidden; color: var(--text-secondary); font-size: 12px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
 .project-health-data dd { margin: 7px 0 4px; color: #173235; font-size: 20px; font-weight: 830; font-variant-numeric: tabular-nums; }
 .project-health-data dd.positive { color: #0f766e; }.project-health-data dd.negative { color: #c2410c; }
-.project-health-data small { display: block; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.project-health-data small { display: block; color: var(--text-muted); font-size: 12px; line-height: 1.45; }
 .project-health-data .project-health-conclusion { overflow: hidden; min-height: 24px; margin-top: 5px; color: #0f4c49; font-size: 13px; line-height: 1.45; }
 
 .project-status-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
@@ -4847,7 +5957,7 @@ function nowStr() {
 .project-status-tabs button:hover { border-color: rgba(15, 118, 110, .42); transform: translateY(-1px); }
 .project-status-tabs button.active { border-color: #0f766e; background: #f0faf7; color: #0c615b; box-shadow: inset 0 0 0 1px rgba(15, 118, 110, .08); }
 .project-status-tabs strong { display: block; overflow: hidden; font-size: 12px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
-.project-status-tabs span { display: block; overflow: hidden; margin-top: 3px; color: var(--text-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.project-status-tabs span { display: block; overflow: hidden; margin-top: 3px; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 
 .project-status-content { display: grid; grid-template-columns: minmax(0, 1.72fr) minmax(286px, .72fr); min-height: 0; gap: 12px; align-items: stretch; }
 .project-status-main, .project-status-aside { min-width: 0; min-height: 0; }
@@ -4857,40 +5967,40 @@ function nowStr() {
 .status-workspace-head, .status-side-panel header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 15px 17px 13px; border-bottom: 1px solid #edf1ef; }
 .status-workspace-head h2, .status-side-panel h2 { margin: 5px 0 3px; color: #173235; font-size: 16px; line-height: 1.25; }
 .status-workspace-head p { max-width: 60ch; margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
-.status-link-action, .status-side-panel header a, .status-side-panel header button, .status-row-action { flex: 0 0 auto; border: 1px solid rgba(15, 118, 110, .25); border-radius: 5px; padding: 6px 9px; background: #fff; color: #0e675f; font: inherit; font-size: 11px; font-weight: 780; line-height: 1.2; text-decoration: none; cursor: pointer; }
+.status-link-action, .status-side-panel header a, .status-side-panel header button, .status-row-action { flex: 0 0 auto; border: 1px solid rgba(15, 118, 110, .25); border-radius: 5px; padding: 6px 9px; background: #fff; color: #0e675f; font: inherit; font-size: 12px; font-weight: 780; line-height: 1.2; text-decoration: none; cursor: pointer; }
 .status-link-action:hover, .status-side-panel header a:hover, .status-side-panel header button:hover, .status-row-action:hover { border-color: #0f766e; background: #f1faf8; }
 .status-empty { display: grid; min-height: 290px; place-items: center; box-sizing: border-box; margin: 0; padding: 34px; color: var(--text-muted); font-size: 13px; line-height: 1.65; text-align: center; }
 
 .status-execution-table, .process-supervision-table { overflow-x: auto; }
 .status-execution-head, .status-execution-table article { display: grid; grid-template-columns: 82px minmax(180px, 1.45fr) minmax(150px, 1.05fr) 92px 96px 92px; min-width: 770px; align-items: center; gap: 13px; padding: 11px 17px; }
-.status-execution-head { color: var(--text-muted); font-size: 11px; font-weight: 760; background: #f8faf9; border-bottom: 1px solid #edf1ef; }
+.status-execution-head { color: var(--text-muted); font-size: 12px; font-weight: 760; background: #f8faf9; border-bottom: 1px solid #edf1ef; }
 .status-execution-table article { min-height: 59px; border-bottom: 1px solid #edf1ef; color: var(--text-secondary); font-size: 12px; }
 .status-execution-table article:last-child { border-bottom: 0; }
-.status-execution-table article > div { min-width: 0; }.status-execution-table article strong { display: block; overflow: hidden; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.status-execution-table article small { display: block; margin-top: 3px; color: var(--text-muted); font-size: 10px; }
-.execution-status { width: fit-content; border-radius: 999px; padding: 4px 7px; background: #f0f3f2; color: #536964; font-size: 10px; font-weight: 780; white-space: nowrap; }.execution-status.overdue { background: #fff0e7; color: #b84e18; }.execution-status.processing { background: #e8f6f2; color: #0f766e; }.execution-status.waiting_confirm { background: #eef5ff; color: #2563a8; }.execution-status.done { background: #edf7ef; color: #39834c; }.execution-status.need_more_info { background: #fff8df; color: #9a6700; }.status-execution-table .overdue { color: #bd4d17; font-weight: 750; }
+.status-execution-table article > div { min-width: 0; }.status-execution-table article strong { display: block; overflow: hidden; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.status-execution-table article small { display: block; margin-top: 3px; color: var(--text-muted); font-size: 12px; }
+.execution-status { width: fit-content; border-radius: 999px; padding: 4px 7px; background: #f0f3f2; color: #536964; font-size: 12px; font-weight: 780; white-space: nowrap; }.execution-status.overdue { background: #fff0e7; color: #b84e18; }.execution-status.processing { background: #e8f6f2; color: #0f766e; }.execution-status.waiting_confirm { background: #eef5ff; color: #2563a8; }.execution-status.done { background: #edf7ef; color: #39834c; }.execution-status.need_more_info { background: #fff8df; color: #9a6700; }.status-execution-table .overdue { color: #bd4d17; font-weight: 750; }
 
 .status-latest-list { padding: 3px 17px; }
 .status-latest-list article { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-height: 61px; border-bottom: 1px solid #edf1ef; }
 .status-latest-list article:last-of-type { border-bottom: 0; }.status-event-dot { width: 7px; height: 7px; border-radius: 50%; background: #0f766e; }.status-event-dot.orange { background: #d97706; }.status-event-dot.red { background: #c2410c; }.status-event-dot.blue { background: #2563eb; }
-.status-latest-list article > div { min-width: 0; }.status-latest-list strong { display: block; overflow: hidden; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.status-latest-list p { overflow: hidden; max-width: 56ch; margin: 3px 0 0; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.status-latest-list time { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.status-latest-list article > div { min-width: 0; }.status-latest-list strong { display: block; overflow: hidden; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.status-latest-list p { overflow: hidden; max-width: 56ch; margin: 3px 0 0; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.status-latest-list time { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 
 .process-supervision-head, .process-supervision-table article { display: grid; grid-template-columns: minmax(185px, 1.18fr) 150px minmax(118px, .82fr) minmax(125px, .9fr) minmax(120px, .88fr) minmax(130px, 1fr); min-width: 920px; gap: 12px; align-items: center; padding: 11px 17px; }
-.process-supervision-head { border-bottom: 1px solid #edf1ef; background: #f8faf9; color: var(--text-muted); font-size: 11px; font-weight: 760; }.process-supervision-table article { min-height: 60px; border-bottom: 1px solid #edf1ef; color: var(--text-secondary); font-size: 11px; }.process-supervision-table article:last-child { border-bottom: 0; }.process-supervision-table article > div { min-width: 0; }.process-supervision-table article strong { display: block; overflow: hidden; margin-top: 2px; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.process-supervision-table article > div:first-child small { color: var(--text-muted); font-family: var(--font-mono, monospace); font-size: 10px; }
-.process-progress { display: grid; grid-template-columns: auto minmax(35px, 1fr); gap: 4px 7px; align-items: center; }.process-progress b { font-size: 12px; color: #173235; }.process-progress i { display: block; height: 5px; overflow: hidden; border-radius: 999px; background: #e6ece9; }.process-progress i em { display: block; height: 100%; border-radius: inherit; background: #0f766e; }.process-progress small { grid-column: 1 / -1; color: var(--text-muted); font-size: 10px; }.process-risk { color: #4e6964; }.process-risk.critical,.process-risk.high { color: #b94b18; font-weight: 760; }.process-risk.medium { color: #b77800; }
+.process-supervision-head { border-bottom: 1px solid #edf1ef; background: #f8faf9; color: var(--text-muted); font-size: 12px; font-weight: 760; }.process-supervision-table article { min-height: 60px; border-bottom: 1px solid #edf1ef; color: var(--text-secondary); font-size: 12px; }.process-supervision-table article:last-child { border-bottom: 0; }.process-supervision-table article > div { min-width: 0; }.process-supervision-table article strong { display: block; overflow: hidden; margin-top: 2px; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.process-supervision-table article > div:first-child small { color: var(--text-muted); font-family: var(--font-mono, monospace); font-size: 12px; }
+.process-progress { display: grid; grid-template-columns: auto minmax(35px, 1fr); gap: 4px 7px; align-items: center; }.process-progress b { font-size: 12px; color: #173235; }.process-progress i { display: block; height: 5px; overflow: hidden; border-radius: 999px; background: #e6ece9; }.process-progress i em { display: block; height: 100%; border-radius: inherit; background: #0f766e; }.process-progress small { grid-column: 1 / -1; color: var(--text-muted); font-size: 12px; }.process-risk { color: #4e6964; }.process-risk.critical,.process-risk.high { color: #b94b18; font-weight: 760; }.process-risk.medium { color: #b77800; }
 
-.status-change-list { padding: 2px 17px; }.status-change-list article { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-height: 71px; border-bottom: 1px solid #edf1ef; }.status-change-list article:last-child { border-bottom: 0; }.status-change-list article > div { min-width: 0; }.status-change-list span { display: block; color: #0f766e; font-size: 10px; font-weight: 780; }.status-change-list strong { display: block; overflow: hidden; margin-top: 3px; color: #173235; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }.status-change-list p { overflow: hidden; max-width: 58ch; margin: 3px 0 0; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }.status-change-list time { color: var(--text-muted); font-size: 11px; white-space: nowrap; }.status-change-list em { border-radius: 999px; padding: 4px 7px; background: #f0f5f3; color: #41615b; font-size: 10px; font-style: normal; font-weight: 760; white-space: nowrap; }
+.status-change-list { padding: 2px 17px; }.status-change-list article { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-height: 71px; border-bottom: 1px solid #edf1ef; }.status-change-list article:last-child { border-bottom: 0; }.status-change-list article > div { min-width: 0; }.status-change-list span { display: block; color: #0f766e; font-size: 12px; font-weight: 780; }.status-change-list strong { display: block; overflow: hidden; margin-top: 3px; color: #173235; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }.status-change-list p { overflow: hidden; max-width: 58ch; margin: 3px 0 0; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.status-change-list time { color: var(--text-muted); font-size: 12px; white-space: nowrap; }.status-change-list em { border-radius: 999px; padding: 4px 7px; background: #f0f5f3; color: #41615b; font-size: 12px; font-style: normal; font-weight: 760; white-space: nowrap; }
 
-.status-side-panel header { padding: 14px 15px 11px; }.status-side-panel h2 { font-size: 14px; }.status-side-panel header a, .status-side-panel header button { padding: 5px 7px; font-size: 10px; }.risk-window-list { padding: 0 15px 8px; }.risk-window-list article { padding: 12px 0; border-bottom: 1px solid #edf1ef; }.risk-window-list article:last-child { border-bottom: 0; }.risk-window-list article > div { display: flex; align-items: center; gap: 7px; }.risk-indicator { width: 7px; height: 7px; border-radius: 50%; background: #84958f; }.risk-indicator.critical { background: #bd4c1a; }.risk-indicator.high { background: #e08416; }.risk-indicator.medium { background: #d1a000; }.risk-window-list strong { overflow: hidden; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.risk-window-list dl { display: grid; gap: 4px; margin: 8px 0; }.risk-window-list dl div { display: grid; grid-template-columns: 55px minmax(0, 1fr); gap: 7px; }.risk-window-list dt { color: var(--text-muted); font-size: 10px; }.risk-window-list dd { overflow: hidden; margin: 0; color: var(--text-secondary); font-size: 11px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }.risk-window-list .status-row-action { display: inline-block; padding: 4px 7px; font-size: 10px; }
-.status-side-empty { margin: 0; padding: 24px 15px; color: var(--text-muted); font-size: 12px; line-height: 1.6; }.change-preview-list { padding: 0 15px 8px; }.change-preview-list article { display: grid; gap: 3px; padding: 10px 0; border-bottom: 1px solid #edf1ef; }.change-preview-list article:last-child { border-bottom: 0; }.change-preview-list span { color: #0f766e; font-size: 10px; font-weight: 780; }.change-preview-list strong { overflow: hidden; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.change-preview-list small { color: var(--text-muted); font-size: 10px; }
+.status-side-panel header { padding: 14px 15px 11px; }.status-side-panel h2 { font-size: 14px; }.status-side-panel header a, .status-side-panel header button { padding: 5px 7px; font-size: 12px; }.risk-window-list { padding: 0 15px 8px; }.risk-window-list article { padding: 12px 0; border-bottom: 1px solid #edf1ef; }.risk-window-list article:last-child { border-bottom: 0; }.risk-window-list article > div { display: flex; align-items: center; gap: 7px; }.risk-indicator { width: 7px; height: 7px; border-radius: 50%; background: #84958f; }.risk-indicator.critical { background: #bd4c1a; }.risk-indicator.high { background: #e08416; }.risk-indicator.medium { background: #d1a000; }.risk-window-list strong { overflow: hidden; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.risk-window-list dl { display: grid; gap: 4px; margin: 8px 0; }.risk-window-list dl div { display: grid; grid-template-columns: 55px minmax(0, 1fr); gap: 7px; }.risk-window-list dt { color: var(--text-muted); font-size: 12px; }.risk-window-list dd { overflow: hidden; margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }.risk-window-list .status-row-action { display: inline-block; padding: 4px 7px; font-size: 12px; }
+.status-side-empty { margin: 0; padding: 24px 15px; color: var(--text-muted); font-size: 12px; line-height: 1.6; }.change-preview-list { padding: 0 15px 8px; }.change-preview-list article { display: grid; gap: 3px; padding: 10px 0; border-bottom: 1px solid #edf1ef; }.change-preview-list article:last-child { border-bottom: 0; }.change-preview-list span { color: #0f766e; font-size: 12px; font-weight: 780; }.change-preview-list strong { overflow: hidden; color: #173235; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.change-preview-list small { color: var(--text-muted); font-size: 12px; }
 
 /* 原型项目状态的内容结构：摘要 + 四个完整业务视图 */
 .project-summary-panel { padding: 14px 17px; border: 1px solid var(--border-default); border-radius: 9px; background: #fff; box-shadow: 0 7px 20px rgba(20, 49, 48, .035); }
-.project-summary-panel header { display: flex; align-items: center; gap: 9px; }.project-summary-panel header span { color: #0f766e; font-size: 11px; font-weight: 800; letter-spacing: .05em; }.project-summary-panel header strong { color: #173235; font-size: 13px; }.project-summary-panel p { margin: 8px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+.project-summary-panel header { display: flex; align-items: center; gap: 9px; }.project-summary-panel header span { color: #0f766e; font-size: 12px; font-weight: 800; letter-spacing: .05em; }.project-summary-panel header strong { color: #173235; font-size: 13px; }.project-summary-panel p { margin: 8px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
 .project-status-content { display: flex; min-height: 0; }.project-status-main { display: flex; width: 100%; min-height: 0; }.project-status-main > .status-workspace { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .status-latest-card-grid, .process-grid, .status-card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; padding: 14px 16px 16px; }
 .status-info-card, .process-card, .task-execution-card { min-width: 0; padding: 13px; border: 1px solid #e4ece9; border-radius: 7px; background: #fbfcfb; }
-.status-info-card { display: flex; flex-direction: column; align-items: flex-start; }.status-info-meta { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 8px; }.status-info-meta > span { overflow: hidden; color: #0f766e; font-size: 11px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }.status-info-meta em { flex: 0 0 auto; border-radius: 999px; padding: 3px 7px; background: #edf7f3; color: #127265; font-size: 10px; font-style: normal; font-weight: 780; }.status-info-meta em.orange { background: #fff5df; color: #a66a00; }.status-info-meta em.red { background: #fff0e9; color: #bf4a1b; }.status-info-meta em.blue { background: #edf5ff; color: #2563a8; }.status-info-meta em.pending { background: #f0f3f2; color: #536964; }.status-info-meta em.processing { background: #e8f6f2; color: #0f766e; }.status-info-meta em.overdue { background: #fff0e7; color: #b84e18; }.status-info-meta em.waiting_confirm { background: #eef5ff; color: #2563a8; }.status-info-meta em.done { background: #edf7ef; color: #39834c; }.status-info-card > small { display: block; margin-top: 8px; color: var(--text-muted); font-size: 10px; }.status-info-card > strong, .task-execution-card > strong { display: block; overflow: hidden; width: 100%; margin-top: 7px; color: #173235; font-size: 13px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }.status-info-card > p, .task-execution-card > p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; margin: 6px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.55; -webkit-line-clamp: 2; }.status-info-card .status-row-action, .task-execution-card .status-row-action { margin-top: 11px; }
-.process-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.process-card { border-left: 3px solid #b8d8d1; }.process-card.key-process { border-color: #d97706; background: #fffdf8; }.process-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; margin-bottom: 9px; }.process-card-head > div { min-width: 0; }.process-card-head small { display: block; color: var(--text-muted); font-size: 10px; font-family: var(--font-mono, monospace); }.process-card-head strong { display: block; overflow: hidden; margin-top: 2px; color: #173235; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }.process-card-head > span { flex: 0 0 auto; border-radius: 999px; padding: 3px 7px; background: #edf7f3; color: #0f766e; font-size: 10px; font-weight: 780; }.process-card-head > span.high, .process-card-head > span.critical { background: #fff0e9; color: #b84e18; }.process-card-head > span.medium { background: #fff5df; color: #9a6700; }.process-card p { margin: 5px 0 0; color: var(--text-secondary); font-size: 11px; line-height: 1.52; }.process-card p b { color: #45635d; font-weight: 780; }.process-card-note { display: block; margin-top: 9px; color: #0f766e; font-size: 10px; font-weight: 750; }
+.status-info-card { display: flex; flex-direction: column; align-items: flex-start; }.status-info-meta { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 8px; }.status-info-meta > span { overflow: hidden; color: #0f766e; font-size: 12px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }.status-info-meta em { flex: 0 0 auto; border-radius: 999px; padding: 3px 7px; background: #edf7f3; color: #127265; font-size: 12px; font-style: normal; font-weight: 780; }.status-info-meta em.orange { background: #fff5df; color: #a66a00; }.status-info-meta em.red { background: #fff0e9; color: #bf4a1b; }.status-info-meta em.blue { background: #edf5ff; color: #2563a8; }.status-info-meta em.pending { background: #f0f3f2; color: #536964; }.status-info-meta em.processing { background: #e8f6f2; color: #0f766e; }.status-info-meta em.overdue { background: #fff0e7; color: #b84e18; }.status-info-meta em.waiting_confirm { background: #eef5ff; color: #2563a8; }.status-info-meta em.done { background: #edf7ef; color: #39834c; }.status-info-card > small { display: block; margin-top: 8px; color: var(--text-muted); font-size: 12px; }.status-info-card > strong, .task-execution-card > strong { display: block; overflow: hidden; width: 100%; margin-top: 7px; color: #173235; font-size: 13px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }.status-info-card > p, .task-execution-card > p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; margin: 6px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.55; -webkit-line-clamp: 2; }.status-info-card .status-row-action, .task-execution-card .status-row-action { margin-top: 11px; }
+.process-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.process-card { border-left: 3px solid #b8d8d1; }.process-card.key-process { border-color: #d97706; background: #fffdf8; }.process-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; margin-bottom: 9px; }.process-card-head > div { min-width: 0; }.process-card-head small { display: block; color: var(--text-muted); font-size: 12px; font-family: var(--font-mono, monospace); }.process-card-head strong { display: block; overflow: hidden; margin-top: 2px; color: #173235; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }.process-card-head > span { flex: 0 0 auto; border-radius: 999px; padding: 3px 7px; background: #edf7f3; color: #0f766e; font-size: 12px; font-weight: 780; }.process-card-head > span.high, .process-card-head > span.critical { background: #fff0e9; color: #b84e18; }.process-card-head > span.medium { background: #fff5df; color: #9a6700; }.process-card p { margin: 5px 0 0; color: var(--text-secondary); font-size: 12px; line-height: 1.52; }.process-card p b { color: #45635d; font-weight: 780; }.process-card-note { display: block; margin-top: 9px; color: #0f766e; font-size: 12px; font-weight: 750; }
 .task-execution-card { border-top: 3px solid #0f766e; }.task-execution-card > p b { color: #45635d; }.status-source-ref { color: #0f766e !important; font-weight: 700; }
 .status-workspace > .status-latest-card-grid, .status-workspace > .process-grid, .status-workspace > .status-card-grid, .status-workspace > .status-empty { flex: 1; min-height: 0; overflow-y: auto; }
 
@@ -4909,9 +6019,9 @@ function nowStr() {
 .project-kpi-strip article.red .project-kpi-icon { background: #ffefef; color: #d83232; }
 .project-kpi-strip article.blue .project-kpi-icon { background: #edf4ff; color: #3182ce; }
 .project-kpi-strip article > div { min-width: 0; }
-.project-kpi-strip span { font-size: 11px; font-weight: 720; }
+.project-kpi-strip span { font-size: 12px; font-weight: 720; }
 .project-kpi-strip strong { margin: 4px 0 3px; font-size: 24px; letter-spacing: -.03em; }
-.project-kpi-strip small { font-size: 10px; }
+.project-kpi-strip small { font-size: 12px; }
 
 .project-health-band { grid-template-columns: minmax(320px, 1.1fr) minmax(0, 2.55fr); border-radius: 8px; box-shadow: 0 8px 24px rgba(24, 54, 51, .045); }
 .project-health-summary { display: grid; grid-template-columns: 112px minmax(0, 1fr); align-items: center; gap: 15px; padding: 18px; background: #fff; }
@@ -4919,10 +6029,10 @@ function nowStr() {
 .project-health-gauge::after { position: absolute; inset: 11px; border-radius: inherit; background: #fff; content: ''; }
 .project-health-gauge > div { position: relative; z-index: 1; display: grid; gap: 3px; place-items: center; text-align: center; }
 .project-health-gauge strong { margin: 0; color: #0b786f; font-size: 16px; line-height: 1.15; }
-.project-health-gauge small { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+.project-health-gauge small { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 .project-health-copy span { color: #193b39; font-size: 14px; font-weight: 800; }
 .project-health-copy p { margin: 9px 0 6px; color: var(--text-secondary); font-size: 12px; line-height: 1.65; }
-.project-health-copy small { display: block; color: var(--text-muted); font-size: 10px; line-height: 1.5; }
+.project-health-copy small { display: block; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
 .project-health-data > div { display: flex; min-height: 134px; flex-direction: column; justify-content: center; padding: 17px 20px; }
 .project-health-data dt { font-size: 12px; }
 .project-health-data dd { margin: 9px 0 5px; font-size: 25px; letter-spacing: -.035em; }
@@ -4940,7 +6050,7 @@ function nowStr() {
 .project-status-tabs button:hover { border-color: #edf1ef; transform: none; background: #f8fbfa; }
 .project-status-tabs button.active { border-color: #edf1ef; background: #fff; box-shadow: none; color: #0d766e; }
 .project-status-tabs button.active::after { background: #0f9d92; }
-.project-status-tabs strong { font-size: 13px; }.project-status-tabs span { margin-top: 2px; font-size: 10px; }
+.project-status-tabs strong { font-size: 13px; }.project-status-tabs span { margin-top: 2px; font-size: 12px; }
 
 .project-status-content { display: grid; grid-template-columns: minmax(0, 1.82fr) minmax(300px, .78fr); min-height: 0; gap: 12px; }
 .project-status-main { display: flex; width: auto; min-width: 0; min-height: 0; }
@@ -4950,14 +6060,14 @@ function nowStr() {
 .status-workspace-head, .status-side-panel header { align-items: center; padding: 15px 17px 13px; }
 .status-workspace-head > div, .status-side-panel header > div { min-width: 0; }
 .status-workspace-head h2, .status-side-panel h2 { margin: 3px 0 2px; font-size: 16px; }
-.status-workspace-head p { max-width: 72ch; font-size: 11px; }
-.status-workspace-head > small, .status-side-panel header > small { flex: 0 0 auto; color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.status-workspace-head p { max-width: 72ch; font-size: 12px; }
+.status-workspace-head > small, .status-side-panel header > small { flex: 0 0 auto; color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 .status-execution-table, .process-supervision-table, .status-latest-list, .status-change-list { flex: 1; min-height: 0; overflow: auto; }
 .status-execution-head, .status-execution-table article { grid-template-columns: 76px minmax(195px, 1.46fr) minmax(155px, 1fr) 82px 118px 98px; min-width: 820px; padding: 11px 16px; }
 .status-execution-table article { min-height: 66px; }
 .status-execution-table article:hover, .process-supervision-table article:hover, .status-latest-list article:hover, .status-change-list article:hover { background: #fbfdfc; }
 .status-execution-table article > div { overflow: hidden; }
-.status-execution-table article > div:not(:nth-child(2)):not(:nth-child(5)) { display: -webkit-box; -webkit-box-orient: vertical; color: #5b706b; font-size: 11px; line-height: 1.5; -webkit-line-clamp: 2; }
+.status-execution-table article > div:not(:nth-child(2)):not(:nth-child(5)) { display: -webkit-box; -webkit-box-orient: vertical; color: #5b706b; font-size: 12px; line-height: 1.5; -webkit-line-clamp: 2; }
 .status-execution-table article > div:nth-child(4) { color: #173235; font-weight: 700; }
 .status-execution-table article > div:last-child { color: #46645e; }
 .status-execution-table article small { line-height: 1.4; }
@@ -4965,10 +6075,10 @@ function nowStr() {
 .status-latest-list { padding: 2px 17px; }
 .status-latest-list article { grid-template-columns: 10px minmax(0, 1fr) auto auto 42px; gap: 10px; min-height: 64px; }
 .status-latest-list p { max-width: 54ch; }
-.status-latest-list em { border-radius: 999px; padding: 3px 7px; background: #edf7f3; color: #127265; font-size: 10px; font-style: normal; font-weight: 780; white-space: nowrap; }
+.status-latest-list em { border-radius: 999px; padding: 3px 7px; background: #edf7f3; color: #127265; font-size: 12px; font-style: normal; font-weight: 780; white-space: nowrap; }
 .status-latest-list em.orange { background: #fff5df; color: #a66a00; }.status-latest-list em.red { background: #fff0e9; color: #bf4a1b; }.status-latest-list em.blue { background: #edf5ff; color: #2563a8; }
 .status-row-placeholder { width: 42px; }
-.status-row-action { padding: 5px 7px; font-size: 10px; }
+.status-row-action { padding: 5px 7px; font-size: 12px; }
 .process-supervision-head, .process-supervision-table article { grid-template-columns: minmax(175px, 1.12fr) minmax(165px, 1.06fr) minmax(145px, 1fr) minmax(150px, 1fr) minmax(135px, .92fr) minmax(145px, 1fr); min-width: 1000px; padding: 11px 16px; }
 .process-supervision-table article > div:not(:first-child) { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; line-height: 1.5; -webkit-line-clamp: 3; }
 .process-progress { display: grid !important; -webkit-line-clamp: unset !important; }
@@ -4977,7 +6087,7 @@ function nowStr() {
 .status-change-list article { min-height: 73px; }
 .status-side-panel { display: flex; min-height: 0; flex-direction: column; }
 .status-side-panel header { flex: 0 0 auto; }.risk-window-list, .change-preview-list { flex: 1; min-height: 0; overflow-y: auto; }
-.risk-window-list article { padding: 12px 0; }.risk-window-list p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; margin: 0; color: #5c726d; font-size: 10px; line-height: 1.5; -webkit-line-clamp: 2; }
+.risk-window-list article { padding: 12px 0; }.risk-window-list p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; margin: 0; color: #5c726d; font-size: 12px; line-height: 1.5; -webkit-line-clamp: 2; }
 .risk-window-list dl { margin: 7px 0; }.risk-window-list dl div { grid-template-columns: 54px minmax(0, 1fr); }.risk-window-list dd { white-space: normal; }
 .change-preview-list article { padding: 11px 0; }
 
@@ -4995,32 +6105,205 @@ function nowStr() {
 .project-kpi-strip strong { margin: 5px 0 4px; font-size: 27px; }
 .project-kpi-strip small { font-size: 12px; }
 
-.project-health-summary { grid-template-columns: 122px minmax(0, 1fr); gap: 18px; min-height: 158px; padding: 20px; }
-.project-health-gauge { width: 114px; height: 114px; }
+.project-health-band {
+  grid-template-columns: minmax(340px, 1.1fr) minmax(170px, .55fr) minmax(170px, .55fr) minmax(360px, 1.45fr);
+  gap: 12px;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.project-health-data { display: contents; }
+
+.project-health-summary,
+.project-health-data > div {
+  position: relative;
+  min-width: 0;
+  min-height: 176px;
+  box-sizing: border-box;
+  border: 1px solid #dfe9e6;
+  border-top: 3px solid #76b8ae;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 26px rgba(24, 54, 51, .055);
+}
+
+.project-health-summary {
+  display: grid;
+  grid-template-columns: 114px minmax(0, 240px);
+  place-content: center;
+  align-items: center;
+  gap: 20px;
+  padding: 22px 24px;
+  border-right: 1px solid #dfe9e6;
+  background: linear-gradient(135deg, #f2faf7 0%, #fff 72%);
+}
+
+.project-health-gauge { width: 110px; height: 110px; }
 .project-health-gauge strong { font-size: 18px; }
 .project-health-gauge small { font-size: 12px; }
+.project-health-copy { min-width: 0; }
 .project-health-copy span { font-size: 16px; }
-.project-health-copy p { margin: 10px 0 7px; font-size: 14px; }
-.project-health-copy small { font-size: 12px; }
-.project-health-data { grid-template-columns: 206px 206px minmax(0, 1fr); }
-.project-health-data > div { min-height: 158px; padding: 20px 22px; }
-.project-health-data > div:nth-child(-n + 2) { padding-right: 20px; padding-left: 20px; }
-.project-health-data dt { overflow: visible; font-size: 13px; line-height: 1.35; text-overflow: clip; white-space: normal; }
-.project-progress-compare { display: grid !important; width: 100%; grid-template-rows: auto auto auto; align-content: center; justify-items: stretch; padding-top: 18px !important; padding-bottom: 16px !important; }
-.project-progress-compare dt { width: 100%; color: #496761; font-weight: 800; letter-spacing: .01em; text-align: left; }
-.progress-compare-values { position: relative; display: grid; width: 100%; box-sizing: border-box; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 28px; margin-top: 13px; padding: 0 2px 13px; border-bottom: 1px solid #bcd1ca; }
-.progress-compare-values span { display: grid; min-width: 0; gap: 4px; justify-items: center; text-align: center; }
-.progress-compare-values small { color: #78908a; font-size: 12px; font-weight: 720; line-height: 1.25; }
-.progress-compare-values b { color: #27433f; font-size: 24px; font-variant-numeric: tabular-nums; line-height: 1.1; letter-spacing: -.035em; }
-.progress-compare-values span:last-child b { color: #0d8278; }
-.project-progress-compare dd { position: relative; display: grid; gap: 2px; justify-self: center; justify-items: center; margin: 12px 0 0; padding: 0; line-height: 1; }
-.project-progress-compare dd::before { position: absolute; top: -13px; left: 50%; width: 1px; height: 10px; background: #83aaa0; content: ''; }
-.project-progress-compare dd small { color: #78908a; font-size: 10px; font-weight: 740; line-height: 1; }
-.project-progress-compare dd strong { color: currentColor; font-size: 22px; font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: -.03em; }
-.project-health-data dd { margin: 10px 0 6px; font-size: 28px; }
-.project-progress-compare dd { margin: 12px 0 0; font-size: inherit; }
+.project-health-copy p { margin: 9px 0 6px; font-size: 14px; line-height: 1.55; text-wrap: pretty; }
+.project-health-copy small { font-size: 12px; line-height: 1.55; }
+
+.project-health-data > div {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  padding: 22px 20px;
+  text-align: center;
+}
+
+.project-health-data > div:nth-child(2) { border-top-color: #0f9d92; }
+.project-health-data .project-health-conclusion {
+  overflow: visible;
+  margin-top: 0;
+  border-top-color: #d97706;
+  background: linear-gradient(135deg, #fff 18%, #fffaf3 100%);
+}
+
+.project-health-data dt {
+  width: 100%;
+  overflow: visible;
+  color: #496761;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.35;
+  text-align: center;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.project-health-data dd { margin: 10px 0 7px; font-size: 30px; line-height: 1; }
 .project-health-data small { font-size: 12px; }
-.project-health-conclusion dd { font-size: 17px; }
+
+.project-progress-compare { display: flex !important; width: auto; justify-self: stretch; padding: 22px 18px !important; }
+.progress-compare-values { display: grid; width: min(100%, 176px); grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 14px; padding: 0; border: 0; }
+.progress-compare-values span { display: grid; min-width: 0; gap: 5px; justify-items: center; text-align: center; }
+.progress-compare-values small { color: #71867f; font-size: 12px; font-weight: 720; line-height: 1.25; }
+.progress-compare-values b { color: #27433f; font-size: 24px; font-variant-numeric: tabular-nums; line-height: 1.05; letter-spacing: -.035em; }
+.progress-compare-values span:last-child b { color: #0d8278; }
+.project-progress-compare dd {
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 15px 0 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #e9f7f3;
+  font-size: inherit;
+  line-height: 1;
+}
+.project-progress-compare dd::before { display: none; }
+.project-progress-compare dd small { color: #5f7770; font-size: 12px; font-weight: 740; line-height: 1; }
+.project-progress-compare dd strong { color: currentColor; font-size: 18px; font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: -.03em; }
+
+.project-health-progress { width: min(100%, 184px); }
+.project-health-data .project-health-conclusion {
+  align-items: stretch;
+  justify-content: center;
+  padding: 18px 20px;
+  text-align: left;
+}
+.project-conclusion-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.project-conclusion-head dt {
+  display: inline-flex;
+  width: auto;
+  align-items: center;
+  gap: 7px;
+  color: #6f5a39;
+  text-align: left;
+}
+.project-conclusion-head dt::before {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #d97706;
+  box-shadow: 0 0 0 4px rgba(217, 119, 6, .1);
+  content: '';
+}
+.project-conclusion-head em {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid #efd5ad;
+  border-radius: 5px;
+  background: #fff6e7;
+  color: #9a6208;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.2;
+}
+.project-health-conclusion > dd {
+  width: 100%;
+  margin: 9px 0 10px;
+  color: #173235;
+  font-size: 18px;
+  line-height: 1.4;
+  text-align: left;
+  text-wrap: balance;
+}
+.project-conclusion-points {
+  display: grid;
+  gap: 0;
+  width: 100%;
+  border-top: 1px solid #efe8dc;
+}
+.project-conclusion-points p {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: 9px;
+  margin: 0;
+  padding: 7px 0;
+  border-bottom: 1px solid #f2ece3;
+}
+.project-conclusion-points b {
+  color: #9a6b24;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 800;
+}
+.project-conclusion-points span {
+  min-width: 0;
+  color: #536b65;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.project-conclusion-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding-top: 9px;
+  color: #6d7f79;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.project-conclusion-meta span { min-width: 0; }
+.project-conclusion-meta strong {
+  flex: 0 0 auto;
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 820;
+  white-space: nowrap;
+}
+
+@media (max-width: 1400px) {
+  .project-health-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 
 .project-status-tabs button { min-height: 70px; padding: 14px 18px; }
 .project-status-tabs strong { font-size: 14px; }
@@ -5043,8 +6326,8 @@ function nowStr() {
 .status-execution-table article strong { font-size: 14px; }
 .status-execution-table article small { font-size: 12px; }
 .status-execution-table article > div:not(:nth-child(2)):not(:nth-child(5)) { font-size: 12px; }
-.execution-status { padding: 5px 9px; font-size: 11px; }
-.closure-status { display: inline-flex; align-items: center; width: fit-content; border: 1px solid transparent; border-radius: 5px; padding: 5px 9px; background: #f2f5f4; color: #557069; font-size: 11px; font-weight: 780; line-height: 1.2; white-space: nowrap; }
+.execution-status { padding: 5px 9px; font-size: 12px; }
+.closure-status { display: inline-flex; align-items: center; width: fit-content; border: 1px solid transparent; border-radius: 5px; padding: 5px 9px; background: #f2f5f4; color: #557069; font-size: 12px; font-weight: 780; line-height: 1.2; white-space: nowrap; }
 .closure-status.open { border-color: #dce5e2; background: #f3f6f5; color: #62746f; }
 .closure-status.review { border-color: #f1d6ad; background: #fff7e8; color: #a46600; }
 .closure-status.supplement { border-color: #e7d7a6; background: #fff9e8; color: #927100; }
@@ -5054,9 +6337,9 @@ function nowStr() {
 .status-latest-list article { grid-template-columns: 10px minmax(0, 1fr) auto auto 48px; gap: 12px; min-height: 74px; }
 .status-latest-list strong { font-size: 14px; }
 .status-latest-list p, .status-latest-list time { font-size: 12px; }
-.status-latest-list em { padding: 4px 8px; font-size: 11px; }
+.status-latest-list em { padding: 4px 8px; font-size: 12px; }
 .status-row-placeholder { width: 48px; }
-.status-row-action { padding: 6px 9px; font-size: 11px; }
+.status-row-action { padding: 6px 9px; font-size: 12px; }
 
 .process-supervision-head, .process-supervision-table article {
   grid-template-columns: minmax(195px, 1.12fr) minmax(180px, 1.06fr) minmax(155px, 1fr) minmax(165px, 1fr) minmax(150px, .92fr) minmax(160px, 1fr);
@@ -5067,10 +6350,10 @@ function nowStr() {
 .process-supervision-table article { min-height: 76px; font-size: 13px; }
 .process-supervision-table article strong, .process-progress b { font-size: 14px; }
 .process-supervision-table article > div:first-child small { color: #5f7771; font-size: 13px; font-weight: 720; line-height: 1.4; letter-spacing: .01em; }
-.process-progress small { font-size: 11px; }
+.process-progress small { font-size: 12px; }
 
 .status-change-list article { min-height: 82px; }
-.status-change-list span { font-size: 11px; }
+.status-change-list span { font-size: 12px; }
 .status-change-list strong { font-size: 14px; }
 .status-change-list p, .status-change-list time, .status-change-list em { font-size: 12px; }
 
@@ -5079,11 +6362,11 @@ function nowStr() {
 .risk-window-list strong { font-size: 14px; }
 .risk-window-list dl { margin: 8px 0; }
 .risk-window-list dl div { grid-template-columns: 60px minmax(0, 1fr); }
-.risk-window-list dt { font-size: 11px; }
+.risk-window-list dt { font-size: 12px; }
 .risk-window-list dd { font-size: 12px; white-space: normal; }
 .change-preview-list article { padding: 13px 0; }
 .change-preview-list strong { font-size: 13px; }
-.change-preview-list span, .change-preview-list small { font-size: 11px; }
+.change-preview-list span, .change-preview-list small { font-size: 12px; }
 
 /* 信息类页签沿用原型的固定宽度卡片栅格，空间不足时自动换行。 */
 .status-latest-list {
@@ -5141,6 +6424,18 @@ function nowStr() {
 .status-change-list time { grid-column: 2; grid-row: 2; align-self: end; margin-left: 12px; }
 
 @media (max-width: 1180px) {
+  .task-lifecycle-board { grid-template-columns: minmax(0, 1.08fr) minmax(320px, .92fr); }
+  .task-management-scope { display: none; }
+  .task-commandbar { grid-template-columns: minmax(0, 1fr) auto; gap: 14px; }
+  .task-command-stats { display: none; }
+  .task-ai-workbench { grid-template-columns: minmax(320px, 39%) minmax(0, 61%); }
+  .task-dobby-judgement { grid-template-columns: 1fr; }
+  .task-dobby-judgement div + div { border-top: 1px solid #e1e9e6; }
+  .task-context-facts { grid-template-columns: 1fr 1fr; }
+  .task-context-facts > span:first-child { grid-column: 1 / -1; }
+  .home-workbench {
+    grid-template-columns: minmax(350px, 43%) minmax(0, 57%);
+  }
   .workspace-grid,
   .chat-layout,
   .status-grid {
@@ -5156,8 +6451,7 @@ function nowStr() {
   .project-kpi-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .project-kpi-strip article:nth-child(3n) { border-right: 0; }
   .project-kpi-strip article:nth-child(-n + 3) { border-bottom: 1px solid #edf1ef; }
-  .project-health-band { grid-template-columns: 1fr; }
-  .project-health-summary { border-right: 0; border-bottom: 1px solid #edf1ef; }
+  .project-health-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .project-status-content { grid-template-columns: 1fr; }
   .project-status-aside { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .status-latest-card-grid, .process-grid, .status-card-grid { grid-template-columns: 1fr; }
@@ -5172,8 +6466,182 @@ function nowStr() {
   .metric-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
+@media (max-width: 900px) {
+  .task-management-page { height: auto; min-height: 0; overflow: visible; }
+  .task-mine-view,
+  .task-history-view,
+  .task-assign-view { min-height: 720px; }
+  .task-lifecycle-board { grid-template-columns: 1fr; grid-template-rows: none; }
+  .task-life-group,
+  .task-life-group.primary { grid-row: auto; min-height: 300px; }
+  .task-history-results { min-height: 520px; }
+  .task-history-search { grid-template-columns: minmax(220px, 1fr) 160px 160px auto; }
+  .task-flow-inline { min-height: 760px; }
+  .task-command-page { height: auto; min-height: 0; overflow: visible; }
+  .task-ai-workbench { grid-template-columns: 1fr; overflow: visible; }
+  .task-command-queue { min-height: 540px; max-height: 68dvh; border-right: 0; border-bottom: 1px solid #dfe9e5; }
+  .task-dobby-panel { min-height: 700px; }
+  .task-dobby-judgement { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .task-dobby-judgement div + div { border-top: 0; }
+  .task-context-facts { grid-template-columns: 1.25fr .55fr .55fr; }
+  .task-context-facts > span:first-child { grid-column: auto; }
+  .home-console {
+    height: auto;
+    min-height: 0;
+  }
+  .home-workspace {
+    height: auto;
+    overflow: visible;
+  }
+  .home-workbench {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+  .home-queue-pane {
+    min-height: 590px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(20, 45, 54, 0.1);
+  }
+  .home-work-ai {
+    min-height: 620px;
+  }
+  .home-chat-panel {
+    min-height: 660px;
+  }
+}
+
 @media (max-width: 720px) {
   .ai-platform { padding: 12px; }
+  .task-management-nav { padding: 6px; }
+  .task-management-nav nav { max-width: none; }
+  .task-management-nav nav button { display: flex; min-height: 42px; align-items: center; justify-content: center; padding: 7px 6px; text-align: center; }
+  .task-management-nav nav button > span { font-size: 12px; }
+  .task-management-nav nav button small,
+  .task-management-nav nav button b { display: none; }
+  .task-mine-view,
+  .task-history-view,
+  .task-assign-view { min-height: 0; }
+  .task-mine-intro { align-items: stretch; flex-direction: column; padding: 14px; }
+  .task-mine-intro h1,
+  .task-assign-head h1 { font-size: 17px; }
+  .task-mine-intro dl { width: 100%; }
+  .task-mine-intro dl div { display: grid; grid-template-columns: 1fr; gap: 4px; }
+  .task-lifecycle-board { overflow: visible; }
+  .task-life-group,
+  .task-life-group.primary { min-height: 320px; }
+  .task-assign-head { align-items: flex-start; flex-direction: column; padding: 13px; }
+  .task-history-search { grid-template-columns: 1fr; }
+  .task-history-results { min-height: 420px; }
+  .task-history-table-head { display: none; }
+  .task-history-results > article { grid-template-columns: 1fr auto; gap: 7px 12px; padding: 12px; }
+  .task-history-results > article > div { grid-column: 1 / -1; }
+  .task-history-results > article > span:nth-of-type(2),
+  .task-history-results > article time { display: none; }
+  .task-history-results > article button { grid-column: 2; grid-row: 2 / 4; }
+  .task-assign-view { min-height: 1100px; }
+  .task-flow-modal.task-flow-inline { width: 100%; height: auto; min-height: 980px; max-height: none; }
+  .task-disposition-drawer { width: 100vw; }
+  .task-disposition-drawer > header,
+  .task-disposition-body,
+  .task-disposition-drawer > footer { padding-right: 14px; padding-left: 14px; }
+  .task-disposition-flow li { grid-template-columns: 24px minmax(0,1fr) auto; }
+  .task-disposition-flow li button { grid-column: 2 / -1; justify-self: start; }
+  .task-disposition-files { align-items: flex-start; flex-direction: column; }
+  .task-disposition-files small { margin-left: 0; }
+  .task-disposition-drawer > footer { display: grid; grid-template-columns: 1fr 1fr; }
+  .task-disposition-drawer > footer .task-disposition-submit { grid-column: 1 / -1; }
+  .task-commandbar { grid-template-columns: 1fr; align-items: stretch; padding: 15px; }
+  .task-command-copy { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .task-command-copy h1 { white-space: normal; }
+  .task-command-copy p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; white-space: normal; -webkit-line-clamp: 2; }
+  .task-command-create { width: 100%; justify-content: center; }
+  .task-command-queue { min-height: 560px; max-height: 74dvh; }
+  .task-command-item { min-height: 122px; grid-template-columns: 30px minmax(0, 1fr); }
+  .task-command-chevron { display: none; }
+  .task-command-item-meta { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .task-dobby-panel { min-height: 760px; }
+  .task-dobby-head { align-items: stretch; flex-direction: column; padding: 14px; }
+  .task-dobby-head h2 { white-space: normal; }
+  .task-dobby-head-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .task-dobby-thread { padding: 15px 12px 22px; }
+  .task-dobby-message { max-width: 100%; }
+  .task-dobby-judgement { grid-template-columns: 1fr; }
+  .task-dobby-judgement div + div { border-top: 1px solid #e1e9e6; }
+  .task-dobby-context,
+  .task-dobby-flow,
+  .task-dobby-suggestions { width: calc(100% - 39px); }
+  .task-context-facts { grid-template-columns: 1fr 1fr; }
+  .task-context-facts > span:first-child { grid-column: 1 / -1; }
+  .task-dobby-flow li { grid-template-columns: 24px minmax(0, 1fr) auto; }
+  .task-dobby-flow li > button { grid-column: 2 / -1; justify-self: start; }
+  .task-dobby-composer { grid-template-columns: 1fr; }
+  .task-dobby-composer button { min-height: 39px; }
+  .home-titlebar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+  }
+  .home-mode-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    min-width: 0;
+  }
+  .home-mode-tabs button {
+    padding: 0 10px;
+  }
+  .home-controlbar {
+    padding: 10px;
+  }
+  .home-status-tabs button {
+    padding: 0 10px;
+  }
+  .home-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .home-pagination > div {
+    width: 100%;
+  }
+  .home-queue-card {
+    grid-template-columns: 30px 42px minmax(0, 1fr);
+    gap: 9px;
+    padding-right: 10px;
+  }
+  .home-work-meta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .home-work-ai-head {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 16px;
+  }
+  .home-work-ai-thread {
+    padding: 16px;
+  }
+  .home-work-context,
+  .home-work-suggestions {
+    width: auto;
+    margin-left: 0;
+  }
+  .chat-composer.home-work-composer,
+  .chat-composer.home-chat-composer {
+    grid-template-columns: 1fr;
+    padding: 12px 16px 16px;
+  }
+  .composer-input-row {
+    grid-template-columns: 1fr;
+  }
+  .composer-attach-button {
+    min-height: 40px;
+    justify-content: flex-start;
+  }
+  .home-work-composer > button[type="submit"],
+  .home-chat-composer > button[type="submit"] {
+    min-height: 40px;
+  }
   .work-hero,
   .chat-head,
   .chat-composer {
@@ -5191,9 +6659,9 @@ function nowStr() {
   .project-kpi-strip article { border-bottom: 1px solid #edf1ef; }
   .project-kpi-strip article:nth-child(2n) { border-right: 0; }
   .project-kpi-strip article:nth-last-child(-n + 2) { border-bottom: 0; }
-  .project-health-data { grid-template-columns: 1fr; }
-  .project-health-data > div { border-right: 0; border-bottom: 1px solid #edf1ef; }
-  .project-health-data > div:last-child { border-bottom: 0; }
+  .project-health-band { grid-template-columns: 1fr; }
+  .project-health-summary { grid-template-columns: 1fr; justify-items: center; text-align: center; }
+  .project-health-copy { max-width: 36ch; }
   .project-status-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .project-status-aside { grid-template-columns: 1fr; }
   .status-latest-card-grid, .process-grid, .status-card-grid { padding: 12px; }
@@ -5226,7 +6694,9 @@ function nowStr() {
   .task-flow-trigger-grid { display:grid; grid-template-columns:1fr; }
   .task-flow-trigger-grid>.form-field,.task-flow-trigger-grid>.form-field:nth-child(2),.task-flow-trigger-grid>.task-flow-cc-field,.task-flow-interval-field { width:100%; min-width:0; }
   .task-flow-body { display: block; overflow-y: auto; }
-  .task-flow-brief { overflow: visible; border-right: 0; border-bottom: 1px solid #e1e9e7; }
+  .task-flow-brief { display: block; overflow: visible; border-right: 0; border-bottom: 1px solid #e1e9e7; }
+  .dobby-generator { display: block; }
+  .dobby-generator textarea { min-height: 180px; }
   .task-flow-canvas { min-height: 720px; overflow: visible; }
   .task-flow-canvas-body { grid-template-columns:1fr; }
   .task-flow-preview-panel { padding:14px 0 0; border-top:1px solid #e1e9e7; border-left:0; }

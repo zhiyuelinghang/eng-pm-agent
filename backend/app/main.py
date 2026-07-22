@@ -24,6 +24,7 @@ def seed_admin() -> None:
 MISSEEDED_DEMO_PROJECTS = ("燃气站改造项目", "3号楼主体结构项目", "市政管网更新项目")
 PROTOTYPE_PROJECT = {
     "project_name": "普陀区真如镇街道社区卫生服务中心异地扩建项目",
+    "storage_folder_name": "普陀区真如镇街道社区卫生服务中心异地扩建项目_ZR-2026-001",
     "owner_unit": "上海真如城市副中心发展有限公司",
     "description": "综合功能社区医院，地上6层、地下2层（含人防），总建筑面积约20992平方米；当前处于施工阶段，合同工期为2024年9月10日至2027年9月9日。",
     "folders": (
@@ -39,6 +40,16 @@ PROTOTYPE_PROJECT = {
         "09_影像与原始数据",
         "10_AI整理成果",
         "99_归档与历史版本",
+    ),
+    "knowledge_folders": (
+        "01_法规规范与标准",
+        "02_企业制度与管理要求",
+        "03_专业技术知识",
+        "04_检查规则与控制阈值",
+        "05_流程模板与表单模板",
+        "06_风险隐患与案例库",
+        "07_AI知识包",
+        "99_废止与历史版本",
     ),
 }
 MISSEEDED_REQUIRED_DOCUMENT_FOLDERS = ("施工合同", "施工组织设计", "总进度计划", "人员名单", "风险清单", "质量指标关联表")
@@ -206,10 +217,40 @@ def seed_prototype_project() -> None:
             for folder in stale_folders:
                 if folder.id not in protected_ids:
                     db.delete(folder)
-        folder_names = set(db.scalars(select(DocumentFolder.name).where(DocumentFolder.project_id == project.id, DocumentFolder.parent_id.is_(None))).all())
+        def ensure_folder(name: str, parent_id: int | None = None) -> DocumentFolder:
+            stmt = select(DocumentFolder).where(DocumentFolder.project_id == project.id, DocumentFolder.name == name)
+            stmt = stmt.where(DocumentFolder.parent_id == parent_id) if parent_id else stmt.where(DocumentFolder.parent_id.is_(None))
+            folder = db.scalar(stmt)
+            if not folder:
+                folder = DocumentFolder(project_id=project.id, parent_id=parent_id, name=name)
+                db.add(folder)
+                db.flush()
+            return folder
+
+        project_library_root = ensure_folder("A_项目工程资料库")
+        project_storage_root = ensure_folder(PROTOTYPE_PROJECT["storage_folder_name"], project_library_root.id)
+        knowledge_library_root = ensure_folder("B_工程知识库")
+
         for name in PROTOTYPE_PROJECT["folders"]:
-            if name not in folder_names:
-                db.add(DocumentFolder(project_id=project.id, name=name))
+            nested = db.scalar(select(DocumentFolder).where(
+                DocumentFolder.project_id == project.id,
+                DocumentFolder.parent_id == project_storage_root.id,
+                DocumentFolder.name == name,
+            ))
+            if nested:
+                continue
+            legacy = db.scalar(select(DocumentFolder).where(
+                DocumentFolder.project_id == project.id,
+                DocumentFolder.parent_id.is_(None),
+                DocumentFolder.name == name,
+            ))
+            if legacy:
+                legacy.parent_id = project_storage_root.id
+            else:
+                db.add(DocumentFolder(project_id=project.id, parent_id=project_storage_root.id, name=name))
+
+        for name in PROTOTYPE_PROJECT["knowledge_folders"]:
+            ensure_folder(name, knowledge_library_root.id)
         db.flush()
         ensure_prototype_status_data(db, project)
         db.commit()

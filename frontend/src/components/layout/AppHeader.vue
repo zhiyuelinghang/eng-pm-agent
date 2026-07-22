@@ -52,6 +52,8 @@ const titleMap: Record<string, string> = {
   '/tasks':     '任务管理',
   '/project':   '项目状态',
   '/docs':      '工程资料',
+  '/tools':     '业务工具',
+  '/profile':   '个人设置',
   '/settings':  '工程配置',
 }
 const pageTitle = computed(() => {
@@ -68,8 +70,8 @@ const projectOptions = computed(() =>
       label: () => h('div', { style: 'display:flex;align-items:center;gap:10px;min-width:190px;padding:3px 0' }, [
         h('div', { style: 'width:6px;height:6px;border-radius:50%;background:#047857;flex-shrink:0;margin-top:2px' }),
         h('div', { style: 'flex:1;min-width:0' }, [
-          h('div', { style: 'font-size:13px;font-weight:500;color:#1B2430;line-height:1.4' }, p.name),
-          h('div', { style: 'font-size:11px;color:#8792A2;line-height:1.4' }, p.ownerUnit),
+          h('div', { style: 'font-size:14px;font-weight:500;color:#1B2430;line-height:1.45' }, p.name),
+          h('div', { style: 'font-size:12px;color:#667085;line-height:1.5' }, p.ownerUnit),
         ]),
         p.id === store.currentProjectId
           ? h(NIcon, { size: 14, color: '#E8590C' }, { default: () => h(Check) })
@@ -107,7 +109,8 @@ const dropdownTheme = {
   flex-shrink: 0;
   padding: 4px 8px;
   border-radius: 5px;
-  font-size: 11px;
+  font-size: 12px;
+  line-height: 1.4;
   font-weight: 750;
   background: #edf5f1;
   color: #0f766e;
@@ -117,7 +120,7 @@ const dropdownTheme = {
 .header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .global-search {
   width: min(30vw, 320px);
-  height: 34px;
+  height: 38px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -133,12 +136,13 @@ const dropdownTheme = {
   border: 0;
   outline: 0;
   font: inherit;
+  font-size: 14px;
   color: var(--text-primary);
   background: transparent;
 }
 .header-icon-btn {
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   border: 1px solid var(--border-emphasis);
   border-radius: var(--radius-sm);
   background: transparent;
@@ -155,21 +159,22 @@ const dropdownTheme = {
   position: absolute;
   top: -5px;
   right: -5px;
-  min-width: 17px;
-  height: 17px;
+  min-width: 20px;
+  height: 20px;
   display: grid;
   place-items: center;
   padding: 0 4px;
   border-radius: 5px;
   background: var(--color-primary);
   color: #fff;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 800;
 }
 .project-switcher {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 38px;
   padding: 6px 12px 6px 10px;
   background: var(--bg-card);
   border: 1px solid var(--border-emphasis);
@@ -187,8 +192,8 @@ const dropdownTheme = {
   flex-shrink: 0;
 }
 .proj-info { display: flex; flex-direction: column; align-items: flex-start; flex: 1; min-width: 0; }
-.proj-name { font-size: 12px; font-weight: 600; color: var(--text-primary); white-space: nowrap; }
-.proj-meta { font-size: 11px; color: var(--text-muted); }
+.proj-name { font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap; line-height: 1.4; }
+.proj-meta { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
 
 :global(.project-switcher-dropdown .n-dropdown-divider) {
   margin: 9px 0;

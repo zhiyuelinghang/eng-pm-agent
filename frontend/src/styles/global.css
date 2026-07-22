@@ -36,9 +36,17 @@
   /* === Text === */
   --text-primary:   #1B2430;
   --text-secondary: #5A6678;
-  --text-muted:     #8792A2;
+  --text-muted:     #667085;
   --text-disabled:  #C2CAD4;
   --text-inverse:   #FFFFFF;
+
+  /* === Accessible typography === */
+  --font-size-caption: 12px;
+  --font-size-body-sm: 13px;
+  --font-size-body: 14px;
+  --font-size-title-sm: 16px;
+  --line-height-tight: 1.4;
+  --line-height-body: 1.6;
 
   /* === Borders === */
   --border-default:   #E5E8ED;
@@ -75,13 +83,30 @@
 html, body {
   height: 100%;
   font-family: 'Fira Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  font-size: 14px;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-body);
   background: var(--bg-base);
   color: var(--text-primary);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 #app { height: 100%; }
+
+button,
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+button,
+input,
+textarea,
+select,
+label {
+  font-size: var(--font-size-body-sm);
+}
 
 /* === Accessibility === */
 :focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
@@ -90,16 +115,22 @@ html, body {
 }
 
 /* === Custom Scrollbar === */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(23,32,46,0.16); border-radius: 3px; }
+::-webkit-scrollbar-thumb { background: rgba(23,32,46,0.22); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(23,32,46,0.3); }
 
 /* === Naive UI Fine-tuning === */
-.n-data-table .n-data-table-th { text-transform: uppercase; letter-spacing: 0.04em; font-size: 11px !important; }
+.n-data-table .n-data-table-th { text-transform: uppercase; letter-spacing: 0.04em; font-size: var(--font-size-caption) !important; line-height: var(--line-height-tight); }
+.n-data-table .n-data-table-td { font-size: var(--font-size-body-sm) !important; line-height: 1.5; }
 .n-data-table-wrapper { border-radius: var(--radius-md); overflow: hidden; }
-.n-base-selection { font-size: 13px !important; }
-.n-input { font-size: 13px !important; }
+.n-base-selection,
+.n-input,
+.n-input__input-el,
+.n-input__textarea-el,
+.n-button,
+.n-form-item-label,
+.n-tabs-tab { font-size: var(--font-size-body-sm) !important; }
 
 /* === Utility Classes === */
 .font-mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
@@ -118,8 +149,9 @@ html, body {
   align-items: center;
   padding: 2px 8px;
   border-radius: 20px;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 600;
+  line-height: var(--line-height-tight);
   white-space: nowrap;
 }
 .badge-danger  { background: var(--color-danger-soft);  color: var(--color-danger); }
@@ -144,7 +176,7 @@ html, body {
   .card { padding: 12px; }
 }
 
-.page-desc { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4; }
+.page-desc { font-size: var(--font-size-body-sm); color: var(--text-muted); margin-bottom: 12px; line-height: 1.55; }
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border-default);
@@ -161,8 +193,8 @@ html, body {
 
 /* === Section Header === */
 .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-.section-head-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); letter-spacing: 0.02em; }
-.section-head-link { font-size: 12px; color: var(--color-primary); text-decoration: none; display: flex; align-items: center; gap: 3px; transition: var(--transition); }
+.section-head-title { font-size: var(--font-size-body); font-weight: 600; color: var(--text-secondary); letter-spacing: 0.02em; }
+.section-head-link { font-size: var(--font-size-body-sm); color: var(--color-primary); text-decoration: none; display: flex; align-items: center; gap: 3px; transition: var(--transition); }
 .section-head-link:hover { color: var(--color-primary-dark); }
 
 /* === Risk Level Dots === */
@@ -173,7 +205,7 @@ html, body {
 .risk-indicator.low      { background: var(--color-success); }
 
 /* === Level Badges (Inline) === */
-.level-tag { padding: 2px 8px; border-radius: var(--radius-xs); font-size: 11px; font-weight: 700; }
+.level-tag { padding: 2px 8px; border-radius: var(--radius-xs); font-size: var(--font-size-caption); font-weight: 700; line-height: var(--line-height-tight); }
 .level-tag.critical { background: var(--color-danger-soft);  color: var(--color-danger); }
 .level-tag.high     { background: var(--color-warning-soft); color: var(--color-warning); }
 .level-tag.medium   { background: var(--color-info-soft);    color: var(--color-info); }
@@ -181,12 +213,13 @@ html, body {
 
 /* === Small Action Button (表格/卡片行内操作) === */
 .action-btn-sm {
-  padding: 3px 10px;
+  min-height: 32px;
+  padding: 4px 10px;
   border-radius: var(--radius-xs);
   border: 1px solid var(--border-emphasis);
   background: var(--bg-surface);
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-body-sm);
   font-family: inherit;
   cursor: pointer;
   transition: var(--transition);
@@ -196,8 +229,8 @@ html, body {
 /* === Unified Button Family（全局统一，render 函数生成的按钮也能命中）=== */
 .btn-primary, .btn-ghost, .btn-success, .btn-warning, .btn-ok, .btn-reject {
   display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-  padding: 7px 14px; border-radius: var(--radius-sm);
-  font-size: 12px; font-weight: 500; font-family: inherit;
+  min-height: 34px; padding: 7px 14px; border-radius: var(--radius-sm);
+  font-size: var(--font-size-body-sm); font-weight: 500; font-family: inherit;
   border: 1px solid transparent; cursor: pointer; transition: var(--transition);
 }
 .btn-primary { background: var(--color-primary-soft); color: var(--color-primary); border-color: var(--border-primary); }
@@ -213,12 +246,13 @@ html, body {
 
 /* 表格行内操作按钮（render 函数生成，必须全局） */
 .action-btn {
+  min-height: 32px;
   padding: 4px 12px;
   border-radius: var(--radius-xs);
   border: 1px solid var(--border-primary);
   background: var(--color-primary-dim);
   color: var(--color-primary);
-  font-size: 12px;
+  font-size: var(--font-size-body-sm);
   font-family: inherit;
   cursor: pointer;
   transition: var(--transition);

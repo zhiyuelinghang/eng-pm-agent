@@ -8,6 +8,19 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class ProfileUpdate(BaseModel):
+    real_name: str = Field(min_length=1, max_length=100)
+    phone: str | None = Field(default=None, max_length=50)
+    email: str | None = Field(default=None, max_length=200)
+    title: str | None = Field(default=None, max_length=100)
+    org_name: str | None = Field(default=None, max_length=200)
+
+
+class PasswordChangeInput(BaseModel):
+    current_password: str = Field(min_length=1, max_length=200)
+    new_password: str = Field(min_length=8, max_length=200)
+
+
 class ProjectInput(BaseModel):
     project_name: str = Field(min_length=1, max_length=200)
     owner_unit: str | None = None
@@ -127,6 +140,15 @@ class TaskTransitionInput(BaseModel):
 class TaskStepUpdate(BaseModel):
     status: str = "completed"
     note: str | None = None
+
+
+class TaskReassignInput(BaseModel):
+    assignee_user_id: int
+    note: str | None = None
+
+
+class TaskNoteInput(BaseModel):
+    note: str
 
 
 class DailyReportInput(BaseModel):
