@@ -7,6 +7,13 @@ from ._access import (
     ResourceAccessService,
 )
 from ._chat import ChatService
+from ._credential_models import (
+    CredentialModelEntry,
+    ModelDiscoveryError,
+    build_credential_model_catalog,
+    discover_credential_models,
+    supports_model_discovery,
+)
 from ._embedding import get_embedding_model
 from ._index_sweeper import IndexSweeper
 from ._index_task_consumer import IndexTaskConsumer
@@ -22,6 +29,7 @@ from ._toolkit import get_toolkit
 __all__ = [
     "AgentView",
     "ChatService",
+    "CredentialModelEntry",
     "CredentialView",
     "IndexSweeper",
     "IndexTaskConsumer",
@@ -33,8 +41,12 @@ __all__ = [
     "SessionStatus",
     "SessionProjection",
     "SubagentHitlProjector",
+    "ModelDiscoveryError",
+    "build_credential_model_catalog",
+    "discover_credential_models",
     "get_embedding_model",
     "get_model",
     "get_tts_model",
     "get_toolkit",
+    "supports_model_discovery",
 ]

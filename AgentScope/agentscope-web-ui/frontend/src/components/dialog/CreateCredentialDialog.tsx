@@ -1,8 +1,10 @@
 import { CircleAlert, Loader2, PlusCircle } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { toast } from 'sonner';
 
 import { credentialApi } from '@/api';
 import type { CredentialSchema } from '@/api';
+import { ApiError } from '@/api/client';
 import { SchemaForm, type SchemaFormValue } from '@/components/form/SchemaForm';
 import { Button } from '@/components/ui/button';
 import {
@@ -27,7 +29,7 @@ import { useTranslation } from '@/i18n/useI18n.ts';
 interface Props {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	onCreated?: () => void;
+	onCreated?: (credentialId: string) => void;
 	defaultType?: string;
 }
 
@@ -74,9 +76,20 @@ export function CreateCredentialDialog({ open, onOpenChange, onCreated, defaultT
 				const val = values[key];
 				if (val !== undefined && val !== '') data[key] = val;
 			}
-			await create({ data });
+			const result = await create({ data });
+			if (selectedType === 'custom_openai_credential') {
+				try {
+					await credentialApi.discoverModels(result.credential_id, true);
+				} catch (error) {
+					const detail =
+						error instanceof ApiError
+							? error.detail
+							: '无法自动获取模型，请手动添加。';
+					toast.warning(`凭证已保存。${detail}`);
+				}
+			}
 			onOpenChange(false);
-			onCreated?.();
+			onCreated?.(result.credential_id);
 		} finally {
 			setSubmitting(false);
 		}

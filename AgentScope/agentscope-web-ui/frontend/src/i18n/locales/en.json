@@ -324,7 +324,29 @@
 		"maxOutput": "Max. Output",
 		"inputTypes": "Input",
 		"outputTypes": "Output",
-		"availableTTSModels": "TTS Models"
+		"availableTTSModels": "TTS Models",
+		"modelCatalog": "Model catalog",
+		"modelCatalogDescription": "Enabled models appear in model selectors for this credential.",
+		"discoverModels": "Discover",
+		"discoveryUnsupported": "This credential does not support OpenAI-compatible model discovery",
+		"discoveryFallbackTitle": "Discovery is unavailable; manual models still work",
+		"manualAdd": "Add manually",
+		"manualModelTitle": "Add model manually",
+		"manualModelDescription": "Enter the exact provider model ID. A duplicate ID updates the existing entry.",
+		"modelId": "Model ID",
+		"modelLabel": "Display name (optional)",
+		"modelLabelPlaceholder": "Uses the model ID when blank",
+		"addModel": "Add model",
+		"hideModel": "Remove from this credential's model list",
+		"deleteManualModel": "Delete manual model",
+		"hiddenModels": "Removed models",
+		"restoreModel": "Restore",
+		"noModelsManualHint": "Discover models or add the provider's model ID manually.",
+		"modelSource": {
+			"builtin": "Default",
+			"discovered": "Discovered",
+			"manual": "Manual"
+		}
 	},
 	"knowledge": {
 		"subtitle": "Manage knowledge bases used by your agents",

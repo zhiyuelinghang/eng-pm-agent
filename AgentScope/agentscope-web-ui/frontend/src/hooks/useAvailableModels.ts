@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 
-import { credentialApi, modelApi } from '@/api';
+import { credentialApi } from '@/api';
 import type { CredentialView, ModelCard } from '@/api';
 
 export interface CredentialWithModels {
@@ -31,8 +31,11 @@ export function useAvailableModels() {
 					if (!type) return;
 					if (!result[type]) result[type] = [];
 					try {
-						const { models } = await modelApi.list(type);
-						result[type].push({ credential, models });
+						const { models } = await credentialApi.models(credential.id);
+						result[type].push({
+							credential,
+							models: models.filter((model) => model.enabled),
+						});
 					} catch {
 						result[type].push({ credential, models: [] });
 					}

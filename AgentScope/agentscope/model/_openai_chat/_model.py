@@ -13,7 +13,7 @@ from ..._utils._common import _generate_id, _flatten_json_schema
 from .._base import ChatModelBase, _TOOL_CHOICE_LITERAL_MODES
 from .._model_response import ChatResponse, StructuredResponse
 from .._model_usage import ChatUsage
-from ...credential import OpenAICredential
+from ...credential import CustomOpenAICredential, OpenAICredential
 from ...formatter import FormatterBase, OpenAIChatFormatter
 from ...message import (
     Msg,
@@ -111,7 +111,7 @@ class OpenAIChatModel(ChatModelBase):
 
     def __init__(
         self,
-        credential: OpenAICredential,
+        credential: OpenAICredential | CustomOpenAICredential,
         model: str,
         parameters: "OpenAIChatModel.Parameters | None" = None,
         stream: bool = True,
@@ -209,7 +209,11 @@ class OpenAIChatModel(ChatModelBase):
         client = openai.AsyncClient(
             **{
                 "api_key": self.credential.api_key.get_secret_value(),
-                "organization": self.credential.organization,
+                "organization": getattr(
+                    self.credential,
+                    "organization",
+                    None,
+                ),
                 "base_url": self.credential.base_url,
                 **self.client_kwargs,
             },

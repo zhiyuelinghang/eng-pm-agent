@@ -3,8 +3,10 @@
 from typing import TYPE_CHECKING, Type
 
 from pydantic import BaseModel, Field
+from pydantic.json_schema import SkipJsonSchema
 
 from .._utils._common import _generate_id
+from ._model_catalog import CredentialModelCatalog
 
 if TYPE_CHECKING:
     from ..embedding import EmbeddingModelBase
@@ -24,6 +26,13 @@ class CredentialBase(BaseModel):
     name: str = Field(
         default="",
         description="User-facing display name for this credential.",
+    )
+
+    model_catalog: SkipJsonSchema[CredentialModelCatalog] = Field(
+        default_factory=CredentialModelCatalog,
+        description=(
+            "Credential-scoped discovered, manually added, and hidden models."
+        ),
     )
 
     @classmethod

@@ -351,6 +351,35 @@ export interface CredentialListResponse {
 	total: number;
 }
 
+export interface CredentialModelDefinition {
+	name: string;
+	label: string | null;
+	context_size: number;
+	output_size: number;
+	input_types: string[];
+	output_types: string[];
+}
+
+export interface CredentialModelEntry extends ModelCard {
+	source: 'builtin' | 'discovered' | 'manual';
+	enabled: boolean;
+}
+
+export interface CredentialModelCatalogResponse {
+	models: CredentialModelEntry[];
+	manual_models: CredentialModelDefinition[];
+	hidden_model_ids: string[];
+	total: number;
+	discovery_supported: boolean;
+	last_discovery_at: string | null;
+	last_discovery_error: string | null;
+}
+
+export interface UpdateCredentialModelCatalogRequest {
+	manual_models: CredentialModelDefinition[];
+	hidden_model_ids: string[];
+}
+
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 
 export type { Msg, ContentBlock } from '@agentscope-ai/agentscope/message';

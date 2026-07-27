@@ -324,7 +324,29 @@
 		"maxOutput": "最大输出",
 		"inputTypes": "输入模态",
 		"outputTypes": "输出模态",
-		"availableTTSModels": "语音合成模型"
+		"availableTTSModels": "语音合成模型",
+		"modelCatalog": "模型目录",
+		"modelCatalogDescription": "此处的启用模型会出现在该凭证的模型选择列表中。",
+		"discoverModels": "自动获取",
+		"discoveryUnsupported": "该凭证类型不支持 OpenAI 兼容的模型自动获取",
+		"discoveryFallbackTitle": "自动获取不可用，可继续手动添加",
+		"manualAdd": "手动添加",
+		"manualModelTitle": "手动添加模型",
+		"manualModelDescription": "填写厂商要求的准确模型 ID；同名模型会更新现有配置。",
+		"modelId": "模型 ID",
+		"modelLabel": "显示名称（可选）",
+		"modelLabelPlaceholder": "留空则显示模型 ID",
+		"addModel": "添加模型",
+		"hideModel": "从此凭证的模型列表中移除",
+		"deleteManualModel": "删除手动模型",
+		"hiddenModels": "已移除模型",
+		"restoreModel": "恢复",
+		"noModelsManualHint": "自动获取模型，或手动添加厂商提供的模型 ID。",
+		"modelSource": {
+			"builtin": "默认",
+			"discovered": "自动获取",
+			"manual": "手动"
+		}
 	},
 	"knowledge": {
 		"subtitle": "管理 Agent 使用的知识库",

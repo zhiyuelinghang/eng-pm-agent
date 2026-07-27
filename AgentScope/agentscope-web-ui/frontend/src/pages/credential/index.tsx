@@ -1,8 +1,25 @@
-import { Eye, EyeOff, Plus, Pencil, Trash2 } from 'lucide-react';
+import {
+	Eye,
+	EyeOff,
+	Loader2,
+	Plus,
+	PlusCircle,
+	Pencil,
+	RefreshCw,
+	RotateCcw,
+	Trash2,
+} from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 
-import { credentialApi, modelApi, ttsModelApi } from '@/api';
-import type { CredentialView, CredentialSchema, ModelCard, TTSModelCard } from '@/api';
+import { credentialApi, ttsModelApi } from '@/api';
+import type {
+	CredentialModelCatalogResponse,
+	CredentialModelDefinition,
+	CredentialModelEntry,
+	CredentialView,
+	CredentialSchema,
+	TTSModelCard,
+} from '@/api';
 import { InputTypeBadges } from '@/components/badge/InputTypeBadges';
 import { CreateCredentialDialog } from '@/components/dialog/CreateCredentialDialog';
 import { DeleteDialog } from '@/components/dialog/DeleteDialog';
@@ -10,7 +27,17 @@ import { EditCredentialDialog } from '@/components/dialog/EditCredentialDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from '@/components/ui/dialog';
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
 import {
 	Sidebar,
@@ -43,9 +70,151 @@ function MaskedValue({ value }: { value: string }) {
 	);
 }
 
+// ─── Manual model dialog ──────────────────────────────────────────────────────
+
+interface ManualModelDialogProps {
+	open: boolean;
+	onOpenChange: (open: boolean) => void;
+	onSave: (model: CredentialModelDefinition) => Promise<void>;
+}
+
+function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProps) {
+	const { t } = useTranslation();
+	const [name, setName] = useState('');
+	const [label, setLabel] = useState('');
+	const [contextSize, setContextSize] = useState('128000');
+	const [outputSize, setOutputSize] = useState('8192');
+	const [submitting, setSubmitting] = useState(false);
+
+	useEffect(() => {
+		if (!open) return;
+		setName('');
+		setLabel('');
+		setContextSize('128000');
+		setOutputSize('8192');
+	}, [open]);
+
+	const handleSave = async () => {
+		const trimmedName = name.trim();
+		const parsedContextSize = Number(contextSize);
+		const parsedOutputSize = Number(outputSize);
+		if (
+			!trimmedName ||
+			!Number.isInteger(parsedContextSize) ||
+			parsedContextSize <= 0 ||
+			!Number.isInteger(parsedOutputSize) ||
+			parsedOutputSize <= 0
+		) {
+			return;
+		}
+
+		setSubmitting(true);
+		try {
+			await onSave({
+				name: trimmedName,
+				label: label.trim() || null,
+				context_size: parsedContextSize,
+				output_size: parsedOutputSize,
+				input_types: ['text/plain'],
+				output_types: ['text/plain'],
+			});
+			onOpenChange(false);
+		} finally {
+			setSubmitting(false);
+		}
+	};
+
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent className="!w-[460px] !max-w-[460px]">
+				<DialogHeader>
+					<DialogTitle>{t('credential.manualModelTitle')}</DialogTitle>
+					<DialogDescription>
+						{t('credential.manualModelDescription')}
+					</DialogDescription>
+				</DialogHeader>
+				<div className="grid gap-4">
+					<div className="grid gap-1.5">
+						<Label htmlFor="manual-model-name">
+							{t('credential.modelId')}
+						</Label>
+						<Input
+							id="manual-model-name"
+							value={name}
+							onChange={(event) => setName(event.target.value)}
+							placeholder="qwen/qwen3-max"
+							autoFocus
+						/>
+					</div>
+					<div className="grid gap-1.5">
+						<Label htmlFor="manual-model-label">
+							{t('credential.modelLabel')}
+						</Label>
+						<Input
+							id="manual-model-label"
+							value={label}
+							onChange={(event) => setLabel(event.target.value)}
+							placeholder={t('credential.modelLabelPlaceholder')}
+						/>
+					</div>
+					<div className="grid grid-cols-2 gap-3">
+						<div className="grid gap-1.5">
+							<Label htmlFor="manual-model-context">
+								{t('credential.maxContext')}
+							</Label>
+							<Input
+								id="manual-model-context"
+								type="number"
+								min={1}
+								value={contextSize}
+								onChange={(event) => setContextSize(event.target.value)}
+							/>
+						</div>
+						<div className="grid gap-1.5">
+							<Label htmlFor="manual-model-output">
+								{t('credential.maxOutput')}
+							</Label>
+							<Input
+								id="manual-model-output"
+								type="number"
+								min={1}
+								value={outputSize}
+								onChange={(event) => setOutputSize(event.target.value)}
+							/>
+						</div>
+					</div>
+				</div>
+				<DialogFooter>
+					<Button
+						variant="ghost"
+						onClick={() => onOpenChange(false)}
+						disabled={submitting}
+					>
+						{t('common.cancel')}
+					</Button>
+					<Button onClick={handleSave} disabled={submitting || !name.trim()}>
+						{submitting ? (
+							<Loader2 className="size-3.5 animate-spin" />
+						) : (
+							<PlusCircle className="size-3.5" />
+						)}
+						{t('credential.addModel')}
+					</Button>
+				</DialogFooter>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
 // ─── Model Card ───────────────────────────────────────────────────────────────
 
-function ModelCardItem({ model }: { model: ModelCard }) {
+interface ModelCardItemProps {
+	model: CredentialModelEntry;
+	onRemove: () => void;
+	disabled: boolean;
+}
+
+function ModelCardItem({ model, onRemove, disabled }: ModelCardItemProps) {
 	const { t } = useTranslation();
 	const ctx = model.context_size ? formatNumber(model.context_size) : null;
 
@@ -63,17 +232,39 @@ function ModelCardItem({ model }: { model: ModelCard }) {
 	return (
 		<Card className="shadow">
 			<CardHeader>
-				<CardTitle
-					className="text-sm font-semibold leading-tight truncate"
-					title={model.name}
-				>
-					{model.label || model.name}
-				</CardTitle>
-				{reasoning ? (
-					<CardAction>
-						<Badge variant={'outline'}>{t('credential.reasoning')}</Badge>
-					</CardAction>
-				) : null}
+				<div className="min-w-0">
+					<CardTitle
+						className="text-sm font-semibold leading-tight truncate"
+						title={model.name}
+					>
+						{model.label || model.name}
+					</CardTitle>
+					<div className="mt-1 flex items-center gap-1.5">
+						<Badge variant="secondary" className="text-[10px]">
+							{t(`credential.modelSource.${model.source}`)}
+						</Badge>
+						{reasoning ? (
+							<Badge variant={'outline'} className="text-[10px]">
+								{t('credential.reasoning')}
+							</Badge>
+						) : null}
+					</div>
+				</div>
+				<CardAction>
+					<Button
+						size="icon-sm"
+						variant="ghost"
+						onClick={onRemove}
+						disabled={disabled}
+						tooltip={t(
+							model.source === 'manual'
+								? 'credential.deleteManualModel'
+								: 'credential.hideModel',
+						)}
+					>
+						<Trash2 />
+					</Button>
+				</CardAction>
 			</CardHeader>
 			<CardContent className="flex flex-col">
 				{model.status !== 'active' && (
@@ -160,31 +351,108 @@ interface DetailPanelProps {
 
 function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps) {
 	const { t } = useTranslation();
-	const [models, setModels] = useState<ModelCard[]>([]);
+	const [catalog, setCatalog] = useState<CredentialModelCatalogResponse | null>(null);
 	const [ttsModels, setTtsModels] = useState<TTSModelCard[]>([]);
 	const [modelsLoading, setModelsLoading] = useState(false);
+	const [discovering, setDiscovering] = useState(false);
+	const [catalogSaving, setCatalogSaving] = useState(false);
+	const [manualModelOpen, setManualModelOpen] = useState(false);
 
 	const type = credential.data.type as string | undefined;
 
-	useEffect(() => {
+	const loadModels = useCallback(async () => {
 		if (!type) return;
 		setModelsLoading(true);
-		Promise.all([
-			modelApi
-				.list(type)
-				.then((res) => res.models)
-				.catch(() => [] as ModelCard[]),
-			ttsModelApi
-				.list(type)
-				.then((res) => res.models)
-				.catch(() => [] as TTSModelCard[]),
-		])
-			.then(([chatModels, tts]) => {
-				setModels(chatModels);
-				setTtsModels(tts);
-			})
-			.finally(() => setModelsLoading(false));
+		try {
+			const [chatCatalog, tts] = await Promise.all([
+				credentialApi.models(credential.id),
+				ttsModelApi
+					.list(type)
+					.then((res) => res.models)
+					.catch(() => [] as TTSModelCard[]),
+			]);
+			setCatalog(chatCatalog);
+			setTtsModels(tts);
+		} catch {
+			setCatalog(null);
+		} finally {
+			setModelsLoading(false);
+		}
 	}, [credential.id, type]);
+
+	useEffect(() => {
+		void loadModels();
+	}, [loadModels]);
+
+	const saveCatalog = useCallback(
+		async (
+			manualModels: CredentialModelDefinition[],
+			hiddenModelIds: string[],
+		) => {
+			setCatalogSaving(true);
+			try {
+				const result = await credentialApi.updateModels(credential.id, {
+					manual_models: manualModels,
+					hidden_model_ids: hiddenModelIds,
+				});
+				setCatalog(result);
+			} finally {
+				setCatalogSaving(false);
+			}
+		},
+		[credential.id],
+	);
+
+	const handleDiscover = async () => {
+		if (!catalog?.discovery_supported) return;
+		setDiscovering(true);
+		try {
+			const result = await credentialApi.discoverModels(credential.id);
+			setCatalog(result);
+		} catch {
+			// The POST persists a safe discovery error on the credential.
+			// Re-read it so the inline state explains the manual fallback.
+			const current = await credentialApi.models(credential.id);
+			setCatalog(current);
+		} finally {
+			setDiscovering(false);
+		}
+	};
+
+	const handleAddManualModel = async (model: CredentialModelDefinition) => {
+		if (!catalog) return;
+		const manualModels = [
+			...catalog.manual_models.filter((item) => item.name !== model.name),
+			model,
+		];
+		await saveCatalog(
+			manualModels,
+			catalog.hidden_model_ids.filter((id) => id !== model.name),
+		);
+	};
+
+	const handleRemoveModel = async (model: CredentialModelEntry) => {
+		if (!catalog) return;
+		if (model.source === 'manual') {
+			await saveCatalog(
+				catalog.manual_models.filter((item) => item.name !== model.name),
+				catalog.hidden_model_ids,
+			);
+			return;
+		}
+		await saveCatalog(catalog.manual_models, [
+			...catalog.hidden_model_ids.filter((id) => id !== model.name),
+			model.name,
+		]);
+	};
+
+	const handleRestoreModel = async (modelName: string) => {
+		if (!catalog) return;
+		await saveCatalog(
+			catalog.manual_models,
+			catalog.hidden_model_ids.filter((id) => id !== modelName),
+		);
+	};
 
 	// Fields to display: use schema properties order, skip id/type/const fields
 	const displayFields = schema
@@ -202,6 +470,8 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 				);
 
 	const name = (credential.data.name as string | undefined) ?? credential.id;
+	const activeModels = catalog?.models.filter((model) => model.enabled) ?? [];
+	const hiddenModels = catalog?.models.filter((model) => !model.enabled) ?? [];
 
 	return (
 		<div className="flex flex-col gap-y-6 p-6 overflow-y-auto h-full">
@@ -268,31 +538,119 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 
 			<Separator />
 
-			{/* Available Models */}
+			{/* Credential-scoped model catalog */}
 			<div className="flex flex-col gap-y-4">
-				<h3 className="text-sm font-semibold">
-					{t('credential.availableModels')}({models.length})
-				</h3>
+				<div className="flex items-start justify-between gap-4">
+					<div>
+						<h3 className="text-sm font-semibold">
+							{t('credential.modelCatalog')}
+							{catalog ? ` (${catalog.total})` : ''}
+						</h3>
+						<p className="mt-1 text-xs text-muted-foreground">
+							{t('credential.modelCatalogDescription')}
+						</p>
+					</div>
+					<div className="flex shrink-0 items-center gap-2">
+						<Button
+							size="sm"
+							variant="outline"
+							onClick={handleDiscover}
+							disabled={
+								!credential.editable ||
+								!catalog?.discovery_supported ||
+								discovering ||
+								catalogSaving
+							}
+							tooltip={
+								catalog?.discovery_supported
+									? t('credential.discoverModels')
+									: t('credential.discoveryUnsupported')
+							}
+						>
+							<RefreshCw className={discovering ? 'animate-spin' : ''} />
+							{t('credential.discoverModels')}
+						</Button>
+						<Button
+							size="sm"
+							onClick={() => setManualModelOpen(true)}
+							disabled={!credential.editable || catalogSaving}
+						>
+							<Plus />
+							{t('credential.manualAdd')}
+						</Button>
+					</div>
+				</div>
+
+				{catalog?.last_discovery_error && (
+					<div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
+						<div className="font-medium">
+							{t('credential.discoveryFallbackTitle')}
+						</div>
+						<div className="mt-0.5 text-xs">
+							{catalog.last_discovery_error}
+						</div>
+					</div>
+				)}
+
 				{modelsLoading ? (
 					<div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
 						{Array.from({ length: 4 }).map((_, i) => (
 							<Skeleton key={i} className="h-20 rounded-lg" />
 						))}
 					</div>
-				) : models.length === 0 ? (
+				) : activeModels.length === 0 ? (
 					<Empty className="border-none py-6">
 						<EmptyHeader>
 							<EmptyTitle>{t('credential.noModels')}</EmptyTitle>
 							<EmptyDescription>
-								{t('credential.noModelsDescription')}
+								{t('credential.noModelsManualHint')}
 							</EmptyDescription>
 						</EmptyHeader>
 					</Empty>
 				) : (
 					<div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
-						{models.map((m) => (
-							<ModelCardItem key={m.name} model={m} />
+						{activeModels.map((model) => (
+							<ModelCardItem
+								key={model.name}
+								model={model}
+								onRemove={() => handleRemoveModel(model)}
+								disabled={!credential.editable || catalogSaving}
+							/>
 						))}
+					</div>
+				)}
+
+				{hiddenModels.length > 0 && (
+					<div className="rounded-lg border bg-muted/20">
+						<div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+							{t('credential.hiddenModels')} ({hiddenModels.length})
+						</div>
+						<div className="divide-y">
+							{hiddenModels.map((model) => (
+								<div
+									key={model.name}
+									className="flex items-center justify-between gap-3 px-3 py-2"
+								>
+									<div className="min-w-0">
+										<div className="truncate text-sm font-medium">
+											{model.label || model.name}
+										</div>
+										<div className="truncate font-mono text-xs text-muted-foreground">
+											{model.name}
+										</div>
+									</div>
+									<Button
+										size="sm"
+										variant="ghost"
+										onClick={() => handleRestoreModel(model.name)}
+										disabled={!credential.editable || catalogSaving}
+									>
+										<RotateCcw />
+										{t('credential.restoreModel')}
+									</Button>
+								</div>
+							))}
+						</div>
 					</div>
 				)}
 			</div>
@@ -313,6 +671,12 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 					</div>
 				</>
 			)}
+
+			<ManualModelDialog
+				open={manualModelOpen}
+				onOpenChange={setManualModelOpen}
+				onSave={handleAddManualModel}
+			/>
 		</div>
 	);
 }
@@ -504,7 +868,10 @@ export const CredentialPage = () => {
 				open={createOpen}
 				onOpenChange={setCreateOpen}
 				defaultType={createDefaultType}
-				onCreated={() => refetch()}
+				onCreated={(credentialId) => {
+					setSelectedId(credentialId);
+					void refetch();
+				}}
 			/>
 			{selectedCredential && (
 				<>

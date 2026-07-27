@@ -22,7 +22,9 @@ from ._agent import (
 from ._credential import (
     CreateCredentialRequest,
     CreateCredentialResponse,
+    CredentialModelCatalogResponse,
     UpdateCredentialRequest,
+    UpdateCredentialModelCatalogRequest,
     ListCredentialsResponse,
     ListCredentialSchemasResponse,
 )
@@ -71,7 +73,9 @@ __all__ = [
     # Credential
     "CreateCredentialRequest",
     "CreateCredentialResponse",
+    "CredentialModelCatalogResponse",
     "UpdateCredentialRequest",
+    "UpdateCredentialModelCatalogRequest",
     "ListCredentialsResponse",
     "ListCredentialSchemasResponse",
     # Knowledge base
