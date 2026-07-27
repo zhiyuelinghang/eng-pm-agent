@@ -9,7 +9,7 @@ set "PYTHON_EXE=%~dp0python-3.13.14\python.exe"
 set "AGENTSCOPE_HOME=%~dp0AgentScope"
 set "AGENTSCOPE_CORE_HOME=%AGENTSCOPE_HOME%\agentscope"
 set "RUNTIME_HOME=%~dp0data\agentscope"
-set "SQLITE_PATH=%RUNTIME_HOME%\agentscope.db"
+set "SQLITE_PATH=%RUNTIME_HOME%\agentscope-v2.db"
 set "QDRANT_HOME=%RUNTIME_HOME%\qdrant"
 set "KNOWLEDGE_BLOB_HOME=%RUNTIME_HOME%\knowledge_blobs"
 set "WEBUI_HOME=%AGENTSCOPE_HOME%\agentscope-web-ui"
@@ -32,14 +32,14 @@ if not exist "%AGENTSCOPE_CORE_HOME%\__init__.py" (
     exit /b 1
 )
 
-"%PYTHON_EXE%" -c "import agentscope; from agentscope.app.storage import SQLiteStorage; assert agentscope.__version__ == '2.0.4.post1'" >nul
+"%PYTHON_EXE%" -c "import agentscope; from agentscope.app.storage import AsyncSQLAlchemyStorage; assert agentscope.__version__ == '2.0.5'" >nul
 if errorlevel 1 (
-    echo [错误] 无法导入项目内 AgentScope 2.0.4.post1 核心。
+    echo [错误] 无法导入项目内 AgentScope 2.0.5 核心。
     pause
     exit /b 1
 )
 
-"%PYTHON_EXE%" -c "import qdrant_client, pypdf, pandas, pptx" >nul
+"%PYTHON_EXE%" -c "import aiosqlite, alembic, qdrant_client, sqlalchemy, pypdf, pandas, pptx" >nul
 if errorlevel 1 (
     echo [错误] AgentScope 知识库依赖不完整。
     echo [提示] 请执行："%PYTHON_EXE%" -m pip install -r "%~dp0requirements-agentscope.txt"
@@ -107,7 +107,7 @@ set "AGENTSCOPE_QDRANT_HOME=%QDRANT_HOME%"
 set "AGENTSCOPE_KNOWLEDGE_BLOB_HOME=%KNOWLEDGE_BLOB_HOME%"
 
 echo [AgentScope] Python 核心：%AGENTSCOPE_CORE_HOME%
-echo [AgentScope] 核心版本：发布版 2.0.4.post1
+echo [AgentScope] 核心版本：发布版 2.0.5
 echo [AgentScope] 存储模式：%AGENTSCOPE_STORAGE%
 echo [AgentScope] 运行数据：%RUNTIME_HOME%
 echo [AgentScope] SQLite 元数据：%SQLITE_PATH%

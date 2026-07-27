@@ -1,0 +1,17 @@
+# AgentScope 上游基线
+
+- 核心版本：AgentScope `v2.0.5`
+- 上游提交：`999f64db8126f2ded2c9271505d384b911c37943`
+- 核心来源：上游仓库的 `src/agentscope`
+- Web UI 来源：同一版本的 `examples/web_ui`
+
+## 本地定制
+
+- 智能体可协同范围：全部、指定智能体、禁用。
+- 工具组装阶段只向智能体暴露允许协同的智能体。
+- 邀请执行阶段重新读取配置，防止配置变更后的陈旧调用。
+- Web UI 增加协同智能体配置面板、中文文案、默认连接信息和五位数端口。
+- 开发存储使用官方 `AsyncSQLAlchemyStorage`、SQLite 和 Alembic。
+- Alembic 配置仅使用 ASCII 注释，以兼容中文 Windows 的默认 GBK 配置读取。
+
+后续升级时先同步对应上游版本，再逐项回放和验证上述本地定制。

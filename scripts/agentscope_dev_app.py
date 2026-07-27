@@ -13,7 +13,11 @@ from agentscope.app import create_app
 from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app.rag.blob_store import LocalBlobStore
 from agentscope.app.rag.knowledge_base_manager import CollectionPerKbManager
-from agentscope.app.storage import RedisStorage, SQLiteStorage, StorageBase
+from agentscope.app.storage import (
+    AsyncSQLAlchemyStorage,
+    RedisStorage,
+    StorageBase,
+)
 from agentscope.app.workspace_manager import LocalWorkspaceManager
 from agentscope.rag import (
     ExcelParser,
@@ -56,7 +60,12 @@ def _create_storage() -> StorageBase:
 
     mode = os.getenv("AGENTSCOPE_STORAGE", "sqlite").strip().lower()
     if mode == "sqlite":
-        return SQLiteStorage(SQLITE_PATH)
+        sqlite_url = f"sqlite+aiosqlite:///{SQLITE_PATH.as_posix()}"
+        return AsyncSQLAlchemyStorage(
+            sqlite_url,
+            create_tables=False,
+            auto_migrate=True,
+        )
 
     if mode == "memory":
         from fakeredis.aioredis import FakeRedis

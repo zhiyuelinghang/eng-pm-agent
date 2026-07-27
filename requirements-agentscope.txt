@@ -1,6 +1,9 @@
-# AgentScope Python 发布版本及其服务、存储、知识库依赖
-# rag 额外依赖包含本地 Qdrant、PDF、Word、PowerPoint、Excel 解析支持。
-agentscope[rag,service,storage]==2.0.4.post1
+# AgentScope Python 2.0.5 发布版本及其服务、SQL 存储、知识库依赖。
+# 2.0.5 将 Qdrant 与 SQL 存储拆分为独立 extra，需要显式启用。
+agentscope[rag,service,storage-sql,vdb-qdrant]==2.0.5
+
+# AsyncSQLAlchemyStorage 的 SQLite 异步驱动由调用方显式安装。
+aiosqlite==0.22.1
 
 # 仅供显式切回 AGENTSCOPE_STORAGE=memory 时使用；默认持久化使用 SQLite
 fakeredis==2.37.0
