@@ -1,6 +1,9 @@
 import {
+	CircleCheck,
+	CircleX,
 	Eye,
 	EyeOff,
+	FlaskConical,
 	Loader2,
 	Plus,
 	PlusCircle,
@@ -16,6 +19,7 @@ import type {
 	CredentialModelCatalogResponse,
 	CredentialModelDefinition,
 	CredentialModelEntry,
+	CredentialModelTestResponse,
 	CredentialView,
 	CredentialSchema,
 	TTSModelCard,
@@ -26,7 +30,14 @@ import { DeleteDialog } from '@/components/dialog/DeleteDialog';
 import { EditCredentialDialog } from '@/components/dialog/EditCredentialDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Card, CardAction, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+	Card,
+	CardAction,
+	CardContent,
+	CardFooter,
+	CardHeader,
+	CardTitle,
+} from '@/components/ui/card';
 import {
 	Dialog,
 	DialogContent,
@@ -174,10 +185,22 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 interface ModelCardItemProps {
 	model: CredentialModelEntry;
 	onRemove: () => void;
+	onTest: () => void;
 	disabled: boolean;
+	testDisabled: boolean;
+	testing: boolean;
+	testResult?: CredentialModelTestResponse;
 }
 
-function ModelCardItem({ model, onRemove, disabled }: ModelCardItemProps) {
+function ModelCardItem({
+	model,
+	onRemove,
+	onTest,
+	disabled,
+	testDisabled,
+	testing,
+	testResult,
+}: ModelCardItemProps) {
 	const { t } = useTranslation();
 	const ctx = model.context_size ? formatNumber(model.context_size) : null;
 
@@ -261,6 +284,51 @@ function ModelCardItem({ model, onRemove, disabled }: ModelCardItemProps) {
 					<InputTypeBadges inputTypes={model.output_types} />
 				</div>
 			</CardContent>
+			<CardFooter className="mt-auto flex-col items-stretch gap-2">
+				<Button
+					size="sm"
+					variant="outline"
+					className="w-full"
+					onClick={onTest}
+					disabled={testDisabled}
+					tooltip={t('credential.modelTest.tooltip')}
+				>
+					{testing ? (
+						<Loader2 className="animate-spin" />
+					) : (
+						<FlaskConical />
+					)}
+					{testing
+						? t('credential.modelTest.testing')
+						: testResult
+							? t('credential.modelTest.retest')
+							: t('credential.modelTest.action')}
+				</Button>
+				{testResult && (
+					<div
+						aria-live="polite"
+						className={`flex items-start gap-1.5 text-xs ${
+							testResult.success ? 'text-emerald-600' : 'text-destructive'
+						}`}
+					>
+						{testResult.success ? (
+							<CircleCheck className="mt-0.5 size-3.5 shrink-0" />
+						) : (
+							<CircleX className="mt-0.5 size-3.5 shrink-0" />
+						)}
+						<span>
+							{testResult.success
+								? t('credential.modelTest.passed', {
+										latency: testResult.latency_ms,
+									})
+								: t(
+										`messageBubble.error.${testResult.error_type ?? 'unknown'}`,
+										{ defaultValue: testResult.message },
+									)}
+						</span>
+					</div>
+				)}
+			</CardFooter>
 		</Card>
 	);
 }
@@ -328,6 +396,10 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 	const [discovering, setDiscovering] = useState(false);
 	const [catalogSaving, setCatalogSaving] = useState(false);
 	const [manualModelOpen, setManualModelOpen] = useState(false);
+	const [testingModel, setTestingModel] = useState<string | null>(null);
+	const [testResults, setTestResults] = useState<
+		Record<string, CredentialModelTestResponse>
+	>({});
 
 	const type = credential.data.type as string | undefined;
 
@@ -352,6 +424,8 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 	}, [credential.id, type]);
 
 	useEffect(() => {
+		setTestingModel(null);
+		setTestResults({});
 		void loadModels();
 	}, [loadModels]);
 
@@ -423,6 +497,21 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 			catalog.manual_models,
 			catalog.hidden_model_ids.filter((id) => id !== modelName),
 		);
+	};
+
+	const handleTestModel = async (modelName: string) => {
+		setTestingModel(modelName);
+		try {
+			const result = await credentialApi.testModel(credential.id, {
+				model: modelName,
+			});
+			setTestResults((previous) => ({
+				...previous,
+				[modelName]: result,
+			}));
+		} finally {
+			setTestingModel(null);
+		}
 	};
 
 	// Fields to display: use schema properties order, skip id/type/const fields
@@ -530,7 +619,8 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 								!credential.editable ||
 								!catalog?.discovery_supported ||
 								discovering ||
-								catalogSaving
+								catalogSaving ||
+								testingModel !== null
 							}
 							tooltip={
 								catalog?.discovery_supported
@@ -544,7 +634,11 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 						<Button
 							size="sm"
 							onClick={() => setManualModelOpen(true)}
-							disabled={!credential.editable || catalogSaving}
+							disabled={
+								!credential.editable ||
+								catalogSaving ||
+								testingModel !== null
+							}
 						>
 							<Plus />
 							{t('credential.manualAdd')}
@@ -585,7 +679,15 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 								key={model.name}
 								model={model}
 								onRemove={() => handleRemoveModel(model)}
-								disabled={!credential.editable || catalogSaving}
+								onTest={() => handleTestModel(model.name)}
+								disabled={
+									!credential.editable ||
+									catalogSaving ||
+									testingModel !== null
+								}
+								testDisabled={testingModel !== null || catalogSaving}
+								testing={testingModel === model.name}
+								testResult={testResults[model.name]}
 							/>
 						))}
 					</div>
@@ -614,7 +716,11 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 										size="sm"
 										variant="ghost"
 										onClick={() => handleRestoreModel(model.name)}
-										disabled={!credential.editable || catalogSaving}
+										disabled={
+											!credential.editable ||
+											catalogSaving ||
+											testingModel !== null
+										}
 									>
 										<RotateCcw />
 										{t('credential.restoreModel')}
@@ -815,6 +921,7 @@ export const CredentialPage = () => {
 			<main className="flex-1 min-h-0 overflow-hidden">
 				{selectedCredential ? (
 					<DetailPanel
+						key={selectedCredential.id}
 						credential={selectedCredential}
 						schema={selectedSchema}
 						onEdit={() => setEditOpen(true)}

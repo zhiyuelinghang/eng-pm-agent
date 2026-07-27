@@ -6,13 +6,21 @@ from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from agentscope.app._service._credential_models import (
+    CredentialModelTestResult,
     ModelDiscoveryError,
     build_credential_model_catalog,
     discover_credential_models,
+    test_credential_model,
 )
 from agentscope.app._service._model import get_model
-from agentscope.app._router._credential import update_credential
-from agentscope.app._router._schema import UpdateCredentialRequest
+from agentscope.app._router._credential import (
+    test_model as test_model_endpoint,
+    update_credential,
+)
+from agentscope.app._router._schema import (
+    TestCredentialModelRequest,
+    UpdateCredentialRequest,
+)
 from agentscope.app.storage import ChatModelConfig, CredentialRecord
 from agentscope.app.storage._utils import _dump_with_secrets
 from agentscope.credential import (
@@ -20,6 +28,8 @@ from agentscope.credential import (
     CredentialModelDefinition,
     CustomOpenAICredential,
 )
+from agentscope.model import ChatResponse, OpenAIChatModel
+from agentscope.types import ErrorType
 
 
 def _credential() -> CustomOpenAICredential:
@@ -159,6 +169,71 @@ class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(model.model, "qwen/qwen3-max")
         self.assertEqual(model.credential.base_url, "https://example.com/v1")
+
+    async def test_model_test_runs_one_real_adapter_call(self):
+        call = AsyncMock(
+            return_value=ChatResponse(content=[], is_last=True),
+        )
+        with patch.object(OpenAIChatModel, "_call_api", call):
+            result = await test_credential_model(
+                _credential(),
+                "qwen/qwen3-max",
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.model, "qwen/qwen3-max")
+        self.assertGreaterEqual(result.latency_ms, 1)
+        self.assertEqual(call.await_count, 1)
+
+    async def test_model_test_returns_sanitised_authentication_failure(self):
+        class ProviderAuthenticationError(Exception):
+            status_code = 401
+
+        with patch.object(
+            OpenAIChatModel,
+            "_call_api",
+            AsyncMock(side_effect=ProviderAuthenticationError("bad key")),
+        ):
+            result = await test_credential_model(
+                _credential(),
+                "qwen/qwen3-max",
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_type, ErrorType.AUTHENTICATION)
+        self.assertNotIn("bad key", result.message)
+
+    async def test_model_test_endpoint_accepts_an_enabled_catalog_model(self):
+        credential = _credential()
+        credential.model_catalog.manual_models = [
+            CredentialModelDefinition(name="qwen/qwen3-max"),
+        ]
+        access = SimpleNamespace(
+            resolve_credential=AsyncMock(
+                return_value=SimpleNamespace(
+                    data=_dump_with_secrets(credential),
+                ),
+            ),
+        )
+        expected = CredentialModelTestResult(
+            success=True,
+            model="qwen/qwen3-max",
+            latency_ms=12,
+            message="ok",
+        )
+
+        with patch(
+            "agentscope.app._router._credential.test_credential_model",
+            AsyncMock(return_value=expected),
+        ):
+            result = await test_model_endpoint(
+                credential_id=credential.id,
+                body=TestCredentialModelRequest(model="qwen/qwen3-max"),
+                user_id="owner",
+                access=access,
+            )
+
+        self.assertEqual(result, expected)
 
     async def test_editing_credential_preserves_hidden_catalog_data(self):
         credential = _credential()

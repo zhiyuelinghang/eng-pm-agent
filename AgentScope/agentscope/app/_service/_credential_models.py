@@ -2,8 +2,10 @@
 """Credential-scoped chat model catalogue and discovery helpers."""
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
+from time import perf_counter
 from typing import Literal
 
 import httpx
@@ -13,7 +15,10 @@ from ...credential import (
     CredentialBase,
     CredentialModelDefinition,
 )
-from ...model import ModelCard
+from ...message import UserMsg
+from ...model import ChatResponse, FinishedReason, ModelCard
+from ...types import ErrorType
+from ._errors import _classify_error
 
 _DISCOVERABLE_CREDENTIAL_TYPES = {
     "custom_openai_credential",
@@ -23,7 +28,15 @@ _DISCOVERABLE_CREDENTIAL_TYPES = {
     "moonshot_credential",
     "xai_credential",
 }
+_OPENAI_SDK_CREDENTIAL_TYPES = {
+    "custom_openai_credential",
+    "openai_credential",
+    "dashscope_credential",
+    "deepseek_credential",
+    "moonshot_credential",
+}
 _MAX_DISCOVERY_RESPONSE_BYTES = 2 * 1024 * 1024
+_MODEL_TEST_TIMEOUT_SECONDS = 30.0
 
 
 class CredentialModelEntry(ModelCard):
@@ -31,6 +44,16 @@ class CredentialModelEntry(ModelCard):
 
     source: Literal["builtin", "discovered", "manual"]
     enabled: bool
+
+
+class CredentialModelTestResult(BaseModel):
+    """Sanitised result of one real, minimal chat completion request."""
+
+    success: bool
+    model: str
+    latency_ms: int
+    error_type: ErrorType | None = None
+    message: str
 
 
 class ModelDiscoveryError(Exception):
@@ -249,3 +272,87 @@ async def discover_credential_models(
         CredentialModelDefinition(name=model_id)
         for model_id in model_ids
     ]
+
+
+async def test_credential_model(
+    credential: CredentialBase,
+    model_name: str,
+) -> CredentialModelTestResult:
+    """Send one minimal, non-streaming request through the real adapter.
+
+    The request asks for a one-word reply, disables retries, and has a hard
+    timeout so clicking the UI button cannot silently trigger repeated calls
+    or leave the request hanging indefinitely. No explicit token parameter is
+    sent because older OpenAI-compatible services may reject the newer
+    ``max_completion_tokens`` field. Provider exception details are classified
+    and sanitised before returning to the browser.
+    """
+    started_at = perf_counter()
+
+    async def _invoke() -> None:
+        model_cls = credential.get_chat_model_class()
+        parameters = model_cls.Parameters()
+        client_kwargs: dict[str, int | float] = {}
+        credential_type = getattr(credential, "type", None)
+        if credential_type in _OPENAI_SDK_CREDENTIAL_TYPES:
+            # The OpenAI SDK otherwise performs its own retries underneath
+            # AgentScope, turning one button click into multiple requests.
+            client_kwargs = {
+                "max_retries": 0,
+                "timeout": 20.0,
+            }
+        elif credential_type == "anthropic_credential":
+            client_kwargs = {
+                "max_retries": 0,
+                "timeout": 20.0,
+            }
+        elif credential_type == "ollama_credential":
+            client_kwargs = {"timeout": 20.0}
+
+        model = model_cls(
+            credential=credential,
+            model=model_name,
+            parameters=parameters,
+            stream=False,
+            max_retries=0,
+            client_kwargs=client_kwargs,
+        )
+        response = await model(
+            [
+                UserMsg(
+                    name="model-test",
+                    content="Reply with only OK.",
+                ),
+            ],
+        )
+
+        if isinstance(response, ChatResponse):
+            if response.finished_reason == FinishedReason.INTERRUPTED:
+                raise TimeoutError("The model test timed out.")
+            return
+
+        async for chunk in response:
+            if chunk.finished_reason == FinishedReason.INTERRUPTED:
+                raise TimeoutError("The model test timed out.")
+
+    try:
+        await asyncio.wait_for(
+            _invoke(),
+            timeout=_MODEL_TEST_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:  # Provider SDKs expose many exception classes.
+        error = _classify_error(exc)
+        return CredentialModelTestResult(
+            success=False,
+            model=model_name,
+            latency_ms=max(1, round((perf_counter() - started_at) * 1000)),
+            error_type=error.type,
+            message=error.message,
+        )
+
+    return CredentialModelTestResult(
+        success=True,
+        model=model_name,
+        latency_ms=max(1, round((perf_counter() - started_at) * 1000)),
+        message="Model request completed successfully.",
+    )

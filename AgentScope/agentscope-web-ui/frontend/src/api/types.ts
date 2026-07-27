@@ -380,6 +380,28 @@ export interface UpdateCredentialModelCatalogRequest {
 	hidden_model_ids: string[];
 }
 
+export type CredentialModelTestErrorType =
+	| 'authentication'
+	| 'permission'
+	| 'rate_limit'
+	| 'invalid_request'
+	| 'upstream'
+	| 'connection'
+	| 'internal'
+	| 'unknown';
+
+export interface TestCredentialModelRequest {
+	model: string;
+}
+
+export interface CredentialModelTestResponse {
+	success: boolean;
+	model: string;
+	latency_ms: number;
+	error_type: CredentialModelTestErrorType | null;
+	message: string;
+}
+
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 
 export type { Msg, ContentBlock } from '@agentscope-ai/agentscope/message';

@@ -2,7 +2,7 @@
 """Request / response schemas for the credential router."""
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..._service import CredentialModelEntry, CredentialView
 from ....credential import CredentialModelDefinition
@@ -56,6 +56,24 @@ class UpdateCredentialModelCatalogRequest(BaseModel):
         default_factory=list,
         description="Built-in or discovered model identifiers to hide.",
     )
+
+
+class TestCredentialModelRequest(BaseModel):
+    """Request one real, minimal completion from a catalogued model."""
+
+    model: str = Field(
+        min_length=1,
+        max_length=512,
+        description="Exact provider model identifier to test.",
+    )
+
+    @field_validator("model")
+    @classmethod
+    def _strip_model(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Model identifier must not be empty.")
+        return value
 
 
 class CredentialModelCatalogResponse(BaseModel):

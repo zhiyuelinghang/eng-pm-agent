@@ -3,11 +3,13 @@ import type {
 	CreateCredentialRequest,
 	CreateCredentialResponse,
 	CredentialModelCatalogResponse,
+	CredentialModelTestResponse,
 	CredentialListResponse,
 	CredentialView,
 	CredentialSchemasResponse,
 	UpdateCredentialRequest,
 	UpdateCredentialModelCatalogRequest,
+	TestCredentialModelRequest,
 } from './types';
 
 export const credentialApi = {
@@ -37,6 +39,12 @@ export const credentialApi = {
 	updateModels: (credentialId: string, body: UpdateCredentialModelCatalogRequest) =>
 		client.patch<CredentialModelCatalogResponse>(
 			`/credential/${encodeURIComponent(credentialId)}/models`,
+			body,
+		),
+
+	testModel: (credentialId: string, body: TestCredentialModelRequest) =>
+		client.post<CredentialModelTestResponse>(
+			`/credential/${encodeURIComponent(credentialId)}/models/test`,
 			body,
 		),
 

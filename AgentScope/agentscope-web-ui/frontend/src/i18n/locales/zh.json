@@ -346,6 +346,13 @@
 			"builtin": "默认",
 			"discovered": "自动获取",
 			"manual": "手动"
+		},
+		"modelTest": {
+			"action": "测试模型",
+			"testing": "正在测试…",
+			"retest": "重新测试",
+			"passed": "测试通过 · {{latency}} ms",
+			"tooltip": "会发送一次极短的真实请求，可能产生少量模型费用。"
 		}
 	},
 	"knowledge": {

@@ -346,6 +346,13 @@
 			"builtin": "Default",
 			"discovered": "Discovered",
 			"manual": "Manual"
+		},
+		"modelTest": {
+			"action": "Test model",
+			"testing": "Testing…",
+			"retest": "Test again",
+			"passed": "Test passed · {{latency}} ms",
+			"tooltip": "Sends one very short real request and may incur a small model charge."
 		}
 	},
 	"knowledge": {

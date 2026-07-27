@@ -16,16 +16,19 @@ from ._schema import (
     CredentialModelCatalogResponse,
     ListCredentialsResponse,
     ListCredentialSchemasResponse,
+    TestCredentialModelRequest,
     UpdateCredentialModelCatalogRequest,
     UpdateCredentialRequest,
 )
 from .._service import (
     CredentialView,
+    CredentialModelTestResult,
     ModelDiscoveryError,
     ResourceAccessService,
     build_credential_model_catalog,
     discover_credential_models,
     supports_model_discovery,
+    test_credential_model,
 )
 from ..storage import StorageBase
 from ...credential import (
@@ -149,6 +152,38 @@ async def list_credential_models(
     record = await access.resolve_credential(user_id, credential_id)
     credential = CredentialFactory.from_dict(record.data)
     return _model_catalog_response(credential)
+
+
+@credential_router.post(
+    "/{credential_id}/models/test",
+    response_model=CredentialModelTestResult,
+    summary="Test one model with a minimal real completion",
+)
+async def test_model(
+    credential_id: str,
+    body: TestCredentialModelRequest,
+    user_id: str = Depends(get_current_user_id),
+    access: ResourceAccessService = Depends(get_resource_access_service),
+) -> CredentialModelTestResult:
+    """Test credential, endpoint, and model access without creating a session."""
+    record = await access.resolve_credential(user_id, credential_id)
+    credential = CredentialFactory.from_dict(record.data)
+    candidate = next(
+        (
+            model
+            for model in build_credential_model_catalog(credential)
+            if model.name == body.model and model.enabled
+        ),
+        None,
+    )
+    if candidate is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Model '{body.model}' is not enabled for this credential."
+            ),
+        )
+    return await test_credential_model(credential, body.model)
 
 
 @credential_router.post(
