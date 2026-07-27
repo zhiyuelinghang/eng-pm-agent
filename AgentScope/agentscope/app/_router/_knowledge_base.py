@@ -48,6 +48,7 @@ from .._service import (
     KnowledgeBaseService,
     KnowledgeBaseView,
     ResourceAccessService,
+    build_credential_embedding_model_catalog,
 )
 from ...middleware import RAGMiddleware
 from ...rag import ParserBase
@@ -102,28 +103,32 @@ async def list_kb_embedding_models(
     credentials = await access.list_resource(user_id, ResourceKind.CREDENTIAL)
 
     providers: list[KbEmbeddingProvider] = []
-    for credential in credentials:
-        credential_type = credential.data.get("type")
-        if not credential_type:
-            continue
-        credential_cls = CredentialFactory.get_credential_class(
-            credential_type,
-        )
-        if credential_cls is None:
-            continue
-        embedding_cls = credential_cls.get_embedding_model_class()
-        if embedding_cls is None:
+    for credential_view in credentials:
+        try:
+            credential_record = await access.resolve_credential(
+                user_id,
+                credential_view.id,
+            )
+            credential = CredentialFactory.from_dict(
+                credential_record.data,
+            )
+        except (KeyError, TypeError, ValueError):
             continue
 
         filtered = []
-        for card in embedding_cls.list_models():
+        for card in build_credential_embedding_model_catalog(credential):
+            if not card.enabled:
+                continue
             projected = policy.filter_card(card)
             if projected is not None:
                 filtered.append(projected)
         if not filtered:
             continue
         providers.append(
-            KbEmbeddingProvider(credential=credential, models=filtered),
+            KbEmbeddingProvider(
+                credential=credential_view,
+                models=filtered,
+            ),
         )
 
     return ListKbEmbeddingModelsResponse(providers=providers, policy=policy)

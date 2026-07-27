@@ -8,11 +8,12 @@ from pydantic import ConfigDict, Field, SecretStr, field_validator
 from ._base import CredentialBase
 
 if TYPE_CHECKING:
+    from ..embedding import EmbeddingModelBase, EmbeddingModelCard
     from ..model import ChatModelBase, ModelCard
 
 
 class CustomOpenAICredential(CredentialBase):
-    """A custom OpenAI Chat Completions compatible service."""
+    """A custom OpenAI-compatible chat and embeddings service."""
 
     model_config = ConfigDict(
         title="自定义（OpenAI 兼容）",
@@ -58,6 +59,18 @@ class CustomOpenAICredential(CredentialBase):
         return OpenAIChatModel
 
     @classmethod
+    def get_embedding_model_class(cls) -> Type["EmbeddingModelBase"]:
+        """Use the generic OpenAI-compatible embeddings adapter."""
+        from ..embedding import OpenAIEmbeddingModel
+
+        return OpenAIEmbeddingModel
+
+    @classmethod
     def list_models(cls) -> list["ModelCard"]:
         """Custom services do not inherit OpenAI's fixed GPT catalogue."""
+        return []
+
+    @classmethod
+    def list_embedding_models(cls) -> list["EmbeddingModelCard"]:
+        """Custom services do not inherit OpenAI's fixed embedding catalog."""
         return []

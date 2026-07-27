@@ -8,26 +8,40 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from agentscope.app._service._credential_models import (
     CredentialModelTestResult,
     ModelDiscoveryError,
+    build_credential_embedding_model_catalog,
     build_credential_model_catalog,
     discover_credential_models,
+    test_credential_embedding_model,
     test_credential_model,
 )
+from agentscope.app._service._embedding import build_embedding_model
 from agentscope.app._service._model import get_model
 from agentscope.app._router._credential import (
     test_model as test_model_endpoint,
     update_credential,
 )
+from agentscope.app._router._knowledge_base import list_kb_embedding_models
 from agentscope.app._router._schema import (
     TestCredentialModelRequest,
     UpdateCredentialRequest,
 )
-from agentscope.app.storage import ChatModelConfig, CredentialRecord
+from agentscope.app.storage import (
+    ChatModelConfig,
+    CredentialRecord,
+    EmbeddingModelConfig,
+)
 from agentscope.app.storage._utils import _dump_with_secrets
+from agentscope.app._service import CredentialView
+from agentscope.app.rag.knowledge_base_manager import (
+    DimensionPolicy,
+    DimensionPolicyKind,
+)
 from agentscope.credential import (
     CredentialFactory,
     CredentialModelDefinition,
     CustomOpenAICredential,
 )
+from agentscope.embedding import OpenAIEmbeddingModel
 from agentscope.model import ChatResponse, OpenAIChatModel
 from agentscope.types import ErrorType
 
@@ -56,6 +70,11 @@ class CredentialModelCatalogTest(TestCase):
 
     def test_custom_provider_has_no_openai_default_models(self):
         self.assertEqual(_credential().list_models(), [])
+        self.assertEqual(_credential().list_embedding_models(), [])
+        self.assertIs(
+            _credential().get_embedding_model_class(),
+            OpenAIEmbeddingModel,
+        )
 
     def test_manual_models_override_discovery_and_hidden_state_is_applied(self):
         credential = _credential()
@@ -89,6 +108,64 @@ class CredentialModelCatalogTest(TestCase):
         )
         self.assertTrue(models["qwen/qwen3-max"].enabled)
         self.assertFalse(models["discovered-only"].enabled)
+
+    def test_manual_embedding_model_is_separate_from_chat_catalog(self):
+        credential = _credential()
+        credential.model_catalog.discovered_models = [
+            CredentialModelDefinition(name="embedding-model"),
+        ]
+        credential.model_catalog.manual_models = [
+            CredentialModelDefinition(
+                model_type="chat",
+                name="chat-model",
+            ),
+            CredentialModelDefinition(
+                model_type="embedding",
+                name="embedding-model",
+                dimensions=1024,
+            ),
+        ]
+
+        chat_models = build_credential_model_catalog(credential)
+        embedding_models = build_credential_embedding_model_catalog(
+            credential,
+        )
+
+        self.assertEqual([item.name for item in chat_models], ["chat-model"])
+        self.assertEqual(
+            [item.name for item in embedding_models],
+            ["embedding-model"],
+        )
+        self.assertEqual(embedding_models[0].dimensions, 1024)
+
+    def test_custom_embedding_runtime_does_not_force_dimensions_parameter(self):
+        credential = _credential()
+        credential.model_catalog.manual_models = [
+            CredentialModelDefinition(
+                model_type="embedding",
+                name="text-embedding-custom",
+                dimensions=768,
+            ),
+        ]
+        record = CredentialRecord(
+            id=credential.id,
+            user_id="owner",
+            data=_dump_with_secrets(credential),
+        )
+
+        model = build_embedding_model(
+            record,
+            EmbeddingModelConfig(
+                type="custom_openai_credential",
+                credential_id=credential.id,
+                model="text-embedding-custom",
+                dimensions=768,
+                parameters={},
+            ),
+        )
+
+        self.assertEqual(model.dimensions, 768)
+        self.assertFalse(model.pass_dimensions)
 
 
 class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
@@ -202,6 +279,85 @@ class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.error_type, ErrorType.AUTHENTICATION)
         self.assertNotIn("bad key", result.message)
+
+    async def test_embedding_probe_detects_vector_dimensions(self):
+        response = SimpleNamespace(
+            status_code=200,
+            content=json.dumps(
+                {
+                    "data": [
+                        {
+                            "index": 0,
+                            "embedding": [0.1, 0.2, 0.3, 0.4],
+                        },
+                    ],
+                },
+            ).encode(),
+        )
+        client = AsyncMock()
+        client.post.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=client)
+        context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch(
+            "agentscope.app._service._credential_models.httpx.AsyncClient",
+            return_value=context,
+        ):
+            result = await test_credential_embedding_model(
+                _credential(),
+                "text-embedding-custom",
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.model_type, "embedding")
+        self.assertEqual(result.dimensions, 4)
+        self.assertEqual(client.post.await_count, 1)
+
+    async def test_manual_embedding_appears_in_knowledge_base_picker(self):
+        credential = _credential()
+        credential.model_catalog.manual_models = [
+            CredentialModelDefinition(
+                model_type="embedding",
+                name="text-embedding-custom",
+                dimensions=768,
+            ),
+        ]
+        record = CredentialRecord(
+            id=credential.id,
+            user_id="owner",
+            data=_dump_with_secrets(credential),
+        )
+        view = CredentialView.model_validate(
+            {
+                **record.model_dump(),
+                "editable": True,
+            },
+        )
+        access = SimpleNamespace(
+            list_resource=AsyncMock(return_value=[view]),
+            resolve_credential=AsyncMock(return_value=record),
+        )
+        manager = SimpleNamespace(
+            get_dimension_policy=AsyncMock(
+                return_value=DimensionPolicy(
+                    kind=DimensionPolicyKind.ANY,
+                ),
+            ),
+        )
+
+        result = await list_kb_embedding_models(
+            user_id="owner",
+            access=access,
+            manager=manager,
+        )
+
+        self.assertEqual(len(result.providers), 1)
+        self.assertEqual(
+            result.providers[0].models[0].name,
+            "text-embedding-custom",
+        )
+        self.assertEqual(result.providers[0].models[0].dimensions, 768)
 
     async def test_model_test_endpoint_accepts_an_enabled_catalog_model(self):
         credential = _credential()

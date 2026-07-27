@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Credential-scoped chat model catalogue and discovery helpers."""
+"""Credential-scoped model catalogue, discovery, and test helpers."""
 from __future__ import annotations
 
 import asyncio
@@ -15,6 +15,7 @@ from ...credential import (
     CredentialBase,
     CredentialModelDefinition,
 )
+from ...embedding import EmbeddingModelCard
 from ...message import UserMsg
 from ...model import ChatResponse, FinishedReason, ModelCard
 from ...types import ErrorType
@@ -37,6 +38,11 @@ _OPENAI_SDK_CREDENTIAL_TYPES = {
 }
 _MAX_DISCOVERY_RESPONSE_BYTES = 2 * 1024 * 1024
 _MODEL_TEST_TIMEOUT_SECONDS = 30.0
+_OPENAI_COMPATIBLE_EMBEDDING_TYPES = {
+    "custom_openai_credential",
+    "openai_credential",
+    "dashscope_credential",
+}
 
 
 class CredentialModelEntry(ModelCard):
@@ -46,18 +52,35 @@ class CredentialModelEntry(ModelCard):
     enabled: bool
 
 
+class CredentialEmbeddingModelEntry(EmbeddingModelCard):
+    """An embedding model card plus credential-scoped catalogue state."""
+
+    source: Literal["builtin", "discovered", "manual"]
+    enabled: bool
+
+
 class CredentialModelTestResult(BaseModel):
-    """Sanitised result of one real, minimal chat completion request."""
+    """Sanitised result of one real, minimal model request."""
 
     success: bool
     model: str
+    model_type: Literal["chat", "embedding"] = "chat"
     latency_ms: int
+    dimensions: int | None = None
     error_type: ErrorType | None = None
     message: str
 
 
 class ModelDiscoveryError(Exception):
     """Safe, user-facing failure raised while querying ``GET /models``."""
+
+
+class EmbeddingProbeError(Exception):
+    """Embedding response failure with an optional HTTP status code."""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def supports_model_discovery(credential: CredentialBase) -> bool:
@@ -145,11 +168,21 @@ def build_credential_model_catalog(
     the context/output limits for the service they actually use.
     """
     merged: dict[str, tuple[ModelCard, str]] = {}
+    manual_embedding_ids = {
+        definition.name
+        for definition in credential.model_catalog.manual_models
+        if definition.model_type == "embedding"
+    }
 
     for card in credential.list_models():
-        merged[card.name] = (card, "builtin")
+        if card.name not in manual_embedding_ids:
+            merged[card.name] = (card, "builtin")
 
     for definition in credential.model_catalog.discovered_models:
+        if definition.model_type != "chat":
+            continue
+        if definition.name in manual_embedding_ids:
+            continue
         if definition.name not in merged:
             merged[definition.name] = (
                 _definition_to_card(credential, definition),
@@ -157,6 +190,8 @@ def build_credential_model_catalog(
             )
 
     for definition in credential.model_catalog.manual_models:
+        if definition.model_type != "chat":
+            continue
         merged[definition.name] = (
             _definition_to_card(credential, definition),
             "manual",
@@ -165,6 +200,92 @@ def build_credential_model_catalog(
     hidden = set(credential.model_catalog.hidden_model_ids)
     return [
         CredentialModelEntry.model_validate(
+            {
+                **card.model_dump(),
+                "source": source,
+                "enabled": name not in hidden,
+            },
+        )
+        for name, (card, source) in merged.items()
+    ]
+
+
+def _embedding_parameter_schema(credential: CredentialBase) -> dict:
+    """Build the parameter schema used by dynamic embedding cards."""
+    embedding_cls = credential.get_embedding_model_class()
+    if embedding_cls is None:
+        return {"type": "object", "properties": {}, "required": []}
+    base_schema = embedding_cls.Parameters.model_json_schema()
+    return {
+        "type": "object",
+        "properties": copy.deepcopy(base_schema.get("properties", {})),
+        "required": base_schema.get("required", []),
+    }
+
+
+def _definition_to_embedding_card(
+    credential: CredentialBase,
+    definition: CredentialModelDefinition,
+) -> EmbeddingModelCard:
+    """Convert a persisted embedding definition into a runtime model card."""
+    if definition.dimensions is None:
+        raise ValueError(
+            f"Embedding model {definition.name!r} has no dimensions.",
+        )
+    return EmbeddingModelCard(
+        name=definition.name,
+        label=definition.label or definition.name,
+        status="active",
+        input_types=definition.input_types,
+        output_types=["application/x-embedding"],
+        dimensions=definition.dimensions,
+        supported_dimensions=None,
+        context_size=definition.context_size,
+        parameter_schema=_embedding_parameter_schema(credential),
+        parameter_overrides={},
+    )
+
+
+def build_credential_embedding_model_catalog(
+    credential: CredentialBase,
+) -> list[CredentialEmbeddingModelEntry]:
+    """Merge built-in and credential-managed embedding model cards."""
+    if credential.get_embedding_model_class() is None:
+        return []
+
+    manual_chat_ids = {
+        definition.name
+        for definition in credential.model_catalog.manual_models
+        if definition.model_type == "chat"
+    }
+    merged: dict[str, tuple[EmbeddingModelCard, str]] = {
+        card.name: (card, "builtin")
+        for card in credential.list_embedding_models()
+        if card.name not in manual_chat_ids
+    }
+
+    for definition in credential.model_catalog.discovered_models:
+        if definition.model_type != "embedding":
+            continue
+        if definition.name in manual_chat_ids:
+            continue
+        if definition.name not in merged:
+            merged[definition.name] = (
+                _definition_to_embedding_card(credential, definition),
+                "discovered",
+            )
+
+    for definition in credential.model_catalog.manual_models:
+        if definition.model_type != "embedding":
+            continue
+        merged[definition.name] = (
+            _definition_to_embedding_card(credential, definition),
+            "manual",
+        )
+
+    hidden = set(credential.model_catalog.hidden_embedding_model_ids)
+    return [
+        CredentialEmbeddingModelEntry.model_validate(
             {
                 **card.model_dump(),
                 "source": source,
@@ -355,4 +476,161 @@ async def test_credential_model(
         model=model_name,
         latency_ms=max(1, round((perf_counter() - started_at) * 1000)),
         message="Model request completed successfully.",
+    )
+
+
+def _embedding_dimensions_from_payload(payload: object) -> int:
+    """Return the first vector length from an OpenAI-compatible response."""
+    if not isinstance(payload, dict):
+        raise EmbeddingProbeError(
+            "Embedding response is not a JSON object.",
+            422,
+        )
+    data = payload.get("data")
+    if not isinstance(data, list) or not data:
+        raise EmbeddingProbeError(
+            "Embedding response does not contain any vectors.",
+            422,
+        )
+    first = data[0]
+    if not isinstance(first, dict):
+        raise EmbeddingProbeError(
+            "Embedding response contains an invalid vector entry.",
+            422,
+        )
+    vector = first.get("embedding", first.get("dense_embedding"))
+    if not isinstance(vector, list) or not vector:
+        raise EmbeddingProbeError(
+            "Embedding response does not contain a usable vector.",
+            422,
+        )
+    if not all(isinstance(value, (int, float)) for value in vector):
+        raise EmbeddingProbeError(
+            "Embedding response vector is not numeric.",
+            422,
+        )
+    return len(vector)
+
+
+async def _probe_openai_compatible_embedding(
+    credential: CredentialBase,
+    model_name: str,
+) -> int:
+    """Call ``POST /embeddings`` once without forcing a dimension."""
+    url = f"{_discovery_base_url(credential)}/embeddings"
+    headers = {
+        "Authorization": f"Bearer {_api_key(credential)}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(20.0),
+        follow_redirects=False,
+    ) as client:
+        response = await client.post(
+            url,
+            headers=headers,
+            json={
+                "model": model_name,
+                "input": "AgentScope embedding model test.",
+            },
+        )
+
+    if not 200 <= response.status_code < 300:
+        raise EmbeddingProbeError(
+            "Embedding endpoint rejected the test request.",
+            response.status_code,
+        )
+    if len(response.content) > _MAX_DISCOVERY_RESPONSE_BYTES:
+        raise EmbeddingProbeError("Embedding response is too large.", 422)
+    try:
+        payload = json.loads(response.content)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise EmbeddingProbeError(
+            "Embedding response is not valid JSON.",
+            422,
+        ) from exc
+    return _embedding_dimensions_from_payload(payload)
+
+
+async def _probe_native_embedding(
+    credential: CredentialBase,
+    model_name: str,
+    dimensions: int | None,
+) -> int:
+    """Test a native embedding adapter when its dimensions are known."""
+    if dimensions is None:
+        raise EmbeddingProbeError(
+            "This provider requires a known embedding dimension.",
+            422,
+        )
+    embedding_cls = credential.get_embedding_model_class()
+    if embedding_cls is None:
+        raise EmbeddingProbeError(
+            "This credential does not support embedding models.",
+            422,
+        )
+    model = embedding_cls(
+        credential=credential,
+        model=model_name,
+        dimensions=dimensions,
+        parameters=embedding_cls.Parameters(),
+        max_retries=0,
+    )
+    response = await model(["AgentScope embedding model test."])
+    if not response.embeddings or not response.embeddings[0]:
+        raise EmbeddingProbeError(
+            "Embedding response does not contain a usable vector.",
+            422,
+        )
+    return len(response.embeddings[0])
+
+
+async def test_credential_embedding_model(
+    credential: CredentialBase,
+    model_name: str,
+    dimensions: int | None = None,
+) -> CredentialModelTestResult:
+    """Send one real embedding request and report the vector dimensions."""
+    started_at = perf_counter()
+
+    async def _invoke() -> int:
+        credential_type = getattr(credential, "type", None)
+        if credential_type in _OPENAI_COMPATIBLE_EMBEDDING_TYPES:
+            return await _probe_openai_compatible_embedding(
+                credential,
+                model_name,
+            )
+        return await _probe_native_embedding(
+            credential,
+            model_name,
+            dimensions,
+        )
+
+    try:
+        detected_dimensions = await asyncio.wait_for(
+            _invoke(),
+            timeout=_MODEL_TEST_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        error = _classify_error(exc)
+        return CredentialModelTestResult(
+            success=False,
+            model=model_name,
+            model_type="embedding",
+            latency_ms=max(1, round((perf_counter() - started_at) * 1000)),
+            error_type=error.type,
+            message=error.message,
+        )
+
+    return CredentialModelTestResult(
+        success=True,
+        model=model_name,
+        model_type="embedding",
+        dimensions=detected_dimensions,
+        latency_ms=max(1, round((perf_counter() - started_at) * 1000)),
+        message=(
+            "Embedding request completed successfully "
+            f"({detected_dimensions} dimensions)."
+        ),
     )

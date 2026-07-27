@@ -1,4 +1,5 @@
 import {
+	CircleAlert,
 	CircleCheck,
 	CircleX,
 	Eye,
@@ -16,6 +17,7 @@ import { useState, useEffect, useCallback } from 'react';
 
 import { credentialApi, ttsModelApi } from '@/api';
 import type {
+	CredentialEmbeddingModelEntry,
 	CredentialModelCatalogResponse,
 	CredentialModelDefinition,
 	CredentialModelEntry,
@@ -49,6 +51,13 @@ import {
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import {
 	Sidebar,
@@ -83,22 +92,32 @@ function MaskedValue({ value }: { value: string }) {
 
 // ─── Manual model dialog ──────────────────────────────────────────────────────
 
+interface ManualModelInput {
+	model_type: 'chat' | 'embedding';
+	name: string;
+	label: string | null;
+}
+
 interface ManualModelDialogProps {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	onSave: (model: CredentialModelDefinition) => Promise<void>;
+	onSave: (model: ManualModelInput) => Promise<void>;
 }
 
 function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProps) {
 	const { t } = useTranslation();
 	const [name, setName] = useState('');
 	const [label, setLabel] = useState('');
+	const [modelType, setModelType] = useState<'chat' | 'embedding'>('chat');
 	const [submitting, setSubmitting] = useState(false);
+	const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
 	useEffect(() => {
 		if (!open) return;
 		setName('');
 		setLabel('');
+		setModelType('chat');
+		setErrorMessage(null);
 	}, [open]);
 
 	const handleSave = async () => {
@@ -106,19 +125,20 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 		if (!trimmedName) return;
 
 		setSubmitting(true);
+		setErrorMessage(null);
 		try {
 			await onSave({
+				model_type: modelType,
 				name: trimmedName,
 				label: label.trim() || null,
-				// OpenAI-compatible GET /models responses normally do not
-				// publish trustworthy token limits. Keep internal catalogue
-				// defaults instead of asking the user to guess them.
-				context_size: 128000,
-				output_size: 8192,
-				input_types: ['text/plain'],
-				output_types: ['text/plain'],
 			});
 			onOpenChange(false);
+		} catch (error) {
+			setErrorMessage(
+				error instanceof Error
+					? error.message
+					: t('credential.modelProbe.failed'),
+			);
 		} finally {
 			setSubmitting(false);
 		}
@@ -134,6 +154,35 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 					</DialogDescription>
 				</DialogHeader>
 				<div className="grid gap-4">
+					<div className="grid gap-1.5">
+						<Label htmlFor="manual-model-type">
+							{t('credential.modelType')}
+						</Label>
+						<Select
+							value={modelType}
+							onValueChange={(value) =>
+								setModelType(value as 'chat' | 'embedding')
+							}
+							disabled={submitting}
+						>
+							<SelectTrigger id="manual-model-type" className="w-full">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="chat">
+									{t('credential.modelTypes.chat')}
+								</SelectItem>
+								<SelectItem value="embedding">
+									{t('credential.modelTypes.embedding')}
+								</SelectItem>
+							</SelectContent>
+						</Select>
+						{modelType === 'embedding' && (
+							<p className="text-xs text-muted-foreground">
+								{t('credential.embeddingProbeHint')}
+							</p>
+						)}
+					</div>
 					<div className="grid gap-1.5">
 						<Label htmlFor="manual-model-name">
 							{t('credential.modelId')}
@@ -157,6 +206,12 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 							placeholder={t('credential.modelLabelPlaceholder')}
 						/>
 					</div>
+					{errorMessage && (
+						<div className="flex items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+							<CircleAlert className="mt-0.5 size-4 shrink-0" />
+							<span>{errorMessage}</span>
+						</div>
+					)}
 				</div>
 				<DialogFooter>
 					<Button
@@ -333,6 +388,125 @@ function ModelCardItem({
 	);
 }
 
+interface EmbeddingModelCardItemProps {
+	model: CredentialEmbeddingModelEntry;
+	onRemove: () => void;
+	onTest: () => void;
+	disabled: boolean;
+	testDisabled: boolean;
+	testing: boolean;
+	testResult?: CredentialModelTestResponse;
+}
+
+function EmbeddingModelCardItem({
+	model,
+	onRemove,
+	onTest,
+	disabled,
+	testDisabled,
+	testing,
+	testResult,
+}: EmbeddingModelCardItemProps) {
+	const { t } = useTranslation();
+
+	return (
+		<Card className="shadow">
+			<CardHeader>
+				<div className="min-w-0">
+					<CardTitle
+						className="truncate text-sm font-semibold leading-tight"
+						title={model.name}
+					>
+						{model.label || model.name}
+					</CardTitle>
+					<div className="mt-1 flex items-center gap-1.5">
+						<Badge variant="secondary" className="text-[10px]">
+							{t(`credential.modelSource.${model.source}`)}
+						</Badge>
+						<Badge variant="outline" className="text-[10px]">
+							{t('credential.modelTypes.embedding')}
+						</Badge>
+					</div>
+				</div>
+				<CardAction>
+					<Button
+						size="icon-sm"
+						variant="ghost"
+						onClick={onRemove}
+						disabled={disabled}
+						tooltip={t(
+							model.source === 'manual'
+								? 'credential.deleteManualModel'
+								: 'credential.hideModel',
+						)}
+					>
+						<Trash2 />
+					</Button>
+				</CardAction>
+			</CardHeader>
+			<CardContent className="flex flex-col gap-1">
+				<div className="flex items-center justify-between text-[14px]">
+					<span className="text-muted-foreground">
+						{t('credential.embeddingDimensions')}
+					</span>
+					<span>{formatNumber(model.dimensions)}</span>
+				</div>
+				<div className="flex items-center justify-between text-[14px]">
+					<span className="text-muted-foreground">{t('credential.inputTypes')}</span>
+					<InputTypeBadges inputTypes={model.input_types} />
+				</div>
+			</CardContent>
+			<CardFooter className="mt-auto flex-col items-stretch gap-2">
+				<Button
+					size="sm"
+					variant="outline"
+					className="w-full"
+					onClick={onTest}
+					disabled={testDisabled}
+					tooltip={t('credential.modelTest.tooltip')}
+				>
+					{testing ? (
+						<Loader2 className="animate-spin" />
+					) : (
+						<FlaskConical />
+					)}
+					{testing
+						? t('credential.modelTest.testing')
+						: testResult
+							? t('credential.modelTest.retest')
+							: t('credential.modelTest.action')}
+				</Button>
+				{testResult && (
+					<div
+						aria-live="polite"
+						className={`flex items-start gap-1.5 text-xs ${
+							testResult.success ? 'text-emerald-600' : 'text-destructive'
+						}`}
+					>
+						{testResult.success ? (
+							<CircleCheck className="mt-0.5 size-3.5 shrink-0" />
+						) : (
+							<CircleX className="mt-0.5 size-3.5 shrink-0" />
+						)}
+						<span>
+							{testResult.success
+								? t('credential.modelTest.embeddingPassed', {
+										latency: testResult.latency_ms,
+										dimensions:
+											testResult.dimensions ?? model.dimensions,
+									})
+								: t(
+										`messageBubble.error.${testResult.error_type ?? 'unknown'}`,
+										{ defaultValue: testResult.message },
+									)}
+						</span>
+					</div>
+				)}
+			</CardFooter>
+		</Card>
+	);
+}
+
 // ─── TTS Model Card ──────────────────────────────────────────────────────────
 
 function TTSModelCardItem({ model }: { model: TTSModelCard }) {
@@ -433,12 +607,14 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 		async (
 			manualModels: CredentialModelDefinition[],
 			hiddenModelIds: string[],
+			hiddenEmbeddingModelIds: string[],
 		) => {
 			setCatalogSaving(true);
 			try {
 				const result = await credentialApi.updateModels(credential.id, {
 					manual_models: manualModels,
 					hidden_model_ids: hiddenModelIds,
+					hidden_embedding_model_ids: hiddenEmbeddingModelIds,
 				});
 				setCatalog(result);
 			} finally {
@@ -464,15 +640,53 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 		}
 	};
 
-	const handleAddManualModel = async (model: CredentialModelDefinition) => {
+	const handleAddManualModel = async (input: ManualModelInput) => {
 		if (!catalog) return;
+		let model: CredentialModelDefinition;
+		if (input.model_type === 'embedding') {
+			const probe = await credentialApi.probeEmbeddingModel(credential.id, {
+				model: input.name,
+				model_type: 'embedding',
+			});
+			if (!probe.success || probe.dimensions == null) {
+				throw new Error(
+					t(`messageBubble.error.${probe.error_type ?? 'unknown'}`, {
+						defaultValue: probe.message,
+					}),
+				);
+			}
+			model = {
+				...input,
+				context_size: 8191,
+				output_size: 1,
+				input_types: ['text/plain'],
+				output_types: ['application/x-embedding'],
+				dimensions: probe.dimensions,
+			};
+		} else {
+			model = {
+				...input,
+				context_size: 128000,
+				output_size: 8192,
+				input_types: ['text/plain'],
+				output_types: ['text/plain'],
+				dimensions: null,
+			};
+		}
 		const manualModels = [
 			...catalog.manual_models.filter((item) => item.name !== model.name),
 			model,
 		];
 		await saveCatalog(
 			manualModels,
-			catalog.hidden_model_ids.filter((id) => id !== model.name),
+			model.model_type === 'chat'
+				? catalog.hidden_model_ids.filter((id) => id !== model.name)
+				: catalog.hidden_model_ids,
+			model.model_type === 'embedding'
+				? catalog.hidden_embedding_model_ids.filter(
+						(id) => id !== model.name,
+					)
+				: catalog.hidden_embedding_model_ids,
 		);
 	};
 
@@ -480,15 +694,47 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 		if (!catalog) return;
 		if (model.source === 'manual') {
 			await saveCatalog(
-				catalog.manual_models.filter((item) => item.name !== model.name),
+				catalog.manual_models.filter(
+					(item) =>
+						item.name !== model.name || item.model_type !== 'chat',
+				),
 				catalog.hidden_model_ids,
+				catalog.hidden_embedding_model_ids,
 			);
 			return;
 		}
 		await saveCatalog(catalog.manual_models, [
 			...catalog.hidden_model_ids.filter((id) => id !== model.name),
 			model.name,
-		]);
+		], catalog.hidden_embedding_model_ids);
+	};
+
+	const handleRemoveEmbeddingModel = async (
+		model: CredentialEmbeddingModelEntry,
+	) => {
+		if (!catalog) return;
+		if (model.source === 'manual') {
+			await saveCatalog(
+				catalog.manual_models.filter(
+					(item) =>
+						item.name !== model.name ||
+						item.model_type !== 'embedding',
+				),
+				catalog.hidden_model_ids,
+				catalog.hidden_embedding_model_ids,
+			);
+			return;
+		}
+		await saveCatalog(
+			catalog.manual_models,
+			catalog.hidden_model_ids,
+			[
+				...catalog.hidden_embedding_model_ids.filter(
+					(id) => id !== model.name,
+				),
+				model.name,
+			],
+		);
 	};
 
 	const handleRestoreModel = async (modelName: string) => {
@@ -496,18 +742,35 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 		await saveCatalog(
 			catalog.manual_models,
 			catalog.hidden_model_ids.filter((id) => id !== modelName),
+			catalog.hidden_embedding_model_ids,
 		);
 	};
 
-	const handleTestModel = async (modelName: string) => {
-		setTestingModel(modelName);
+	const handleRestoreEmbeddingModel = async (modelName: string) => {
+		if (!catalog) return;
+		await saveCatalog(
+			catalog.manual_models,
+			catalog.hidden_model_ids,
+			catalog.hidden_embedding_model_ids.filter(
+				(id) => id !== modelName,
+			),
+		);
+	};
+
+	const handleTestModel = async (
+		modelType: 'chat' | 'embedding',
+		modelName: string,
+	) => {
+		const testKey = `${modelType}:${modelName}`;
+		setTestingModel(testKey);
 		try {
 			const result = await credentialApi.testModel(credential.id, {
 				model: modelName,
+				model_type: modelType,
 			});
 			setTestResults((previous) => ({
 				...previous,
-				[modelName]: result,
+				[testKey]: result,
 			}));
 		} finally {
 			setTestingModel(null);
@@ -532,6 +795,10 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 	const name = (credential.data.name as string | undefined) ?? credential.id;
 	const activeModels = catalog?.models.filter((model) => model.enabled) ?? [];
 	const hiddenModels = catalog?.models.filter((model) => !model.enabled) ?? [];
+	const activeEmbeddingModels =
+		catalog?.embedding_models.filter((model) => model.enabled) ?? [];
+	const hiddenEmbeddingModels =
+		catalog?.embedding_models.filter((model) => !model.enabled) ?? [];
 
 	return (
 		<div className="flex flex-col gap-y-6 p-6 overflow-y-auto h-full">
@@ -663,7 +930,7 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 							<Skeleton key={i} className="h-20 rounded-lg" />
 						))}
 					</div>
-				) : activeModels.length === 0 ? (
+				) : activeModels.length + activeEmbeddingModels.length === 0 ? (
 					<Empty className="border-none py-6">
 						<EmptyHeader>
 							<EmptyTitle>{t('credential.noModels')}</EmptyTitle>
@@ -673,23 +940,79 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 						</EmptyHeader>
 					</Empty>
 				) : (
-					<div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
-						{activeModels.map((model) => (
-							<ModelCardItem
-								key={model.name}
-								model={model}
-								onRemove={() => handleRemoveModel(model)}
-								onTest={() => handleTestModel(model.name)}
-								disabled={
-									!credential.editable ||
-									catalogSaving ||
-									testingModel !== null
-								}
-								testDisabled={testingModel !== null || catalogSaving}
-								testing={testingModel === model.name}
-								testResult={testResults[model.name]}
-							/>
-						))}
+					<div className="flex flex-col gap-5">
+						{activeModels.length > 0 && (
+							<section className="flex flex-col gap-2.5">
+								<h4 className="text-xs font-semibold text-muted-foreground">
+									{t('credential.modelTypes.chat')} ({activeModels.length})
+								</h4>
+								<div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
+									{activeModels.map((model) => {
+										const testKey = `chat:${model.name}`;
+										return (
+											<ModelCardItem
+												key={model.name}
+												model={model}
+												onRemove={() => handleRemoveModel(model)}
+												onTest={() =>
+													handleTestModel('chat', model.name)
+												}
+												disabled={
+													!credential.editable ||
+													catalogSaving ||
+													testingModel !== null
+												}
+												testDisabled={
+													testingModel !== null ||
+													catalogSaving
+												}
+												testing={testingModel === testKey}
+												testResult={testResults[testKey]}
+											/>
+										);
+									})}
+								</div>
+							</section>
+						)}
+						{activeEmbeddingModels.length > 0 && (
+							<section className="flex flex-col gap-2.5">
+								<h4 className="text-xs font-semibold text-muted-foreground">
+									{t('credential.modelTypes.embedding')} (
+									{activeEmbeddingModels.length})
+								</h4>
+								<div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
+									{activeEmbeddingModels.map((model) => {
+										const testKey = `embedding:${model.name}`;
+										return (
+											<EmbeddingModelCardItem
+												key={model.name}
+												model={model}
+												onRemove={() =>
+													handleRemoveEmbeddingModel(model)
+												}
+												onTest={() =>
+													handleTestModel(
+														'embedding',
+														model.name,
+													)
+												}
+												disabled={
+													!credential.editable ||
+													catalogSaving ||
+													testingModel !== null
+												}
+												testDisabled={
+													testingModel !== null ||
+													catalogSaving
+												}
+												testing={testingModel === testKey}
+												testResult={testResults[testKey]}
+											/>
+										);
+									})}
+								</div>
+							</section>
+						)}
 					</div>
 				)}
 
@@ -705,8 +1028,13 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 									className="flex items-center justify-between gap-3 px-3 py-2"
 								>
 									<div className="min-w-0">
-										<div className="truncate text-sm font-medium">
-											{model.label || model.name}
+										<div className="flex items-center gap-2">
+											<div className="truncate text-sm font-medium">
+												{model.label || model.name}
+											</div>
+											<Badge variant="outline" className="text-[10px]">
+												{t('credential.modelTypes.chat')}
+											</Badge>
 										</div>
 										<div className="truncate font-mono text-xs text-muted-foreground">
 											{model.name}
@@ -716,6 +1044,52 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 										size="sm"
 										variant="ghost"
 										onClick={() => handleRestoreModel(model.name)}
+										disabled={
+											!credential.editable ||
+											catalogSaving ||
+											testingModel !== null
+										}
+									>
+										<RotateCcw />
+										{t('credential.restoreModel')}
+									</Button>
+								</div>
+							))}
+						</div>
+					</div>
+				)}
+
+				{hiddenEmbeddingModels.length > 0 && (
+					<div className="rounded-lg border bg-muted/20">
+						<div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+							{t('credential.hiddenModels')} (
+							{hiddenEmbeddingModels.length})
+						</div>
+						<div className="divide-y">
+							{hiddenEmbeddingModels.map((model) => (
+								<div
+									key={model.name}
+									className="flex items-center justify-between gap-3 px-3 py-2"
+								>
+									<div className="min-w-0">
+										<div className="flex items-center gap-2">
+											<div className="truncate text-sm font-medium">
+												{model.label || model.name}
+											</div>
+											<Badge variant="outline" className="text-[10px]">
+												{t('credential.modelTypes.embedding')}
+											</Badge>
+										</div>
+										<div className="truncate font-mono text-xs text-muted-foreground">
+											{model.name}
+										</div>
+									</div>
+									<Button
+										size="sm"
+										variant="ghost"
+										onClick={() =>
+											handleRestoreEmbeddingModel(model.name)
+										}
 										disabled={
 											!credential.editable ||
 											catalogSaving ||

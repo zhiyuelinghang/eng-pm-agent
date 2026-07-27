@@ -352,12 +352,14 @@ export interface CredentialListResponse {
 }
 
 export interface CredentialModelDefinition {
+	model_type: 'chat' | 'embedding';
 	name: string;
 	label: string | null;
 	context_size: number;
 	output_size: number;
 	input_types: string[];
 	output_types: string[];
+	dimensions: number | null;
 }
 
 export interface CredentialModelEntry extends ModelCard {
@@ -365,10 +367,17 @@ export interface CredentialModelEntry extends ModelCard {
 	enabled: boolean;
 }
 
+export interface CredentialEmbeddingModelEntry extends EmbeddingModelCard {
+	source: 'builtin' | 'discovered' | 'manual';
+	enabled: boolean;
+}
+
 export interface CredentialModelCatalogResponse {
 	models: CredentialModelEntry[];
+	embedding_models: CredentialEmbeddingModelEntry[];
 	manual_models: CredentialModelDefinition[];
 	hidden_model_ids: string[];
+	hidden_embedding_model_ids: string[];
 	total: number;
 	discovery_supported: boolean;
 	last_discovery_at: string | null;
@@ -378,6 +387,7 @@ export interface CredentialModelCatalogResponse {
 export interface UpdateCredentialModelCatalogRequest {
 	manual_models: CredentialModelDefinition[];
 	hidden_model_ids: string[];
+	hidden_embedding_model_ids: string[];
 }
 
 export type CredentialModelTestErrorType =
@@ -392,12 +402,15 @@ export type CredentialModelTestErrorType =
 
 export interface TestCredentialModelRequest {
 	model: string;
+	model_type: 'chat' | 'embedding';
 }
 
 export interface CredentialModelTestResponse {
 	success: boolean;
 	model: string;
+	model_type: 'chat' | 'embedding';
 	latency_ms: number;
+	dimensions: number | null;
 	error_type: CredentialModelTestErrorType | null;
 	message: string;
 }

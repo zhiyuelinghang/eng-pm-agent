@@ -48,5 +48,11 @@ export const credentialApi = {
 			body,
 		),
 
+	probeEmbeddingModel: (credentialId: string, body: TestCredentialModelRequest) =>
+		client.post<CredentialModelTestResponse>(
+			`/credential/${encodeURIComponent(credentialId)}/models/embedding/probe`,
+			body,
+		),
+
 	delete: (credentialId: string) => client.delete(`/credential/${credentialId}`),
 };

@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """Request / response schemas for the credential router."""
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from ..._service import CredentialModelEntry, CredentialView
+from ..._service import (
+    CredentialEmbeddingModelEntry,
+    CredentialModelEntry,
+    CredentialView,
+)
 from ....credential import CredentialModelDefinition
 
 
@@ -56,6 +61,10 @@ class UpdateCredentialModelCatalogRequest(BaseModel):
         default_factory=list,
         description="Built-in or discovered model identifiers to hide.",
     )
+    hidden_embedding_model_ids: list[str] = Field(
+        default_factory=list,
+        description="Built-in embedding model identifiers to hide.",
+    )
 
 
 class TestCredentialModelRequest(BaseModel):
@@ -65,6 +74,10 @@ class TestCredentialModelRequest(BaseModel):
         min_length=1,
         max_length=512,
         description="Exact provider model identifier to test.",
+    )
+    model_type: Literal["chat", "embedding"] = Field(
+        default="chat",
+        description="Whether to run a chat completion or embedding request.",
     )
 
     @field_validator("model")
@@ -80,13 +93,19 @@ class CredentialModelCatalogResponse(BaseModel):
     """Resolved model catalog for one concrete credential."""
 
     models: list[CredentialModelEntry] = Field(
-        description="All known models, including disabled entries.",
+        description="All known chat models, including disabled entries.",
+    )
+    embedding_models: list[CredentialEmbeddingModelEntry] = Field(
+        description="All known embedding models, including disabled entries.",
     )
     manual_models: list[CredentialModelDefinition] = Field(
         description="The exact persisted manual model definitions.",
     )
     hidden_model_ids: list[str] = Field(
-        description="The exact persisted hidden model identifiers.",
+        description="The exact persisted hidden chat model identifiers.",
+    )
+    hidden_embedding_model_ids: list[str] = Field(
+        description="The exact persisted hidden embedding model identifiers.",
     )
     total: int = Field(description="Number of enabled candidate models.")
     discovery_supported: bool = Field(

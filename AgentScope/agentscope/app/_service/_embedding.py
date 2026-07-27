@@ -20,6 +20,7 @@ from ._access import ResourceAccessService
 from ..storage import CredentialRecord, EmbeddingModelConfig
 from ...credential import CredentialFactory
 from ...embedding import EmbeddingModelBase
+from ._credential_models import build_credential_embedding_model_catalog
 
 
 def build_embedding_model(
@@ -69,7 +70,7 @@ def build_embedding_model(
         )
 
     context_size: int | None = None
-    for card in embedding_cls.list_models():
+    for card in build_credential_embedding_model_catalog(credential):
         if card.name == config.model:
             context_size = card.context_size
             break
@@ -88,6 +89,12 @@ def build_embedding_model(
     }
     if context_size is not None:
         kwargs["context_size"] = context_size
+    if getattr(credential, "type", None) == "custom_openai_credential":
+        # A generic compatible endpoint may reject OpenAI's optional
+        # ``dimensions`` request field. The catalog stores the dimension
+        # detected from the provider's natural response, so no override is
+        # needed at runtime.
+        kwargs["pass_dimensions"] = False
 
     return embedding_cls(**kwargs)
 

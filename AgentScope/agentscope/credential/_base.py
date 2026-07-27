@@ -9,7 +9,7 @@ from .._utils._common import _generate_id
 from ._model_catalog import CredentialModelCatalog
 
 if TYPE_CHECKING:
-    from ..embedding import EmbeddingModelBase
+    from ..embedding import EmbeddingModelBase, EmbeddingModelCard
     from ..model import ChatModelBase, ModelCard
     from ..tts import TTSModelBase
     from ..tts._tts_model_card import TTSModelCard
@@ -103,3 +103,17 @@ class CredentialBase(BaseModel):
                 The embedding model class, or ``None``.
         """
         return None
+
+    @classmethod
+    def list_embedding_models(cls) -> list["EmbeddingModelCard"]:
+        """List candidate embedding models available under this credential.
+
+        Providers normally inherit the model cards exposed by their
+        embedding adapter. Custom compatible credentials may override this
+        method to start with an empty catalog and rely exclusively on models
+        explicitly added by the user.
+        """
+        embedding_cls = cls.get_embedding_model_class()
+        if embedding_cls is None:
+            return []
+        return embedding_cls.list_models()

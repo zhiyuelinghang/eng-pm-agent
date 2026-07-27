@@ -25,9 +25,11 @@ from .._service import (
     CredentialModelTestResult,
     ModelDiscoveryError,
     ResourceAccessService,
+    build_credential_embedding_model_catalog,
     build_credential_model_catalog,
     discover_credential_models,
     supports_model_discovery,
+    test_credential_embedding_model,
     test_credential_model,
 )
 from ..storage import StorageBase
@@ -48,11 +50,19 @@ def _model_catalog_response(
     credential: CredentialBase,
 ) -> CredentialModelCatalogResponse:
     models = build_credential_model_catalog(credential)
+    embedding_models = build_credential_embedding_model_catalog(credential)
     return CredentialModelCatalogResponse(
         models=models,
+        embedding_models=embedding_models,
         manual_models=credential.model_catalog.manual_models,
         hidden_model_ids=credential.model_catalog.hidden_model_ids,
-        total=sum(model.enabled for model in models),
+        hidden_embedding_model_ids=(
+            credential.model_catalog.hidden_embedding_model_ids
+        ),
+        total=(
+            sum(model.enabled for model in models)
+            + sum(model.enabled for model in embedding_models)
+        ),
         discovery_supported=supports_model_discovery(credential),
         last_discovery_at=credential.model_catalog.last_discovery_at,
         last_discovery_error=credential.model_catalog.last_discovery_error,
@@ -168,14 +178,26 @@ async def test_model(
     """Test credential, endpoint, and model access without creating a session."""
     record = await access.resolve_credential(user_id, credential_id)
     credential = CredentialFactory.from_dict(record.data)
-    candidate = next(
-        (
-            model
-            for model in build_credential_model_catalog(credential)
-            if model.name == body.model and model.enabled
-        ),
-        None,
-    )
+    if body.model_type == "embedding":
+        candidate = next(
+            (
+                model
+                for model in build_credential_embedding_model_catalog(
+                    credential,
+                )
+                if model.name == body.model and model.enabled
+            ),
+            None,
+        )
+    else:
+        candidate = next(
+            (
+                model
+                for model in build_credential_model_catalog(credential)
+                if model.name == body.model and model.enabled
+            ),
+            None,
+        )
     if candidate is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -183,7 +205,42 @@ async def test_model(
                 f"Model '{body.model}' is not enabled for this credential."
             ),
         )
+    if body.model_type == "embedding":
+        return await test_credential_embedding_model(
+            credential,
+            body.model,
+            candidate.dimensions,
+        )
     return await test_credential_model(credential, body.model)
+
+
+@credential_router.post(
+    "/{credential_id}/models/embedding/probe",
+    response_model=CredentialModelTestResult,
+    summary="Probe an OpenAI-compatible embedding model before saving it",
+)
+async def probe_embedding_model(
+    credential_id: str,
+    body: TestCredentialModelRequest,
+    user_id: str = Depends(get_current_user_id),
+    access: ResourceAccessService = Depends(get_resource_access_service),
+) -> CredentialModelTestResult:
+    """Detect an embedding model's dimensions with one real request."""
+    _, record = await access.resolve_for_edit(
+        user_id,
+        ResourceKind.CREDENTIAL,
+        credential_id,
+    )
+    credential = CredentialFactory.from_dict(record.data)
+    if credential.get_embedding_model_class() is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="This credential does not support embedding models.",
+        )
+    return await test_credential_embedding_model(
+        credential,
+        body.model,
+    )
 
 
 @credential_router.post(
@@ -255,6 +312,7 @@ async def update_credential_models(
         discovered_models=old_catalog.discovered_models,
         manual_models=list(manual_by_name.values()),
         hidden_model_ids=body.hidden_model_ids,
+        hidden_embedding_model_ids=body.hidden_embedding_model_ids,
         last_discovery_at=old_catalog.last_discovery_at,
         last_discovery_error=old_catalog.last_discovery_error,
     )

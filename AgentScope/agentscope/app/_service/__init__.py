@@ -8,12 +8,15 @@ from ._access import (
 )
 from ._chat import ChatService
 from ._credential_models import (
+    CredentialEmbeddingModelEntry,
     CredentialModelEntry,
     CredentialModelTestResult,
     ModelDiscoveryError,
+    build_credential_embedding_model_catalog,
     build_credential_model_catalog,
     discover_credential_models,
     supports_model_discovery,
+    test_credential_embedding_model,
     test_credential_model,
 )
 from ._embedding import get_embedding_model
@@ -31,6 +34,7 @@ from ._toolkit import get_toolkit
 __all__ = [
     "AgentView",
     "ChatService",
+    "CredentialEmbeddingModelEntry",
     "CredentialModelEntry",
     "CredentialModelTestResult",
     "CredentialView",
@@ -45,6 +49,7 @@ __all__ = [
     "SessionProjection",
     "SubagentHitlProjector",
     "ModelDiscoveryError",
+    "build_credential_embedding_model_catalog",
     "build_credential_model_catalog",
     "discover_credential_models",
     "get_embedding_model",
@@ -52,5 +57,6 @@ __all__ = [
     "get_tts_model",
     "get_toolkit",
     "supports_model_discovery",
+    "test_credential_embedding_model",
     "test_credential_model",
 ]

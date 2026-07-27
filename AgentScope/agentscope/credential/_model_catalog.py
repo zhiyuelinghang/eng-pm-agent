@@ -1,13 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Credential-scoped chat model catalog data structures."""
+"""Credential-scoped model catalog data structures."""
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class CredentialModelDefinition(BaseModel):
     """A model supplied by discovery or entered by the user."""
 
+    model_type: Literal["chat", "embedding"] = Field(
+        default="chat",
+        description=(
+            "How AgentScope should use this model. Existing catalog records "
+            "default to chat for backward compatibility."
+        ),
+    )
     name: str = Field(
         min_length=1,
         max_length=512,
@@ -36,6 +44,14 @@ class CredentialModelDefinition(BaseModel):
         default_factory=lambda: ["text/plain"],
         description="Supported output MIME types.",
     )
+    dimensions: int | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Embedding vector dimensions. Required for embedding models and "
+            "unused by chat models."
+        ),
+    )
 
     @field_validator("name")
     @classmethod
@@ -53,6 +69,14 @@ class CredentialModelDefinition(BaseModel):
         value = value.strip()
         return value or None
 
+    @model_validator(mode="after")
+    def _require_embedding_dimensions(self) -> "CredentialModelDefinition":
+        if self.model_type == "embedding" and self.dimensions is None:
+            raise ValueError(
+                "Embedding model definitions require detected dimensions.",
+            )
+        return self
+
 
 class CredentialModelCatalog(BaseModel):
     """Persisted model customisation for one credential."""
@@ -69,6 +93,12 @@ class CredentialModelCatalog(BaseModel):
         default_factory=list,
         description="Built-in or discovered model identifiers hidden by user.",
     )
+    hidden_embedding_model_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Built-in embedding model identifiers hidden by the user."
+        ),
+    )
     last_discovery_at: datetime | None = Field(
         default=None,
         description="Most recent discovery attempt timestamp.",
@@ -78,7 +108,7 @@ class CredentialModelCatalog(BaseModel):
         description="Most recent discovery failure, if any.",
     )
 
-    @field_validator("hidden_model_ids")
+    @field_validator("hidden_model_ids", "hidden_embedding_model_ids")
     @classmethod
     def _normalise_hidden_ids(cls, values: list[str]) -> list[str]:
         """Trim, remove blanks, and keep identifiers in stable order."""

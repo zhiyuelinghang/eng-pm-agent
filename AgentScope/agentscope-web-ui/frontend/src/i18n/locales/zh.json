@@ -326,13 +326,20 @@
 		"outputTypes": "输出模态",
 		"availableTTSModels": "语音合成模型",
 		"modelCatalog": "模型目录",
-		"modelCatalogDescription": "此处的启用模型会出现在该凭证的模型选择列表中。",
+		"modelCatalogDescription": "对话模型与 Embedding 模型会分别进入对应的模型选择器。",
 		"discoverModels": "自动获取",
 		"discoveryUnsupported": "该凭证类型不支持 OpenAI 兼容的模型自动获取",
 		"discoveryFallbackTitle": "自动获取不可用，可继续手动添加",
 		"manualAdd": "手动添加",
 		"manualModelTitle": "手动添加模型",
-		"manualModelDescription": "填写厂商要求的准确模型 ID；同名模型会更新现有配置。",
+		"manualModelDescription": "选择用途并填写厂商要求的准确模型 ID；再次添加同名模型可更新其类型。",
+		"modelType": "模型类型",
+		"modelTypes": {
+			"chat": "对话模型",
+			"embedding": "Embedding 模型"
+		},
+		"embeddingProbeHint": "保存前会发送一次极短的 Embedding 请求，自动识别向量维度。",
+		"embeddingDimensions": "向量维度",
 		"modelId": "模型 ID",
 		"modelLabel": "显示名称（可选）",
 		"modelLabelPlaceholder": "留空则显示模型 ID",
@@ -352,7 +359,11 @@
 			"testing": "正在测试…",
 			"retest": "重新测试",
 			"passed": "测试通过 · {{latency}} ms",
+			"embeddingPassed": "测试通过 · {{dimensions}} 维 · {{latency}} ms",
 			"tooltip": "会发送一次极短的真实请求，可能产生少量模型费用。"
+		},
+		"modelProbe": {
+			"failed": "无法识别该 Embedding 模型，请检查模型 ID、API 地址和凭证。"
 		}
 	},
 	"knowledge": {
