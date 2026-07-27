@@ -360,6 +360,7 @@
 			"retest": "Test again",
 			"passed": "Test passed · {{latency}} ms",
 			"embeddingPassed": "Test passed · {{dimensions}} dims · {{latency}} ms",
+			"rawResponse": "Provider raw response",
 			"tooltip": "Sends one very short real request and may incur a small model charge."
 		},
 		"modelProbe": {

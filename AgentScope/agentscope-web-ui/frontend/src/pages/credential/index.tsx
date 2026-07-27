@@ -90,6 +90,70 @@ function MaskedValue({ value }: { value: string }) {
 	);
 }
 
+class ModelProbeFailure extends Error {
+	readonly result: CredentialModelTestResponse;
+
+	constructor(message: string, result: CredentialModelTestResponse) {
+		super(message);
+		this.name = 'ModelProbeFailure';
+		this.result = result;
+	}
+}
+
+function ProviderRawResponse({ result }: { result: CredentialModelTestResponse }) {
+	const { t } = useTranslation();
+	if (!result.raw_response) return null;
+
+	return (
+		<div className="mt-2 min-w-0 rounded-md border border-border/70 bg-muted/60 p-2 text-foreground">
+			<div className="mb-1.5 flex items-center justify-between gap-2 text-[11px] font-medium">
+				<span>{t('credential.modelTest.rawResponse')}</span>
+				{result.status_code != null && (
+					<Badge variant="outline" className="h-5 font-mono text-[10px]">
+						HTTP {result.status_code}
+					</Badge>
+				)}
+			</div>
+			<pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-muted-foreground">
+				{result.raw_response}
+			</pre>
+		</div>
+	);
+}
+
+function ModelTestFeedback({
+	result,
+	successText,
+}: {
+	result: CredentialModelTestResponse;
+	successText: string;
+}) {
+	const { t } = useTranslation();
+	const message = result.success
+		? successText
+		: t(`messageBubble.error.${result.error_type ?? 'unknown'}`, {
+				defaultValue: result.message,
+			});
+
+	return (
+		<div aria-live="polite" className="min-w-0 text-xs">
+			<div
+				className={`flex items-start gap-1.5 ${
+					result.success ? 'text-emerald-600' : 'text-destructive'
+				}`}
+			>
+				{result.success ? (
+					<CircleCheck className="mt-0.5 size-3.5 shrink-0" />
+				) : (
+					<CircleX className="mt-0.5 size-3.5 shrink-0" />
+				)}
+				<span>{message}</span>
+			</div>
+			{!result.success && <ProviderRawResponse result={result} />}
+		</div>
+	);
+}
+
 // ─── Manual model dialog ──────────────────────────────────────────────────────
 
 interface ManualModelInput {
@@ -111,6 +175,8 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 	const [modelType, setModelType] = useState<'chat' | 'embedding'>('chat');
 	const [submitting, setSubmitting] = useState(false);
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
+	const [probeFailure, setProbeFailure] =
+		useState<CredentialModelTestResponse | null>(null);
 
 	useEffect(() => {
 		if (!open) return;
@@ -118,6 +184,7 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 		setLabel('');
 		setModelType('chat');
 		setErrorMessage(null);
+		setProbeFailure(null);
 	}, [open]);
 
 	const handleSave = async () => {
@@ -126,6 +193,7 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 
 		setSubmitting(true);
 		setErrorMessage(null);
+		setProbeFailure(null);
 		try {
 			await onSave({
 				model_type: modelType,
@@ -134,6 +202,9 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 			});
 			onOpenChange(false);
 		} catch (error) {
+			if (error instanceof ModelProbeFailure) {
+				setProbeFailure(error.result);
+			}
 			setErrorMessage(
 				error instanceof Error
 					? error.message
@@ -207,9 +278,14 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 						/>
 					</div>
 					{errorMessage && (
-						<div className="flex items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-							<CircleAlert className="mt-0.5 size-4 shrink-0" />
-							<span>{errorMessage}</span>
+						<div className="rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-sm">
+							<div className="flex items-start gap-2 text-destructive">
+								<CircleAlert className="mt-0.5 size-4 shrink-0" />
+								<span>{errorMessage}</span>
+							</div>
+							{probeFailure && (
+								<ProviderRawResponse result={probeFailure} />
+							)}
 						</div>
 					)}
 				</div>
@@ -360,28 +436,12 @@ function ModelCardItem({
 							: t('credential.modelTest.action')}
 				</Button>
 				{testResult && (
-					<div
-						aria-live="polite"
-						className={`flex items-start gap-1.5 text-xs ${
-							testResult.success ? 'text-emerald-600' : 'text-destructive'
-						}`}
-					>
-						{testResult.success ? (
-							<CircleCheck className="mt-0.5 size-3.5 shrink-0" />
-						) : (
-							<CircleX className="mt-0.5 size-3.5 shrink-0" />
-						)}
-						<span>
-							{testResult.success
-								? t('credential.modelTest.passed', {
-										latency: testResult.latency_ms,
-									})
-								: t(
-										`messageBubble.error.${testResult.error_type ?? 'unknown'}`,
-										{ defaultValue: testResult.message },
-									)}
-						</span>
-					</div>
+					<ModelTestFeedback
+						result={testResult}
+						successText={t('credential.modelTest.passed', {
+							latency: testResult.latency_ms,
+						})}
+					/>
 				)}
 			</CardFooter>
 		</Card>
@@ -477,30 +537,14 @@ function EmbeddingModelCardItem({
 							: t('credential.modelTest.action')}
 				</Button>
 				{testResult && (
-					<div
-						aria-live="polite"
-						className={`flex items-start gap-1.5 text-xs ${
-							testResult.success ? 'text-emerald-600' : 'text-destructive'
-						}`}
-					>
-						{testResult.success ? (
-							<CircleCheck className="mt-0.5 size-3.5 shrink-0" />
-						) : (
-							<CircleX className="mt-0.5 size-3.5 shrink-0" />
-						)}
-						<span>
-							{testResult.success
-								? t('credential.modelTest.embeddingPassed', {
-										latency: testResult.latency_ms,
-										dimensions:
-											testResult.dimensions ?? model.dimensions,
-									})
-								: t(
-										`messageBubble.error.${testResult.error_type ?? 'unknown'}`,
-										{ defaultValue: testResult.message },
-									)}
-						</span>
-					</div>
+					<ModelTestFeedback
+						result={testResult}
+						successText={t('credential.modelTest.embeddingPassed', {
+							latency: testResult.latency_ms,
+							dimensions:
+								testResult.dimensions ?? model.dimensions,
+						})}
+					/>
 				)}
 			</CardFooter>
 		</Card>
@@ -649,10 +693,11 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 				model_type: 'embedding',
 			});
 			if (!probe.success || probe.dimensions == null) {
-				throw new Error(
+				throw new ModelProbeFailure(
 					t(`messageBubble.error.${probe.error_type ?? 'unknown'}`, {
 						defaultValue: probe.message,
 					}),
+					probe,
 				);
 			}
 			model = {

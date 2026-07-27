@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import re
 from time import perf_counter
 from typing import Literal
 
@@ -37,6 +38,7 @@ _OPENAI_SDK_CREDENTIAL_TYPES = {
     "moonshot_credential",
 }
 _MAX_DISCOVERY_RESPONSE_BYTES = 2 * 1024 * 1024
+_MAX_MODEL_TEST_RAW_RESPONSE_CHARS = 4_000
 _MODEL_TEST_TIMEOUT_SECONDS = 30.0
 _OPENAI_COMPATIBLE_EMBEDDING_TYPES = {
     "custom_openai_credential",
@@ -69,6 +71,8 @@ class CredentialModelTestResult(BaseModel):
     dimensions: int | None = None
     error_type: ErrorType | None = None
     message: str
+    status_code: int | None = None
+    raw_response: str | None = None
 
 
 class ModelDiscoveryError(Exception):
@@ -78,9 +82,15 @@ class ModelDiscoveryError(Exception):
 class EmbeddingProbeError(Exception):
     """Embedding response failure with an optional HTTP status code."""
 
-    def __init__(self, message: str, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        raw_response: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.raw_response = raw_response
 
 
 def supports_model_discovery(credential: CredentialBase) -> bool:
@@ -112,6 +122,127 @@ def _api_key(credential: CredentialBase) -> str:
     if isinstance(value, str):
         return value
     raise ModelDiscoveryError("当前凭证没有可用于模型发现的 API Key。")
+
+
+def _exception_chain(exc: BaseException) -> list[BaseException]:
+    """Return an exception and its causes without following cycles."""
+    result: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        result.append(current)
+        current = current.__cause__ or current.__context__
+    return result
+
+
+def _raw_value_to_text(value: object) -> str | None:
+    """Convert an upstream response body into readable text."""
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            default=str,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _redact_and_truncate_provider_response(
+    value: str,
+    credential: CredentialBase,
+) -> str:
+    """Hide credential secrets and bound an upstream error body."""
+    redacted = value
+    secrets = {
+        item.get_secret_value()
+        for item in credential.__dict__.values()
+        if isinstance(item, SecretStr) and item.get_secret_value()
+    }
+    for secret in sorted(secrets, key=len, reverse=True):
+        redacted = redacted.replace(secret, "[REDACTED]")
+
+    redacted = re.sub(
+        r"(?i)(bearer\s+)[a-z0-9._~+/=-]+",
+        r"\1[REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(
+        (
+            r"(?i)([\"']?(?:api[_-]?key|authorization|access[_-]?token)"
+            r"[\"']?\s*[:=]\s*[\"'])([^\"']+)"
+        ),
+        r"\1[REDACTED]",
+        redacted,
+    )
+
+    if len(redacted) <= _MAX_MODEL_TEST_RAW_RESPONSE_CHARS:
+        return redacted
+    return (
+        redacted[:_MAX_MODEL_TEST_RAW_RESPONSE_CHARS]
+        + "\n… [response truncated]"
+    )
+
+
+def _provider_error_details(
+    exc: Exception,
+    credential: CredentialBase,
+) -> tuple[int | None, str | None]:
+    """Extract HTTP status and original upstream body from SDK exceptions."""
+    status_code: int | None = None
+    candidates: list[object] = []
+
+    for current in _exception_chain(exc):
+        if status_code is None:
+            direct_status = getattr(current, "status_code", None)
+            if isinstance(direct_status, int):
+                status_code = direct_status
+
+        raw_response = getattr(current, "raw_response", None)
+        if raw_response:
+            candidates.append(raw_response)
+
+        response = getattr(current, "response", None)
+        if response is not None:
+            response_status = getattr(response, "status_code", None)
+            if status_code is None and isinstance(response_status, int):
+                status_code = response_status
+            content = getattr(response, "content", None)
+            if content:
+                candidates.append(content)
+            else:
+                try:
+                    response_text = getattr(response, "text", None)
+                except Exception:
+                    response_text = None
+                if response_text:
+                    candidates.append(response_text)
+
+        body = getattr(current, "body", None)
+        if body:
+            candidates.append(body)
+
+    if not candidates:
+        candidates.append(str(exc))
+
+    for candidate in candidates:
+        text = _raw_value_to_text(candidate)
+        if text and text.strip():
+            return (
+                status_code,
+                _redact_and_truncate_provider_response(
+                    text.strip(),
+                    credential,
+                ),
+            )
+    return status_code, None
 
 
 def _model_parameter_schema(
@@ -463,12 +594,18 @@ async def test_credential_model(
         )
     except Exception as exc:  # Provider SDKs expose many exception classes.
         error = _classify_error(exc)
+        status_code, raw_response = _provider_error_details(
+            exc,
+            credential,
+        )
         return CredentialModelTestResult(
             success=False,
             model=model_name,
             latency_ms=max(1, round((perf_counter() - started_at) * 1000)),
             error_type=error.type,
             message=error.message,
+            status_code=status_code,
+            raw_response=raw_response,
         )
 
     return CredentialModelTestResult(
@@ -540,17 +677,28 @@ async def _probe_openai_compatible_embedding(
         raise EmbeddingProbeError(
             "Embedding endpoint rejected the test request.",
             response.status_code,
+            _raw_value_to_text(response.content),
         )
     if len(response.content) > _MAX_DISCOVERY_RESPONSE_BYTES:
-        raise EmbeddingProbeError("Embedding response is too large.", 422)
+        raise EmbeddingProbeError(
+            "Embedding response is too large.",
+            422,
+            _raw_value_to_text(response.content),
+        )
     try:
         payload = json.loads(response.content)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EmbeddingProbeError(
             "Embedding response is not valid JSON.",
             422,
+            _raw_value_to_text(response.content),
         ) from exc
-    return _embedding_dimensions_from_payload(payload)
+    try:
+        return _embedding_dimensions_from_payload(payload)
+    except EmbeddingProbeError as exc:
+        if exc.raw_response is None:
+            exc.raw_response = _raw_value_to_text(payload)
+        raise
 
 
 async def _probe_native_embedding(
@@ -614,6 +762,10 @@ async def test_credential_embedding_model(
         )
     except Exception as exc:
         error = _classify_error(exc)
+        status_code, raw_response = _provider_error_details(
+            exc,
+            credential,
+        )
         return CredentialModelTestResult(
             success=False,
             model=model_name,
@@ -621,6 +773,8 @@ async def test_credential_embedding_model(
             latency_ms=max(1, round((perf_counter() - started_at) * 1000)),
             error_type=error.type,
             message=error.message,
+            status_code=status_code,
+            raw_response=raw_response,
         )
 
     return CredentialModelTestResult(

@@ -280,6 +280,40 @@ class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
         self.assertEqual(result.error_type, ErrorType.AUTHENTICATION)
         self.assertNotIn("bad key", result.message)
 
+    async def test_model_test_exposes_redacted_provider_response(self):
+        class ProviderInvalidRequestError(Exception):
+            status_code = 400
+
+            def __init__(self) -> None:
+                super().__init__("invalid request")
+                self.response = SimpleNamespace(
+                    status_code=400,
+                    content=json.dumps(
+                        {
+                            "error": {
+                                "message": "Unsupported input format.",
+                                "echoed_api_key": "secret",
+                            },
+                        },
+                    ).encode(),
+                )
+
+        with patch.object(
+            OpenAIChatModel,
+            "_call_api",
+            AsyncMock(side_effect=ProviderInvalidRequestError()),
+        ):
+            result = await test_credential_model(
+                _credential(),
+                "qwen/qwen3-max",
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.status_code, 400)
+        self.assertIn("Unsupported input format.", result.raw_response)
+        self.assertNotIn('"secret"', result.raw_response)
+        self.assertIn("[REDACTED]", result.raw_response)
+
     async def test_embedding_probe_detects_vector_dimensions(self):
         response = SimpleNamespace(
             status_code=200,
@@ -313,6 +347,30 @@ class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
         self.assertEqual(result.model_type, "embedding")
         self.assertEqual(result.dimensions, 4)
         self.assertEqual(client.post.await_count, 1)
+
+    async def test_embedding_probe_exposes_provider_error_body(self):
+        response = SimpleNamespace(
+            status_code=400,
+            content=b'{"error":{"message":"model is not an embedding model"}}',
+        )
+        client = AsyncMock()
+        client.post.return_value = response
+        context = MagicMock()
+        context.__aenter__ = AsyncMock(return_value=client)
+        context.__aexit__ = AsyncMock(return_value=None)
+
+        with patch(
+            "agentscope.app._service._credential_models.httpx.AsyncClient",
+            return_value=context,
+        ):
+            result = await test_credential_embedding_model(
+                _credential(),
+                "chat-only-model",
+            )
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.status_code, 400)
+        self.assertIn("not an embedding model", result.raw_response)
 
     async def test_manual_embedding_appears_in_knowledge_base_picker(self):
         credential = _credential()

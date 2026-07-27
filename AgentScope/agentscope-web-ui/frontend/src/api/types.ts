@@ -413,6 +413,8 @@ export interface CredentialModelTestResponse {
 	dimensions: number | null;
 	error_type: CredentialModelTestErrorType | null;
 	message: string;
+	status_code: number | null;
+	raw_response: string | null;
 }
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────

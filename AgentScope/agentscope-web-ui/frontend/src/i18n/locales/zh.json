@@ -360,6 +360,7 @@
 			"retest": "重新测试",
 			"passed": "测试通过 · {{latency}} ms",
 			"embeddingPassed": "测试通过 · {{dimensions}} 维 · {{latency}} ms",
+			"rawResponse": "厂商原始响应",
 			"tooltip": "会发送一次极短的真实请求，可能产生少量模型费用。"
 		},
 		"modelProbe": {
