@@ -333,6 +333,8 @@
 		"manualAdd": "Add manually",
 		"manualModelTitle": "Add model manually",
 		"manualModelDescription": "Choose how the model is used, then enter its exact provider model ID. Adding the same ID again updates its type.",
+		"editModelTitle": "Edit model",
+		"editModelDescription": "Change the model ID, display name, or model type. The model ID is the exact value sent to the provider.",
 		"modelType": "Model type",
 		"modelTypes": {
 			"chat": "Chat model",
@@ -344,6 +346,8 @@
 		"modelLabel": "Display name (optional)",
 		"modelLabelPlaceholder": "Uses the model ID when blank",
 		"addModel": "Add model",
+		"saveModel": "Save changes",
+		"editManualModel": "Edit manual model",
 		"hideModel": "Remove from this credential's model list",
 		"deleteManualModel": "Delete manual model",
 		"hiddenModels": "Removed models",

@@ -333,6 +333,8 @@
 		"manualAdd": "手动添加",
 		"manualModelTitle": "手动添加模型",
 		"manualModelDescription": "选择用途并填写厂商要求的准确模型 ID；再次添加同名模型可更新其类型。",
+		"editModelTitle": "编辑模型",
+		"editModelDescription": "可修改模型 ID、显示名称和模型类型。模型 ID 是实际发送给厂商的值。",
 		"modelType": "模型类型",
 		"modelTypes": {
 			"chat": "对话模型",
@@ -344,6 +346,8 @@
 		"modelLabel": "显示名称（可选）",
 		"modelLabelPlaceholder": "留空则显示模型 ID",
 		"addModel": "添加模型",
+		"saveModel": "保存修改",
+		"editManualModel": "编辑手动模型",
 		"hideModel": "从此凭证的模型列表中移除",
 		"deleteManualModel": "删除手动模型",
 		"hiddenModels": "已移除模型",

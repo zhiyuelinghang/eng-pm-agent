@@ -166,9 +166,15 @@ interface ManualModelDialogProps {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onSave: (model: ManualModelInput) => Promise<void>;
+	initialModel?: ManualModelInput | null;
 }
 
-function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProps) {
+function ManualModelDialog({
+	open,
+	onOpenChange,
+	onSave,
+	initialModel,
+}: ManualModelDialogProps) {
 	const { t } = useTranslation();
 	const [name, setName] = useState('');
 	const [label, setLabel] = useState('');
@@ -180,12 +186,12 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 
 	useEffect(() => {
 		if (!open) return;
-		setName('');
-		setLabel('');
-		setModelType('chat');
+		setName(initialModel?.name ?? '');
+		setLabel(initialModel?.label ?? '');
+		setModelType(initialModel?.model_type ?? 'chat');
 		setErrorMessage(null);
 		setProbeFailure(null);
-	}, [open]);
+	}, [initialModel, open]);
 
 	const handleSave = async () => {
 		const trimmedName = name.trim();
@@ -219,9 +225,19 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent className="!w-[460px] !max-w-[460px]">
 				<DialogHeader>
-					<DialogTitle>{t('credential.manualModelTitle')}</DialogTitle>
+					<DialogTitle>
+						{t(
+							initialModel
+								? 'credential.editModelTitle'
+								: 'credential.manualModelTitle',
+						)}
+					</DialogTitle>
 					<DialogDescription>
-						{t('credential.manualModelDescription')}
+						{t(
+							initialModel
+								? 'credential.editModelDescription'
+								: 'credential.manualModelDescription',
+						)}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="grid gap-4">
@@ -303,7 +319,11 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 						) : (
 							<PlusCircle className="size-3.5" />
 						)}
-						{t('credential.addModel')}
+						{t(
+							initialModel
+								? 'credential.saveModel'
+								: 'credential.addModel',
+						)}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -316,6 +336,7 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 interface ModelCardItemProps {
 	model: CredentialModelEntry;
 	onRemove: () => void;
+	onEdit?: () => void;
 	onTest: () => void;
 	disabled: boolean;
 	testDisabled: boolean;
@@ -326,6 +347,7 @@ interface ModelCardItemProps {
 function ModelCardItem({
 	model,
 	onRemove,
+	onEdit,
 	onTest,
 	disabled,
 	testDisabled,
@@ -356,6 +378,12 @@ function ModelCardItem({
 					>
 						{model.label || model.name}
 					</CardTitle>
+					<div
+						className="mt-1 truncate font-mono text-[11px] text-muted-foreground"
+						title={model.name}
+					>
+						{t('credential.modelId')}: {model.name}
+					</div>
 					<div className="mt-1 flex items-center gap-1.5">
 						<Badge variant="secondary" className="text-[10px]">
 							{t(`credential.modelSource.${model.source}`)}
@@ -368,19 +396,32 @@ function ModelCardItem({
 					</div>
 				</div>
 				<CardAction>
-					<Button
-						size="icon-sm"
-						variant="ghost"
-						onClick={onRemove}
-						disabled={disabled}
-						tooltip={t(
-							model.source === 'manual'
-								? 'credential.deleteManualModel'
-								: 'credential.hideModel',
+					<div className="flex items-center gap-1">
+						{onEdit && (
+							<Button
+								size="icon-sm"
+								variant="ghost"
+								onClick={onEdit}
+								disabled={disabled}
+								tooltip={t('credential.editManualModel')}
+							>
+								<Pencil />
+							</Button>
 						)}
-					>
-						<Trash2 />
-					</Button>
+						<Button
+							size="icon-sm"
+							variant="ghost"
+							onClick={onRemove}
+							disabled={disabled}
+							tooltip={t(
+								model.source === 'manual'
+									? 'credential.deleteManualModel'
+									: 'credential.hideModel',
+							)}
+						>
+							<Trash2 />
+						</Button>
+					</div>
 				</CardAction>
 			</CardHeader>
 			<CardContent className="flex flex-col">
@@ -451,6 +492,7 @@ function ModelCardItem({
 interface EmbeddingModelCardItemProps {
 	model: CredentialEmbeddingModelEntry;
 	onRemove: () => void;
+	onEdit?: () => void;
 	onTest: () => void;
 	disabled: boolean;
 	testDisabled: boolean;
@@ -461,6 +503,7 @@ interface EmbeddingModelCardItemProps {
 function EmbeddingModelCardItem({
 	model,
 	onRemove,
+	onEdit,
 	onTest,
 	disabled,
 	testDisabled,
@@ -479,6 +522,12 @@ function EmbeddingModelCardItem({
 					>
 						{model.label || model.name}
 					</CardTitle>
+					<div
+						className="mt-1 truncate font-mono text-[11px] text-muted-foreground"
+						title={model.name}
+					>
+						{t('credential.modelId')}: {model.name}
+					</div>
 					<div className="mt-1 flex items-center gap-1.5">
 						<Badge variant="secondary" className="text-[10px]">
 							{t(`credential.modelSource.${model.source}`)}
@@ -489,19 +538,32 @@ function EmbeddingModelCardItem({
 					</div>
 				</div>
 				<CardAction>
-					<Button
-						size="icon-sm"
-						variant="ghost"
-						onClick={onRemove}
-						disabled={disabled}
-						tooltip={t(
-							model.source === 'manual'
-								? 'credential.deleteManualModel'
-								: 'credential.hideModel',
+					<div className="flex items-center gap-1">
+						{onEdit && (
+							<Button
+								size="icon-sm"
+								variant="ghost"
+								onClick={onEdit}
+								disabled={disabled}
+								tooltip={t('credential.editManualModel')}
+							>
+								<Pencil />
+							</Button>
 						)}
-					>
-						<Trash2 />
-					</Button>
+						<Button
+							size="icon-sm"
+							variant="ghost"
+							onClick={onRemove}
+							disabled={disabled}
+							tooltip={t(
+								model.source === 'manual'
+									? 'credential.deleteManualModel'
+									: 'credential.hideModel',
+							)}
+						>
+							<Trash2 />
+						</Button>
+					</div>
 				</CardAction>
 			</CardHeader>
 			<CardContent className="flex flex-col gap-1">
@@ -614,6 +676,8 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 	const [discovering, setDiscovering] = useState(false);
 	const [catalogSaving, setCatalogSaving] = useState(false);
 	const [manualModelOpen, setManualModelOpen] = useState(false);
+	const [editingManualModel, setEditingManualModel] =
+		useState<CredentialModelDefinition | null>(null);
 	const [testingModel, setTestingModel] = useState<string | null>(null);
 	const [testResults, setTestResults] = useState<
 		Record<string, CredentialModelTestResponse>
@@ -644,6 +708,8 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 	useEffect(() => {
 		setTestingModel(null);
 		setTestResults({});
+		setEditingManualModel(null);
+		setManualModelOpen(false);
 		void loadModels();
 	}, [loadModels]);
 
@@ -686,8 +752,20 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 
 	const handleAddManualModel = async (input: ManualModelInput) => {
 		if (!catalog) return;
+		const original = editingManualModel;
 		let model: CredentialModelDefinition;
-		if (input.model_type === 'embedding') {
+		const canReuseEmbeddingMetadata =
+			input.model_type === 'embedding' &&
+			original?.model_type === 'embedding' &&
+			original.name === input.name &&
+			original.dimensions != null;
+
+		if (canReuseEmbeddingMetadata) {
+			model = {
+				...original,
+				...input,
+			};
+		} else if (input.model_type === 'embedding') {
 			const probe = await credentialApi.probeEmbeddingModel(credential.id, {
 				model: input.name,
 				model_type: 'embedding',
@@ -709,30 +787,57 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 				dimensions: probe.dimensions,
 			};
 		} else {
+			const existingChat =
+				original?.model_type === 'chat' ? original : null;
 			model = {
+				...(existingChat ?? {}),
 				...input,
-				context_size: 128000,
-				output_size: 8192,
-				input_types: ['text/plain'],
-				output_types: ['text/plain'],
+				context_size: existingChat?.context_size ?? 128000,
+				output_size: existingChat?.output_size ?? 8192,
+				input_types: existingChat?.input_types ?? ['text/plain'],
+				output_types: existingChat?.output_types ?? ['text/plain'],
 				dimensions: null,
 			};
 		}
+		const replacedNames = new Set(
+			[model.name, original?.name].filter(
+				(value): value is string => Boolean(value),
+			),
+		);
 		const manualModels = [
-			...catalog.manual_models.filter((item) => item.name !== model.name),
+			...catalog.manual_models.filter(
+				(item) => !replacedNames.has(item.name),
+			),
 			model,
 		];
 		await saveCatalog(
 			manualModels,
-			model.model_type === 'chat'
-				? catalog.hidden_model_ids.filter((id) => id !== model.name)
-				: catalog.hidden_model_ids,
-			model.model_type === 'embedding'
-				? catalog.hidden_embedding_model_ids.filter(
-						(id) => id !== model.name,
-					)
-				: catalog.hidden_embedding_model_ids,
+			catalog.hidden_model_ids.filter(
+				(id) => !replacedNames.has(id),
+			),
+			catalog.hidden_embedding_model_ids.filter(
+				(id) => !replacedNames.has(id),
+			),
 		);
+	};
+
+	const handleOpenAddModel = () => {
+		setEditingManualModel(null);
+		setManualModelOpen(true);
+	};
+
+	const handleOpenEditModel = (
+		modelType: 'chat' | 'embedding',
+		modelName: string,
+	) => {
+		if (!catalog) return;
+		const definition = catalog.manual_models.find(
+			(item) =>
+				item.model_type === modelType && item.name === modelName,
+		);
+		if (!definition) return;
+		setEditingManualModel(definition);
+		setManualModelOpen(true);
 	};
 
 	const handleRemoveModel = async (model: CredentialModelEntry) => {
@@ -945,7 +1050,7 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 						</Button>
 						<Button
 							size="sm"
-							onClick={() => setManualModelOpen(true)}
+							onClick={handleOpenAddModel}
 							disabled={
 								!credential.editable ||
 								catalogSaving ||
@@ -999,6 +1104,15 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 												key={model.name}
 												model={model}
 												onRemove={() => handleRemoveModel(model)}
+												onEdit={
+													model.source === 'manual'
+														? () =>
+																handleOpenEditModel(
+																	'chat',
+																	model.name,
+																)
+														: undefined
+												}
 												onTest={() =>
 													handleTestModel('chat', model.name)
 												}
@@ -1034,6 +1148,15 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 												model={model}
 												onRemove={() =>
 													handleRemoveEmbeddingModel(model)
+												}
+												onEdit={
+													model.source === 'manual'
+														? () =>
+																handleOpenEditModel(
+																	'embedding',
+																	model.name,
+																)
+														: undefined
 												}
 												onTest={() =>
 													handleTestModel(
@@ -1170,8 +1293,12 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 
 			<ManualModelDialog
 				open={manualModelOpen}
-				onOpenChange={setManualModelOpen}
+				onOpenChange={(open) => {
+					setManualModelOpen(open);
+					if (!open) setEditingManualModel(null);
+				}}
 				onSave={handleAddManualModel}
+				initialModel={editingManualModel}
 			/>
 		</div>
 	);
