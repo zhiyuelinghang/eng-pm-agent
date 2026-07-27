@@ -9,15 +9,16 @@ set "PYTHON_EXE=%~dp0python-3.13.14\python.exe"
 set "AGENTSCOPE_HOME=%~dp0AgentScope"
 set "AGENTSCOPE_CORE_HOME=%AGENTSCOPE_HOME%\agentscope"
 set "RUNTIME_HOME=%~dp0data\agentscope"
+set "SQLITE_PATH=%RUNTIME_HOME%\agentscope.db"
 set "QDRANT_HOME=%RUNTIME_HOME%\qdrant"
 set "KNOWLEDGE_BLOB_HOME=%RUNTIME_HOME%\knowledge_blobs"
 set "WEBUI_HOME=%AGENTSCOPE_HOME%\agentscope-web-ui"
 
 if not defined AGENTSCOPE_HOST set "AGENTSCOPE_HOST=127.0.0.1"
 if not defined AGENTSCOPE_PORT set "AGENTSCOPE_PORT=18642"
-if not defined AGENTSCOPE_STORAGE set "AGENTSCOPE_STORAGE=memory"
-set "AGENTSCOPE_WEBUI_PORT=5173"
-set "AGENTSCOPE_WEBUI_HELPER_PORT=3000"
+if not defined AGENTSCOPE_STORAGE set "AGENTSCOPE_STORAGE=sqlite"
+if not defined AGENTSCOPE_WEBUI_PORT set "AGENTSCOPE_WEBUI_PORT=25173"
+if not defined AGENTSCOPE_WEBUI_HELPER_PORT set "AGENTSCOPE_WEBUI_HELPER_PORT=23000"
 
 if not exist "%PYTHON_EXE%" (
     echo [错误] 未找到项目内嵌 Python：%PYTHON_EXE%
@@ -31,7 +32,7 @@ if not exist "%AGENTSCOPE_CORE_HOME%\__init__.py" (
     exit /b 1
 )
 
-"%PYTHON_EXE%" -c "import agentscope; assert agentscope.__version__ == '2.0.4.post1'" >nul
+"%PYTHON_EXE%" -c "import agentscope; from agentscope.app.storage import SQLiteStorage; assert agentscope.__version__ == '2.0.4.post1'" >nul
 if errorlevel 1 (
     echo [错误] 无法导入项目内 AgentScope 2.0.4.post1 核心。
     pause
@@ -101,6 +102,7 @@ if not exist "%WEBUI_HOME%\node_modules\.pnpm" (
 )
 
 set "AGENTSCOPE_RUNTIME_HOME=%RUNTIME_HOME%"
+set "AGENTSCOPE_SQLITE_PATH=%SQLITE_PATH%"
 set "AGENTSCOPE_QDRANT_HOME=%QDRANT_HOME%"
 set "AGENTSCOPE_KNOWLEDGE_BLOB_HOME=%KNOWLEDGE_BLOB_HOME%"
 
@@ -108,6 +110,7 @@ echo [AgentScope] Python 核心：%AGENTSCOPE_CORE_HOME%
 echo [AgentScope] 核心版本：发布版 2.0.4.post1
 echo [AgentScope] 存储模式：%AGENTSCOPE_STORAGE%
 echo [AgentScope] 运行数据：%RUNTIME_HOME%
+echo [AgentScope] SQLite 元数据：%SQLITE_PATH%
 echo [AgentScope] 本地 Qdrant：%QDRANT_HOME%
 echo [AgentScope] 知识库文件：%KNOWLEDGE_BLOB_HOME%
 echo [AgentScope] 后端地址：http://%AGENTSCOPE_HOST%:%AGENTSCOPE_PORT%
@@ -121,7 +124,7 @@ start "AgentScope API" /D "%~dp0" "%PYTHON_EXE%" "%~dp0scripts\agentscope_dev_ru
 echo [AgentScope] 正在启动官方 Web UI 热更新进程……
 start "AgentScope Web UI" /D "%WEBUI_HOME%" cmd.exe /k pnpm dev
 
-echo [AgentScope] 已分别启动后端和 Web UI；关闭对应窗口即可停止服务。
+echo [AgentScope] 已分别启动后端和 Web UI；停止时请运行 stop_agentscope.bat。
 exit /b 0
 
 :KILL_PORT

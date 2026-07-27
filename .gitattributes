@@ -1,0 +1,2 @@
+# Windows 批处理脚本必须保持 CRLF，避免 CMD 在 UTF-8 中文行处误拆命令。
+*.bat text eol=crlf

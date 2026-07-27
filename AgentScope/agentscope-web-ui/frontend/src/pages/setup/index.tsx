@@ -18,10 +18,18 @@ interface Props {
 	className?: string;
 }
 
+const DEFAULT_SERVER_URL =
+	import.meta.env.VITE_DEFAULT_SERVER_URL || 'http://127.0.0.1:18642';
+const DEFAULT_USERNAME = import.meta.env.VITE_DEFAULT_USERNAME || 'default';
+
 export const SetupPage = ({ onComplete, className }: Props) => {
 	const { t } = useTranslation();
-	const [url, setUrl] = useState(() => localStorage.getItem('server_url') ?? '');
-	const [username, setUsername] = useState(() => localStorage.getItem('username') ?? '');
+	const [url, setUrl] = useState(
+		() => localStorage.getItem('server_url') || DEFAULT_SERVER_URL,
+	);
+	const [username, setUsername] = useState(
+		() => localStorage.getItem('username') || DEFAULT_USERNAME,
+	);
 
 	const handleSubmit = (e: React.FormEvent) => {
 		e.preventDefault();

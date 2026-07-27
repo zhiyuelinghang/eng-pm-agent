@@ -3,6 +3,7 @@
 
 from ._base import StorageBase
 from ._redis_storage import RedisStorage
+from ._sqlite_storage import SQLiteStorage
 from ._model import (
     AgentData,
     AgentRecord,
@@ -32,6 +33,7 @@ from ._model import (
 __all__ = [
     "StorageBase",
     "RedisStorage",
+    "SQLiteStorage",
     # The ORM models
     "AgentCallConfig",
     "InviteConfig",

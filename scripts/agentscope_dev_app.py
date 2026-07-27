@@ -13,7 +13,7 @@ from agentscope.app import create_app
 from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app.rag.blob_store import LocalBlobStore
 from agentscope.app.rag.knowledge_base_manager import CollectionPerKbManager
-from agentscope.app.storage import RedisStorage
+from agentscope.app.storage import RedisStorage, SQLiteStorage, StorageBase
 from agentscope.app.workspace_manager import LocalWorkspaceManager
 from agentscope.rag import (
     ExcelParser,
@@ -36,17 +36,28 @@ QDRANT_HOME = Path(
 KNOWLEDGE_BLOB_HOME = Path(
     os.getenv("AGENTSCOPE_KNOWLEDGE_BLOB_HOME", RUNTIME_HOME / "knowledge_blobs"),
 ).resolve()
+SQLITE_PATH = Path(
+    os.getenv("AGENTSCOPE_SQLITE_PATH", RUNTIME_HOME / "agentscope.db"),
+).resolve()
 _fake_redis_client: Any = None
 
-for runtime_path in (WORKSPACE_HOME, QDRANT_HOME, KNOWLEDGE_BLOB_HOME):
+for runtime_path in (
+    WORKSPACE_HOME,
+    QDRANT_HOME,
+    KNOWLEDGE_BLOB_HOME,
+    SQLITE_PATH.parent,
+):
     runtime_path.mkdir(parents=True, exist_ok=True)
 
 
-def _create_storage() -> RedisStorage:
-    """Create the release package's supported Redis storage backend."""
+def _create_storage() -> StorageBase:
+    """Create the configured durable or compatibility storage backend."""
     global _fake_redis_client
 
-    mode = os.getenv("AGENTSCOPE_STORAGE", "memory").strip().lower()
+    mode = os.getenv("AGENTSCOPE_STORAGE", "sqlite").strip().lower()
+    if mode == "sqlite":
+        return SQLiteStorage(SQLITE_PATH)
+
     if mode == "memory":
         from fakeredis.aioredis import FakeRedis
 
@@ -65,7 +76,7 @@ def _create_storage() -> RedisStorage:
         )
 
     raise ValueError(
-        "AGENTSCOPE_STORAGE 仅支持 'memory' 或 'redis'",
+        "AGENTSCOPE_STORAGE 仅支持 'sqlite'、'memory' 或 'redis'",
     )
 
 

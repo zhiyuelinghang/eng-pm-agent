@@ -2,7 +2,8 @@ import express from 'express';
 import cors from 'cors';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT =
+	process.env.AGENTSCOPE_WEBUI_HELPER_PORT || process.env.PORT || 23000;
 
 app.use(cors());
 app.use(express.json());
