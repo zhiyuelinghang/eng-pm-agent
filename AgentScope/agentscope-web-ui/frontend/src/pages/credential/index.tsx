@@ -82,39 +82,28 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 	const { t } = useTranslation();
 	const [name, setName] = useState('');
 	const [label, setLabel] = useState('');
-	const [contextSize, setContextSize] = useState('128000');
-	const [outputSize, setOutputSize] = useState('8192');
 	const [submitting, setSubmitting] = useState(false);
 
 	useEffect(() => {
 		if (!open) return;
 		setName('');
 		setLabel('');
-		setContextSize('128000');
-		setOutputSize('8192');
 	}, [open]);
 
 	const handleSave = async () => {
 		const trimmedName = name.trim();
-		const parsedContextSize = Number(contextSize);
-		const parsedOutputSize = Number(outputSize);
-		if (
-			!trimmedName ||
-			!Number.isInteger(parsedContextSize) ||
-			parsedContextSize <= 0 ||
-			!Number.isInteger(parsedOutputSize) ||
-			parsedOutputSize <= 0
-		) {
-			return;
-		}
+		if (!trimmedName) return;
 
 		setSubmitting(true);
 		try {
 			await onSave({
 				name: trimmedName,
 				label: label.trim() || null,
-				context_size: parsedContextSize,
-				output_size: parsedOutputSize,
+				// OpenAI-compatible GET /models responses normally do not
+				// publish trustworthy token limits. Keep internal catalogue
+				// defaults instead of asking the user to guess them.
+				context_size: 128000,
+				output_size: 8192,
 				input_types: ['text/plain'],
 				output_types: ['text/plain'],
 			});
@@ -156,32 +145,6 @@ function ManualModelDialog({ open, onOpenChange, onSave }: ManualModelDialogProp
 							onChange={(event) => setLabel(event.target.value)}
 							placeholder={t('credential.modelLabelPlaceholder')}
 						/>
-					</div>
-					<div className="grid grid-cols-2 gap-3">
-						<div className="grid gap-1.5">
-							<Label htmlFor="manual-model-context">
-								{t('credential.maxContext')}
-							</Label>
-							<Input
-								id="manual-model-context"
-								type="number"
-								min={1}
-								value={contextSize}
-								onChange={(event) => setContextSize(event.target.value)}
-							/>
-						</div>
-						<div className="grid gap-1.5">
-							<Label htmlFor="manual-model-output">
-								{t('credential.maxOutput')}
-							</Label>
-							<Input
-								id="manual-model-output"
-								type="number"
-								min={1}
-								value={outputSize}
-								onChange={(event) => setOutputSize(event.target.value)}
-							/>
-						</div>
 					</div>
 				</div>
 				<DialogFooter>
@@ -273,14 +236,22 @@ function ModelCardItem({ model, onRemove, disabled }: ModelCardItemProps) {
 					</Badge>
 				)}
 
-				<div className="flex justify-between items-center text-[14px]">
-					<span className="text-muted-foreground">{t('credential.maxContext')}</span>
-					<span>{ctx}</span>
-				</div>
-				<div className="flex justify-between items-center text-[14px]">
-					<span className="text-muted-foreground">{t('credential.maxOutput')}</span>
-					<span>{output}</span>
-				</div>
+				{model.source === 'builtin' && (
+					<>
+						<div className="flex justify-between items-center text-[14px]">
+							<span className="text-muted-foreground">
+								{t('credential.maxContext')}
+							</span>
+							<span>{ctx}</span>
+						</div>
+						<div className="flex justify-between items-center text-[14px]">
+							<span className="text-muted-foreground">
+								{t('credential.maxOutput')}
+							</span>
+							<span>{output}</span>
+						</div>
+					</>
+				)}
 				<div className="flex justify-between items-center text-[14px]">
 					<span className="text-muted-foreground">{t('credential.inputTypes')}</span>
 					<InputTypeBadges inputTypes={model.input_types} />
