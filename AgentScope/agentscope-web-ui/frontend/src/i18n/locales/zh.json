@@ -190,6 +190,49 @@
 				"object_required": "自定义请求参数必须是 JSON 对象。"
 			}
 		},
+		"platform-config": {
+			"legend": "平台接入配置",
+			"description": "控制该智能体在工程管理平台中的角色、发布状态、权限和默认知识库。",
+			"role": {
+				"label": "平台角色",
+				"options": {
+					"global_main": "全局主智能体",
+					"business": "业务智能体",
+					"system_internal": "系统内置智能体"
+				},
+				"descriptions": {
+					"global_main": "承接平台普通对话，并可动态协同全部已启用、已开放调用的非主智能体。",
+					"business": "发布后自动显示在平台“业务工具”页面，也可以被授权的智能体协同调用。",
+					"system_internal": "只供系统内部流程使用，不会显示在业务工具目录中。"
+				}
+			},
+			"globalMainNotice": "保存后，平台此前配置的全局主智能体会自动降级为业务智能体；此配置对整个平台生效。全局主智能体可调用全部已启用且允许协同的非主智能体。",
+			"enabled": "允许平台运行",
+			"published": "发布到平台",
+			"catalogDescription": "平台展示说明",
+			"descriptionPlaceholder": "说明该智能体面向业务用户提供什么能力。",
+			"category": "业务分类",
+			"sortOrder": "显示顺序",
+			"permissionMode": "平台会话权限模式",
+			"permissionModeDescription": "只影响工程管理平台创建的新会话；建议使用 Auto，由内置权限审核员先行判断。",
+			"permissionOptions": {
+				"auto": "Auto（自动审核）",
+				"default": "Default（逐项确认）",
+				"accept_edits": "Accept Edits",
+				"explore": "Explore（只读）",
+				"dont_ask": "Don't Ask（询问即拒绝）",
+				"bypass": "Bypass（跳过检查）"
+			},
+			"knowledge": {
+				"label": "平台默认知识库",
+				"description": "平台为该智能体创建会话时自动挂载；团队邀请时也优先继承此配置。",
+				"mode": "检索模式",
+				"agentic": "Agentic（智能体主动检索）",
+				"static": "Static（每轮自动检索）",
+				"topK": "召回条数"
+			},
+			"visibilityNotice": "业务工具目录只展示“业务智能体 + 已启用 + 已发布”；全局主智能体和系统内置智能体始终隐藏。"
+		},
 		"context-config": {
 			"legend": "上下文配置",
 			"description": "控制上下文窗口的管理和压缩方式。",
@@ -677,14 +720,16 @@
 		}
 	},
 	"setup": {
-		"title": "连接到服务器",
-		"description": "请输入服务器地址和用户名以开始使用。",
-		"serverUrl": "服务器地址",
-		"serverUrlPlaceholder": "https://...",
-		"username": "用户名",
-		"usernamePlaceholder": "请输入用户名",
-		"submit": "开始使用",
-		"hint": "此应用仅提供前端服务，所有数据均来自填写的服务器地址，用户名仅用于服务端鉴权。"
+		"title": "登录 AgentScope 管理端",
+		"description": "使用独立的 AgentScope 管理账号登录。该账号与工程管理平台账号无关。",
+		"username": "管理账号",
+		"usernamePlaceholder": "请输入 AgentScope 管理账号",
+		"password": "管理密码",
+		"passwordPlaceholder": "请输入管理密码",
+		"submit": "登录管理端",
+		"submitting": "正在登录…",
+		"connectionFailed": "暂时无法连接 AgentScope 服务，请联系部署管理员检查服务状态。",
+		"hint": "管理账号只作为进入 AgentScope 管理页面的凭证；所有 AgentScope 配置对整个平台全局生效，平台业务账号不能登录此页面。"
 	},
 	"tour": {
 		"trigger": "新手引导",

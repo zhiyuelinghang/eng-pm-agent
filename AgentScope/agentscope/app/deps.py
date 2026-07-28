@@ -1,7 +1,12 @@
 # -*- coding: utf-8 -*-
 """Shared FastAPI dependencies for the agentscope app."""
-from fastapi import Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, status
 
+from ._auth import (
+    AgentScopeAuthConfig,
+    AgentScopePrincipal,
+    authenticate_bearer_token,
+)
 from .workspace_manager import WorkspaceManagerBase
 from ._manager import (
     BackgroundTaskManager,
@@ -23,29 +28,92 @@ from .storage import StorageBase
 from ..rag import ParserBase
 
 
-async def get_current_user_id(
-    x_user_id: str = Header(
-        description="Caller's user ID. "
-        "Temporary header-based identity; will be replaced by JWT auth.",
+def _service_request_allowed(request: Request) -> bool:
+    """Limit the engineering-platform token to runtime gateway endpoints."""
+    path = request.url.path.rstrip("/") or "/"
+    if request.method == "GET" and path == "/agent/platform/catalog":
+        return True
+    return path == "/chat" or any(
+        path == prefix or path.startswith(f"{prefix}/")
+        for prefix in ("/sessions", "/workspace")
+    )
+
+
+async def get_current_principal(
+    request: Request,
+    authorization: str | None = Header(
+        default=None,
+        description="Bearer management token or platform service token.",
     ),
-) -> str:
-    """Return the caller's user ID from the ``X-User-ID`` request header.
+    x_user_id: str | None = Header(
+        default=None,
+        description=(
+            "Legacy identity header, accepted only when the embedding "
+            "application has not enabled authentication."
+        ),
+    ),
+) -> AgentScopePrincipal:
+    """Authenticate the management WebUI or engineering-platform service.
 
-    Args:
-        x_user_id (`str`): Value of the ``X-User-ID`` header.
-
-    Returns:
-        `str`: The authenticated user ID.
-
-    Raises:
-        `HTTPException`: 401 if the header is missing or empty.
+    When the embedding application does not supply an
+    :class:`AgentScopeAuthConfig`, the historical ``X-User-ID`` behavior is
+    retained for upstream compatibility. The local engineering deployment
+    always enables the new authentication mode.
     """
-    if not x_user_id:
+    config: AgentScopeAuthConfig | None = getattr(
+        request.app.state,
+        "auth_config",
+        None,
+    )
+    if config is None:
+        if not x_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="X-User-ID header is required.",
+            )
+        return AgentScopePrincipal(kind="legacy", subject=x_user_id)
+
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="X-User-ID header is required.",
+            detail="请先登录 AgentScope 管理页面。",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-    return x_user_id
+    principal = authenticate_bearer_token(config, token)
+    if principal is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="登录凭证无效或已过期，请重新登录。",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if principal.kind == "service" and not _service_request_allowed(request):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="平台服务凭证无权访问 AgentScope 管理接口。",
+        )
+    request.state.agentscope_principal = principal
+    return principal
+
+
+async def get_current_user_id(
+    request: Request,
+    principal: AgentScopePrincipal = Depends(get_current_principal),
+) -> str:
+    """Return the storage scope for the authenticated caller.
+
+    In authenticated deployments every management account and the engineering
+    platform service map to the same global configuration namespace. The
+    principal only grants access; it never owns AgentScope settings.
+    """
+    config: AgentScopeAuthConfig | None = getattr(
+        request.app.state,
+        "auth_config",
+        None,
+    )
+    if config is None:
+        return principal.subject
+    return config.global_config_id
 
 
 async def get_storage(request: Request) -> StorageBase:

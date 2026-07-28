@@ -2,7 +2,7 @@ import axios from 'axios'
 
 export type ApiEnvelope<T> = { success: boolean; data: T; message: string }
 
-const apiBaseUrl = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_API_BASE_URL || '/api'
+export const apiBaseUrl = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env?.VITE_API_BASE_URL || '/api'
 const api = axios.create({ baseURL: apiBaseUrl, timeout: 15_000 })
 
 api.interceptors.request.use((config) => {

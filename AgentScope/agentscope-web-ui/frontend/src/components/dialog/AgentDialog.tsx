@@ -2,7 +2,13 @@ import { CircleAlert, Loader2, PlusCircle } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { AgentCallConfig, ContextConfig, InviteConfig, ReActConfig } from '@/api';
+import type {
+	AgentCallConfig,
+	ContextConfig,
+	InviteConfig,
+	PlatformAgentConfig,
+	ReActConfig,
+} from '@/api';
 import {
 	AgentFormFields,
 	defaultAgentFormValues,
@@ -77,6 +83,8 @@ export function AgentDialog({ onCreated, triggerId }: Props) {
 					context_config: values.context_config as unknown as ContextConfig,
 					react_config: values.react_config as unknown as ReActConfig,
 					model_policy: modelPolicy,
+					platform_config:
+						values.platform_config as unknown as PlatformAgentConfig,
 					invite_config: values.invite_config as unknown as InviteConfig,
 					call_config: values.call_config as unknown as AgentCallConfig,
 				},

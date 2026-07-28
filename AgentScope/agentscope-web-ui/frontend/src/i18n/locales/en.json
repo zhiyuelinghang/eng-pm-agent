@@ -190,6 +190,49 @@
 				"object_required": "Custom request parameters must be a JSON object."
 			}
 		},
+		"platform-config": {
+			"legend": "Platform Integration",
+			"description": "Controls this agent's role, publication state, permissions, and default knowledge bases in the engineering platform.",
+			"role": {
+				"label": "Platform role",
+				"options": {
+					"global_main": "Global main agent",
+					"business": "Business agent",
+					"system_internal": "Internal system agent"
+				},
+				"descriptions": {
+					"global_main": "Handles ordinary platform chat and can dynamically collaborate with every enabled, invitable non-main agent.",
+					"business": "Appears automatically on the Business Tools page when published and can be called by authorised agents.",
+					"system_internal": "Used only by internal system flows and never shown in the business-tool catalogue."
+				}
+			},
+			"globalMainNotice": "Saving demotes the platform's previous global main agent to a business agent. This setting applies to the entire platform, and the global main agent may call every enabled, invitable non-main agent.",
+			"enabled": "Allow platform execution",
+			"published": "Publish to platform",
+			"catalogDescription": "Platform description",
+			"descriptionPlaceholder": "Explain what this agent offers to business users.",
+			"category": "Business category",
+			"sortOrder": "Display order",
+			"permissionMode": "Platform session permission mode",
+			"permissionModeDescription": "Applies only to new sessions created by the engineering platform. Auto is recommended so the built-in reviewer can decide first.",
+			"permissionOptions": {
+				"auto": "Auto review",
+				"default": "Default (ask)",
+				"accept_edits": "Accept Edits",
+				"explore": "Explore (read only)",
+				"dont_ask": "Don't Ask (deny asks)",
+				"bypass": "Bypass checks"
+			},
+			"knowledge": {
+				"label": "Default platform knowledge bases",
+				"description": "Automatically attached to platform-created sessions and preferred when this agent is invited into a team.",
+				"mode": "Retrieval mode",
+				"agentic": "Agentic retrieval",
+				"static": "Static retrieval",
+				"topK": "Top K"
+			},
+			"visibilityNotice": "The Business Tools catalogue only shows enabled, published business agents. Global-main and internal agents are always hidden."
+		},
 		"context-config": {
 			"legend": "Context Config",
 			"description": "Controls how the context window is managed and compressed.",
@@ -677,14 +720,16 @@
 		}
 	},
 	"setup": {
-		"title": "Connect to Service",
-		"description": "Enter your server URL and username to get started.",
-		"serverUrl": "Server URL",
-		"serverUrlPlaceholder": "https://...",
-		"username": "Username",
-		"usernamePlaceholder": "Your username",
-		"submit": "Get Started",
-		"hint": "This is a frontend-only application, and all data are served from the Server URL above. The username is used solely for server-side authentication."
+		"title": "Sign in to AgentScope Admin",
+		"description": "Use the independent AgentScope management account. It is unrelated to engineering-platform accounts.",
+		"username": "Admin account",
+		"usernamePlaceholder": "AgentScope admin account",
+		"password": "Admin password",
+		"passwordPlaceholder": "Admin password",
+		"submit": "Sign in",
+		"submitting": "Signing in…",
+		"connectionFailed": "AgentScope is currently unavailable. Ask the deployment administrator to check the service.",
+		"hint": "The management account only authorizes access to this console. All AgentScope configuration is global to the platform, and platform business accounts cannot sign in here."
 	},
 	"tour": {
 		"trigger": "Take a tour",

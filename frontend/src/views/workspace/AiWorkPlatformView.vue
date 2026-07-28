@@ -177,8 +177,8 @@
               </div>
             </div>
           </div>
-          <div :class="['messages', 'home-chat-messages', { 'is-empty': !homeQuickChatMessages.length }]">
-            <div v-if="!homeQuickChatMessages.length" class="home-chat-guide">
+          <div ref="homeQuickViewport" :class="['messages', 'home-chat-messages', { 'is-empty': !homeQuickChatMessages.length && !homeQuickStreamingTrace }]">
+            <div v-if="!homeQuickChatMessages.length && !homeQuickStreamingTrace" class="home-chat-guide">
               <div class="home-chat-guide-copy">
                 <strong>从这里开始协同处理</strong>
                 <p>可以围绕当前项目的任务、资料、风险和人员关系展开处理；对话中形成的新工作会同步到智能协同，后续继续跟踪责任人、截止时间和处理进度。</p>
@@ -199,9 +199,13 @@
                 {{ message.role === 'assistant' ? '管' : '我' }}
               </div>
               <div class="message-stack">
-                <div v-if="message.role === 'assistant'" class="message-role">Dobby</div>
+                <div v-if="message.role === 'assistant'" class="message-role">{{ homeQuickAgentName }}</div>
                 <div class="message-bubble">
-                  <p>{{ message.content }}</p>
+                  <AgentMessageContent
+                    :content="message.content"
+                    :runtime-trace="message.runtimeTrace"
+                    @confirm="confirmHomeToolCall"
+                  />
                   <div v-if="message.attachments?.length" class="message-attachments" aria-label="消息附件">
                     <span v-for="attachment in message.attachments" :key="attachment.id">
                       <n-icon :size="16"><FileText /></n-icon>
@@ -227,6 +231,19 @@
                 </div>
               </div>
             </article>
+            <article v-if="homeQuickStreamingTrace" class="message-row assistant">
+              <div class="message-avatar" aria-hidden="true">管</div>
+              <div class="message-stack">
+                <div class="message-role">{{ homeQuickAgentName }}</div>
+                <div class="message-bubble">
+                  <AgentMessageContent
+                    :runtime-trace="homeQuickStreamingTrace"
+                    streaming
+                    @confirm="confirmHomeToolCall"
+                  />
+                </div>
+              </div>
+            </article>
           </div>
           <form class="chat-composer home-chat-composer" @submit.prevent="dispatchQuickCommand">
             <div class="composer-entry">
@@ -246,14 +263,18 @@
                 </label>
                 <textarea
                   v-model="quickCommand"
-                  placeholder="输入问题，也可以上传资料让 Dobby 识别和分析"
+                  :placeholder="`输入问题，也可以上传资料让${homeQuickAgentName}识别和分析`"
                   @keydown.enter.exact.prevent="dispatchQuickCommand"
                 ></textarea>
               </div>
             </div>
-            <button type="submit" :disabled="quickUploading || (!quickCommand.trim() && !quickFiles.length)">
+            <button v-if="quickUploading" type="button" class="stop-agent" @click="stopHomeAgent">
+              <n-icon :size="17"><PlayerStop /></n-icon>
+              停止
+            </button>
+            <button v-else type="submit" :disabled="!quickCommand.trim() && !quickFiles.length">
               <n-icon :size="17"><Send /></n-icon>
-              {{ quickUploading ? '上传中…' : '发送' }}
+              发送
             </button>
           </form>
         </section>
@@ -286,8 +307,8 @@
               <time>{{ session.time }}</time>
               <span class="session-desc">{{ session.desc }}</span>
               <div class="session-meta">
-                <span>{{ session.participantIds.length }} 人参与</span>
-                <span>{{ session.taskIds.length }} 项工作</span>
+                <span>平台主智能体</span>
+                <span>AgentScope 会话</span>
               </div>
             </article>
           </section>
@@ -326,7 +347,7 @@
         </div>
         <div v-if="meetingMinute" class="meeting-minute"><strong>{{ meetingMinute.title }}</strong><p>{{ meetingMinute.summary }}</p><span>行动项 {{ meetingMinute.action_items?.length || 0 }} 项</span></div>
 
-        <div class="messages collab-messages">
+        <div ref="collaborationMessagesViewport" class="messages collab-messages">
           <article
             v-for="message in activeChatMessages"
             :key="message.id"
@@ -337,11 +358,14 @@
             </div>
             <div class="message-stack">
               <div v-if="message.role === 'assistant'" class="message-role">
-                <span>Dobby</span>
-                <time>{{ message.role === 'assistant' ? '09:43' : '' }}</time>
+                <span>{{ activeAgentName }}</span>
               </div>
               <div class="message-bubble">
-                <p>{{ message.content }}</p>
+                <AgentMessageContent
+                  :content="message.content"
+                  :runtime-trace="message.runtimeTrace"
+                  @confirm="confirmCollaborationToolCall"
+                />
                 <div v-if="message.generatedTaskIds?.length" class="generated-work">
                   <div class="generated-work-head">
                     <span>已生成工作（{{ tasksByIds(message.generatedTaskIds).length }}）</span>
@@ -370,6 +394,19 @@
               </div>
             </div>
           </article>
+          <article v-if="activeCollaborationTrace" class="message-row assistant">
+            <div class="message-avatar" aria-hidden="true">管</div>
+            <div class="message-stack">
+              <div class="message-role"><span>{{ activeAgentName }}</span></div>
+              <div class="message-bubble">
+                <AgentMessageContent
+                  :runtime-trace="activeCollaborationTrace"
+                  streaming
+                  @confirm="confirmCollaborationToolCall"
+                />
+              </div>
+            </div>
+          </article>
         </div>
 
         <div v-if="chatSuggestionsOpen" class="suggestion-list chat-suggestion-panel">
@@ -393,7 +430,11 @@
 
         <form class="chat-composer collab-composer" @submit.prevent="sendPrompt">
           <textarea v-model="prompt" placeholder="输入要查询的项目问题，或描述需要下发的任务..." @keydown.enter.prevent="sendPrompt"></textarea>
-          <button class="send-button" type="submit">
+          <button v-if="activeCollaborationTrace" class="send-button stop-agent" type="button" @click="stopCollaborationAgent">
+            <n-icon :size="17"><PlayerStop /></n-icon>
+            停止
+          </button>
+          <button v-else class="send-button" type="submit">
             <n-icon :size="17"><Send /></n-icon>
             发送
           </button>
@@ -941,11 +982,21 @@ import { useRoute } from 'vue-router'
 import { NIcon, useMessage } from 'naive-ui'
 import {
   AdjustmentsHorizontal, At, CalendarEvent, ChartBar, ChevronDown, ChevronLeft, ChevronRight,
-  Dots, FileText, Folder, ListCheck, Notes, Paperclip, Pin, Plus, Robot,
+  Dots, FileText, Folder, ListCheck, Notes, Paperclip, Pin, PlayerStop, Plus, Robot,
   Search, Send, Settings, Table, User, UserPlus,
 } from '@vicons/tabler'
 import { useAppStore, type AttachmentRecord } from '@/stores/app'
 import api, { type ApiEnvelope } from '@/api/client'
+import { streamAgentConversationMessage } from '@/api/agentStream'
+import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
+import {
+  applyAgentRuntimeEvent,
+  createEmptyRuntimeTrace,
+  runtimeTraceFromExtraData,
+  type AgentRuntimeTrace,
+  type AgentToolCallBlock,
+  type ApiAgentMessage,
+} from '@/types/agentRuntime'
 import type { DraftStatus, FillStatus, Member, RiskLevel, Task, TaskStatus } from '@/types'
 
 type ChatMessage = {
@@ -954,6 +1005,7 @@ type ChatMessage = {
   content: string
   generatedTaskIds?: string[]
   attachments?: ChatAttachment[]
+  runtimeTrace?: AgentRuntimeTrace | null
 }
 
 type ChatAttachment = {
@@ -964,8 +1016,17 @@ type ChatAttachment = {
 }
 
 type CollaborationSession = { id: string; title: string; desc: string; time: string; participantIds: string[]; taskIds: string[] }
-type ApiCollaborationSession = { id: number; title: string; summary?: string; participant_ids: number[]; task_ids: number[]; created_at: string; updated_at: string }
-type ApiCollaborationMessage = { id: number; role: 'assistant' | 'user'; content: string; generated_task_ids: number[]; created_at: string }
+type ApiAgentConversation = {
+  id: number
+  project_id: number
+  agent_id: string
+  agent_name: string
+  conversation_type: 'general' | 'business'
+  title: string
+  status: string
+  created_at: string
+  updated_at: string
+}
 type TaskFlowStepDraft = { id: string; name: string; owner_user_id: string; due_at: string; material: string }
 type TriggerIntervalUnit = 'hour' | 'day' | 'week' | 'month'
 type GeneratedTaskFlow = {
@@ -1418,8 +1479,19 @@ watch(selectedHomeWorkItemId, () => {
 
 onMounted(() => {
   void loadCollaborationSessions()
+  void loadHomeAgentConversation()
 })
-watch(() => store.currentProjectId, () => { void loadCollaborationSessions() })
+watch(() => store.currentProjectId, () => {
+  void loadCollaborationSessions()
+  void loadHomeAgentConversation()
+})
+watch(section, currentSection => {
+  if (currentSection === 'ai') {
+    void loadCollaborationSessions()
+  } else if (currentSection === 'home') {
+    void loadHomeAgentConversation()
+  }
+})
 
 const quickCommand = ref('')
 async function dispatchQuickCommand() {
@@ -1430,7 +1502,47 @@ async function dispatchQuickCommand() {
   try {
     if (files.length) await uploadComposerFiles(files, 'Dobby问答附件')
     const attachments = createChatAttachments(files)
-    syncHomeQuickCommand(content, attachments)
+    const optimisticUser: ChatMessage = {
+      id: `hq-u-${Date.now()}`,
+      role: 'user',
+      content,
+      attachments: attachments.length ? attachments : undefined,
+    }
+    homeQuickChatMessages.value = [...homeQuickChatMessages.value, optimisticUser]
+    const conversation = await ensureHomeAgentConversation()
+    homeQuickStreamingTrace.value = createEmptyRuntimeTrace()
+    quickCommand.value = ''
+    quickFiles.value = []
+    const completion: {
+      message: ApiAgentMessage | null
+      runtimeStatus: string
+    } = { message: null, runtimeStatus: 'running' }
+    await streamAgentConversationMessage(conversation.id, content, {
+      onEvent: async runtimeEvent => {
+        homeQuickStreamingTrace.value = applyAgentRuntimeEvent(
+          homeQuickStreamingTrace.value,
+          runtimeEvent,
+        )
+        await nextTick()
+        scrollHomeQuick()
+      },
+      onDone: payload => {
+        completion.message = payload.message
+        completion.runtimeStatus = payload.runtime_status
+      },
+    })
+    if (completion.message) {
+      homeQuickChatMessages.value = [
+        ...homeQuickChatMessages.value,
+        mapAgentMessage(completion.message),
+      ]
+      homeQuickStreamingTrace.value = null
+      homeAgentConversation.value = {
+        ...conversation,
+        status: completion.runtimeStatus,
+        updated_at: nowStr(),
+      }
+    }
     store.addLog({
       id: `log${Date.now()}`,
       time: nowStr(),
@@ -1439,12 +1551,60 @@ async function dispatchQuickCommand() {
       detail: files.length ? `${content}；附件：${files.map(file => file.name).join('、')}` : content,
       level: 'info',
     })
-    quickCommand.value = ''
-    quickFiles.value = []
-  } catch {
-    message.error('附件上传失败，请检查文件或网络后重试。')
+    await nextTick()
+    scrollHomeQuick(true)
+  } catch (error: any) {
+    message.error(error?.response?.data?.detail || error?.message || '主智能体处理失败，请检查 AgentScope 配置后重试。')
   } finally {
     quickUploading.value = false
+  }
+}
+
+function scrollHomeQuick(smooth = false) {
+  const viewport = homeQuickViewport.value
+  if (!viewport) return
+  viewport.scrollTo({
+    top: viewport.scrollHeight,
+    behavior: smooth ? 'smooth' : 'auto',
+  })
+}
+
+async function stopHomeAgent() {
+  if (!homeAgentConversation.value) return
+  try {
+    await api.post(`/agent-conversations/${homeAgentConversation.value.id}/interrupt`)
+    message.info('已请求停止，正在等待智能体安全结束当前步骤。')
+  } catch (error: any) {
+    message.error(error?.response?.data?.detail || '停止主智能体失败。')
+  }
+}
+
+async function confirmHomeToolCall(
+  replyId: string,
+  toolCall: AgentToolCallBlock,
+  confirmed: boolean,
+) {
+  if (!homeAgentConversation.value) return
+  try {
+    const response = await api.post<ApiEnvelope<{
+      message: ApiAgentMessage | null
+      runtime_status: string
+    }>>(
+      `/agent-conversations/${homeAgentConversation.value.id}/confirm`,
+      {
+        reply_id: replyId,
+        tool_call: toolCall,
+        confirmed,
+      },
+      { timeout: 170_000 },
+    )
+    if (response.data.data.message) {
+      await loadHomeAgentConversation()
+    } else {
+      message.success(response.data.message)
+    }
+  } catch (error: any) {
+    message.error(error?.response?.data?.detail || '提交人工确认失败。')
   }
 }
 
@@ -1498,39 +1658,97 @@ const prompt = ref('')
 const chatSuggestionsOpen = ref(false)
 const generatedChatSuggestions = ref<Record<string, ChatSuggestion[]>>({})
 const sessionMessages = ref<Record<string, ChatMessage[]>>({})
-const homeQuickSessionId = ref<string | null>(null)
-const homeQuickSession = computed(() =>
-  homeQuickSessionId.value
-    ? sessions.value.find(session => session.id === homeQuickSessionId.value)
-    : undefined
-)
+const collaborationConversations = ref<Record<string, ApiAgentConversation>>({})
+const collaborationStreamingTraces = ref<Record<string, AgentRuntimeTrace | null>>({})
+const collaborationMessagesViewport = ref<HTMLElement | null>(null)
+const homeAgentConversation = ref<ApiAgentConversation | null>(null)
+const homeQuickChatMessages = ref<ChatMessage[]>([])
+const homeQuickStreamingTrace = ref<AgentRuntimeTrace | null>(null)
+const homeQuickViewport = ref<HTMLElement | null>(null)
+const homeQuickSession = computed(() => homeAgentConversation.value)
 const homeQuickSessionTitle = computed(() => homeQuickSession.value?.title ?? '')
-const homeQuickSessionTime = computed(() => homeQuickSession.value?.time ?? '')
-const homeQuickChatMessages = computed<ChatMessage[]>(() =>
-  homeQuickSessionId.value ? sessionMessages.value[homeQuickSessionId.value] ?? [] : []
-)
+const homeQuickSessionTime = computed(() => homeQuickSession.value?.updated_at ?? homeQuickSession.value?.created_at ?? '')
+const homeQuickAgentName = computed(() => homeQuickSession.value?.agent_name || '平台主智能体')
 const activeChatMessages = computed(() => sessionMessages.value[activeSessionId.value] ?? [])
+const activeCollaborationTrace = computed(
+  () => collaborationStreamingTraces.value[activeSessionId.value] ?? null,
+)
+const activeAgentName = computed(
+  () => collaborationConversations.value[activeSessionId.value]?.agent_name || '平台主智能体',
+)
 const activeChatSuggestions = computed(() => generatedChatSuggestions.value[activeSessionId.value] ?? [])
 const meetingMinute = ref<{ title: string; summary: string; action_items?: unknown[] } | null>(null)
 
-function mapSession(row: ApiCollaborationSession): CollaborationSession { return { id: String(row.id), title: row.title, desc: row.summary || '暂无会话摘要', time: row.updated_at || row.created_at, participantIds: (row.participant_ids || []).map(String), taskIds: (row.task_ids || []).map(String) } }
-function mapMessage(row: ApiCollaborationMessage): ChatMessage { return { id: String(row.id), role: row.role, content: row.content, generatedTaskIds: (row.generated_task_ids || []).map(String) } }
+function mapAgentSession(row: ApiAgentConversation): CollaborationSession {
+  return {
+    id: String(row.id),
+    title: row.title,
+    desc: `${row.agent_name} · ${agentConversationStatusLabel(row.status)}`,
+    time: row.updated_at || row.created_at,
+    participantIds: [],
+    taskIds: [],
+  }
+}
+
+function agentConversationStatusLabel(status: string) {
+  return ({
+    active: '可用',
+    running: '处理中',
+    awaiting_permission: '等待确认',
+    awaiting_external: '等待外部输入',
+    completed: '已完成',
+    failed: '失败',
+    interrupted: '已停止',
+  } as Record<string, string>)[status] || status
+}
+
 async function loadSessionMessages(sessionId: string) {
   if (!sessionId) return
-  const response = await api.get<ApiEnvelope<ApiCollaborationMessage[]>>(`/collaboration-sessions/${sessionId}/messages`)
-  sessionMessages.value = { ...sessionMessages.value, [sessionId]: response.data.data.map(mapMessage) }
+  const response = await api.get<ApiEnvelope<ApiAgentMessage[]>>(
+    `/agent-conversations/${sessionId}/messages`,
+  )
+  sessionMessages.value = {
+    ...sessionMessages.value,
+    [sessionId]: response.data.data.map(mapAgentMessage),
+  }
 }
+
 async function loadCollaborationSessions() {
+  sessions.value = []
+  collaborationConversations.value = {}
+  collaborationStreamingTraces.value = {}
+  sessionMessages.value = {}
+  activeSessionId.value = ''
   if (!store.currentProjectId) return
-  const response = await api.get<ApiEnvelope<ApiCollaborationSession[]>>(`/projects/${store.currentProjectId}/collaboration-sessions`)
-  sessions.value = response.data.data.map(mapSession)
-  if (!activeSessionId.value || !sessions.value.some(item => item.id === activeSessionId.value)) activeSessionId.value = sessions.value[0]?.id || ''
-  if (activeSessionId.value) await loadSessionMessages(activeSessionId.value)
+  try {
+    const response = await api.get<ApiEnvelope<ApiAgentConversation[]>>(
+      `/projects/${store.currentProjectId}/agent-conversations`,
+      { params: { conversation_type: 'general' } },
+    )
+    const rows = response.data.data
+    collaborationConversations.value = Object.fromEntries(
+      rows.map(row => [String(row.id), row]),
+    )
+    sessions.value = rows.map(mapAgentSession)
+    activeSessionId.value = sessions.value[0]?.id || ''
+    if (activeSessionId.value) await loadSessionMessages(activeSessionId.value)
+  } catch (error: any) {
+    message.error(error?.response?.data?.detail || '加载智能协同会话失败。')
+  }
 }
+
 async function createMeetingMinute() {
-  if (!activeSessionId.value) return
-  const response = await api.post<ApiEnvelope<{ title: string; summary: string; action_items?: unknown[] }>>(`/collaboration-sessions/${activeSessionId.value}/minutes`)
-  meetingMinute.value = response.data.data
+  if (!activeSessionId.value || activeCollaborationTrace.value) return
+  const reply = await runCollaborationPrompt(
+    '请根据当前完整会话生成一份简洁的会议纪要，包含议题、关键结论、待办事项、责任人和截止时间；缺少的信息请明确标注“待确认”。',
+  )
+  if (reply) {
+    meetingMinute.value = {
+      title: `${activeSession.value?.title || '当前会话'} · 智能纪要`,
+      summary: reply.content,
+      action_items: [],
+    }
+  }
 }
 
 watch(activeSessionId, () => {
@@ -1621,75 +1839,266 @@ function generatedTaskIdsFromPrompt(content: string) {
 
 async function sendPrompt() {
   const content = prompt.value.trim()
-  if (!content || !activeSessionId.value) return
-  const response = await api.post<ApiEnvelope<{ session: ApiCollaborationSession; message: ApiCollaborationMessage }>>(`/collaboration-sessions/${activeSessionId.value}/messages`, { content })
-  const session = mapSession(response.data.data.session)
-  sessions.value = sessions.value.map(item => item.id === session.id ? session : item)
-  await loadSessionMessages(activeSessionId.value)
-  store.addLog({ id: `log${Date.now()}`, time: nowStr(), operator: '系统', action: '会话处理', detail: content, level: 'success' })
+  if (!content) return
   prompt.value = ''
+  await runCollaborationPrompt(content)
 }
 
-function sessionTitleFromFirstMessage(content: string) {
-  return content.trim().split(/[。！？!?；;\n]/)[0]?.trim() || content.trim()
-}
-
-function ensureHomeQuickSession(content: string) {
-  if (homeQuickSessionId.value && sessions.value.some(session => session.id === homeQuickSessionId.value)) {
-    return homeQuickSessionId.value
+async function runCollaborationPrompt(content: string): Promise<ChatMessage | null> {
+  const sessionId = activeSessionId.value
+  if (!content.trim() || !sessionId || collaborationStreamingTraces.value[sessionId]) {
+    return null
   }
-  const id = `home-${Date.now()}`
-  const title = sessionTitleFromFirstMessage(content)
-  homeQuickSessionId.value = id
-  sessions.value.unshift({
-    id,
-    title,
-    desc: content.slice(0, 22),
-    time: nowStr(),
-    participantIds: ['m1'],
-    taskIds: [],
-  })
-  sessionMessages.value[id] = []
-  return id
+  const optimisticId = `collab-user-${Date.now()}`
+  const optimisticUser: ChatMessage = {
+    id: optimisticId,
+    role: 'user',
+    content,
+  }
+  sessionMessages.value = {
+    ...sessionMessages.value,
+    [sessionId]: [...(sessionMessages.value[sessionId] ?? []), optimisticUser],
+  }
+  collaborationStreamingTraces.value = {
+    ...collaborationStreamingTraces.value,
+    [sessionId]: createEmptyRuntimeTrace(),
+  }
+  meetingMinute.value = null
+  let accepted = false
+  const completion: {
+    message: ApiAgentMessage | null
+    runtimeStatus: string
+  } = { message: null, runtimeStatus: 'running' }
+  await nextTick()
+  scrollCollaborationMessages(true)
+
+  try {
+    await streamAgentConversationMessage(Number(sessionId), content, {
+      onAccepted: async payload => {
+        accepted = true
+        sessionMessages.value = {
+          ...sessionMessages.value,
+          [sessionId]: (sessionMessages.value[sessionId] ?? []).map(item =>
+            item.id === optimisticId ? mapAgentMessage(payload.user_message) : item,
+          ),
+        }
+      },
+      onEvent: async runtimeEvent => {
+        collaborationStreamingTraces.value = {
+          ...collaborationStreamingTraces.value,
+          [sessionId]: applyAgentRuntimeEvent(
+            collaborationStreamingTraces.value[sessionId] ?? null,
+            runtimeEvent,
+          ),
+        }
+        await nextTick()
+        if (activeSessionId.value === sessionId) scrollCollaborationMessages()
+      },
+      onDone: payload => {
+        completion.message = payload.message
+        completion.runtimeStatus = payload.runtime_status
+      },
+    })
+
+    if (!completion.message) {
+      throw new Error('AgentScope 已结束事件流，但没有返回最终消息。')
+    }
+    const finalMessage = mapAgentMessage(completion.message)
+    sessionMessages.value = {
+      ...sessionMessages.value,
+      [sessionId]: [...(sessionMessages.value[sessionId] ?? []), finalMessage],
+    }
+    collaborationStreamingTraces.value = {
+      ...collaborationStreamingTraces.value,
+      [sessionId]: null,
+    }
+    const conversation = collaborationConversations.value[sessionId]
+    if (conversation) {
+      const updatedConversation: ApiAgentConversation = {
+        ...conversation,
+        status: completion.runtimeStatus,
+        updated_at: nowStr(),
+      }
+      collaborationConversations.value = {
+        ...collaborationConversations.value,
+        [sessionId]: updatedConversation,
+      }
+      const updatedSession = mapAgentSession(updatedConversation)
+      sessions.value = [
+        updatedSession,
+        ...sessions.value.filter(item => item.id !== sessionId),
+      ]
+    }
+    store.addLog({
+      id: `log${Date.now()}`,
+      time: nowStr(),
+      operator: '系统',
+      action: '主智能体协同',
+      detail: content,
+      level: 'success',
+    })
+    await nextTick()
+    if (activeSessionId.value === sessionId) scrollCollaborationMessages(true)
+    return finalMessage
+  } catch (error: any) {
+    if (!accepted) {
+      sessionMessages.value = {
+        ...sessionMessages.value,
+        [sessionId]: (sessionMessages.value[sessionId] ?? []).filter(
+          item => item.id !== optimisticId,
+        ),
+      }
+    }
+    const errorReplyId = `platform-error-${Date.now()}`
+    let trace = collaborationStreamingTraces.value[sessionId] ?? createEmptyRuntimeTrace()
+    trace = applyAgentRuntimeEvent(trace, {
+      type: 'REPLY_START',
+      reply_id: errorReplyId,
+      name: collaborationConversations.value[sessionId]?.agent_name || '平台主智能体',
+    })
+    trace = applyAgentRuntimeEvent(trace, {
+      type: 'REPLY_END',
+      reply_id: errorReplyId,
+      error: {
+        type: 'platform_stream_error',
+        message: error?.response?.data?.detail || error?.message || '智能体处理失败。',
+      },
+      finished_reason: 'error',
+    })
+    sessionMessages.value = {
+      ...sessionMessages.value,
+      [sessionId]: [
+        ...(sessionMessages.value[sessionId] ?? []),
+        {
+          id: errorReplyId,
+          role: 'assistant',
+          content: '',
+          runtimeTrace: trace,
+        },
+      ],
+    }
+    collaborationStreamingTraces.value = {
+      ...collaborationStreamingTraces.value,
+      [sessionId]: null,
+    }
+    message.error(error?.response?.data?.detail || error?.message || '主智能体处理失败。')
+    return null
+  }
 }
 
-function syncHomeQuickCommand(content: string, attachments: ChatAttachment[] = []) {
-  const id = ensureHomeQuickSession(content)
-  const now = nowStr()
-  const messages = sessionMessages.value[id] ?? []
-  const generatedTaskIds = content.includes('资料') || content.includes('缺项')
-    ? ['t2', 't4']
-    : content.includes('风险')
-      ? ['t4', 't6']
-      : []
-  messages.push({ id: `hq-u-${Date.now()}`, role: 'user', content, attachments: attachments.length ? attachments : undefined })
-  messages.push({
-    id: `hq-a-${Date.now() + 1}`,
-    role: 'assistant',
-    content: attachments.length
-      ? `已收到 ${attachments.length} 个附件（${attachments.map(file => file.name).join('、')}），文件已归入当前项目资料库。我会结合资料内容和项目上下文继续处理：${content}`
-      : generatedTaskIds.length
-        ? `已根据当前任务、资料缺口和风险状态生成相关工作：${content}`
-        : `已进入当前项目协同：${content}`,
-    generatedTaskIds: generatedTaskIds.length ? generatedTaskIds : undefined,
+function scrollCollaborationMessages(smooth = false) {
+  const viewport = collaborationMessagesViewport.value
+  if (!viewport) return
+  viewport.scrollTo({
+    top: viewport.scrollHeight,
+    behavior: smooth ? 'smooth' : 'auto',
   })
-  sessionMessages.value[id] = messages
-  const targetSession = sessions.value.find(session => session.id === id)
-  if (targetSession) {
-    targetSession.desc = content.slice(0, 22)
-    targetSession.time = now
-    if (generatedTaskIds.length) targetSession.taskIds = Array.from(new Set([...targetSession.taskIds, ...generatedTaskIds]))
+}
+
+async function stopCollaborationAgent() {
+  const sessionId = activeSessionId.value
+  if (!sessionId) return
+  try {
+    await api.post(`/agent-conversations/${sessionId}/interrupt`)
+    message.info('已请求停止，正在等待智能体安全结束当前步骤。')
+  } catch (error: any) {
+    message.error(error?.response?.data?.detail || '停止智能体失败。')
   }
-  activeSessionId.value = id
+}
+
+async function confirmCollaborationToolCall(
+  replyId: string,
+  toolCall: AgentToolCallBlock,
+  confirmed: boolean,
+) {
+  const sessionId = activeSessionId.value
+  if (!sessionId) return
+  try {
+    const response = await api.post<ApiEnvelope<{
+      message: ApiAgentMessage | null
+      runtime_status: string
+    }>>(
+      `/agent-conversations/${sessionId}/confirm`,
+      {
+        reply_id: replyId,
+        tool_call: toolCall,
+        confirmed,
+      },
+      { timeout: 170_000 },
+    )
+    if (response.data.data.message) {
+      await loadSessionMessages(sessionId)
+    } else {
+      message.success(response.data.message)
+    }
+  } catch (error: any) {
+    message.error(error?.response?.data?.detail || '提交人工确认失败。')
+  }
+}
+
+function mapAgentMessage(row: ApiAgentMessage): ChatMessage {
+  return {
+    id: String(row.id),
+    role: row.role,
+    content: row.content,
+    runtimeTrace: runtimeTraceFromExtraData(row.extra_data),
+  }
+}
+
+async function loadHomeAgentConversation() {
+  homeAgentConversation.value = null
+  homeQuickChatMessages.value = []
+  homeQuickStreamingTrace.value = null
+  if (!store.currentProjectId) return
+  try {
+    const response = await api.get<ApiEnvelope<ApiAgentConversation[]>>(
+      `/projects/${store.currentProjectId}/agent-conversations`,
+      { params: { conversation_type: 'general' } },
+    )
+    const conversation = response.data.data[0]
+    if (!conversation) return
+    homeAgentConversation.value = conversation
+    const messagesResponse = await api.get<ApiEnvelope<ApiAgentMessage[]>>(
+      `/agent-conversations/${conversation.id}/messages`,
+    )
+    homeQuickChatMessages.value = messagesResponse.data.data.map(mapAgentMessage)
+  } catch (error: any) {
+    message.error(error?.response?.data?.detail || '加载主智能体会话失败。')
+  }
+}
+
+async function ensureHomeAgentConversation() {
+  if (homeAgentConversation.value) return homeAgentConversation.value
+  if (!store.currentProjectId) throw new Error('请先选择项目')
+  const response = await api.post<ApiEnvelope<ApiAgentConversation>>(
+    `/projects/${store.currentProjectId}/agent-conversations`,
+    { conversation_type: 'general' },
+  )
+  homeAgentConversation.value = response.data.data
+  return response.data.data
 }
 
 async function startNewSession() {
   if (!store.currentProjectId) return
-  const response = await api.post<ApiEnvelope<ApiCollaborationSession>>(`/projects/${store.currentProjectId}/collaboration-sessions`, { title: '新的工程协同' })
-  const session = mapSession(response.data.data)
+  const response = await api.post<ApiEnvelope<ApiAgentConversation>>(
+    `/projects/${store.currentProjectId}/agent-conversations`,
+    {
+      conversation_type: 'general',
+      title: '新的工程协同',
+    },
+  )
+  const conversation = response.data.data
+  const session = mapAgentSession(conversation)
+  collaborationConversations.value = {
+    ...collaborationConversations.value,
+    [session.id]: conversation,
+  }
   sessions.value.unshift(session)
   sessionMessages.value = { ...sessionMessages.value, [session.id]: [] }
   activeSessionId.value = session.id
+  homeAgentConversation.value = conversation
+  homeQuickChatMessages.value = []
+  homeQuickStreamingTrace.value = null
 }
 
 type TaskManagementTab = 'mine' | 'history' | 'assign'
@@ -3152,6 +3561,24 @@ function nowStr() {
 .home-chat-composer > button[type="submit"] {
   min-width: 92px;
 }
+.home-chat-composer > .stop-agent {
+  display:inline-flex;
+  min-width:92px;
+  min-height:58px;
+  align-items:center;
+  align-self:end;
+  justify-content:center;
+  gap:6px;
+  border:0;
+  border-radius:8px;
+  color:#fff;
+  background:#3e5f5a;
+  font:inherit;
+  font-size:13px;
+  font-weight:800;
+  cursor:pointer;
+}
+.home-chat-composer > .stop-agent:hover { background:#304f4a; }
 
 .composer-entry {
   display: grid;

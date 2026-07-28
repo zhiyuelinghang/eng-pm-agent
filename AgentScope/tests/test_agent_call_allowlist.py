@@ -12,6 +12,7 @@ from agentscope.app.storage import (
     AgentData,
     AgentRecord,
     InviteConfig,
+    PlatformAgentConfig,
 )
 
 
@@ -27,6 +28,7 @@ def _agent(
     *,
     invitable: bool = False,
     call_config: AgentCallConfig | None = None,
+    platform_config: PlatformAgentConfig | None = None,
 ) -> AgentRecord:
     return AgentRecord(
         id=agent_id,
@@ -40,6 +42,7 @@ def _agent(
                 invite_description=f"{name} capability" if invitable else None,
             ),
             call_config=call_config or AgentCallConfig(),
+            platform_config=platform_config or PlatformAgentConfig(),
         ),
     )
 
@@ -121,6 +124,53 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
         self.assertIn("no longer allowed", result.content[0].text)
         self.assertEqual(storage.get_agent.await_count, 1)
 
+    async def test_global_main_sees_all_enabled_non_main_agents(self) -> None:
+        caller = _agent(
+            CALLER_ID,
+            "Caller",
+            platform_config=PlatformAgentConfig(role="global_main"),
+        )
+        visible_agents = [
+            caller,
+            _agent(TARGET_A_ID, "Published", invitable=True),
+            _agent(
+                TARGET_B_ID,
+                "Unpublished",
+                invitable=True,
+                platform_config=PlatformAgentConfig(published=False),
+            ),
+            _agent(
+                "internal",
+                "Internal",
+                invitable=True,
+                platform_config=PlatformAgentConfig(
+                    role="system_internal",
+                    published=False,
+                ),
+            ),
+            _agent(
+                "disabled",
+                "Disabled",
+                invitable=True,
+                platform_config=PlatformAgentConfig(enabled=False),
+            ),
+        ]
+        targets = await self._invite_targets_for(caller, visible_agents)
+
+        self.assertEqual(len(targets or []), 3)
+        self.assertTrue(
+            any(target.startswith("Published@") for target in targets or []),
+        )
+        self.assertTrue(
+            any(target.startswith("Unpublished@") for target in targets or []),
+        )
+        self.assertTrue(
+            any(target.startswith("Internal@") for target in targets or []),
+        )
+        self.assertFalse(
+            any(target.startswith("Disabled@") for target in targets or []),
+        )
+
     async def _invite_targets(
         self,
         call_config: AgentCallConfig,
@@ -136,6 +186,13 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
             _agent(TARGET_A_ID, "Target A", invitable=True),
             _agent(TARGET_B_ID, "Target B", invitable=True),
         ]
+        return await self._invite_targets_for(caller, visible_agents)
+
+    async def _invite_targets_for(
+        self,
+        caller: AgentRecord,
+        visible_agents: list[AgentRecord],
+    ) -> list[str] | None:
         workspace = SimpleNamespace(
             list_tools=AsyncMock(return_value=[]),
             list_skills=AsyncMock(return_value=[]),

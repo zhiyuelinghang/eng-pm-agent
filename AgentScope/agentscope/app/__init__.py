@@ -4,9 +4,11 @@ components and a configurable FastAPI app factory.
 """
 
 from ._app import create_app
+from ._auth import AgentScopeAuthConfig
 from ._types import SubAgentTemplate
 
 __all__ = [
     "create_app",
+    "AgentScopeAuthConfig",
     "SubAgentTemplate",
 ]

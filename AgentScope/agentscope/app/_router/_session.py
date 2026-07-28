@@ -295,10 +295,16 @@ async def create_session(
         `HTTPException`: 404 if the agent / credential / knowledge base
             is not visible to the caller.
     """
-    # Agent must be visible to the caller (own or shared).
-    await access.resolve_agent(user_id, body.agent_id)
+    # Agent must be visible to the caller (own or shared).  A fixed model
+    # policy is enforced server-side so API clients cannot accidentally
+    # create a model-less session (or override the model selected by the
+    # agent administrator).
+    agent = await access.resolve_agent(user_id, body.agent_id)
+    chat_model_config = body.chat_model_config
+    if agent.data.model_policy.mode == "fixed":
+        chat_model_config = agent.data.model_policy.chat_model_config
 
-    await _ensure_credential_exists(access, user_id, body.chat_model_config)
+    await _ensure_credential_exists(access, user_id, chat_model_config)
     await _ensure_credential_exists(
         access,
         user_id,
@@ -328,7 +334,7 @@ async def create_session(
         agent_id=body.agent_id,
         config=SessionConfig(
             workspace_id=resolved_workspace_id,
-            chat_model_config=body.chat_model_config,
+            chat_model_config=chat_model_config,
             fallback_chat_model_config=body.fallback_chat_model_config,
             tts_model_config=body.tts_model_config,
             knowledge_config=body.knowledge_config,
@@ -461,7 +467,12 @@ async def update_session(
             detail=f"Session '{session_id}' not found.",
         )
 
-    await _ensure_credential_exists(access, user_id, body.chat_model_config)
+    agent = await access.resolve_agent(user_id, agent_id)
+    chat_model_config = body.chat_model_config
+    if agent.data.model_policy.mode == "fixed":
+        chat_model_config = agent.data.model_policy.chat_model_config
+
+    await _ensure_credential_exists(access, user_id, chat_model_config)
     await _ensure_credential_exists(
         access,
         user_id,
@@ -506,6 +517,12 @@ async def update_session(
         exclude_unset=True,
         exclude={"permission_mode"},
     )
+    if agent.data.model_policy.mode == "fixed":
+        config_updates["chat_model_config"] = (
+            chat_model_config.model_dump(mode="json")
+            if chat_model_config is not None
+            else None
+        )
 
     return await storage.upsert_session(
         user_id=user_id,

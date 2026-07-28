@@ -218,11 +218,24 @@ time or interval"
             user_id,
             ResourceKind.AGENT,
         )
+        caller_is_global_main = (
+            agent_record.data.platform_config.role == "global_main"
+        )
         invitable_pool = [
             view
             for view in visible_agents
             if view.id != agent_record.id
-            and agent_record.data.call_config.allows(view.id)
+            and (
+                (
+                    caller_is_global_main
+                    and view.data.platform_config.enabled
+                    and view.data.platform_config.role != "global_main"
+                )
+                or (
+                    not caller_is_global_main
+                    and agent_record.data.call_config.allows(view.id)
+                )
+            )
             and view.data.invite_config.invitable
             and (view.data.invite_config.invite_description or "").strip()
         ]

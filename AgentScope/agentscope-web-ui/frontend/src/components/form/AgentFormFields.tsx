@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 
 import type {
 	AgentCallConfig,
+	PlatformAgentConfig,
 	AgentSchemaV2Response,
 	AgentView,
 	JSONSchema,
@@ -9,6 +10,7 @@ import type {
 } from '@/api';
 import { AgentCallConfigFields } from '@/components/form/AgentCallConfigFields';
 import { AgentModelPolicyFields } from '@/components/form/AgentModelPolicyFields';
+import { AgentPlatformConfigFields } from '@/components/form/AgentPlatformConfigFields';
 import { SchemaForm, type SchemaFormValue } from '@/components/form/SchemaForm';
 import {
 	FieldDescription,
@@ -22,6 +24,7 @@ import { agentModelPolicyToForm, type AgentModelPolicyFormValues } from '@/lib/a
 export type AgentSection =
 	| 'identity'
 	| 'model_policy'
+	| 'platform_config'
 	| 'context_config'
 	| 'react_config'
 	| 'invite_config'
@@ -48,6 +51,7 @@ interface Props {
  */
 const NESTED_SECTIONS: Array<{ key: Exclude<AgentSection, 'identity'>; i18n: string }> = [
 	{ key: 'model_policy', i18n: 'model-policy' },
+	{ key: 'platform_config', i18n: 'platform-config' },
 	{ key: 'context_config', i18n: 'context-config' },
 	{ key: 'react_config', i18n: 'react-config' },
 	{ key: 'invite_config', i18n: 'invite-config' },
@@ -82,6 +86,10 @@ function sliceSchema(root: JSONSchema): Record<AgentSection, JSONSchema> {
 	return {
 		identity,
 		model_policy: (props.model_policy as JSONSchema) ?? {
+			type: 'object',
+			properties: {},
+		},
+		platform_config: (props.platform_config as JSONSchema) ?? {
 			type: 'object',
 			properties: {},
 		},
@@ -139,6 +147,13 @@ export function AgentFormFields({ schema, values, agents, currentAgentId, onChan
 										onChange('model_policy', String(k), v)
 									}
 								/>
+							) : sectionKey === 'platform_config' ? (
+								<AgentPlatformConfigFields
+									values={values.platform_config as Partial<PlatformAgentConfig>}
+									onChange={(k, v) =>
+										onChange('platform_config', String(k), v)
+									}
+								/>
 							) : sectionKey === 'call_config' ? (
 								<AgentCallConfigFields
 									values={values.call_config as Partial<AgentCallConfig>}
@@ -186,6 +201,16 @@ export function defaultAgentFormValues(schema: AgentSchemaV2Response): AgentForm
 	return {
 		identity: fromDefaults(sections.identity),
 		model_policy: agentModelPolicyToForm(),
+		platform_config: {
+			role: 'business',
+			enabled: true,
+			published: true,
+			description: null,
+			category: '通用',
+			sort_order: 100,
+			permission_mode: 'auto',
+			knowledge_config: null,
+		},
 		context_config: fromDefaults(sections.context_config),
 		react_config: fromDefaults(sections.react_config),
 		invite_config: fromDefaults(sections.invite_config),

@@ -197,6 +197,26 @@ class CollaborationMessageInput(BaseModel):
     content: str = Field(min_length=1)
 
 
+class AgentConversationInput(BaseModel):
+    agent_id: str | None = Field(default=None, max_length=64)
+    conversation_type: str = Field(
+        default="business",
+        pattern="^(general|business)$",
+    )
+    title: str | None = Field(default=None, max_length=300)
+
+
+class AgentConversationMessageInput(BaseModel):
+    content: str = Field(min_length=1, max_length=20000)
+
+
+class AgentConversationConfirmInput(BaseModel):
+    reply_id: str = Field(min_length=1, max_length=128)
+    tool_call: dict[str, Any]
+    confirmed: bool
+    rules: list[dict[str, Any]] | None = None
+
+
 class ProjectChangeInput(BaseModel):
     category: str = "工程内容变更"
     title: str = Field(min_length=1, max_length=300)

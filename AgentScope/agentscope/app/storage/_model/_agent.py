@@ -7,7 +7,11 @@ from pydantic.json_schema import SkipJsonSchema
 
 from ...._utils._common import _generate_id
 from ._base import _RecordBase
-from ._session import ChatModelConfig
+from ._session import (
+    ChatModelConfig,
+    SessionKnowledgeConfig,
+)
+from ....permission import PermissionMode
 from ....agent import ContextConfig, ReActConfig
 
 
@@ -147,6 +151,83 @@ class AgentModelPolicy(BaseModel):
         return self
 
 
+class PlatformAgentConfig(BaseModel):
+    """Controls how an agent is exposed to the engineering platform.
+
+    The AgentScope Web UI remains the administration surface, while the
+    engineering platform consumes this deliberately small publication
+    contract.  Runtime prompts, credentials, and provider parameters never
+    need to leak into the platform's business-agent catalogue.
+    """
+
+    role: Literal["global_main", "business", "system_internal"] = Field(
+        default="business",
+        description=(
+            "Platform role. ``global_main`` is the single default agent used "
+            "by ordinary platform chat, ``business`` is published in the "
+            "business-tool catalogue, and ``system_internal`` stays hidden."
+        ),
+        title="Platform Role",
+    )
+
+    enabled: bool = Field(
+        default=True,
+        description="Whether the engineering platform may run this agent.",
+        title="Platform Enabled",
+    )
+
+    published: bool = Field(
+        default=True,
+        description=(
+            "Whether this agent is published to the engineering platform. "
+            "Only enabled, published business agents appear as business tools."
+        ),
+        title="Published",
+    )
+
+    description: str | None = Field(
+        default=None,
+        description=(
+            "Business-facing description shown in the platform catalogue. "
+            "When omitted, the invite description is used as a fallback."
+        ),
+        title="Platform Description",
+        json_schema_extra={"format": "textarea"},
+    )
+
+    category: str = Field(
+        default="通用",
+        description="Business-tool category shown in the platform.",
+        title="Category",
+    )
+
+    sort_order: int = Field(
+        default=100,
+        ge=0,
+        le=9999,
+        description="Ascending display order in the business-tool catalogue.",
+        title="Sort Order",
+    )
+
+    permission_mode: PermissionMode = Field(
+        default=PermissionMode.AUTO,
+        description=(
+            "Permission mode applied to sessions created by the engineering "
+            "platform."
+        ),
+        title="Platform Permission Mode",
+    )
+
+    knowledge_config: SessionKnowledgeConfig | None = Field(
+        default=None,
+        description=(
+            "Default knowledge bases and retrieval parameters attached to "
+            "sessions created for this agent by the engineering platform."
+        ),
+        title="Platform Knowledge Configuration",
+    )
+
+
 class AgentData(BaseModel):
     """The agent data model."""
 
@@ -194,6 +275,15 @@ class AgentData(BaseModel):
             "model or always uses its own model and request parameters."
         ),
         title="Model Configuration",
+    )
+
+    platform_config: PlatformAgentConfig = Field(
+        default_factory=PlatformAgentConfig,
+        description=(
+            "Publication, role, permission, and knowledge defaults used by "
+            "the engineering platform integration."
+        ),
+        title="Platform Integration",
     )
 
     invite_config: InviteConfig = Field(

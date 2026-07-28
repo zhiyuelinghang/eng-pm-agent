@@ -9,6 +9,7 @@ from .rag.knowledge_base_manager import KnowledgeBaseManagerBase
 from .workspace_manager import WorkspaceManagerBase
 from ._router import (
     agent_router,
+    auth_router,
     chat_router,
     credential_router,
     knowledge_base_router,
@@ -18,6 +19,7 @@ from ._router import (
     session_router,
     workspace_router,
 )
+from ._auth import AgentScopeAuthConfig
 from ._types import AgentMiddlewareFactory, AgentToolFactory, SubAgentTemplate
 from .message_bus import MessageBus
 from .storage import StorageBase
@@ -57,6 +59,7 @@ def create_app(
     custom_subagent_templates: list[SubAgentTemplate] | None = None,
     custom_agent_cls: Type[Agent] | None = None,
     resource_access_policy: ResourceAccessPolicyBase | None = None,
+    auth_config: AgentScopeAuthConfig | None = None,
     title: str = "AgentScope",
     version: str = __version__,
 ) -> FastAPI:
@@ -186,6 +189,11 @@ def create_app(
             user. When ``None`` (default), a
             :class:`DenyAllResourceAccessPolicy` is installed which
             preserves the historical owner-isolated behavior.
+        auth_config (`AgentScopeAuthConfig | None`, optional):
+            Independent management-login and platform-service authentication.
+            When supplied, authenticated callers are mapped to one global
+            configuration namespace. When omitted, the historical
+            ``X-User-ID`` behavior remains available for compatibility.
         title (`str`, defaults to ``"AgentScope"``):
             OpenAPI title shown in the docs UI.
         version (`str`, defaults to the package version):
@@ -213,6 +221,7 @@ def create_app(
     app.state.resource_access_policy = (
         resource_access_policy or DenyAllResourceAccessPolicy()
     )
+    app.state.auth_config = auth_config
 
     # Parser / chunker / blob-store defaults only make sense when the
     # KB feature is actually enabled.  When ``knowledge_base_manager`` is
@@ -255,6 +264,7 @@ def create_app(
 
     # Built-in routers
     for router in (
+        auth_router,
         agent_router,
         chat_router,
         credential_router,

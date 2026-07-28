@@ -1,26 +1,34 @@
+import asyncio
 import hashlib
 import io
 import json
 import re
 import shutil
+from contextlib import suppress
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.responses import StreamingResponse
 import httpx
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .agentscope_client import (
+    AgentScopeClient,
+    AgentScopeGatewayError,
+    AgentScopeReply,
+)
 from .config import get_settings
-from .db import get_db
-from .models import (Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectMember, ProjectSettings, ProjectStatusSnapshot,
-                     QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsRiskLink)
+from .db import SessionLocal, get_db
+from .models import (AgentConversation, AgentConversationMessage, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectMember, ProjectSettings, ProjectStatusSnapshot,
+                      QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsRiskLink)
 from .schemas import (AttachmentUpdate, DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
                       LoginRequest, MemberInput, PasswordChangeInput, ProfileUpdate, ProjectInput, RiskInput, TaskFlowGenerateInput, TaskInput, TaskTransitionInput,
                       WbsInput, WbsRiskLinkInput, OperationLogInput, PlatformFieldMappingInput, ProjectSettingsInput,
-                      CollaborationMessageInput, CollaborationSessionInput, DocumentFolderInput, ProjectChangeInput, ProjectInformationDispositionInput, QualityMetricInput, TaskNoteInput, TaskReassignInput, TaskStepUpdate)
+                       AgentConversationConfirmInput, AgentConversationInput, AgentConversationMessageInput, CollaborationMessageInput, CollaborationSessionInput, DocumentFolderInput, ProjectChangeInput, ProjectInformationDispositionInput, QualityMetricInput, TaskNoteInput, TaskReassignInput, TaskStepUpdate)
 from .security import create_access_token, decode_access_token, hash_password, verify_password
 
 
@@ -63,6 +71,30 @@ def project_or_404(db: Session, project_id: int) -> Project:
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
+    return project
+
+
+def project_for_user_or_403(
+    db: Session,
+    project_id: int,
+    user: User,
+) -> Project:
+    """Resolve a project while enforcing current platform membership."""
+    project = project_or_404(db, project_id)
+    if user.role in {"admin", "superadmin"}:
+        return project
+    membership = db.scalar(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user.id,
+            ProjectMember.status == "active",
+        ),
+    )
+    if membership is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="你不是该项目的有效成员",
+        )
     return project
 
 
@@ -216,6 +248,291 @@ def audit(db: Session, user: User, action: str, detail: str, project_id: int | N
     db.add(OperationLog(project_id=project_id, operator_id=user.id, action=action, detail=detail, target_type=target_type, target_id=target_id))
 
 
+def _agentscope_client() -> AgentScopeClient:
+    return AgentScopeClient(get_settings())
+
+
+def _raise_agentscope_http_error(exc: AgentScopeGatewayError) -> None:
+    raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+def _public_agent_catalog_item(item: dict[str, Any] | None) -> dict[str, Any] | None:
+    if item is None:
+        return None
+    return {
+        key: item.get(key)
+        for key in (
+            "id",
+            "name",
+            "description",
+            "category",
+            "role",
+            "enabled",
+            "published",
+            "invitable",
+            "model_ready",
+            "sort_order",
+            "permission_mode",
+        )
+    }
+
+
+def _catalog_agent_for_conversation(
+    catalog: dict[str, Any],
+    conversation: AgentConversation,
+) -> dict[str, Any]:
+    """Resolve a conversation against the latest publication catalogue."""
+    if conversation.conversation_type == "general":
+        selected = catalog.get("global_main")
+        if selected is None or selected.get("id") != conversation.agent_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "平台全局主智能体已停用或发生切换，请刷新页面后开始"
+                    "新的主智能体会话"
+                ),
+            )
+    else:
+        selected = next(
+            (
+                item
+                for item in catalog.get("business_agents", [])
+                if item.get("id") == conversation.agent_id
+            ),
+            None,
+        )
+        if selected is None:
+            raise HTTPException(
+                status_code=409,
+                detail="该业务智能体已停用或取消发布，请刷新业务工具页面",
+            )
+    if not selected.get("model_ready"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"智能体「{selected.get('name')}」尚未配置固定模型",
+        )
+    return selected
+
+
+def _agent_conversation_or_404(
+    db: Session,
+    conversation_id: int,
+    user: User,
+) -> AgentConversation:
+    conversation = db.get(AgentConversation, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="智能体会话不存在")
+    if conversation.user_id != user.id:
+        raise HTTPException(status_code=403, detail="无权访问该智能体会话")
+    project_for_user_or_403(db, conversation.project_id, user)
+    return conversation
+
+
+def _build_agent_project_context(
+    db: Session,
+    project: Project,
+    user: User,
+) -> str:
+    """Build a bounded, read-only project snapshot for one agent turn."""
+    wbs_items = db.scalars(
+        select(WbsItem)
+        .where(WbsItem.project_id == project.id)
+        .order_by(WbsItem.code)
+        .limit(30),
+    ).all()
+    risks = db.scalars(
+        select(RiskSource)
+        .where(RiskSource.project_id == project.id)
+        .order_by(RiskSource.updated_at.desc())
+        .limit(20),
+    ).all()
+    tasks = db.scalars(
+        select(Task)
+        .where(Task.project_id == project.id)
+        .order_by(Task.updated_at.desc())
+        .limit(30),
+    ).all()
+    documents = db.execute(
+        select(Attachment, AttachmentText.content)
+        .outerjoin(
+            AttachmentText,
+            AttachmentText.attachment_id == Attachment.id,
+        )
+        .where(Attachment.project_id == project.id)
+        .order_by(Attachment.updated_at.desc())
+        .limit(12),
+    ).all()
+    document_summaries: list[str] = []
+    for attachment, extracted_text in documents:
+        summary = f"{attachment.file_name}（{attachment.category}）"
+        compact_text = " ".join((extracted_text or "").split())
+        if compact_text:
+            summary += f"：{compact_text[:1200]}"
+        document_summaries.append(summary)
+    return (
+        "<platform-context>\n"
+        "以下内容由工程管理平台后端按当前登录用户和项目权限注入，只能作为"
+        "本次任务的项目事实；不得假设用户拥有未列出的项目或权限。\n"
+        f"当前用户：{user.real_name}（用户ID {user.id}，系统角色 {user.role}）\n"
+        f"当前项目：{project.project_name}（项目ID {project.id}）\n"
+        f"所属单位：{project.owner_unit or '未填写'}\n"
+        f"项目说明：{(project.description or '未填写')[:500]}\n"
+        "WBS："
+        + (
+            "；".join(
+                f"{item.code} {item.name}（进度{item.progress}%／{item.status}）"
+                for item in wbs_items
+            )
+            or "暂无"
+        )
+        + "\n风险源："
+        + (
+            "；".join(
+                f"{item.name}（{item.level}／{item.status}）"
+                for item in risks
+            )
+            or "暂无"
+        )
+        + "\n近期任务："
+        + (
+            "；".join(
+                f"{item.title}（{item.status}，截止{item.due_at or '未设置'}）"
+                for item in tasks
+            )
+            or "暂无"
+        )
+        + "\n工程资料："
+        + (
+            "；".join(
+                item
+                for item in document_summaries
+            )
+            or "暂无"
+        )
+        + "\n</platform-context>"
+    )
+
+
+def _agent_reply_extra_data(
+    reply: AgentScopeReply,
+    trace_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the durable, UI-facing runtime payload for one platform reply."""
+    runtime_messages = reply.raw_messages or (
+        [reply.raw_message] if reply.raw_message else []
+    )
+    result: dict[str, Any] = {
+        "status": reply.status,
+        "agentscope_message": reply.raw_message,
+        "agentscope_messages": runtime_messages,
+    }
+    if trace_summary:
+        result["runtime_trace"] = trace_summary
+    return result
+
+
+def _persist_agent_reply(
+    conversation_id: int,
+    reply: AgentScopeReply,
+    trace_summary: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Persist a streamed AgentScope reply using a fresh DB session.
+
+    Streaming responses outlive the request-scoped SQLAlchemy session.  A
+    fresh session also lets completion continue after the browser disconnects.
+    The AgentScope message id is used as an idempotency key so a resumed
+    permission request updates its parked message instead of duplicating it.
+    """
+    with SessionLocal() as db:
+        conversation = db.get(AgentConversation, conversation_id)
+        if conversation is None:
+            return None
+        assistant: AgentConversationMessage | None = None
+        if reply.message_id:
+            assistant = db.scalar(
+                select(AgentConversationMessage).where(
+                    AgentConversationMessage.conversation_id
+                    == conversation_id,
+                    AgentConversationMessage.agentscope_message_id
+                    == reply.message_id,
+                ),
+            )
+        is_new = assistant is None
+        if assistant is None:
+            assistant = AgentConversationMessage(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=reply.content,
+                agentscope_message_id=reply.message_id,
+                extra_data={},
+            )
+            db.add(assistant)
+        assistant.content = reply.content
+        assistant.extra_data = {
+            **(assistant.extra_data or {}),
+            **_agent_reply_extra_data(reply, trace_summary),
+        }
+        conversation.status = reply.status
+        conversation.last_error = None
+        conversation.updated_at = datetime.now(UTC)
+        user = db.get(User, conversation.user_id)
+        if is_new and user is not None:
+            audit(
+                db,
+                user,
+                "调用智能体",
+                f"调用「{conversation.agent_name}」处理平台消息",
+                conversation.project_id,
+                "agent_conversation",
+                conversation.id,
+            )
+        db.commit()
+        db.refresh(assistant)
+        return serialize(assistant)
+
+
+def _record_agent_turn_error(conversation_id: int, detail: str) -> None:
+    """Persist a transport/runtime failure after an SSE response has begun."""
+    with SessionLocal() as db:
+        conversation = db.get(AgentConversation, conversation_id)
+        if conversation is None:
+            return
+        conversation.status = "error"
+        conversation.last_error = detail
+        conversation.updated_at = datetime.now(UTC)
+        db.commit()
+
+
+def _sse_frame(event: str, data: Any) -> str:
+    """Serialize one named Server-Sent Event frame."""
+    return (
+        f"event: {event}\n"
+        f"data: {json.dumps(data, ensure_ascii=False, separators=(',', ':'))}\n\n"
+    )
+
+
+async def _persist_agent_reply_after_disconnect(
+    chat_task: asyncio.Task[AgentScopeReply],
+    conversation_id: int,
+    trace_summary: dict[str, Any],
+) -> None:
+    """Finish persistence when the browser closes an in-flight stream."""
+    try:
+        reply = await asyncio.shield(chat_task)
+        await asyncio.to_thread(
+            _persist_agent_reply,
+            conversation_id,
+            reply,
+            trace_summary,
+        )
+    except Exception as exc:  # noqa: BLE001
+        await asyncio.to_thread(
+            _record_agent_turn_error,
+            conversation_id,
+            str(exc),
+        )
+
+
 @router.post("/auth/login")
 def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
     user = db.scalar(select(User).where(User.username == payload.username))
@@ -252,6 +569,598 @@ def change_my_password(payload: PasswordChangeInput, db: Session = Depends(get_d
     user.password_hash = hash_password(payload.new_password)
     db.commit()
     return ok(None, "登录密码已更新")
+
+
+@router.get("/agents/catalog")
+def get_agent_catalog(
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Expose AgentScope's safe publication catalogue to the platform UI."""
+    try:
+        catalog = _agentscope_client().get_catalog()
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    business_agents = [
+        _public_agent_catalog_item(item)
+        for item in catalog.get("business_agents", [])
+    ]
+    return ok(
+        {
+            "global_main": _public_agent_catalog_item(
+                catalog.get("global_main"),
+            ),
+            "business_agents": business_agents,
+            "total": len(business_agents),
+        },
+    )
+
+
+@router.get("/projects/{project_id}/agent-conversations")
+def list_agent_conversations(
+    project_id: int,
+    conversation_type: str | None = Query(
+        default=None,
+        pattern="^(general|business)$",
+    ),
+    agent_id: str | None = Query(default=None, max_length=64),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    statement = select(AgentConversation).where(
+        AgentConversation.project_id == project_id,
+        AgentConversation.user_id == user.id,
+    )
+    if conversation_type:
+        statement = statement.where(
+            AgentConversation.conversation_type == conversation_type,
+        )
+    if conversation_type == "general" and not agent_id:
+        try:
+            current_main = _agentscope_client().get_catalog().get(
+                "global_main",
+            )
+        except AgentScopeGatewayError as exc:
+            _raise_agentscope_http_error(exc)
+        if current_main is None:
+            return ok([])
+        statement = statement.where(
+            AgentConversation.agent_id == str(current_main["id"]),
+        )
+    if agent_id:
+        statement = statement.where(AgentConversation.agent_id == agent_id)
+    rows = db.scalars(
+        statement.order_by(AgentConversation.updated_at.desc()),
+    ).all()
+    return ok([serialize(row) for row in rows])
+
+
+@router.post("/projects/{project_id}/agent-conversations")
+def create_agent_conversation(
+    project_id: int,
+    payload: AgentConversationInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project = project_for_user_or_403(db, project_id, user)
+    client = _agentscope_client()
+    try:
+        catalog = client.get_catalog()
+        if payload.conversation_type == "general":
+            selected_agent = catalog.get("global_main")
+            if selected_agent is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="AgentScope 尚未配置已启用的全局主智能体",
+                )
+        else:
+            if not payload.agent_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail="业务智能体会话必须提供 agent_id",
+                )
+            selected_agent = next(
+                (
+                    item
+                    for item in catalog.get("business_agents", [])
+                    if item.get("id") == payload.agent_id
+                ),
+                None,
+            )
+            if selected_agent is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="该业务智能体未发布、已停用或不存在",
+                )
+
+        row = AgentConversation(
+            project_id=project.id,
+            user_id=user.id,
+            agent_id=str(selected_agent["id"]),
+            agent_name=str(selected_agent["name"]),
+            conversation_type=payload.conversation_type,
+            title=payload.title
+            or (
+                f"{selected_agent['name']} · {project.project_name}"
+                if payload.conversation_type == "business"
+                else f"{project.project_name} · 智能协同"
+            ),
+            status="creating",
+        )
+        db.add(row)
+        db.flush()
+        row.agentscope_session_id = client.create_session(
+            agent=selected_agent,
+            workspace_id=(
+                f"platform-u{user.id}-p{project.id}-conversation-{row.id}"
+            ),
+            name=row.title,
+        )
+        row.status = "active"
+        audit(
+            db,
+            user,
+            "创建智能体会话",
+            f"创建「{row.agent_name}」平台会话",
+            project.id,
+            "agent_conversation",
+            row.id,
+        )
+        db.commit()
+        db.refresh(row)
+        return ok(serialize(row), "智能体会话已创建")
+    except AgentScopeGatewayError as exc:
+        db.rollback()
+        _raise_agentscope_http_error(exc)
+
+
+@router.get("/agent-conversations/{conversation_id}/messages")
+def list_agent_conversation_messages(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    _agent_conversation_or_404(db, conversation_id, user)
+    rows = db.scalars(
+        select(AgentConversationMessage)
+        .where(AgentConversationMessage.conversation_id == conversation_id)
+        .order_by(AgentConversationMessage.created_at),
+    ).all()
+    return ok([serialize(row) for row in rows])
+
+
+@router.post("/agent-conversations/{conversation_id}/messages")
+def create_agent_conversation_message(
+    conversation_id: int,
+    payload: AgentConversationMessageInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    conversation = _agent_conversation_or_404(db, conversation_id, user)
+    project = project_for_user_or_403(db, conversation.project_id, user)
+    if not conversation.agentscope_session_id:
+        raise HTTPException(
+            status_code=409,
+            detail="智能体会话尚未完成初始化",
+        )
+
+    client = _agentscope_client()
+    try:
+        catalog = client.get_catalog()
+        selected_agent = _catalog_agent_for_conversation(
+            catalog,
+            conversation,
+        )
+        client.sync_session(
+            agent=selected_agent,
+            session_id=conversation.agentscope_session_id,
+        )
+    except AgentScopeGatewayError as exc:
+        conversation.status = "error"
+        conversation.last_error = str(exc)
+        db.commit()
+        _raise_agentscope_http_error(exc)
+
+    user_message = AgentConversationMessage(
+        conversation_id=conversation.id,
+        role="user",
+        content=payload.content,
+        extra_data={},
+    )
+    db.add(user_message)
+    db.flush()
+    injected_content = (
+        _build_agent_project_context(db, project, user)
+        + "\n<user-request>\n"
+        + payload.content
+        + "\n</user-request>"
+    )
+    try:
+        reply = client.chat(
+            agent_id=conversation.agent_id,
+            session_id=conversation.agentscope_session_id,
+            content=injected_content,
+            sender_name=user.real_name,
+            metadata={
+                "source": "engineering_platform",
+                "platform_user_id": user.id,
+                "project_id": project.id,
+                "conversation_id": conversation.id,
+            },
+        )
+    except AgentScopeGatewayError as exc:
+        conversation.status = "error"
+        conversation.last_error = str(exc)
+        db.commit()
+        _raise_agentscope_http_error(exc)
+
+    assistant = AgentConversationMessage(
+        conversation_id=conversation.id,
+        role="assistant",
+        content=reply.content,
+        agentscope_message_id=reply.message_id,
+        extra_data=_agent_reply_extra_data(reply),
+    )
+    db.add(assistant)
+    conversation.status = reply.status
+    conversation.last_error = None
+    conversation.updated_at = datetime.now(UTC)
+    audit(
+        db,
+        user,
+        "调用智能体",
+        f"调用「{conversation.agent_name}」处理平台消息",
+        project.id,
+        "agent_conversation",
+        conversation.id,
+    )
+    db.commit()
+    db.refresh(user_message)
+    db.refresh(assistant)
+    db.refresh(conversation)
+    return ok(
+        {
+            "conversation": serialize(conversation),
+            "user_message": serialize(user_message),
+            "message": serialize(assistant),
+            "runtime_status": reply.status,
+        },
+        (
+            "智能体处理完成"
+            if reply.status == "completed"
+            else "智能体等待进一步处理"
+        ),
+    )
+
+
+@router.post("/agent-conversations/{conversation_id}/messages/stream")
+def stream_agent_conversation_message(
+    conversation_id: int,
+    payload: AgentConversationMessageInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Relay one authorized AgentScope turn as structured SSE events."""
+    conversation = _agent_conversation_or_404(db, conversation_id, user)
+    project = project_for_user_or_403(db, conversation.project_id, user)
+    if not conversation.agentscope_session_id:
+        raise HTTPException(
+            status_code=409,
+            detail="智能体会话尚未完成初始化",
+        )
+
+    client = _agentscope_client()
+    try:
+        catalog = client.get_catalog()
+        selected_agent = _catalog_agent_for_conversation(
+            catalog,
+            conversation,
+        )
+        client.sync_session(
+            agent=selected_agent,
+            session_id=conversation.agentscope_session_id,
+        )
+    except AgentScopeGatewayError as exc:
+        conversation.status = "error"
+        conversation.last_error = str(exc)
+        db.commit()
+        _raise_agentscope_http_error(exc)
+
+    user_message = AgentConversationMessage(
+        conversation_id=conversation.id,
+        role="user",
+        content=payload.content,
+        extra_data={},
+    )
+    db.add(user_message)
+    conversation.status = "running"
+    conversation.last_error = None
+    conversation.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(user_message)
+
+    injected_content = (
+        _build_agent_project_context(db, project, user)
+        + "\n<user-request>\n"
+        + payload.content
+        + "\n</user-request>"
+    )
+    agent_id = conversation.agent_id
+    session_id = conversation.agentscope_session_id
+    sender_name = user.real_name
+    metadata = {
+        "source": "engineering_platform",
+        "platform_user_id": user.id,
+        "project_id": project.id,
+        "conversation_id": conversation.id,
+        "platform_message_id": user_message.id,
+    }
+    accepted_payload = {
+        "conversation_id": conversation.id,
+        "user_message": serialize(user_message),
+        "runtime_status": "running",
+    }
+
+    async def relay() -> Any:
+        chat_task: asyncio.Task[AgentScopeReply] | None = None
+        event_task: asyncio.Task[dict[str, Any]] | None = None
+        trace_summary: dict[str, Any] = {
+            "model_names": [],
+            "tasks_context": None,
+            "team_update_count": 0,
+            "subagent_hitl": [],
+        }
+        yield _sse_frame("accepted", accepted_payload)
+        try:
+            async with client.event_stream(session_id, agent_id) as events:
+                event_task = asyncio.create_task(anext(events))
+                await asyncio.sleep(0)
+                chat_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        client.chat,
+                        agent_id=agent_id,
+                        session_id=session_id,
+                        content=injected_content,
+                        sender_name=sender_name,
+                        metadata=metadata,
+                    ),
+                )
+
+                while True:
+                    waiting: set[asyncio.Task[Any]] = {chat_task}
+                    if event_task is not None:
+                        waiting.add(event_task)
+                    completed, _ = await asyncio.wait(
+                        waiting,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    if event_task is not None and event_task in completed:
+                        try:
+                            runtime_event = event_task.result()
+                        except StopAsyncIteration:
+                            event_task = None
+                        else:
+                            event_type = str(runtime_event.get("type") or "")
+                            if event_type == "MODEL_CALL_START":
+                                model_name = str(
+                                    runtime_event.get("model_name") or "",
+                                )
+                                if (
+                                    model_name
+                                    and model_name
+                                    not in trace_summary["model_names"]
+                                ):
+                                    trace_summary["model_names"].append(
+                                        model_name,
+                                    )
+                            elif (
+                                event_type == "CUSTOM"
+                                and runtime_event.get("name")
+                                == "state_updated"
+                            ):
+                                value = runtime_event.get("value") or {}
+                                trace_summary["tasks_context"] = value.get(
+                                    "tasks_context",
+                                )
+                            elif (
+                                event_type == "CUSTOM"
+                                and runtime_event.get("name")
+                                == "team_updated"
+                            ):
+                                trace_summary["team_update_count"] += 1
+                            elif (
+                                event_type == "CUSTOM"
+                                and runtime_event.get("name")
+                                == "subagent_require_user_confirm"
+                            ):
+                                value = runtime_event.get("value") or {}
+                                key = (
+                                    str(value.get("worker_session_id") or ""),
+                                    str(value.get("reply_id") or ""),
+                                )
+                                trace_summary["subagent_hitl"] = [
+                                    entry
+                                    for entry in trace_summary["subagent_hitl"]
+                                    if (
+                                        str(
+                                            entry.get(
+                                                "worker_session_id",
+                                            )
+                                            or "",
+                                        ),
+                                        str(entry.get("reply_id") or ""),
+                                    )
+                                    != key
+                                ]
+                                trace_summary["subagent_hitl"].append(value)
+                            elif (
+                                event_type == "CUSTOM"
+                                and runtime_event.get("name")
+                                == "subagent_user_confirm_result"
+                            ):
+                                value = runtime_event.get("value") or {}
+                                key = (
+                                    str(value.get("worker_session_id") or ""),
+                                    str(value.get("reply_id") or ""),
+                                )
+                                trace_summary["subagent_hitl"] = [
+                                    entry
+                                    for entry in trace_summary["subagent_hitl"]
+                                    if (
+                                        str(
+                                            entry.get(
+                                                "worker_session_id",
+                                            )
+                                            or "",
+                                        ),
+                                        str(entry.get("reply_id") or ""),
+                                    )
+                                    != key
+                                ]
+                            yield _sse_frame("agent_event", runtime_event)
+                            event_task = asyncio.create_task(anext(events))
+
+                    if chat_task in completed:
+                        reply = chat_task.result()
+                        break
+
+                if event_task is not None and not event_task.done():
+                    event_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await event_task
+
+            persisted = await asyncio.to_thread(
+                _persist_agent_reply,
+                conversation_id,
+                reply,
+                trace_summary,
+            )
+            if persisted is None:
+                raise AgentScopeGatewayError(
+                    "平台会话已被删除，无法保存智能体回复。",
+                    status_code=409,
+                )
+            yield _sse_frame(
+                "done",
+                {
+                    "message": persisted,
+                    "runtime_status": reply.status,
+                },
+            )
+        except asyncio.CancelledError:
+            if chat_task is not None:
+                asyncio.create_task(
+                    _persist_agent_reply_after_disconnect(
+                        chat_task,
+                        conversation_id,
+                        trace_summary,
+                    ),
+                )
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if event_task is not None and not event_task.done():
+                event_task.cancel()
+            if chat_task is not None and not chat_task.done():
+                asyncio.create_task(
+                    _persist_agent_reply_after_disconnect(
+                        chat_task,
+                        conversation_id,
+                        trace_summary,
+                    ),
+                )
+            else:
+                await asyncio.to_thread(
+                    _record_agent_turn_error,
+                    conversation_id,
+                    str(exc),
+                )
+            status_code = (
+                exc.status_code
+                if isinstance(exc, AgentScopeGatewayError)
+                else 500
+            )
+            yield _sse_frame(
+                "error",
+                {
+                    "detail": str(exc),
+                    "status_code": status_code,
+                },
+            )
+
+    return StreamingResponse(
+        relay(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/agent-conversations/{conversation_id}/interrupt")
+def interrupt_agent_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    conversation = _agent_conversation_or_404(db, conversation_id, user)
+    if not conversation.agentscope_session_id:
+        raise HTTPException(status_code=409, detail="智能体会话尚未完成初始化")
+    try:
+        result = _agentscope_client().interrupt(
+            agent_id=conversation.agent_id,
+            session_id=conversation.agentscope_session_id,
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    conversation.status = "interrupting"
+    db.commit()
+    return ok(result, "已请求停止智能体")
+
+
+@router.post("/agent-conversations/{conversation_id}/confirm")
+def confirm_agent_conversation_tool(
+    conversation_id: int,
+    payload: AgentConversationConfirmInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    conversation = _agent_conversation_or_404(db, conversation_id, user)
+    if not conversation.agentscope_session_id:
+        raise HTTPException(status_code=409, detail="智能体会话尚未完成初始化")
+    try:
+        client = _agentscope_client()
+        catalog = client.get_catalog()
+        _catalog_agent_for_conversation(catalog, conversation)
+        reply = client.confirm_tool_call(
+            agent_id=conversation.agent_id,
+            session_id=conversation.agentscope_session_id,
+            reply_id=payload.reply_id,
+            tool_call=payload.tool_call,
+            confirmed=payload.confirmed,
+            rules=payload.rules,
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    if reply.projected:
+        return ok(
+            {
+                "message": None,
+                "runtime_status": reply.status,
+            },
+            reply.content,
+        )
+    persisted = _persist_agent_reply(conversation.id, reply)
+    if persisted is None:
+        raise HTTPException(status_code=409, detail="平台智能体会话已被删除")
+    return ok(
+        {
+            "message": persisted,
+            "runtime_status": reply.status,
+        },
+        "人工确认结果已处理",
+    )
 
 
 @router.get("/projects")

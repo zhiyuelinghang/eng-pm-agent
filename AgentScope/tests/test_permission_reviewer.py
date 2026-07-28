@@ -185,6 +185,20 @@ class AgentPermissionReviewerIntegrationTest(IsolatedAsyncioTestCase):
 class AutoPermissionModeRouterTest(IsolatedAsyncioTestCase):
     """Ensure Auto cannot be selected without an enabled reviewer."""
 
+    @staticmethod
+    def _access() -> SimpleNamespace:
+        return SimpleNamespace(
+            resolve_agent=AsyncMock(
+                return_value=SimpleNamespace(
+                    data=SimpleNamespace(
+                        model_policy=SimpleNamespace(
+                            mode="inherit_session",
+                        ),
+                    ),
+                ),
+            ),
+        )
+
     async def test_auto_mode_rejected_when_reviewer_is_disabled(self) -> None:
         session = SessionRecord(
             user_id="user",
@@ -212,7 +226,7 @@ class AutoPermissionModeRouterTest(IsolatedAsyncioTestCase):
                 agent_id=session.agent_id,
                 user_id=session.user_id,
                 storage=storage,
-                access=SimpleNamespace(),
+                access=self._access(),
                 permission_review_service=reviewer_service,
             )
 
@@ -251,7 +265,7 @@ class AutoPermissionModeRouterTest(IsolatedAsyncioTestCase):
             agent_id=session.agent_id,
             user_id=session.user_id,
             storage=storage,
-            access=SimpleNamespace(),
+            access=self._access(),
             permission_review_service=reviewer_service,
         )
 

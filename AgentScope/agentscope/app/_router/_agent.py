@@ -20,6 +20,8 @@ from ._schema import (
     ListAgentsResponse,
     CreateAgentRequest,
     CreateAgentResponse,
+    PlatformAgentCatalogItem,
+    PlatformAgentCatalogResponse,
     UpdateAgentRequest,
 )
 from .._service import (
@@ -42,6 +44,74 @@ agent_router = APIRouter(
     tags=["agent"],
     responses={404: {"description": "Not found"}},
 )
+
+
+def _normalise_platform_agent_data(data: AgentData) -> AgentData:
+    """Apply invariants implied by an agent's platform role."""
+    platform_config = data.platform_config
+    updates = {}
+    if platform_config.role == "global_main" and data.call_config.scope != "all":
+        updates["call_config"] = data.call_config.model_copy(
+            update={"scope": "all"},
+        )
+    if platform_config.role == "system_internal" and platform_config.published:
+        updates["platform_config"] = platform_config.model_copy(
+            update={"published": False},
+        )
+    return data.model_copy(update=updates) if updates else data
+
+
+async def _demote_other_global_main_agents(
+    storage: StorageBase,
+    global_config_id: str,
+    selected_agent_id: str,
+) -> None:
+    """Keep exactly one global-main agent in the platform configuration."""
+    for record in await storage.list_agents(global_config_id):
+        if (
+            record.id == selected_agent_id
+            or record.data.platform_config.role != "global_main"
+        ):
+            continue
+        demoted_config = record.data.platform_config.model_copy(
+            update={"role": "business"},
+        )
+        demoted = record.model_copy(
+            update={
+                "data": record.data.model_copy(
+                    update={"platform_config": demoted_config},
+                ),
+                "updated_at": datetime.now(),
+            },
+        )
+        await storage.upsert_agent(global_config_id, demoted)
+
+
+def _catalog_item(agent: AgentView) -> PlatformAgentCatalogItem:
+    config = agent.data.platform_config
+    description = (
+        (config.description or "").strip()
+        or (agent.data.invite_config.invite_description or "").strip()
+        or "暂无业务说明"
+    )
+    permission_mode = config.permission_mode
+    return PlatformAgentCatalogItem(
+        id=agent.id,
+        name=agent.data.name,
+        description=description,
+        category=config.category.strip() or "通用",
+        role=config.role,
+        enabled=config.enabled,
+        published=config.published,
+        invitable=bool(agent.data.invite_config.invitable),
+        model_ready=(
+            agent.data.model_policy.mode == "fixed"
+            and agent.data.model_policy.chat_model_config is not None
+        ),
+        sort_order=config.sort_order,
+        permission_mode=getattr(permission_mode, "value", permission_mode),
+        knowledge_config=config.knowledge_config,
+    )
 
 
 async def _validate_model_policy(
@@ -237,6 +307,46 @@ async def list_agents(
     return ListAgentsResponse(agents=entries, total=len(entries))
 
 
+@agent_router.get(
+    "/platform/catalog",
+    response_model=PlatformAgentCatalogResponse,
+    summary="Published agent catalogue for the engineering platform",
+)
+async def get_platform_agent_catalog(
+    user_id: str = Depends(get_current_user_id),
+    access: ResourceAccessService = Depends(get_resource_access_service),
+) -> PlatformAgentCatalogResponse:
+    """Return the configured global main agent and published business agents.
+
+    The response intentionally excludes prompts, credentials, and provider
+    parameters.  It is the stable contract consumed by the engineering
+    platform's backend gateway.
+    """
+    entries = await access.list_resource(user_id, ResourceKind.AGENT)
+    items = [_catalog_item(entry) for entry in entries]
+    global_candidates = sorted(
+        (
+            item
+            for item in items
+            if item.role == "global_main" and item.enabled
+        ),
+        key=lambda item: (item.sort_order, item.name, item.id),
+    )
+    business_agents = sorted(
+        (
+            item
+            for item in items
+            if item.role == "business" and item.enabled and item.published
+        ),
+        key=lambda item: (item.sort_order, item.name, item.id),
+    )
+    return PlatformAgentCatalogResponse(
+        global_main=global_candidates[0] if global_candidates else None,
+        business_agents=business_agents,
+        total=len(business_agents),
+    )
+
+
 @agent_router.post(
     "/",
     response_model=CreateAgentResponse,
@@ -283,6 +393,7 @@ async def create_agent(
             context_config=body.context_config,
             react_config=body.react_config,
             model_policy=model_policy,
+            platform_config=body.platform_config,
             invite_config=body.invite_config,
             call_config=body.call_config,
         )
@@ -291,8 +402,11 @@ async def create_agent(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=exc.errors(),
         ) from exc
+    data = _normalise_platform_agent_data(data)
     record = AgentRecord(user_id=user_id, data=data)
     agent_id = await storage.upsert_agent(user_id, record)
+    if data.platform_config.role == "global_main":
+        await _demote_other_global_main_agents(storage, user_id, agent_id)
     return CreateAgentResponse(agent_id=agent_id)
 
 
@@ -357,6 +471,7 @@ async def update_agent(
             ),
         },
     )
+    updated_data = _normalise_platform_agent_data(updated_data)
     if agent_id in updated_data.call_config.allowed_agent_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -365,6 +480,12 @@ async def update_agent(
     updated_agent = existing.model_copy(
         update={"data": updated_data, "updated_at": datetime.now()},
     )
+    if updated_data.platform_config.role == "global_main":
+        await _demote_other_global_main_agents(
+            storage,
+            owner_id,
+            agent_id,
+        )
     await storage.upsert_agent(owner_id, updated_agent)
     # Only reachable via ``resolve_for_edit``, so the caller has edit
     # permission by construction.

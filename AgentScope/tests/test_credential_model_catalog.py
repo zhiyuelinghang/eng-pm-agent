@@ -14,8 +14,8 @@ from agentscope.app._service._credential_models import (
     build_credential_embedding_model_catalog,
     build_credential_model_catalog,
     discover_credential_models,
-    test_credential_embedding_model,
-    test_credential_model,
+    test_credential_embedding_model as _test_credential_embedding_model,
+    test_credential_model as _test_credential_model,
 )
 from agentscope.app._service._embedding import build_embedding_model
 from agentscope.app._service._model import (
@@ -23,7 +23,7 @@ from agentscope.app._service._model import (
     resolve_effective_chat_model_config,
 )
 from agentscope.app._router._credential import (
-    test_model as test_model_endpoint,
+    test_model as _test_model_endpoint,
     update_credential,
     update_credential_models,
 )
@@ -463,7 +463,7 @@ class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
             return_value=ChatResponse(content=[], is_last=True),
         )
         with patch.object(OpenAIChatModel, "_call_api", call):
-            result = await test_credential_model(
+            result = await _test_credential_model(
                 _credential(),
                 "qwen/qwen3-max",
             )
@@ -493,7 +493,7 @@ class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
             return ChatResponse(content=[], is_last=True)
 
         with patch.object(OpenAIChatModel, "_call_api", _call_api):
-            result = await test_credential_model(
+            result = await _test_credential_model(
                 credential,
                 "qwen/qwen3-max",
             )
@@ -518,7 +518,7 @@ class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
             "_call_api",
             AsyncMock(side_effect=ProviderAuthenticationError("bad key")),
         ):
-            result = await test_credential_model(
+            result = await _test_credential_model(
                 _credential(),
                 "qwen/qwen3-max",
             )
@@ -550,7 +550,7 @@ class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
             "_call_api",
             AsyncMock(side_effect=ProviderInvalidRequestError()),
         ):
-            result = await test_credential_model(
+            result = await _test_credential_model(
                 _credential(),
                 "qwen/qwen3-max",
             )
@@ -585,7 +585,7 @@ class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
             "agentscope.app._service._credential_models.httpx.AsyncClient",
             return_value=context,
         ):
-            result = await test_credential_embedding_model(
+            result = await _test_credential_embedding_model(
                 _credential(),
                 "text-embedding-custom",
             )
@@ -610,7 +610,7 @@ class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
             "agentscope.app._service._credential_models.httpx.AsyncClient",
             return_value=context,
         ):
-            result = await test_credential_embedding_model(
+            result = await _test_credential_embedding_model(
                 _credential(),
                 "chat-only-model",
             )
@@ -687,7 +687,7 @@ class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
             "agentscope.app._router._credential.test_credential_model",
             AsyncMock(return_value=expected),
         ):
-            result = await test_model_endpoint(
+            result = await _test_model_endpoint(
                 credential_id=credential.id,
                 body=TestCredentialModelRequest(model="qwen/qwen3-max"),
                 user_id="owner",

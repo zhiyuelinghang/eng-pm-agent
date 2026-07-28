@@ -8,6 +8,7 @@ from ._model import (
     AgentCallConfig,
     AgentData,
     AgentModelPolicy,
+    PlatformAgentConfig,
     AgentRecord,
     CredentialRecord,
     KnowledgeBaseData,
@@ -69,6 +70,7 @@ __all__ = [
     # The ORM models
     "AgentCallConfig",
     "AgentModelPolicy",
+    "PlatformAgentConfig",
     "InviteConfig",
     "AgentData",
     "AgentRecord",

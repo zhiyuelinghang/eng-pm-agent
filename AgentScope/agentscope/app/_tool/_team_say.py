@@ -6,10 +6,9 @@ from pydantic import Field
 
 from ._constants import HANDLE_LEN
 from ._team_tool_base import _TeamToolBase
-from ..message_bus import MessageBusKeys
-from .._bus_ops import enqueue_run_trigger
+from .._team_messaging import deliver_team_message
 from ..storage._utils import _ensure_team_members
-from ...message import HintBlock, TextBlock, ToolResultState
+from ...message import TextBlock, ToolResultState
 from ...tool import ToolChunk, ParamsBase
 
 
@@ -311,26 +310,14 @@ class TeamSay(_TeamToolBase):
                 else self._agent_id
             )
 
-            hint = HintBlock(
-                hint=(
-                    f'<team-message from="{sender_name}">\n'
-                    f"{content}\n"
-                    f"</team-message>"
-                ),
-                source=sender_name,
-            )
-            payload = hint.model_dump(mode="json")
-
             for sid, aid in recipients:
-                await self._message_bus.queue_push(
-                    MessageBusKeys.inbox(sid),
-                    payload,
-                )
-                await enqueue_run_trigger(
+                await deliver_team_message(
                     self._message_bus,
                     user_id=self._user_id,
-                    session_id=sid,
-                    agent_id=aid,
+                    recipient_session_id=sid,
+                    recipient_agent_id=aid,
+                    sender_name=sender_name,
+                    content=content,
                 )
 
             count = len(recipients)

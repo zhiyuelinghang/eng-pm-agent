@@ -219,9 +219,6 @@ const ChatPageInner = () => {
 			<Sidebar collapsible={isMobile ? 'offcanvas' : 'none'} className="border-r">
 				<SidebarHeader>
 					<div className="flex flex-col gap-y-2">
-						<span className="text-muted-foreground text-xs">
-							{localStorage.getItem('server_url')}
-						</span>
 						<div className="flex flex-row gap-x-2 items-center">
 							<AgentSelect
 								agents={agents}

@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     ai_api_key: str = ""
     ai_base_url: str = "https://api.openai.com/v1"
     ai_model: str = "gpt-4.1-mini"
+    agentscope_base_url: str = "http://127.0.0.1:18642"
+    agentscope_service_token: str = ""
+    agentscope_request_timeout_seconds: float = 150.0
+    agentscope_poll_interval_seconds: float = 0.35
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

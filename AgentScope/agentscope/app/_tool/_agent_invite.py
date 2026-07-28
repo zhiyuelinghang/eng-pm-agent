@@ -304,10 +304,24 @@ class AgentInvite(_TeamToolBase):
                 self._caller_owner_id,
                 self._agent_id,
             )
+            global_main_target_allowed = (
+                caller is not None
+                and caller.data.platform_config.role == "global_main"
+                and invited.data.platform_config.enabled
+                and invited.data.platform_config.role != "global_main"
+            )
+            configured_target_allowed = (
+                caller is not None
+                and caller.data.platform_config.role != "global_main"
+                and caller.data.call_config.allows(invited.id)
+            )
             if (
                 caller is None
                 or invited.id == caller.id
-                or not caller.data.call_config.allows(invited.id)
+                or not (
+                    global_main_target_allowed
+                    or configured_target_allowed
+                )
             ):
                 return _error(
                     f"AgentInvite: agent {invited.data.name!r} is no longer "
@@ -326,6 +340,13 @@ class AgentInvite(_TeamToolBase):
                 or not (
                     fresh.data.invite_config.invite_description or ""
                 ).strip()
+                or (
+                    caller.data.platform_config.role == "global_main"
+                    and (
+                        fresh.data.platform_config.role == "global_main"
+                        or not fresh.data.platform_config.enabled
+                    )
+                )
             ):
                 return _error(
                     f"AgentInvite: agent {invited.data.name!r} is no "
@@ -378,9 +399,16 @@ class AgentInvite(_TeamToolBase):
                 self._user_id,
                 invited.id,
             )
+            borrowed_knowledge_config = (
+                invited.data.platform_config.knowledge_config
+            )
             if invited_sessions:
                 primary = invited_sessions[0]
                 borrowed_workspace_id = primary.config.workspace_id
+                borrowed_knowledge_config = (
+                    borrowed_knowledge_config
+                    or primary.config.knowledge_config
+                )
             else:
                 borrowed_workspace_id = (
                     self._workspace_manager.assign_workspace_id(
@@ -432,6 +460,7 @@ class AgentInvite(_TeamToolBase):
                     name=f"team:{team.id}/invited:{invited_handle}",
                     chat_model_config=borrowed_chat_model,
                     fallback_chat_model_config=borrowed_fallback_model,
+                    knowledge_config=borrowed_knowledge_config,
                 ),
                 state=worker_state,
             )

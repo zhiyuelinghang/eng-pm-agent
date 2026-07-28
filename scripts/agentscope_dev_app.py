@@ -9,7 +9,7 @@ from typing import Any
 from fastapi.middleware import Middleware
 from fastapi.middleware.cors import CORSMiddleware
 
-from agentscope.app import create_app
+from agentscope.app import AgentScopeAuthConfig, create_app
 from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app.rag.blob_store import LocalBlobStore
 from agentscope.app.rag.knowledge_base_manager import CollectionPerKbManager
@@ -30,6 +30,41 @@ from agentscope.rag import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_project_env() -> None:
+    """Load the root ``.env`` without adding another runtime dependency."""
+    env_path = PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        return
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if (
+            len(value) >= 2
+            and value[0] == value[-1]
+            and value[0] in {"'", '"'}
+        ):
+            value = value[1:-1]
+        if key:
+            os.environ.setdefault(key, value)
+
+
+def _required_env(name: str) -> str:
+    """Return one required auth setting with an actionable startup error."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(
+            f"缺少 AgentScope 鉴权配置 {name}，请在项目根目录 .env 中设置。",
+        )
+    return value
+
+
+_load_project_env()
 RUNTIME_HOME = Path(
     os.getenv("AGENTSCOPE_RUNTIME_HOME", PROJECT_ROOT / "data" / "agentscope"),
 ).resolve()
@@ -108,6 +143,20 @@ app = create_app(
         ExcelParser(),
     ],
     blob_store=LocalBlobStore(root_dir=KNOWLEDGE_BLOB_HOME),
+    auth_config=AgentScopeAuthConfig(
+        admin_username=_required_env("AGENTSCOPE_ADMIN_USERNAME"),
+        admin_password=_required_env("AGENTSCOPE_ADMIN_PASSWORD"),
+        signing_secret=_required_env("AGENTSCOPE_AUTH_SECRET"),
+        service_token=_required_env("AGENTSCOPE_SERVICE_TOKEN"),
+        global_config_id=os.getenv(
+            "AGENTSCOPE_GLOBAL_CONFIG_ID",
+            "default",
+        ).strip()
+        or "default",
+        management_token_ttl_seconds=int(
+            os.getenv("AGENTSCOPE_MANAGEMENT_TOKEN_TTL_SECONDS", "28800"),
+        ),
+    ),
     extra_middlewares=[
         Middleware(
             CORSMiddleware,

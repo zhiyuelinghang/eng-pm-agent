@@ -12,12 +12,15 @@
         </header>
 
         <nav class="tool-list">
+          <p v-if="catalogLoading" class="tool-list-state">正在读取 AgentScope 智能体目录…</p>
+          <p v-else-if="catalogError" class="tool-list-state error">{{ catalogError }}</p>
+          <p v-else-if="!businessTools.length" class="tool-list-state">暂无已发布的业务智能体，请先在 AgentScope 中完成发布。</p>
           <button
             v-for="tool in businessTools"
-            :key="tool.key"
+            :key="tool.id"
             type="button"
-            :class="{ active: selectedToolKey === tool.key }"
-            @click="selectTool(tool.key)"
+            :class="{ active: selectedToolId === tool.id }"
+            @click="selectTool(tool.id)"
           >
             <span class="tool-list-icon"><n-icon :size="20"><component :is="tool.icon" /></n-icon></span>
             <span class="tool-list-copy">
@@ -38,7 +41,7 @@
             <h1>{{ selectedTool.name }}</h1>
             <p>{{ selectedTool.description }}</p>
           </div>
-          <div class="tool-online-state"><i></i><span>可用</span></div>
+          <div class="tool-online-state" :class="{ unavailable: !selectedTool.modelReady }"><i></i><span>{{ selectedTool.modelReady ? '可用' : '模型未配置' }}</span></div>
         </header>
 
         <div ref="threadViewport" class="tool-thread">
@@ -47,7 +50,11 @@
             <div class="tool-message-stack">
               <span v-if="item.role === 'assistant'">{{ selectedTool.name }}</span>
               <div class="tool-message-bubble">
-                <p>{{ item.content }}</p>
+                <AgentMessageContent
+                  :content="item.content"
+                  :runtime-trace="item.runtimeTrace"
+                  @confirm="confirmToolCall"
+                />
                 <div v-if="item.attachments?.length" class="tool-message-files">
                   <span v-for="attachment in item.attachments" :key="attachment.id">
                     <n-icon :size="16"><FileText /></n-icon>
@@ -59,7 +66,21 @@
             </div>
           </article>
 
-          <section v-if="!activeToolMessages.length" class="tool-empty-state">
+          <article v-if="activeStreamingTrace" class="tool-message assistant">
+            <div class="tool-message-avatar" aria-hidden="true">管</div>
+            <div class="tool-message-stack">
+              <span>{{ selectedTool.name }}</span>
+              <div class="tool-message-bubble runtime">
+                <AgentMessageContent
+                  :runtime-trace="activeStreamingTrace"
+                  streaming
+                  @confirm="confirmToolCall"
+                />
+              </div>
+            </div>
+          </article>
+
+          <section v-if="!activeToolMessages.length && !activeStreamingTrace" class="tool-empty-state">
             <div class="tool-empty-icon"><n-icon :size="27"><component :is="selectedTool.icon" /></n-icon></div>
             <span>{{ selectedTool.name }}智能体</span>
             <h2>{{ selectedTool.emptyTitle }}</h2>
@@ -93,9 +114,13 @@
               ></textarea>
             </div>
           </div>
-          <button class="tool-send-button" type="submit" :disabled="submitting || (!command.trim() && !selectedFiles.length)">
+          <button v-if="submitting" class="tool-send-button stop" type="button" @click="stopToolMessage">
+            <n-icon :size="18"><PlayerStop /></n-icon>
+            停止
+          </button>
+          <button v-else class="tool-send-button" type="submit" :disabled="!selectedTool.id || !selectedTool.modelReady || (!command.trim() && !selectedFiles.length)">
             <n-icon :size="18"><Send /></n-icon>
-            {{ submitting ? '处理中…' : '发送' }}
+            发送
           </button>
         </form>
       </section>
@@ -104,106 +129,190 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { NIcon, useMessage } from 'naive-ui'
-import { ChartBar, CircleCheck, Database, FileText, Paperclip, Robot, Route, Send, ShieldCheck } from '@vicons/tabler'
+import { ChartBar, CircleCheck, Database, FileText, Paperclip, PlayerStop, Robot, Route, Send, ShieldCheck } from '@vicons/tabler'
+import type { Component } from 'vue'
+import api, { type ApiEnvelope } from '@/api/client'
+import { streamAgentConversationMessage } from '@/api/agentStream'
+import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
 import { useAppStore } from '@/stores/app'
+import {
+  applyAgentRuntimeEvent,
+  createEmptyRuntimeTrace,
+  runtimeTraceFromExtraData,
+  type AgentRuntimeTrace,
+  type AgentToolCallBlock,
+  type ApiAgentMessage,
+} from '@/types/agentRuntime'
 
-type ToolKey = 'analysis' | 'safety' | 'trend' | 'risk' | 'writing' | 'review'
+type AgentCatalogItem = {
+  id: string
+  name: string
+  description: string
+  category: string
+  role: 'global_main' | 'business' | 'system_internal'
+  enabled: boolean
+  published: boolean
+  invitable: boolean
+  model_ready: boolean
+  sort_order: number
+  permission_mode: string
+}
+type AgentCatalog = {
+  global_main: AgentCatalogItem | null
+  business_agents: AgentCatalogItem[]
+  total: number
+}
+type ApiAgentConversation = {
+  id: number
+  project_id: number
+  user_id: number
+  agent_id: string
+  agent_name: string
+  conversation_type: 'general' | 'business'
+  title: string
+  agentscope_session_id?: string | null
+  status: string
+}
+type BusinessTool = {
+  id: string
+  name: string
+  shortDescription: string
+  description: string
+  emptyTitle: string
+  emptyDescription: string
+  placeholder: string
+  starters: string[]
+  icon: Component
+  modelReady: boolean
+}
 type ToolMessage = {
   id: string
   role: 'assistant' | 'user'
   content: string
   attachments?: Array<{ id: string; name: string; size: number }>
+  runtimeTrace?: AgentRuntimeTrace | null
 }
-
-const businessTools = [
-  {
-    key: 'analysis' as const,
-    name: '数据分析',
-    shortDescription: '查询数据并生成分析结论',
-    description: '按自然语言查询当前项目数据，整理统计口径、表格和结论摘要。',
-    emptyTitle: '描述你要分析的数据问题',
-    emptyDescription: '说明指标、范围和时间条件，智能体会整理查询口径并输出数据结论。',
-    placeholder: '例如：统计当前项目风险、隐患、质量问题和逾期任务',
-    starters: ['统计当前项目重点风险和逾期任务', '汇总各工序当前进度', '分析任务闭环情况'],
-    icon: Database,
-  },
-  {
-    key: 'safety' as const,
-    name: '安全隐患',
-    shortDescription: '识别隐患并给出整改建议',
-    description: '结合巡检照片、隐患记录和整改反馈，识别问题并整理闭环要求。',
-    emptyTitle: '上传现场信息或描述隐患',
-    emptyDescription: '可上传巡检照片，或说明隐患位置和现象，智能体会给出判断与整改建议。',
-    placeholder: '例如：分析基坑西侧临边防护隐患，并给出整改建议',
-    starters: ['分析临边防护隐患', '检查隐患闭环证据是否齐全', '生成现场整改要求'],
-    icon: ShieldCheck,
-  },
-  {
-    key: 'trend' as const,
-    name: '趋势预测',
-    shortDescription: '判断监测与进度变化趋势',
-    description: '结合监测数据、计划进度和预警阈值，判断变化趋势和关注时间窗。',
-    emptyTitle: '选择需要预测的指标',
-    emptyDescription: '提供监测数据、进度记录或指标名称，智能体会判断趋势和关注时间窗。',
-    placeholder: '例如：预测 S3 测斜位移未来 24 小时风险趋势',
-    starters: ['预测 S3 测斜位移趋势', '判断当前进度偏差是否扩大', '列出未来一周关注窗口'],
-    icon: ChartBar,
-  },
-  {
-    key: 'risk' as const,
-    name: '风险诊断',
-    shortDescription: '诊断风险与证据链缺口',
-    description: '按风险源、工序、责任人、资料缺口和监测数据形成诊断结论。',
-    emptyTitle: '说明需要诊断的风险场景',
-    emptyDescription: '输入工序、风险现象或关注事项，智能体会梳理原因、影响和处置优先级。',
-    placeholder: '例如：诊断深基坑开挖窗口当前主要风险',
-    starters: ['诊断深基坑开挖风险', '检查重点风险的资料缺口', '梳理风险责任人与措施'],
-    icon: Route,
-  },
-  {
-    key: 'writing' as const,
-    name: '报告撰写',
-    shortDescription: '生成报告草稿和引用清单',
-    description: '根据当前项目数据生成专项报告、整改闭环清单或阶段工作周报。',
-    emptyTitle: '告诉我需要撰写什么报告',
-    emptyDescription: '说明报告类型、统计周期和重点内容，也可以上传已有资料作为写作依据。',
-    placeholder: '例如：起草深基坑质量安全监督报告',
-    starters: ['起草质量安全监督报告', '生成本周项目简报', '整理整改闭环清单'],
-    icon: FileText,
-  },
-  {
-    key: 'review' as const,
-    name: '报告审核',
-    shortDescription: '核对依据、数据和证据链',
-    description: '检查报告依据、来源完整性、数据一致性以及任务闭环证据。',
-    emptyTitle: '上传或指定需要审核的报告',
-    emptyDescription: '智能体会检查内容依据、数据一致性、缺失来源和闭环证据，并列出修改建议。',
-    placeholder: '例如：审核深基坑报告是否缺少来源和证据链',
-    starters: ['审核报告的数据一致性', '检查引用依据是否齐全', '列出报告需要补充的证据'],
-    icon: CircleCheck,
-  },
-]
 
 const store = useAppStore()
 const message = useMessage()
-const selectedToolKey = ref<ToolKey>('analysis')
+const businessTools = ref<BusinessTool[]>([])
+const selectedToolId = ref('')
 const command = ref('')
 const selectedFiles = ref<File[]>([])
 const submitting = ref(false)
+const catalogLoading = ref(false)
+const catalogError = ref('')
 const threadViewport = ref<HTMLElement | null>(null)
-const toolMessages = ref<Record<ToolKey, ToolMessage[]>>({ analysis: [], safety: [], trend: [], risk: [], writing: [], review: [] })
+const toolMessages = ref<Record<string, ToolMessage[]>>({})
+const conversationIds = ref<Record<string, number>>({})
+const streamingTraces = ref<Record<string, AgentRuntimeTrace | null>>({})
+const emptyTool: BusinessTool = {
+  id: '',
+  name: '业务智能体',
+  shortDescription: '',
+  description: '请先在 AgentScope 中发布业务智能体。',
+  emptyTitle: '暂无可用业务智能体',
+  emptyDescription: '配置为“业务智能体”，启用并发布后会自动出现在这里。',
+  placeholder: '暂无可用智能体',
+  starters: [],
+  icon: Robot,
+  modelReady: false,
+}
 
-const selectedTool = computed(() => businessTools.find(tool => tool.key === selectedToolKey.value) || businessTools[0])
-const currentProject = computed(() => store.projects.find(project => project.id === store.currentProjectId))
-const activeToolMessages = computed(() => toolMessages.value[selectedToolKey.value])
-const openTaskCount = computed(() => store.tasks.filter(task => !['done', 'cancelled'].includes(task.status)).length)
-const priorityRiskCount = computed(() => store.riskSources.filter(risk => ['critical', 'high'].includes(risk.level)).length)
-function selectTool(key: ToolKey) {
-  selectedToolKey.value = key
+const selectedTool = computed(() => businessTools.value.find(tool => tool.id === selectedToolId.value) || businessTools.value[0] || emptyTool)
+const activeToolMessages = computed(() => toolMessages.value[selectedTool.value.id] ?? [])
+const activeStreamingTrace = computed(() => streamingTraces.value[selectedTool.value.id] ?? null)
+
+function iconForAgent(item: AgentCatalogItem): Component {
+  const text = `${item.category} ${item.name}`
+  if (/安全|隐患/.test(text)) return ShieldCheck
+  if (/报告|资料|文档|合同/.test(text)) return FileText
+  if (/趋势|预测|进度/.test(text)) return ChartBar
+  if (/风险|诊断|审查/.test(text)) return Route
+  if (/数据|统计|分析/.test(text)) return Database
+  if (/审核|复核|质量/.test(text)) return CircleCheck
+  return Robot
+}
+
+function mapAgentToTool(item: AgentCatalogItem): BusinessTool {
+  const description = item.description || `${item.name}已由 AgentScope 发布。`
+  return {
+    id: item.id,
+    name: item.name,
+    shortDescription: description,
+    description,
+    emptyTitle: `向${item.name}说明你的任务`,
+    emptyDescription: `当前对话将直接交给${item.name}处理，并自动携带当前项目的权限范围与数据摘要。`,
+    placeholder: `输入需要${item.name}处理的项目问题`,
+    starters: [
+      `请结合当前项目说明你能协助处理哪些事项`,
+      `检查当前项目最需要关注的问题并给出依据`,
+      `给出下一步可执行的处理建议`,
+    ],
+    icon: iconForAgent(item),
+    modelReady: item.model_ready,
+  }
+}
+
+async function loadCatalog() {
+  catalogLoading.value = true
+  catalogError.value = ''
+  try {
+    const response = await api.get<ApiEnvelope<AgentCatalog>>('/agents/catalog')
+    businessTools.value = response.data.data.business_agents.map(mapAgentToTool)
+    if (!businessTools.value.some(tool => tool.id === selectedToolId.value)) {
+      selectedToolId.value = businessTools.value[0]?.id ?? ''
+    }
+    if (selectedToolId.value && store.currentProjectId) await loadToolConversation(selectedToolId.value)
+  } catch (error: any) {
+    catalogError.value = error?.response?.data?.detail || '无法读取 AgentScope 智能体目录。'
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
+async function loadToolConversation(agentId: string) {
+  if (!agentId || !store.currentProjectId) return
+  const response = await api.get<ApiEnvelope<ApiAgentConversation[]>>(
+    `/projects/${store.currentProjectId}/agent-conversations`,
+    { params: { conversation_type: 'business', agent_id: agentId } },
+  )
+  const conversation = response.data.data[0]
+  if (!conversation) {
+    toolMessages.value = { ...toolMessages.value, [agentId]: [] }
+    return
+  }
+  conversationIds.value = { ...conversationIds.value, [agentId]: conversation.id }
+  const messagesResponse = await api.get<ApiEnvelope<ApiAgentMessage[]>>(`/agent-conversations/${conversation.id}/messages`)
+  toolMessages.value = {
+    ...toolMessages.value,
+    [agentId]: messagesResponse.data.data.map(item => ({
+      id: String(item.id),
+      role: item.role,
+      content: item.content,
+      runtimeTrace: runtimeTraceFromExtraData(item.extra_data),
+    })),
+  }
+}
+
+async function ensureConversation(agentId: string) {
+  const existing = conversationIds.value[agentId]
+  if (existing) return existing
+  const response = await api.post<ApiEnvelope<ApiAgentConversation>>(
+    `/projects/${store.currentProjectId}/agent-conversations`,
+    { conversation_type: 'business', agent_id: agentId },
+  )
+  conversationIds.value = { ...conversationIds.value, [agentId]: response.data.data.id }
+  return response.data.data.id
+}
+
+function selectTool(agentId: string) {
+  selectedToolId.value = agentId
   command.value = ''
   selectedFiles.value = []
+  void loadToolConversation(agentId)
   nextTick(() => threadViewport.value?.scrollTo({ top: 0 }))
 }
 
@@ -232,30 +341,15 @@ function formatFileSize(size: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 
-function buildToolReply(text: string, attachmentCount: number) {
-  const projectName = currentProject.value?.name || '当前项目'
-  const attachmentText = attachmentCount ? `已读取你上传的 ${attachmentCount} 个附件，并与当前项目数据一并分析。` : ''
-  const replies: Record<ToolKey, string> = {
-    analysis: `${projectName}目前有 ${openTaskCount.value} 项开放任务，其中 ${store.overdueTasks.length} 项逾期；已登记 ${store.riskSources.length} 个风险源、${store.qualityMetrics.length} 项质量指标和 ${store.attachments.length} 份工程资料。下一步可以按工序、责任人或时间范围继续拆分统计口径。`,
-    safety: `当前项目记录了 ${store.dashboard?.safety_issues ?? 0} 项安全问题，重点风险源 ${priorityRiskCount.value} 个。建议先核对现场照片、整改责任人、完成时限和复核证据，再生成闭环任务。`,
-    trend: `当前 WBS 共 ${store.wbsItems.length} 项，平均进度为 ${averageWbsProgress()}%。建议将计划节点、实际进度和监测阈值放在同一时间轴上，重点观察临近预警值和进度持续偏差的工序。`,
-    risk: `已按风险源、关联工序、责任人和资料完整性检查。当前有 ${priorityRiskCount.value} 个高等级风险源、${store.overdueTasks.length} 项逾期任务，建议优先补齐监测依据并确认责任人的下一步动作。`,
-    writing: `已为“${text}”建立报告结构：项目概况、当前进展、风险与隐患、质量情况、任务闭环、结论与建议。报告可引用 ${store.attachments.length} 份资料和 ${store.informationRecords.length} 条过程信息。`,
-    review: `已按依据、数据一致性、来源完整性和闭环证据四项进行预审。建议重点检查报告中的进度值是否与 WBS 一致、风险结论是否有监测数据支撑，以及整改事项是否附有复核记录。`,
-  }
-  return `${attachmentText}${replies[selectedToolKey.value]}`
-}
-
-function averageWbsProgress() {
-  if (!store.wbsItems.length) return 0
-  return Math.round(store.wbsItems.reduce((sum, item) => sum + item.progress, 0) / store.wbsItems.length)
-}
-
 async function submitToolMessage() {
   const text = command.value.trim() || (selectedFiles.value.length ? '请分析我上传的资料' : '')
   if (!text || submitting.value) return
   if (!store.currentProjectId) {
     message.warning('请先选择项目。')
+    return
+  }
+  if (!selectedTool.value.id || !selectedTool.value.modelReady) {
+    message.warning('请先选择已配置固定模型的业务智能体。')
     return
   }
   const files = [...selectedFiles.value]
@@ -264,20 +358,103 @@ async function submitToolMessage() {
     for (const file of files) await store.uploadAttachment(file, `业务工具/${selectedTool.value.name}`)
     const timestamp = Date.now()
     const attachments = files.map(file => ({ id: `${file.name}-${file.lastModified}`, name: file.name, size: file.size }))
-    toolMessages.value[selectedToolKey.value].push(
-      { id: `${selectedToolKey.value}-user-${timestamp}`, role: 'user', content: text, attachments: attachments.length ? attachments : undefined },
-      { id: `${selectedToolKey.value}-assistant-${timestamp + 1}`, role: 'assistant', content: buildToolReply(text, attachments.length) },
-    )
+    const agentId = selectedTool.value.id
+    const current = [...(toolMessages.value[agentId] ?? [])]
+    current.push({ id: `${agentId}-user-${timestamp}`, role: 'user', content: text, attachments: attachments.length ? attachments : undefined })
+    toolMessages.value = { ...toolMessages.value, [agentId]: current }
+    const conversationId = await ensureConversation(agentId)
+    streamingTraces.value = {
+      ...streamingTraces.value,
+      [agentId]: createEmptyRuntimeTrace(),
+    }
     command.value = ''
     selectedFiles.value = []
+    const completion: { message: ApiAgentMessage | null } = { message: null }
+    await streamAgentConversationMessage(conversationId, text, {
+      onEvent: async runtimeEvent => {
+        streamingTraces.value = {
+          ...streamingTraces.value,
+          [agentId]: applyAgentRuntimeEvent(streamingTraces.value[agentId], runtimeEvent),
+        }
+        await nextTick()
+        threadViewport.value?.scrollTo({ top: threadViewport.value.scrollHeight })
+      },
+      onDone: payload => {
+        completion.message = payload.message
+      },
+    })
+    if (completion.message) {
+      current.push({
+        id: String(completion.message.id || `${agentId}-assistant-${timestamp + 1}`),
+        role: 'assistant',
+        content: completion.message.content,
+        runtimeTrace: runtimeTraceFromExtraData(completion.message.extra_data),
+      })
+      toolMessages.value = { ...toolMessages.value, [agentId]: current }
+      streamingTraces.value = { ...streamingTraces.value, [agentId]: null }
+    }
     await nextTick()
     threadViewport.value?.scrollTo({ top: threadViewport.value.scrollHeight, behavior: 'smooth' })
-  } catch {
-    message.error('处理失败，请检查附件或网络后重试。')
+  } catch (error: any) {
+    message.error(error?.response?.data?.detail || error?.message || '智能体处理失败，请检查 AgentScope 状态后重试。')
   } finally {
     submitting.value = false
   }
 }
+
+async function stopToolMessage() {
+  const conversationId = conversationIds.value[selectedTool.value.id]
+  if (!conversationId) return
+  try {
+    await api.post(`/agent-conversations/${conversationId}/interrupt`)
+    message.info('已请求停止，正在等待智能体安全结束当前步骤。')
+  } catch (error: any) {
+    message.error(error?.response?.data?.detail || '停止智能体失败。')
+  }
+}
+
+async function confirmToolCall(
+  replyId: string,
+  toolCall: AgentToolCallBlock,
+  confirmed: boolean,
+) {
+  const conversationId = conversationIds.value[selectedTool.value.id]
+  if (!conversationId) return
+  message.info(
+    confirmed
+      ? `正在允许「${toolCall.name}」执行。`
+      : `正在拒绝「${toolCall.name}」。`,
+  )
+  try {
+    const response = await api.post<ApiEnvelope<{
+      message: ApiAgentMessage | null
+      runtime_status: string
+    }>>(
+      `/agent-conversations/${conversationId}/confirm`,
+      {
+        reply_id: replyId,
+        tool_call: toolCall,
+        confirmed,
+      },
+      { timeout: 170_000 },
+    )
+    if (response.data.data.message) {
+      await loadToolConversation(selectedTool.value.id)
+    } else {
+      message.success(response.data.message)
+    }
+  } catch (error: any) {
+    message.error(error?.response?.data?.detail || '提交人工确认失败。')
+  }
+}
+
+onMounted(loadCatalog)
+watch(() => store.currentProjectId, () => {
+  conversationIds.value = {}
+  toolMessages.value = {}
+  streamingTraces.value = {}
+  if (selectedToolId.value) void loadToolConversation(selectedToolId.value)
+})
 </script>
 
 <style scoped>
@@ -309,6 +486,8 @@ async function submitToolMessage() {
 .tool-rail-head em { display: grid; min-width: 28px; height: 28px; place-items: center; border-radius: 6px; color: #0f766e; background: #e3f1ec; font-size: 13px; font-style: normal; font-weight: 850; font-variant-numeric: tabular-nums; }
 .tool-rail-head p { grid-column: 1 / -1; margin: 4px 0 0; color: #71857f; font-size: 12px; line-height: 1.5; }
 .tool-list { min-height: 0; padding: 7px 0; overflow-y: auto; overscroll-behavior: contain; }
+.tool-list-state { margin: 0; padding: 20px 18px; color: #71857f; font-size: 12px; line-height: 1.7; }
+.tool-list-state.error { color: #a64025; }
 .tool-list button { position: relative; display: grid; width: 100%; min-height: 76px; grid-template-columns: 42px minmax(0, 1fr) 7px; align-items: center; gap: 11px; padding: 10px 15px; border: 0; border-bottom: 1px solid rgba(31, 66, 62, .065); color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; transition: background .2s ease, box-shadow .2s ease, transform .2s ease; }
 .tool-list button::before { position: absolute; inset: 9px auto 9px 0; width: 3px; border-radius: 0 3px 3px 0; content: ''; background: transparent; }
 .tool-list button:hover { background: #f0f6f3; }
@@ -332,6 +511,8 @@ async function submitToolMessage() {
 .active-tool-copy p { overflow: hidden; margin: 0; color: #6e827d; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .tool-online-state { display: inline-flex; align-items: center; gap: 7px; color: #60766f; font-size: 12px; }
 .tool-online-state i { width: 7px; height: 7px; border-radius: 50%; background: #16a277; box-shadow: 0 0 0 4px rgba(22, 162, 119, .1); }
+.tool-online-state.unavailable { color: #a46600; }
+.tool-online-state.unavailable i { background: #d48a18; box-shadow: 0 0 0 4px rgba(212, 138, 24, .12); }
 .tool-thread { display: flex; min-height: 0; flex-direction: column; gap: 13px; padding: 18px clamp(18px, 3vw, 40px) 28px; overflow-y: auto; overscroll-behavior: contain; }
 .tool-message { display: grid; max-width: min(830px, 94%); grid-template-columns: 32px minmax(0, 1fr); align-items: start; gap: 10px; }
 .tool-message.user { align-self: flex-end; grid-template-columns: minmax(0, 1fr) 32px; }
@@ -368,6 +549,8 @@ async function submitToolMessage() {
 .tool-composer textarea { width: 100%; min-height: 38px; max-height: 92px; box-sizing: border-box; padding: 8px 5px; border: 0; outline: 0; color: #294844; background: transparent; font: inherit; font-size: 14px; line-height: 1.5; resize: none; }
 .tool-send-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 0; border-radius: 7px; color: #fff; background: #c95622; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; transition: transform .18s ease, background .18s ease, box-shadow .18s ease; }
 .tool-send-button:hover { transform: translateY(-1px); background: #b94a1b; box-shadow: 0 9px 18px rgba(201, 86, 34, .18); }
+.tool-send-button.stop { background:#3e5f5a; }
+.tool-send-button.stop:hover { background:#304f4a; box-shadow:0 9px 18px rgba(48,79,74,.16); }
 .tool-send-button:active { transform: translateY(1px) scale(.98); }
 .tool-send-button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
 @media (max-width: 980px) {

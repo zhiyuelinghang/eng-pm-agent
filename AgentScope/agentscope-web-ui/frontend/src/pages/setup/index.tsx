@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { ApiError, loginManagement } from '@/api/client.ts';
 import { Button } from '@/components/ui/button.tsx';
 import {
 	Card,
@@ -18,24 +19,26 @@ interface Props {
 	className?: string;
 }
 
-const DEFAULT_SERVER_URL =
-	import.meta.env.VITE_DEFAULT_SERVER_URL || 'http://127.0.0.1:18642';
-const DEFAULT_USERNAME = import.meta.env.VITE_DEFAULT_USERNAME || 'default';
-
 export const SetupPage = ({ onComplete, className }: Props) => {
 	const { t } = useTranslation();
-	const [url, setUrl] = useState(
-		() => localStorage.getItem('server_url') || DEFAULT_SERVER_URL,
-	);
-	const [username, setUsername] = useState(
-		() => localStorage.getItem('username') || DEFAULT_USERNAME,
-	);
+	const [username, setUsername] = useState(() => localStorage.getItem('auth_username') || '');
+	const [password, setPassword] = useState('');
+	const [submitting, setSubmitting] = useState(false);
+	const [error, setError] = useState('');
 
-	const handleSubmit = (e: React.FormEvent) => {
+	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
-		localStorage.setItem('server_url', url);
-		localStorage.setItem('username', username);
-		onComplete();
+		setError('');
+		setSubmitting(true);
+		try {
+			await loginManagement(username, password);
+			setPassword('');
+			onComplete();
+		} catch (reason) {
+			setError(reason instanceof ApiError ? reason.detail : t('setup.connectionFailed'));
+		} finally {
+			setSubmitting(false);
+		}
 	};
 
 	return (
@@ -50,19 +53,6 @@ export const SetupPage = ({ onComplete, className }: Props) => {
 						<form onSubmit={handleSubmit}>
 							<FieldGroup>
 								<Field>
-									<FieldLabel htmlFor="server-url-input">
-										{t('setup.serverUrl')}
-									</FieldLabel>
-									<Input
-										id="server-url-input"
-										type="url"
-										placeholder={t('setup.serverUrlPlaceholder')}
-										value={url}
-										onChange={(e) => setUrl(e.target.value)}
-										required
-									/>
-								</Field>
-								<Field>
 									<FieldLabel htmlFor="username-input">
 										{t('setup.username')}
 									</FieldLabel>
@@ -76,8 +66,27 @@ export const SetupPage = ({ onComplete, className }: Props) => {
 									/>
 								</Field>
 								<Field>
-									<Button type="submit" className="w-full">
-										{t('setup.submit')}
+									<FieldLabel htmlFor="password-input">
+										{t('setup.password')}
+									</FieldLabel>
+									<Input
+										id="password-input"
+										type="password"
+										autoComplete="current-password"
+										placeholder={t('setup.passwordPlaceholder')}
+										value={password}
+										onChange={(e) => setPassword(e.target.value)}
+										required
+									/>
+								</Field>
+								{error && (
+									<FieldDescription className="text-destructive">
+										{error}
+									</FieldDescription>
+								)}
+								<Field>
+									<Button type="submit" className="w-full" disabled={submitting}>
+										{submitting ? t('setup.submitting') : t('setup.submit')}
 									</Button>
 								</Field>
 							</FieldGroup>

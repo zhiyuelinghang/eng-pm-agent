@@ -52,6 +52,19 @@ export interface AgentModelPolicy {
 	chat_model_config: ChatModelConfig | null;
 }
 
+export type PlatformAgentRole = 'global_main' | 'business' | 'system_internal';
+
+export interface PlatformAgentConfig {
+	role: PlatformAgentRole;
+	enabled: boolean;
+	published: boolean;
+	description: string | null;
+	category: string;
+	sort_order: number;
+	permission_mode: PermissionMode;
+	knowledge_config: SessionKnowledgeConfig | null;
+}
+
 // ─── Agent ────────────────────────────────────────────────────────────────────
 
 export interface AgentData {
@@ -61,6 +74,7 @@ export interface AgentData {
 	context_config: ContextConfig;
 	react_config: ReActConfig;
 	model_policy: AgentModelPolicy;
+	platform_config: PlatformAgentConfig;
 	invite_config: InviteConfig;
 	call_config: AgentCallConfig;
 }
@@ -81,6 +95,7 @@ export interface CreateAgentRequest {
 	context_config?: ContextConfig;
 	react_config?: ReActConfig;
 	model_policy?: AgentModelPolicy;
+	platform_config?: PlatformAgentConfig;
 	invite_config?: InviteConfig;
 	call_config?: AgentCallConfig;
 }
@@ -95,6 +110,7 @@ export interface UpdateAgentRequest {
 	context_config?: ContextConfig;
 	react_config?: ReActConfig;
 	model_policy?: AgentModelPolicy;
+	platform_config?: PlatformAgentConfig;
 	invite_config?: InviteConfig;
 	call_config?: AgentCallConfig;
 }

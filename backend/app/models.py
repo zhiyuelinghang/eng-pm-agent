@@ -251,6 +251,60 @@ class CollaborationMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class AgentConversation(TimestampMixin, Base):
+    """Account-private mapping to one AgentScope conversation session."""
+
+    __tablename__ = "agent_conversations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+    )
+    agent_id: Mapped[str] = mapped_column(String(64), index=True)
+    agent_name: Mapped[str] = mapped_column(String(200))
+    conversation_type: Mapped[str] = mapped_column(
+        String(32),
+        default="business",
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(300))
+    agentscope_session_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AgentConversationMessage(Base):
+    """Auditable platform-side mirror of a message handled by AgentScope."""
+
+    __tablename__ = "agent_conversation_messages"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(32))
+    content: Mapped[str] = mapped_column(Text)
+    agentscope_message_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        index=True,
+    )
+    extra_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
 class MeetingMinute(TimestampMixin, Base):
     __tablename__ = "meeting_minutes"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

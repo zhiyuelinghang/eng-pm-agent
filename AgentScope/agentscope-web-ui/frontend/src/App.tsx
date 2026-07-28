@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { createBrowserRouter, Navigate, RouterProvider, useNavigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 
+import { hasValidAuthSession } from '@/api/client';
 import { RouteError } from '@/components/error/RouteError';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { buildChatTour } from '@/components/tour/chatTourSteps';
@@ -57,11 +58,18 @@ const router = createBrowserRouter([
 
 function App() {
 	const { t } = useTranslation();
-	const [setupComplete, setSetupComplete] = useState(() => !!localStorage.getItem('server_url'));
+	const [setupComplete, setSetupComplete] = useState(() => hasValidAuthSession());
 	const tours = useMemo(() => [buildChatTour(t)], [t]);
 
 	if (!setupComplete) {
-		return <SetupPage onComplete={() => setSetupComplete(true)} />;
+		return (
+			<SetupPage
+				onComplete={() => {
+					window.history.replaceState(null, '', '/');
+					setSetupComplete(true);
+				}}
+			/>
+		);
 	}
 
 	return (

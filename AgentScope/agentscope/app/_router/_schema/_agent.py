@@ -5,7 +5,13 @@ import warnings
 from pydantic import BaseModel, Field
 
 from ....agent import ContextConfig, ReActConfig
-from ...storage import AgentCallConfig, AgentModelPolicy, InviteConfig
+from ...storage import (
+    AgentCallConfig,
+    AgentModelPolicy,
+    InviteConfig,
+    PlatformAgentConfig,
+    SessionKnowledgeConfig,
+)
 from ..._service import AgentView
 
 
@@ -31,6 +37,10 @@ class CreateAgentRequest(BaseModel):
             "Agent-specific model selection. Defaults to following the "
             "current conversation."
         ),
+    )
+    platform_config: PlatformAgentConfig = Field(
+        default_factory=PlatformAgentConfig,
+        description="Engineering-platform role and publication settings.",
     )
     invite_config: InviteConfig = Field(
         default_factory=InviteConfig,
@@ -77,6 +87,13 @@ class UpdateAgentRequest(BaseModel):
             "New agent model policy. Omit to retain the existing policy."
         ),
     )
+    platform_config: PlatformAgentConfig | None = Field(
+        default=None,
+        description=(
+            "Engineering-platform role and publication settings. Omit to "
+            "retain the existing configuration."
+        ),
+    )
     invite_config: InviteConfig | None = Field(
         default=None,
         description=(
@@ -99,6 +116,33 @@ class ListAgentsResponse(BaseModel):
 
     agents: list[AgentView] = Field(description="Agent records.")
     total: int = Field(description="Total number of agents.")
+
+
+class PlatformAgentCatalogItem(BaseModel):
+    """Safe, runtime-ready agent metadata consumed by the main platform."""
+
+    id: str
+    name: str
+    description: str
+    category: str
+    role: str
+    enabled: bool
+    published: bool
+    invitable: bool
+    model_ready: bool
+    sort_order: int
+    permission_mode: str
+    knowledge_config: SessionKnowledgeConfig | None = None
+
+
+class PlatformAgentCatalogResponse(BaseModel):
+    """Global main-agent selection and published business-agent catalogue."""
+
+    global_main: PlatformAgentCatalogItem | None = None
+    business_agents: list[PlatformAgentCatalogItem] = Field(
+        default_factory=list,
+    )
+    total: int
 
 
 class AgentSchemaResponse(BaseModel):

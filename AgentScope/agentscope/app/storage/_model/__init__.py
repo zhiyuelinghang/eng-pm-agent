@@ -7,6 +7,7 @@ from ._agent import (
     AgentModelPolicy,
     AgentRecord,
     InviteConfig,
+    PlatformAgentConfig,
 )
 from ._credential import CredentialRecord
 from ._knowledge_base import KnowledgeBaseData, KnowledgeBaseRecord
@@ -38,6 +39,7 @@ __all__ = [
     "AgentData",
     "AgentModelPolicy",
     "AgentRecord",
+    "PlatformAgentConfig",
     "CredentialRecord",
     "KnowledgeBaseData",
     "KnowledgeBaseRecord",

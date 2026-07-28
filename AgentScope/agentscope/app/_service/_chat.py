@@ -12,10 +12,12 @@ that wants them subscribes through the
 ``GET /sessions/{sid}/stream`` SSE endpoint.
 """
 import asyncio
+import json
 
 from fastapi import HTTPException
 
 from .._bus_ops import enqueue_run_trigger, publish_session_event
+from .._team_messaging import deliver_team_message
 from ..message_bus import MessageBus, MessageBusKeys
 from ..rag.knowledge_base_manager import KnowledgeBaseManagerBase
 from ..storage import StorageBase, AgentRecord, SessionRecord
@@ -57,7 +59,12 @@ from ...event import (
     UserInterruptEvent,
 )
 from ._errors import _classify_error
-from ...message import AssistantMsg, Msg, ToolCallState
+from ...message import (
+    AssistantMsg,
+    Msg,
+    ToolCallState,
+    ToolResultState,
+)
 from ...permission import AdditionalWorkingDirectory, PermissionMode
 
 
@@ -705,19 +712,78 @@ class ChatService:
                 # acquire the lock and load a stale state from storage
                 # before this write lands.
                 async def _persist() -> None:
+                    # TeamDelete can intentionally remove a worker session
+                    # while its cancelled model/tool coroutine is still
+                    # unwinding. In that case there is no state left to
+                    # persist and treating the expected cleanup as a failed
+                    # chat run only creates a misleading error.
+                    current_session = await self._storage.get_session(
+                        user_id,
+                        agent_id,
+                        session_id,
+                    )
+                    if current_session is None:
+                        logger.info(
+                            "Skipping final persistence for session %s: "
+                            "the session was deleted while its run was "
+                            "finishing.",
+                            session_id,
+                        )
+                        await self._message_bus.log_trim(events_key)
+                        return
                     if reply_msg is not None:
                         await self._storage.upsert_message(
                             user_id,
                             session_id,
                             reply_msg,
                         )
-                    await self._storage.update_session_state(
-                        user_id=user_id,
-                        agent_id=agent_id,
-                        session_id=session_id,
-                        state=agent.state,
-                    )
+                    try:
+                        await self._storage.update_session_state(
+                            user_id=user_id,
+                            agent_id=agent_id,
+                            session_id=session_id,
+                            state=agent.state,
+                        )
+                    except KeyError:
+                        # The team may be deleted in the short interval
+                        # between the existence check above and this write.
+                        if (
+                            await self._storage.get_session(
+                                user_id,
+                                agent_id,
+                                session_id,
+                            )
+                            is not None
+                        ):
+                            raise
+                        logger.info(
+                            "Session %s was deleted during final "
+                            "persistence; discarding its obsolete state.",
+                            session_id,
+                        )
+                        await self._message_bus.log_trim(events_key)
+                        return
                     await self._message_bus.log_trim(events_key)
+                    try:
+                        await self._auto_report_worker_reply(
+                            user_id=user_id,
+                            session_id=session_id,
+                            agent_id=agent_id,
+                            agent_record=agent_record,
+                            reply_msg=reply_msg,
+                        )
+                    except Exception:  # pylint: disable=broad-except
+                        # A delivery failure must not roll back the completed
+                        # worker reply/state. The original result stays
+                        # inspectable in the worker session and the failure is
+                        # visible in logs for retry/diagnosis.
+                        logger.exception(
+                            "Failed to auto-report completed worker reply "
+                            "for user_id=%s session_id=%s agent_id=%s",
+                            user_id,
+                            session_id,
+                            agent_id,
+                        )
 
                 persist_task = asyncio.create_task(_persist())
                 try:
@@ -728,6 +794,127 @@ class ChatService:
                     # propagate to honour asyncio semantics.
                     await persist_task
                     raise
+
+    @staticmethod
+    def _reported_to_leader(
+        reply_msg: Msg,
+        leader_name: str,
+    ) -> bool:
+        """Return whether this reply already delivered TeamSay to leader."""
+        successful_result_ids = {
+            block.id
+            for block in reply_msg.get_content_blocks("tool_result")
+            if block.name == "TeamSay"
+            and block.state == ToolResultState.SUCCESS
+        }
+        for call in reply_msg.get_content_blocks("tool_call"):
+            if call.name != "TeamSay" or call.id not in successful_result_ids:
+                continue
+            try:
+                target = json.loads(call.input).get("to")
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if target is None or target == leader_name:
+                return True
+        return False
+
+    async def _auto_report_worker_reply(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        agent_id: str,
+        agent_record: AgentRecord,
+        reply_msg: Msg | None,
+    ) -> None:
+        """Reliably forward a terminal worker reply to its team leader.
+
+        Worker prompts still ask the model to call ``TeamSay`` itself because
+        that allows it to choose a concise report. Models do not always obey
+        tool-use instructions, though. When a completed, failed, or
+        max-iteration worker turn contains no successful TeamSay to the
+        leader, its final result is delivered automatically so the leader can
+        resume instead of waiting forever. Intentionally interrupted workers
+        are not reported.
+        """
+        if reply_msg is None or reply_msg.finished_reason in {
+            None,
+            ReplyFinishedReason.INTERRUPTED,
+        }:
+            return
+
+        current_session = await self._storage.get_session(
+            user_id,
+            agent_id,
+            session_id,
+        )
+        if current_session is None or current_session.team_id is None:
+            return
+        team = await self._storage.get_team(
+            user_id,
+            current_session.team_id,
+        )
+        if team is None or team.session_id == session_id:
+            return
+
+        leader_session = await self._storage.get_session(
+            user_id,
+            "",
+            team.session_id,
+        )
+        if leader_session is None:
+            return
+        leader_agent = await self._storage.get_agent(
+            user_id,
+            leader_session.agent_id,
+        )
+        leader_name = (
+            leader_agent.data.name
+            if leader_agent is not None
+            else leader_session.agent_id
+        )
+        if self._reported_to_leader(reply_msg, leader_name):
+            return
+
+        text_blocks = reply_msg.get_content_blocks("text")
+        final_text = next(
+            (
+                block.text.strip()
+                for block in reversed(text_blocks)
+                if block.text.strip()
+            ),
+            "",
+        )
+        if reply_msg.finished_reason == ReplyFinishedReason.ERROR:
+            error_message = (
+                reply_msg.error.message
+                if reply_msg.error is not None
+                else "未知运行错误"
+            )
+            content = (
+                f"子智能体执行失败：{error_message}"
+                + (f"\n已生成的最后文本：{final_text}" if final_text else "")
+            )
+        else:
+            content = final_text or (
+                "本轮任务已经结束，但子智能体没有生成可供转发的"
+                "文本结果。"
+            )
+        await deliver_team_message(
+            self._message_bus,
+            user_id=user_id,
+            recipient_session_id=leader_session.id,
+            recipient_agent_id=leader_session.agent_id,
+            sender_name=agent_record.data.name,
+            content=content,
+        )
+        logger.info(
+            "Auto-reported terminal worker reply %s from session %s "
+            "to leader session %s.",
+            reply_msg.id,
+            session_id,
+            leader_session.id,
+        )
 
     async def _project_event(
         self,
