@@ -42,14 +42,38 @@ export const SetupPage = ({ onComplete, className }: Props) => {
 	};
 
 	return (
-		<div className="flex items-center justify-center h-full">
-			<div className={cn('flex flex-col gap-6 w-full max-w-sm', className)}>
-				<Card>
-					<CardHeader>
-						<CardTitle>{t('setup.title')}</CardTitle>
-						<CardDescription>{t('setup.description')}</CardDescription>
+		<main className="relative flex min-h-dvh items-center justify-center overflow-hidden bg-[#f4f7f5] px-5 py-10 dark:bg-background">
+			<div
+				aria-hidden="true"
+				className="pointer-events-none absolute -top-40 -right-28 size-[30rem] rounded-full bg-[#c95622]/8 blur-3xl"
+			/>
+			<div
+				aria-hidden="true"
+				className="pointer-events-none absolute -bottom-56 -left-32 size-[34rem] rounded-full bg-[#173f3e]/8 blur-3xl"
+			/>
+			<div className={cn('relative flex w-full max-w-md flex-col gap-5', className)}>
+				<Card className="gap-5 bg-card/95 py-6 shadow-[0_24px_70px_rgba(16,37,40,0.12)] backdrop-blur-sm">
+					<CardHeader className="gap-4 px-6">
+						<div className="flex items-center gap-3.5">
+							<img
+								src="/dobby.svg"
+								alt="Dobby"
+								className="size-12 rounded-xl shadow-[0_8px_20px_rgba(201,86,34,0.24)]"
+							/>
+							<div className="min-w-0">
+								<p className="text-[11px] font-semibold tracking-[0.18em] text-[#c95622] uppercase">
+									Dobby
+								</p>
+								<CardTitle className="mt-0.5 text-xl font-semibold tracking-[-0.02em] text-[#173f3e] dark:text-foreground">
+									{t('setup.title')}
+								</CardTitle>
+							</div>
+						</div>
+						<CardDescription className="max-w-[36ch] leading-6">
+							{t('setup.description')}
+						</CardDescription>
 					</CardHeader>
-					<CardContent>
+					<CardContent className="px-6">
 						<form onSubmit={handleSubmit}>
 							<FieldGroup>
 								<Field>
@@ -85,7 +109,11 @@ export const SetupPage = ({ onComplete, className }: Props) => {
 									</FieldDescription>
 								)}
 								<Field>
-									<Button type="submit" className="w-full" disabled={submitting}>
+									<Button
+										type="submit"
+										className="w-full bg-[#173f3e] text-white transition-transform duration-200 hover:-translate-y-0.5 hover:bg-[#102f30] active:translate-y-0"
+										disabled={submitting}
+									>
 										{submitting ? t('setup.submitting') : t('setup.submit')}
 									</Button>
 								</Field>
@@ -93,8 +121,10 @@ export const SetupPage = ({ onComplete, className }: Props) => {
 						</form>
 					</CardContent>
 				</Card>
-				<FieldDescription className="px-6 text-center">{t('setup.hint')}</FieldDescription>
+				<FieldDescription className="px-8 text-center leading-5">
+					{t('setup.hint')}
+				</FieldDescription>
 			</div>
-		</div>
+		</main>
 	);
 };

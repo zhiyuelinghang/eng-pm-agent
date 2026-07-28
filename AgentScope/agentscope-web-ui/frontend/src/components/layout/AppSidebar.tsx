@@ -5,12 +5,12 @@ import {
 	KeyRound,
 	Languages,
 	LibraryBig,
-	Settings,
+	LogOut,
 } from 'lucide-react';
 import { useOnborda } from 'onborda';
 import { useNavigate, useLocation } from 'react-router-dom';
 
-import AgentScope from '@/assets/images/agentscope.svg?react';
+import { clearAuthSession } from '@/api/client';
 import { CHAT_TOUR_NAME } from '@/components/tour/chatTourSteps';
 import {
 	Sidebar,
@@ -48,11 +48,21 @@ export function AppSidebar() {
 		i18n.changeLanguage(next);
 	};
 
+	const handleLogout = () => {
+		clearAuthSession();
+		navigate('/setup', { replace: true });
+	};
+
 	return (
 		<Sidebar collapsible="none" className="w-[calc(var(--sidebar-width-icon)+1px)]! border-r">
 			<SidebarHeader>
 				<div className="flex items-center justify-center h-12 mt-2">
-					<AgentScope className="size-8 items-center justify-center rounded-lg" />
+					<img
+						src="/dobby.svg"
+						alt="Dobby"
+						title={t('brand.managementCenter')}
+						className="size-8 rounded-[10px] shadow-[0_5px_14px_rgba(201,86,34,0.24)]"
+					/>
 				</div>
 			</SidebarHeader>
 			<SidebarContent>
@@ -139,12 +149,11 @@ export function AppSidebar() {
 					</SidebarMenuItem>
 					<SidebarMenuItem>
 						<SidebarMenuButton
-							tooltip={{ children: t('common.settings'), hidden: false }}
-							isActive={location.pathname === '/setup'}
-							onClick={() => navigate('/setup')}
+							tooltip={{ children: t('common.logout'), hidden: false }}
+							onClick={handleLogout}
 							className="px-2"
 						>
-							<Settings />
+							<LogOut />
 						</SidebarMenuButton>
 					</SidebarMenuItem>
 				</SidebarMenu>

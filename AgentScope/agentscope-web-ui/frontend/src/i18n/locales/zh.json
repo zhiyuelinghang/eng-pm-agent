@@ -20,6 +20,7 @@
 		"interrupted": "已中断",
 		"knowledge": "知识库",
 		"loading": "加载中...",
+		"logout": "退出管理中心",
 		"model": "模型",
 		"name": "名称",
 		"no": "否",
@@ -44,6 +45,9 @@
 		"yes": "是",
 		"deleteTitle": "删除{{entity}} \"{{name}}\"？",
 		"deleteDescription": "此操作无法撤销。"
+	},
+	"brand": {
+		"managementCenter": "Dobby 智能体管理中心"
 	},
 	"error": {
 		"description": "页面遇到意外错误。你可以重试或返回首页。",
@@ -720,16 +724,16 @@
 		}
 	},
 	"setup": {
-		"title": "登录 AgentScope 管理端",
-		"description": "使用独立的 AgentScope 管理账号登录。该账号与工程管理平台账号无关。",
+		"title": "智能体管理中心",
+		"description": "统一管理智能体、模型、知识库与运行权限。请使用独立管理账号登录。",
 		"username": "管理账号",
-		"usernamePlaceholder": "请输入 AgentScope 管理账号",
+		"usernamePlaceholder": "请输入 Dobby 管理账号",
 		"password": "管理密码",
 		"passwordPlaceholder": "请输入管理密码",
-		"submit": "登录管理端",
+		"submit": "进入管理中心",
 		"submitting": "正在登录…",
-		"connectionFailed": "暂时无法连接 AgentScope 服务，请联系部署管理员检查服务状态。",
-		"hint": "管理账号只作为进入 AgentScope 管理页面的凭证；所有 AgentScope 配置对整个平台全局生效，平台业务账号不能登录此页面。"
+		"connectionFailed": "暂时无法连接 Dobby 智能体服务，请联系部署管理员检查服务状态。",
+		"hint": "此账号仅用于进入 Dobby 智能体管理中心；所有配置对整个平台全局生效，平台业务账号无法登录。"
 	},
 	"tour": {
 		"trigger": "新手引导",

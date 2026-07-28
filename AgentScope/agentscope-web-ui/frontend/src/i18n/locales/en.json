@@ -20,6 +20,7 @@
 		"interrupted": "Interrupted",
 		"knowledge": "Knowledge Bases",
 		"loading": "Loading...",
+		"logout": "Sign out",
 		"model": "Model",
 		"name": "Name",
 		"no": "No",
@@ -44,6 +45,9 @@
 		"yes": "Yes",
 		"deleteTitle": "Delete {{entity}} \"{{name}}\"?",
 		"deleteDescription": "This action cannot be undone."
+	},
+	"brand": {
+		"managementCenter": "Dobby Agent Management Center"
 	},
 	"error": {
 		"description": "The page hit an unexpected error. You can retry or go back home.",
@@ -720,16 +724,16 @@
 		}
 	},
 	"setup": {
-		"title": "Sign in to AgentScope Admin",
-		"description": "Use the independent AgentScope management account. It is unrelated to engineering-platform accounts.",
+		"title": "Agent Management Center",
+		"description": "Manage agents, models, knowledge, and runtime permissions in one place. Sign in with the dedicated management account.",
 		"username": "Admin account",
-		"usernamePlaceholder": "AgentScope admin account",
+		"usernamePlaceholder": "Dobby admin account",
 		"password": "Admin password",
 		"passwordPlaceholder": "Admin password",
-		"submit": "Sign in",
+		"submit": "Enter management center",
 		"submitting": "Signing in…",
-		"connectionFailed": "AgentScope is currently unavailable. Ask the deployment administrator to check the service.",
-		"hint": "The management account only authorizes access to this console. All AgentScope configuration is global to the platform, and platform business accounts cannot sign in here."
+		"connectionFailed": "The Dobby agent service is currently unavailable. Ask the deployment administrator to check the service.",
+		"hint": "This account only authorizes access to the Dobby Agent Management Center. All configuration is global to the platform, and platform business accounts cannot sign in."
 	},
 	"tour": {
 		"trigger": "Take a tour",
