@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from ..access import ResourceKind
 from ..deps import (
     get_current_user_id,
+    get_permission_review_service,
     get_resource_access_service,
     get_storage,
 )
@@ -16,7 +17,11 @@ from ._schema import (
     CredentialModelCatalogResponse,
     ListCredentialsResponse,
     ListCredentialSchemasResponse,
+    ListPermissionReviewAuditsResponse,
+    PermissionReviewerConfigResponse,
+    TestPermissionReviewerConfigRequest,
     TestCredentialModelRequest,
+    UpdatePermissionReviewerConfigRequest,
     UpdateCredentialModelCatalogRequest,
     UpdateCredentialRequest,
 )
@@ -24,10 +29,13 @@ from .._service import (
     CredentialView,
     CredentialModelTestResult,
     ModelDiscoveryError,
+    PermissionReviewerTestResult,
+    PermissionReviewService,
     ResourceAccessService,
     build_credential_embedding_model_catalog,
     build_credential_model_catalog,
     discover_credential_models,
+    normalize_credential_model_parameters,
     supports_model_discovery,
     test_credential_embedding_model,
     test_credential_model,
@@ -59,6 +67,9 @@ def _model_catalog_response(
         hidden_embedding_model_ids=(
             credential.model_catalog.hidden_embedding_model_ids
         ),
+        model_default_parameters=(
+            credential.model_catalog.model_default_parameters
+        ),
         total=(
             sum(model.enabled for model in models)
             + sum(model.enabled for model in embedding_models)
@@ -82,6 +93,79 @@ async def list_credential_schemas() -> ListCredentialSchemasResponse:
 
     return ListCredentialSchemasResponse(
         schemas=CredentialFactory.list_schemas(),
+    )
+
+
+@credential_router.get(
+    "/system/permission-reviewer",
+    response_model=PermissionReviewerConfigResponse,
+    summary="Get the built-in permission reviewer configuration",
+)
+async def get_permission_reviewer_config(
+    user_id: str = Depends(get_current_user_id),
+    service: PermissionReviewService = Depends(get_permission_review_service),
+) -> PermissionReviewerConfigResponse:
+    """Return the current user's independent reviewer model binding."""
+    record = await service.get_config(user_id)
+    return PermissionReviewerConfigResponse(
+        config=record.data,
+        updated_at=record.updated_at if record.data.enabled else None,
+    )
+
+
+@credential_router.put(
+    "/system/permission-reviewer",
+    response_model=PermissionReviewerConfigResponse,
+    summary="Update the built-in permission reviewer configuration",
+)
+async def update_permission_reviewer_config(
+    body: UpdatePermissionReviewerConfigRequest,
+    user_id: str = Depends(get_current_user_id),
+    service: PermissionReviewService = Depends(get_permission_review_service),
+) -> PermissionReviewerConfigResponse:
+    """Persist a dedicated credential/model binding for permission review."""
+    try:
+        record = await service.save_config(user_id, body)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return PermissionReviewerConfigResponse(
+        config=record.data,
+        updated_at=record.updated_at,
+    )
+
+
+@credential_router.post(
+    "/system/permission-reviewer/test",
+    response_model=PermissionReviewerTestResult,
+    summary="Test the built-in permission reviewer model",
+)
+async def test_permission_reviewer_config(
+    body: TestPermissionReviewerConfigRequest,
+    user_id: str = Depends(get_current_user_id),
+    service: PermissionReviewService = Depends(get_permission_review_service),
+) -> PermissionReviewerTestResult:
+    """Run a safe synthetic review without saving the submitted binding."""
+    return await service.test_config(user_id, body)
+
+
+@credential_router.get(
+    "/system/permission-reviewer/audits",
+    response_model=ListPermissionReviewAuditsResponse,
+    summary="List recent built-in permission reviewer decisions",
+)
+async def list_permission_reviewer_audits(
+    limit: int = 20,
+    user_id: str = Depends(get_current_user_id),
+    service: PermissionReviewService = Depends(get_permission_review_service),
+) -> ListPermissionReviewAuditsResponse:
+    """Return recent automatic decisions for audit and troubleshooting."""
+    audits = await service.list_audits(user_id, limit=max(1, min(limit, 100)))
+    return ListPermissionReviewAuditsResponse(
+        audits=audits,
+        total=len(audits),
     )
 
 
@@ -313,9 +397,39 @@ async def update_credential_models(
         manual_models=list(manual_by_name.values()),
         hidden_model_ids=body.hidden_model_ids,
         hidden_embedding_model_ids=body.hidden_embedding_model_ids,
+        model_default_parameters={},
         last_discovery_at=old_catalog.last_discovery_at,
         last_discovery_error=old_catalog.last_discovery_error,
     )
+
+    submitted_defaults = (
+        old_catalog.model_default_parameters
+        if body.model_default_parameters is None
+        else body.model_default_parameters
+    )
+    known_models = {
+        model.name for model in build_credential_model_catalog(credential)
+    }
+    normalised_defaults = {}
+    for model_name, parameters in submitted_defaults.items():
+        # Deleting or replacing a manual model also removes its stale
+        # defaults instead of making the whole catalogue update fail.
+        if model_name not in known_models or not parameters:
+            continue
+        try:
+            normalised_defaults[model_name] = (
+                normalize_credential_model_parameters(
+                    credential,
+                    model_name,
+                    parameters,
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=str(exc),
+            ) from exc
+    credential.model_catalog.model_default_parameters = normalised_defaults
     await storage.upsert_credential(owner_id, credential)
     return _model_catalog_response(credential)
 

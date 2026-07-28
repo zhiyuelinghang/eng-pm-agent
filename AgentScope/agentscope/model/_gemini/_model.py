@@ -277,6 +277,7 @@ class GeminiChatModel(ChatModelBase):
                 "include_thoughts": False,
                 "thinking_budget": 0,
             }
+        config.update(self._get_request_body_overrides())
 
         fmt_tools, fmt_tool_choice = self._format_tools(tools, tool_choice)
 

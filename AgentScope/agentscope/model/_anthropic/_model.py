@@ -183,6 +183,16 @@ class AnthropicChatModel(ChatModelBase):
                 "type": "enabled",
                 "budget_tokens": budget,
             }
+        request_body_overrides = self._get_request_body_overrides()
+        if request_body_overrides:
+            existing_extra_body = kwargs.get("extra_body")
+            extra_body = (
+                dict(existing_extra_body)
+                if isinstance(existing_extra_body, dict)
+                else {}
+            )
+            extra_body.update(request_body_overrides)
+            kwargs["extra_body"] = extra_body
 
         fmt_tools, fmt_tool_choice = self._format_tools(tools, tool_choice)
         if fmt_tools:

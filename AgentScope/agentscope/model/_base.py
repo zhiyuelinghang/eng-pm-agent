@@ -30,6 +30,58 @@ from ..tool import ToolChoice
 
 _TOOL_CHOICE_LITERAL_MODES = {"auto", "none", "required"}
 _MULTIMODAL_DATA_BLOCK_TOKEN_ESTIMATE = 2000
+CUSTOM_REQUEST_BODY_KEY = "__request_body__"
+"""Reserved parameter key for provider-specific request-body overrides."""
+
+_PROTECTED_REQUEST_BODY_KEYS = {
+    "model",
+    "messages",
+    "input",
+    "contents",
+    "stream",
+    "tools",
+    "tool_choice",
+    "system",
+    "extra_body",
+}
+_MAX_CUSTOM_REQUEST_BODY_BYTES = 64 * 1024
+
+
+def validate_custom_request_body(value: Any) -> dict[str, Any]:
+    """Validate and canonicalise provider-specific request-body overrides.
+
+    The value must be a JSON object. Core request fields owned by AgentScope
+    cannot be replaced, while provider-specific fields such as
+    ``enable_thinking``, ``reasoning`` and ``thinking`` remain available.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("Custom request parameters must be a JSON object.")
+
+    protected = sorted(set(value) & _PROTECTED_REQUEST_BODY_KEYS)
+    if protected:
+        raise ValueError(
+            "Custom request parameters cannot replace AgentScope-managed "
+            "field(s): "
+            + ", ".join(protected),
+        )
+
+    try:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        )
+    except (RecursionError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "Custom request parameters must contain JSON-compatible values.",
+        ) from exc
+
+    if len(encoded.encode("utf-8")) > _MAX_CUSTOM_REQUEST_BODY_BYTES:
+        raise ValueError(
+            "Custom request parameters cannot exceed 64 KiB.",
+        )
+    return json.loads(encoded)
 
 
 class ChatModelBase:
@@ -56,6 +108,9 @@ class ChatModelBase:
 
     context_size: int
     """The model context size that will be used in the context compression."""
+
+    request_body_overrides: dict[str, Any]
+    """Provider-specific JSON fields merged into the outgoing request body."""
 
     def __init__(
         self,
@@ -94,6 +149,20 @@ class ChatModelBase:
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.context_size = context_size
+        self.request_body_overrides = {}
+
+    def set_request_body_overrides(
+        self,
+        value: dict[str, Any] | None,
+    ) -> None:
+        """Set validated provider-specific request-body overrides."""
+        self.request_body_overrides = validate_custom_request_body(
+            {} if value is None else value,
+        )
+
+    def _get_request_body_overrides(self) -> dict[str, Any]:
+        """Return a defensive copy for adapter request assembly."""
+        return deepcopy(self.request_body_overrides)
 
     @classmethod
     def _get_retryable_exceptions(cls) -> tuple[Type[Exception], ...]:

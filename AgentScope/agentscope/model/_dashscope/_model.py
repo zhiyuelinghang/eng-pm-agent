@@ -253,6 +253,7 @@ class DashScopeChatModel(ChatModelBase):
             extra_body["thinking_budget"] = self.parameters.thinking_budget
         if self.parameters.top_k is not None:
             extra_body["top_k"] = self.parameters.top_k
+        extra_body.update(self._get_request_body_overrides())
 
         if extra_body:
             request_kwargs.setdefault("extra_body", {})

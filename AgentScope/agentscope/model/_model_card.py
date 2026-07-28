@@ -102,6 +102,7 @@ class ModelCard(BaseModel):
         if "application/x-thinking" not in output_types:
             properties.pop("thinking_enable", None)
             properties.pop("thinking_budget", None)
+            properties.pop("reasoning_effort", None)
 
         # Auto-filter: only omni-style models that declare an ``audio/*``
         # output type expose the ``voice`` parameter to the frontend

@@ -9,7 +9,6 @@ import {
 	type AgentFormValues,
 	type AgentSection,
 } from '@/components/form/AgentFormFields';
-import type { SchemaFormValue } from '@/components/form/SchemaForm';
 import { Alert, AlertDescription } from '@/components/ui/alert.tsx';
 import { Button } from '@/components/ui/button';
 import {
@@ -22,6 +21,12 @@ import {
 } from '@/components/ui/dialog';
 import { useAgents } from '@/hooks/useAgents';
 import { useAgentSchema } from '@/hooks/useAgentSchema';
+import {
+	AgentModelPolicyFormError,
+	agentModelPolicyFromForm,
+	agentModelPolicyToForm,
+	type AgentModelPolicyFormValues,
+} from '@/lib/agent-model-policy';
 import { formatApiErrorForAlert } from '@/lib/api-error';
 
 interface Props {
@@ -59,13 +64,14 @@ export function EditAgentDialog({ open, onOpenChange, agent, onUpdated }: Props)
 			},
 			context_config: { ...base.context_config, ...(d.context_config ?? {}) },
 			react_config: { ...base.react_config, ...(d.react_config ?? {}) },
+			model_policy: agentModelPolicyToForm(d.model_policy),
 			invite_config: { ...base.invite_config, ...(d.invite_config ?? {}) },
 			call_config: { ...base.call_config, ...(d.call_config ?? {}) },
 		});
 		setErrorMsg('');
 	}, [open, schema, agent]);
 
-	const handleChange = (section: AgentSection, key: string, value: SchemaFormValue) => {
+	const handleChange = (section: AgentSection, key: string, value: unknown) => {
 		setErrorMsg('');
 		setValues((prev) =>
 			prev ? { ...prev, [section]: { ...prev[section], [key]: value } } : prev,
@@ -79,6 +85,9 @@ export function EditAgentDialog({ open, onOpenChange, agent, onUpdated }: Props)
 		setErrorMsg('');
 		setSubmitting(true);
 		try {
+			const modelPolicy = agentModelPolicyFromForm(
+				values.model_policy as AgentModelPolicyFormValues,
+			);
 			await update(
 				agent.id,
 				{
@@ -86,6 +95,7 @@ export function EditAgentDialog({ open, onOpenChange, agent, onUpdated }: Props)
 					system_prompt: values.identity.system_prompt as string | undefined,
 					context_config: values.context_config as unknown as ContextConfig,
 					react_config: values.react_config as unknown as ReActConfig,
+					model_policy: modelPolicy,
 					invite_config: values.invite_config as unknown as InviteConfig,
 					call_config: values.call_config as unknown as AgentCallConfig,
 				},
@@ -94,7 +104,11 @@ export function EditAgentDialog({ open, onOpenChange, agent, onUpdated }: Props)
 			onOpenChange(false);
 			onUpdated?.();
 		} catch (e) {
-			setErrorMsg(formatApiErrorForAlert(e));
+			setErrorMsg(
+				e instanceof AgentModelPolicyFormError
+					? t(`agent-form.model-policy.errors.${e.code}`)
+					: formatApiErrorForAlert(e),
+			);
 		} finally {
 			setSubmitting(false);
 		}

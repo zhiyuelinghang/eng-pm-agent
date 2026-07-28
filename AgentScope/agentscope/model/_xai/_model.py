@@ -219,6 +219,7 @@ class XAIChatModel(ChatModelBase):
             create_kwargs["tool_choice"] = xai_tool_choice
 
         create_kwargs.update(generate_kwargs)
+        create_kwargs.update(self._get_request_body_overrides())
 
         chat = client.chat.create(**create_kwargs)
         for xai_msg in xai_messages:

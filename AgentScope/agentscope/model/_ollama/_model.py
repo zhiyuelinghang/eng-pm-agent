@@ -178,6 +178,7 @@ class OllamaChatModel(ChatModelBase):
         kwargs["think"] = self.parameters.thinking_enable
 
         kwargs.update(generate_kwargs)
+        kwargs.update(self._get_request_body_overrides())
 
         fmt_tools, _ = self._format_tools(tools, tool_choice)
 

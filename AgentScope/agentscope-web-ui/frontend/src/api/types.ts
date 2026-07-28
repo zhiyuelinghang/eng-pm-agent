@@ -45,6 +45,13 @@ export interface AgentCallConfig {
 	allowed_agent_ids: string[];
 }
 
+export type AgentModelPolicyMode = 'inherit_session' | 'fixed';
+
+export interface AgentModelPolicy {
+	mode: AgentModelPolicyMode;
+	chat_model_config: ChatModelConfig | null;
+}
+
 // ─── Agent ────────────────────────────────────────────────────────────────────
 
 export interface AgentData {
@@ -53,6 +60,7 @@ export interface AgentData {
 	system_prompt: string;
 	context_config: ContextConfig;
 	react_config: ReActConfig;
+	model_policy: AgentModelPolicy;
 	invite_config: InviteConfig;
 	call_config: AgentCallConfig;
 }
@@ -72,6 +80,7 @@ export interface CreateAgentRequest {
 	system_prompt?: string;
 	context_config?: ContextConfig;
 	react_config?: ReActConfig;
+	model_policy?: AgentModelPolicy;
 	invite_config?: InviteConfig;
 	call_config?: AgentCallConfig;
 }
@@ -85,6 +94,7 @@ export interface UpdateAgentRequest {
 	system_prompt?: string;
 	context_config?: ContextConfig;
 	react_config?: ReActConfig;
+	model_policy?: AgentModelPolicy;
 	invite_config?: InviteConfig;
 	call_config?: AgentCallConfig;
 }
@@ -365,6 +375,7 @@ export interface CredentialModelDefinition {
 export interface CredentialModelEntry extends ModelCard {
 	source: 'builtin' | 'discovered' | 'manual';
 	enabled: boolean;
+	default_parameters: Record<string, unknown>;
 }
 
 export interface CredentialEmbeddingModelEntry extends EmbeddingModelCard {
@@ -378,6 +389,7 @@ export interface CredentialModelCatalogResponse {
 	manual_models: CredentialModelDefinition[];
 	hidden_model_ids: string[];
 	hidden_embedding_model_ids: string[];
+	model_default_parameters: Record<string, Record<string, unknown>>;
 	total: number;
 	discovery_supported: boolean;
 	last_discovery_at: string | null;
@@ -388,6 +400,7 @@ export interface UpdateCredentialModelCatalogRequest {
 	manual_models: CredentialModelDefinition[];
 	hidden_model_ids: string[];
 	hidden_embedding_model_ids: string[];
+	model_default_parameters: Record<string, Record<string, unknown>>;
 }
 
 export type CredentialModelTestErrorType =
@@ -415,6 +428,57 @@ export interface CredentialModelTestResponse {
 	message: string;
 	status_code: number | null;
 	raw_response: string | null;
+}
+
+export interface PermissionReviewerConfig {
+	enabled: boolean;
+	credential_id: string | null;
+	model: string | null;
+	parameters: Record<string, unknown>;
+	fallback_credential_id: string | null;
+	fallback_model: string | null;
+	fallback_parameters: Record<string, unknown>;
+	confidence_threshold: number;
+	max_auto_risk: 'low' | 'medium';
+	timeout_seconds: number;
+}
+
+export interface PermissionReviewerConfigResponse {
+	config: PermissionReviewerConfig;
+	updated_at: string | null;
+}
+
+export interface PermissionReviewerTestResponse {
+	success: boolean;
+	latency_ms: number;
+	action: 'allow_once' | 'deny' | 'human_required' | null;
+	risk: 'low' | 'medium' | 'high' | 'critical' | null;
+	confidence: number | null;
+	reason: string | null;
+	model: string | null;
+	error: string | null;
+}
+
+export interface PermissionReviewAudit {
+	id: string;
+	created_at: string;
+	updated_at: string;
+	user_id: string;
+	agent_id: string;
+	session_id: string;
+	tool_name: string;
+	action: 'allow_once' | 'deny' | 'human_required';
+	risk: 'low' | 'medium' | 'high' | 'critical';
+	confidence: number;
+	reason: string;
+	source: string;
+	model: string | null;
+	tool_input: Record<string, unknown>;
+}
+
+export interface PermissionReviewAuditListResponse {
+	audits: PermissionReviewAudit[];
+	total: number;
 }
 
 // ─── Chat ─────────────────────────────────────────────────────────────────────
@@ -485,6 +549,7 @@ export interface AddSkillRequest {
 
 export type PermissionMode =
 	| 'default'
+	| 'auto'
 	| 'accept_edits'
 	| 'explore'
 	| 'bypass'
@@ -559,6 +624,8 @@ export interface ModelCard {
 	output_size: number;
 	parameter_schema: Record<string, unknown>;
 	parameters_overrides: Record<string, Record<string, unknown>>;
+	/** Credential-scoped defaults; absent on provider-only model endpoints. */
+	default_parameters?: Record<string, unknown>;
 }
 
 export interface ListModelRequest {

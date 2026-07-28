@@ -108,6 +108,70 @@ class CredentialRow(_JsonRecordMixin):
     _indexed_fields = ("user_id",)
 
 
+class PermissionReviewerConfigRow(_JsonRecordMixin):
+    """One built-in permission reviewer configuration per user."""
+
+    __tablename__ = "permission_reviewer_configs"
+
+    user_id: Mapped[str] = mapped_column(
+        String(_ID_LEN),
+        nullable=False,
+        index=True,
+    )
+
+    __table_args__ = (
+        Index(
+            "ux_permission_reviewer_configs_user",
+            "user_id",
+            unique=True,
+        ),
+    )
+
+    _indexed_fields = ("user_id",)
+
+
+class PermissionReviewAuditRow(_JsonRecordMixin):
+    """Audit trail for model-assisted permission decisions."""
+
+    __tablename__ = "permission_review_audits"
+
+    user_id: Mapped[str] = mapped_column(
+        String(_ID_LEN),
+        nullable=False,
+        index=True,
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(_ID_LEN),
+        nullable=False,
+        index=True,
+    )
+    agent_id: Mapped[str] = mapped_column(
+        String(_ID_LEN),
+        nullable=False,
+        index=True,
+    )
+    tool_name: Mapped[str] = mapped_column(
+        String(_ID_LEN),
+        nullable=False,
+        index=True,
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_permission_review_audits_user_created",
+            "user_id",
+            "created_at",
+        ),
+    )
+
+    _indexed_fields = (
+        "user_id",
+        "session_id",
+        "agent_id",
+        "tool_name",
+    )
+
+
 class AgentRow(_JsonRecordMixin):
     """One row per :class:`~agentscope.app.storage.AgentRecord`."""
 

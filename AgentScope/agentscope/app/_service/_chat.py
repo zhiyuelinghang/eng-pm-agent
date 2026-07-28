@@ -35,11 +35,12 @@ from .._types import (
     SubAgentTemplate,
 )
 from ._access import ResourceAccessService
-from ._model import get_model
+from ._model import get_model, resolve_effective_chat_model_config
 from ._tts_model import get_tts_model
 from ._toolkit import get_toolkit
 from ._session_projection import SessionProjection
 from ._projectors import SubagentHitlProjector
+from ._permission_review import PermissionReviewService
 
 from ..._logging import logger
 from ...agent import Agent, ModelConfig
@@ -54,7 +55,7 @@ from ...event import (
 )
 from ._errors import _classify_error
 from ...message import AssistantMsg, Msg, ToolCallState
-from ...permission import AdditionalWorkingDirectory
+from ...permission import AdditionalWorkingDirectory, PermissionMode
 
 
 class ChatService:
@@ -86,6 +87,7 @@ class ChatService:
         custom_subagent_templates: dict[str, SubAgentTemplate] | None = None,
         custom_agent_cls: type[Agent] | None = None,
         extra_projectors: list[EventProjector] | None = None,
+        permission_review_service: PermissionReviewService | None = None,
     ) -> None:
         """Initialize chat service.
 
@@ -144,6 +146,10 @@ class ChatService:
                 injection style). Each is invoked once per produced
                 event to mirror a UI feed onto another session; see
                 :class:`~agentscope.app._types.EventProjector`.
+            permission_review_service (`PermissionReviewService | None`, \
+             optional):
+                Resolves the user's independently configured built-in
+                permission reviewer for each assembled AUTO-mode agent.
         """
         self._storage = storage
         self._workspace_manager = workspace_manager
@@ -156,6 +162,7 @@ class ChatService:
         self._extra_agent_tools = extra_agent_tools
         self._sub_agent_templates = custom_subagent_templates
         self._agent_cls = custom_agent_cls or Agent
+        self._permission_review_service = permission_review_service
         self._projection = SessionProjection(message_bus)
         self._projectors: list[EventProjector] = [
             SubagentHitlProjector(storage),
@@ -463,9 +470,13 @@ class ChatService:
         )
 
         # ----------------------------------------------------------------
-        # 4. Model + fallback (resolved from session's config).
+        # 4. Model + fallback. An agent-pinned model wins; otherwise the
+        # current conversation remains the source of truth.
         # ----------------------------------------------------------------
-        model_cfg = session_record.config.chat_model_config
+        model_cfg = resolve_effective_chat_model_config(
+            agent_record.data,
+            session_record.config,
+        )
         if not model_cfg:
             raise HTTPException(
                 status_code=404,
@@ -485,7 +496,20 @@ class ChatService:
         # ----------------------------------------------------------------
         agent_state = session_record.state
         agent_state.session_id = session_id
-        agent = self._agent_cls(
+        permission_reviewer = (
+            await self._permission_review_service.build_reviewer(
+                user_id=user_id,
+                agent_id=agent_id,
+                session_id=session_id,
+            )
+            if (
+                self._permission_review_service is not None
+                and agent_state.permission_context.mode
+                == PermissionMode.AUTO
+            )
+            else None
+        )
+        agent_kwargs = dict(
             name=agent_record.data.name,
             system_prompt=agent_record.data.system_prompt,
             model=model,
@@ -497,6 +521,26 @@ class ChatService:
             middlewares=middlewares,
             offloader=workspace,
         )
+        if permission_reviewer is not None:
+            import inspect
+
+            init_parameters = inspect.signature(
+                self._agent_cls.__init__,
+            ).parameters.values()
+            if any(
+                parameter.name == "permission_reviewer"
+                or parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in init_parameters
+            ):
+                agent_kwargs["permission_reviewer"] = permission_reviewer
+            else:
+                logger.warning(
+                    "Configured permission reviewer was not attached because "
+                    "custom agent class %s does not accept "
+                    "'permission_reviewer'. Human confirmation remains active.",
+                    self._agent_cls.__name__,
+                )
+        agent = self._agent_cls(**agent_kwargs)
 
         # ----------------------------------------------------------------
         # 6. Guard: skip wake-up driven runs when the agent is parked on

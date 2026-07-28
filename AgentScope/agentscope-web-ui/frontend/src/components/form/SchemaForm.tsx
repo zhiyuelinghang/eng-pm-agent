@@ -27,6 +27,8 @@ interface Props {
 	placeholderFor?: (key: string, prop: JSONSchemaProperty) => string | undefined;
 	/** Optional override for the helper text shown under a field. */
 	descriptionFor?: (key: string, prop: JSONSchemaProperty) => string | undefined;
+	/** Optional display label for enum options. */
+	optionFor?: (key: string, value: unknown) => string;
 	/** Prefix for generated DOM IDs (so multiple SchemaForms on one page don't collide). */
 	idPrefix?: string;
 }
@@ -76,6 +78,7 @@ export function SchemaForm({
 	labelFor,
 	placeholderFor,
 	descriptionFor,
+	optionFor,
 	idPrefix = 'schema-form',
 }: Props) {
 	const entries = Object.entries(schema.properties ?? {}).filter(
@@ -131,7 +134,7 @@ export function SchemaForm({
 								<SelectContent>
 									{enumOpts.map((opt) => (
 										<SelectItem key={String(opt)} value={String(opt)}>
-											{String(opt)}
+											{optionFor?.(key, opt) ?? String(opt)}
 										</SelectItem>
 									))}
 								</SelectContent>

@@ -8,6 +8,7 @@ import type {
 	JSONSchemaProperty,
 } from '@/api';
 import { AgentCallConfigFields } from '@/components/form/AgentCallConfigFields';
+import { AgentModelPolicyFields } from '@/components/form/AgentModelPolicyFields';
 import { SchemaForm, type SchemaFormValue } from '@/components/form/SchemaForm';
 import {
 	FieldDescription,
@@ -16,16 +17,18 @@ import {
 	FieldSeparator,
 	FieldSet,
 } from '@/components/ui/field';
+import { agentModelPolicyToForm, type AgentModelPolicyFormValues } from '@/lib/agent-model-policy';
 
 export type AgentSection =
 	| 'identity'
+	| 'model_policy'
 	| 'context_config'
 	| 'react_config'
 	| 'invite_config'
 	| 'call_config';
 
 export type AgentFormValues = {
-	[K in AgentSection]: Record<string, SchemaFormValue>;
+	[K in AgentSection]: Record<string, unknown>;
 };
 
 interface Props {
@@ -33,7 +36,7 @@ interface Props {
 	values: AgentFormValues;
 	agents: AgentView[];
 	currentAgentId?: string;
-	onChange: (section: AgentSection, key: string, value: SchemaFormValue) => void;
+	onChange: (section: AgentSection, key: string, value: unknown) => void;
 }
 
 /**
@@ -44,6 +47,7 @@ interface Props {
  * in the identity fieldset automatically.
  */
 const NESTED_SECTIONS: Array<{ key: Exclude<AgentSection, 'identity'>; i18n: string }> = [
+	{ key: 'model_policy', i18n: 'model-policy' },
 	{ key: 'context_config', i18n: 'context-config' },
 	{ key: 'react_config', i18n: 'react-config' },
 	{ key: 'invite_config', i18n: 'invite-config' },
@@ -77,6 +81,10 @@ function sliceSchema(root: JSONSchema): Record<AgentSection, JSONSchema> {
 
 	return {
 		identity,
+		model_policy: (props.model_policy as JSONSchema) ?? {
+			type: 'object',
+			properties: {},
+		},
 		context_config: (props.context_config as JSONSchema) ?? {
 			type: 'object',
 			properties: {},
@@ -124,7 +132,14 @@ export function AgentFormFields({ schema, values, agents, currentAgentId, onChan
 						<FieldSet>
 							<FieldLegend>{legend}</FieldLegend>
 							{description && <FieldDescription>{description}</FieldDescription>}
-							{sectionKey === 'call_config' ? (
+							{sectionKey === 'model_policy' ? (
+								<AgentModelPolicyFields
+									values={values.model_policy as AgentModelPolicyFormValues}
+									onChange={(k, v) =>
+										onChange('model_policy', String(k), v)
+									}
+								/>
+							) : sectionKey === 'call_config' ? (
 								<AgentCallConfigFields
 									values={values.call_config as Partial<AgentCallConfig>}
 									agents={agents}
@@ -134,7 +149,7 @@ export function AgentFormFields({ schema, values, agents, currentAgentId, onChan
 							) : (
 								<SchemaForm
 									schema={sectionSchema}
-									values={values[sectionKey]}
+									values={values[sectionKey] as Record<string, SchemaFormValue>}
 									onChange={(k, v) => onChange(sectionKey, k, v)}
 									idPrefix={`agent-form-${sectionI18n}`}
 									labelFor={(k, prop) =>
@@ -170,6 +185,7 @@ export function defaultAgentFormValues(schema: AgentSchemaV2Response): AgentForm
 	};
 	return {
 		identity: fromDefaults(sections.identity),
+		model_policy: agentModelPolicyToForm(),
 		context_config: fromDefaults(sections.context_config),
 		react_config: fromDefaults(sections.react_config),
 		invite_config: fromDefaults(sections.invite_config),

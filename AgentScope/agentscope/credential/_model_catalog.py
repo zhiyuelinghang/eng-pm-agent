@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Credential-scoped model catalog data structures."""
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -99,6 +99,14 @@ class CredentialModelCatalog(BaseModel):
             "Built-in embedding model identifiers hidden by the user."
         ),
     )
+    model_default_parameters: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        description=(
+            "Provider-specific default inference parameters keyed by exact "
+            "chat model identifier. Runtime/session parameters override "
+            "these values."
+        ),
+    )
     last_discovery_at: datetime | None = Field(
         default=None,
         description="Most recent discovery attempt timestamp.",
@@ -119,4 +127,27 @@ class CredentialModelCatalog(BaseModel):
             if value and value not in seen:
                 result.append(value)
                 seen.add(value)
+        return result
+
+    @field_validator("model_default_parameters")
+    @classmethod
+    def _normalise_model_default_parameters(
+        cls,
+        values: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """Normalise model ids and omit empty parameter records."""
+        if len(values) > 1000:
+            raise ValueError(
+                "At most 1000 model default parameter records are allowed.",
+            )
+        result: dict[str, dict[str, Any]] = {}
+        for raw_name, parameters in values.items():
+            name = raw_name.strip()
+            if not name or len(name) > 512:
+                raise ValueError(
+                    "Model default parameter keys must be non-empty model "
+                    "identifiers no longer than 512 characters.",
+                )
+            if parameters:
+                result[name] = dict(parameters)
         return result

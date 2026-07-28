@@ -212,6 +212,10 @@ class MoonshotChatModel(ChatModelBase):
                 "type",
                 thinking_type,
             )
+        request_body_overrides = self._get_request_body_overrides()
+        if request_body_overrides:
+            kwargs.setdefault("extra_body", {})
+            kwargs["extra_body"].update(request_body_overrides)
 
         fmt_tools, fmt_tool_choice = self._format_tools(tools, tool_choice)
 

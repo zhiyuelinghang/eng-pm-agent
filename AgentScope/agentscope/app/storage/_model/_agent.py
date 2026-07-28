@@ -7,6 +7,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 from ...._utils._common import _generate_id
 from ._base import _RecordBase
+from ._session import ChatModelConfig
 from ....agent import ContextConfig, ReActConfig
 
 
@@ -109,6 +110,43 @@ class AgentCallConfig(BaseModel):
         return False
 
 
+class AgentModelPolicy(BaseModel):
+    """Controls whether an agent follows its session or pins a model.
+
+    ``chat_model_config`` is intentionally retained while ``mode`` is
+    ``inherit_session`` so users can temporarily follow a conversation and
+    later switch back to the previously selected fixed model without
+    rebuilding its provider-specific parameters.
+    """
+
+    mode: Literal["inherit_session", "fixed"] = Field(
+        default="inherit_session",
+        description=(
+            "Model selection policy. ``inherit_session`` uses the model "
+            "selected by the current conversation; ``fixed`` always uses "
+            "``chat_model_config``."
+        ),
+        title="Model Policy",
+    )
+
+    chat_model_config: ChatModelConfig | None = Field(
+        default=None,
+        description=(
+            "Agent-specific model and parameters. Required when mode is "
+            "``fixed`` and ignored while inheriting the session model."
+        ),
+        title="Fixed Chat Model",
+    )
+
+    @model_validator(mode="after")
+    def _require_fixed_model(self) -> "AgentModelPolicy":
+        if self.mode == "fixed" and self.chat_model_config is None:
+            raise ValueError(
+                "chat_model_config is required when model policy is fixed",
+            )
+        return self
+
+
 class AgentData(BaseModel):
     """The agent data model."""
 
@@ -147,6 +185,15 @@ class AgentData(BaseModel):
     react_config: ReActConfig = Field(
         description="The react config for the agent.",
         title="React Config",
+    )
+
+    model_policy: AgentModelPolicy = Field(
+        default_factory=AgentModelPolicy,
+        description=(
+            "Controls whether this agent follows the current conversation's "
+            "model or always uses its own model and request parameters."
+        ),
+        title="Model Configuration",
     )
 
     invite_config: InviteConfig = Field(

@@ -370,13 +370,10 @@ class AgentInvite(_TeamToolBase):
                 else leader_session.agent_id
             )
 
-            # Prefer the invited agent's own primary session for
-            # workspace + chat-model reuse: it already has any MCP /
-            # skills / cache set up. Fall back to a freshly-generated
-            # workspace id + the leader's chat model when the agent has
-            # never been opened — the underlying workspace is created
-            # lazily by the workspace manager on first chat, so a bare
-            # id is enough.
+            # Reuse the invited agent's primary workspace when available,
+            # but do not implicitly reuse that unrelated conversation's
+            # model. A fixed agent model wins; otherwise this team-scoped
+            # session follows the leader's currently selected model.
             invited_sessions = await self._storage.list_sessions(
                 self._user_id,
                 invited.id,
@@ -384,14 +381,6 @@ class AgentInvite(_TeamToolBase):
             if invited_sessions:
                 primary = invited_sessions[0]
                 borrowed_workspace_id = primary.config.workspace_id
-                borrowed_chat_model = (
-                    primary.config.chat_model_config
-                    or leader_session.config.chat_model_config
-                )
-                borrowed_fallback_model = (
-                    primary.config.fallback_chat_model_config
-                    or leader_session.config.fallback_chat_model_config
-                )
             else:
                 borrowed_workspace_id = (
                     self._workspace_manager.assign_workspace_id(
@@ -400,10 +389,15 @@ class AgentInvite(_TeamToolBase):
                         session_id=_generate_id(),
                     )
                 )
-                borrowed_chat_model = leader_session.config.chat_model_config
-                borrowed_fallback_model = (
-                    leader_session.config.fallback_chat_model_config
-                )
+            invited_policy = invited.data.model_policy
+            borrowed_chat_model = (
+                invited_policy.chat_model_config
+                if invited_policy.mode == "fixed"
+                else leader_session.config.chat_model_config
+            )
+            borrowed_fallback_model = (
+                leader_session.config.fallback_chat_model_config
+            )
 
             # Permission context is NOT inherited from the leader.
             # PermissionContext.working_directories and allow/deny/ask

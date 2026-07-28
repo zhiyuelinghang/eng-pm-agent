@@ -13,6 +13,7 @@ from ..deps import (
     get_chat_service,
     get_current_user_id,
     get_message_bus,
+    get_permission_review_service,
     get_resource_access_service,
     get_session_service,
     get_storage,
@@ -33,6 +34,7 @@ from ._schema import (
 from ..message_bus import MessageBus, MessageBusKeys
 from .._service import (
     AgentView,
+    PermissionReviewService,
     ResourceAccessService,
     ChatService,
     SessionService,
@@ -49,6 +51,7 @@ from ..storage import (
     TeamRecord,
 )
 from ...message import ToolCallState
+from ...permission import PermissionMode
 from ..storage._utils import _ensure_team_members
 from ...event import CustomEvent
 from ..workspace_manager import WorkspaceManagerBase
@@ -431,6 +434,9 @@ async def update_session(
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
     access: ResourceAccessService = Depends(get_resource_access_service),
+    permission_review_service: PermissionReviewService = Depends(
+        get_permission_review_service,
+    ),
 ) -> SessionRecord:
     """Update the model configuration of an existing session.
 
@@ -470,6 +476,18 @@ async def update_session(
 
     updated_state = existing.state
     if body.permission_mode is not None:
+        if body.permission_mode == PermissionMode.AUTO:
+            reviewer_config = await permission_review_service.get_config(
+                user_id,
+            )
+            if not reviewer_config.data.enabled:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "Auto permission mode requires an enabled built-in "
+                        "permission reviewer."
+                    ),
+                )
         updated_ctx = existing.state.permission_context.model_copy(
             update={"mode": body.permission_mode},
         )

@@ -9,7 +9,6 @@ import {
 	type AgentFormValues,
 	type AgentSection,
 } from '@/components/form/AgentFormFields';
-import type { SchemaFormValue } from '@/components/form/SchemaForm';
 import { Alert, AlertDescription } from '@/components/ui/alert.tsx';
 import { Button } from '@/components/ui/button';
 import {
@@ -23,6 +22,11 @@ import {
 } from '@/components/ui/dialog';
 import { useAgents } from '@/hooks/useAgents';
 import { useAgentSchema } from '@/hooks/useAgentSchema';
+import {
+	AgentModelPolicyFormError,
+	agentModelPolicyFromForm,
+	type AgentModelPolicyFormValues,
+} from '@/lib/agent-model-policy';
 import { formatApiErrorForAlert } from '@/lib/api-error';
 
 interface Props {
@@ -49,7 +53,7 @@ export function AgentDialog({ onCreated, triggerId }: Props) {
 		}
 	}, [open, schema, values]);
 
-	const handleChange = (section: AgentSection, key: string, value: SchemaFormValue) => {
+	const handleChange = (section: AgentSection, key: string, value: unknown) => {
 		setErrorMsg('');
 		setValues((prev) =>
 			prev ? { ...prev, [section]: { ...prev[section], [key]: value } } : prev,
@@ -63,12 +67,16 @@ export function AgentDialog({ onCreated, triggerId }: Props) {
 		setErrorMsg('');
 		setSubmitting(true);
 		try {
+			const modelPolicy = agentModelPolicyFromForm(
+				values.model_policy as AgentModelPolicyFormValues,
+			);
 			await create(
 				{
 					name,
 					system_prompt: values.identity.system_prompt as string | undefined,
 					context_config: values.context_config as unknown as ContextConfig,
 					react_config: values.react_config as unknown as ReActConfig,
+					model_policy: modelPolicy,
 					invite_config: values.invite_config as unknown as InviteConfig,
 					call_config: values.call_config as unknown as AgentCallConfig,
 				},
@@ -77,7 +85,11 @@ export function AgentDialog({ onCreated, triggerId }: Props) {
 			setOpen(false);
 			onCreated?.();
 		} catch (e) {
-			setErrorMsg(formatApiErrorForAlert(e));
+			setErrorMsg(
+				e instanceof AgentModelPolicyFormError
+					? t(`agent-form.model-policy.errors.${e.code}`)
+					: formatApiErrorForAlert(e),
+			);
 		} finally {
 			setSubmitting(false);
 		}

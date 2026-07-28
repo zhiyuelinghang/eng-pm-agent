@@ -13,6 +13,7 @@
 		"delete": "Delete",
 		"deleting": "Deleting…",
 		"disabled": "Disabled",
+		"enabled": "Enabled",
 		"edit": "Edit",
 		"error": "Something went wrong",
 		"information": "Information",
@@ -124,6 +125,10 @@
 		"inputPlaceholder": "Type a message...",
 		"placeholder": "Type a message...",
 		"send": "Send",
+		"model": {
+			"agentFixed": "Agent fixed",
+			"unavailable": "Model unavailable"
+		},
 		"confirmToolCall": "Allow this action?",
 		"subagentConfirmTitle": "{{name}} requests confirmation",
 		"newSession": "New Session",
@@ -158,6 +163,31 @@
 			},
 			"system-prompt": {
 				"label": "System prompt"
+			}
+		},
+		"model-policy": {
+			"legend": "Model Configuration",
+			"description": "Pin a dedicated model and parameters to this agent, or let it follow the current conversation.",
+			"mode": {
+				"label": "Model policy",
+				"inherit": "Follow conversation",
+				"fixed": "Fixed model",
+				"inherit_sessionDescription": "Use the model selected for the current conversation.",
+				"fixedDescription": "Always use the model and parameters below; the chat screen cannot override them."
+			},
+			"credential": "Model credential",
+			"credentialPlaceholder": "Select a credential",
+			"model": "Model",
+			"modelPlaceholder": "Select a model",
+			"parameters": "Agent-specific parameters",
+			"parametersDescription": "Only overrides saved here belong to this agent; omitted values continue to inherit credential-level model defaults.",
+			"customDescription": "Provider-specific reasoning or extension parameters sent with every model request made by this agent.",
+			"unavailable": "currently unavailable",
+			"unavailableDescription": "The saved model is hidden, deleted, or temporarily missing from this credential's catalog. Select another model before saving.",
+			"errors": {
+				"model_required": "A fixed model policy requires a credential and model.",
+				"invalid_json": "Custom request parameters are not valid JSON.",
+				"object_required": "Custom request parameters must be a JSON object."
 			}
 		},
 		"context-config": {
@@ -333,6 +363,7 @@
 		"manualAdd": "Add manually",
 		"manualModelTitle": "Add model manually",
 		"manualModelDescription": "Choose how the model is used, then enter its exact provider model ID. Adding the same ID again updates its type.",
+		"manualModelCustomParametersDescription": "If this model does not declare reasoning support, enter the provider-specific JSON parameters here while adding it. Leave blank to send no custom parameters; they remain editable after creation.",
 		"editModelTitle": "Edit model",
 		"editModelDescription": "Change the model ID, display name, or model type. The model ID is the exact value sent to the provider.",
 		"modelType": "Model type",
@@ -369,6 +400,68 @@
 		},
 		"modelProbe": {
 			"failed": "Could not detect this embedding model. Check its model ID, API URL, and credential."
+		},
+		"modelDefaults": {
+			"action": "Configure model defaults",
+			"title": "Model defaults",
+			"description": "Configure default inference parameters for {{model}}, including thinking mode and reasoning effort.",
+			"inheritanceTitle": "Inherited by every use case",
+			"inheritanceDescription": "Business agents, team members, schedules, and built-in agents read these defaults. Session-specific or dedicated settings can override them.",
+			"configured": "{{count}} configured",
+			"reset": "Restore provider defaults",
+			"save": "Save defaults",
+			"saved": "Model defaults saved.",
+			"customTitle": "Custom request parameters (JSON)",
+			"customDescription": "Use this for provider fields the model has not declared. Values are merged into the actual request body and custom values win on conflicts; AgentScope-owned model, message, and tool fields cannot be replaced.",
+			"customRequired": "Thinking fields undeclared",
+			"customPlaceholder": "{\n  \"enable_thinking\": true\n}",
+			"customExamplesLabel": "Choose the form required by this provider, for example:",
+			"customExamples": "OpenAI compatible: {\"enable_thinking\":true}\nResponses: {\"reasoning\":{\"effort\":\"low\"}}\nAnthropic: {\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":5000}}",
+			"customInvalid": "Invalid JSON. Check brackets, quotes, commas, and values.",
+			"customObjectRequired": "Custom request parameters must be a JSON object."
+		},
+		"permissionReviewer": {
+			"systemGroup": "Built-in agents",
+			"shortTitle": "Permission reviewer",
+			"builtIn": "Built in",
+			"title": "System permission reviewer",
+			"subtitle": "Independently reviews tool calls for sessions using Auto permission mode.",
+			"systemBadge": "System built-in · no business chat",
+			"securityTitle": "The permission engine remains the non-bypassable boundary",
+			"securityDescription": "The reviewer only sees operations whose original result is Ask. Explicit denials, dangerous paths, and destructive operations cannot be auto-approved. Model failures or uncertainty always fall back to a human.",
+			"bindingTitle": "Independent model binding",
+			"bindingDescription": "The reviewer does not follow the active chat model, so it can use a stronger model and dedicated quota.",
+			"credential": "Primary credential",
+			"model": "Primary reviewer model",
+			"selectCredential": "Select a credential",
+			"selectModel": "Select a chat model",
+			"fallbackCredential": "Fallback credential (optional)",
+			"fallbackModel": "Fallback model (optional)",
+			"noFallback": "No fallback model",
+			"confidence": "Minimum auto-decision confidence",
+			"maxRisk": "Maximum risk for auto decisions",
+			"timeout": "Review timeout",
+			"seconds": "sec",
+			"test": "Test reviewer",
+			"testing": "Testing…",
+			"save": "Save configuration",
+			"saved": "Permission reviewer configuration saved.",
+			"testPassed": "Reviewer test passed · {{latency}} ms",
+			"testFailed": "Reviewer test failed",
+			"auditTitle": "Recent review decisions",
+			"auditDescription": "Only automatic review decisions are recorded. Sensitive fields are redacted before sending or persistence.",
+			"noAudits": "No automatic review decisions yet.",
+			"actions": {
+				"allow_once": "Allow once",
+				"deny": "Deny",
+				"human_required": "Ask human"
+			},
+			"risks": {
+				"low": "Low risk",
+				"medium": "Medium risk",
+				"high": "High risk",
+				"critical": "Critical risk"
+			}
 		}
 	},
 	"knowledge": {
@@ -467,6 +560,7 @@
 		"trigger-tooltip": "Permission Mode",
 		"label": "Permission Mode",
 		"default-tooltip": "Default mode: all operations require explicit permission (most secure)",
+		"auto-tooltip": "AI review mode: ordinary confirmations go to the built-in reviewer first; high-risk, low-confidence, or failed reviews fall back to a person",
 		"accept_edits-tooltip": "Auto-allow file reads/writes in working directories and filesystem commands; other operations follow normal rules",
 		"explore-tooltip": "Read-only mode: allow read/grep/glob tools, deny write/edit/bash modification tools",
 		"bypass-tooltip": "All operations automatically allowed without any permission checks (use in trusted/sandbox environments)",
@@ -555,7 +649,32 @@
 		"ttsEmpty": "No TTS models available.",
 		"ttsParameters": "Parameters",
 		"ttsParametersDescription": "Adjust parameters for the selected TTS model.",
-		"noTts": "No TTS"
+		"noTts": "No TTS",
+		"fields": {
+			"max_tokens": "Max output tokens",
+			"thinking_enable": "Enable thinking",
+			"reasoning_effort": "Reasoning effort",
+			"thinking_budget": "Thinking budget",
+			"temperature": "Temperature",
+			"top_p": "Top P",
+			"top_k": "Top K",
+			"parallel_tool_calls": "Parallel tool calls",
+			"voice": "Voice"
+		},
+		"fieldDescriptions": {
+			"thinking_enable": "Controls whether this model emits extended thinking or reasoning.",
+			"reasoning_effort": "Controls how much computation the model spends on reasoning; available levels depend on the provider and model.",
+			"thinking_budget": "Maximum number of tokens the model may spend on thinking."
+		},
+		"values": {
+			"none": "None",
+			"minimal": "Minimal",
+			"low": "Low",
+			"medium": "Medium",
+			"high": "High",
+			"xhigh": "Extra high",
+			"max": "Maximum"
+		}
 	},
 	"setup": {
 		"title": "Connect to Service",

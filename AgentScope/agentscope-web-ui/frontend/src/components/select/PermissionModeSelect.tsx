@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils.ts';
 
 const PERMISSION_MODES: { value: PermissionMode; label: string }[] = [
 	{ value: 'default', label: 'Default' },
+	{ value: 'auto', label: 'Auto' },
 	{ value: 'accept_edits', label: 'Accept Edits' },
 	{ value: 'explore', label: 'Explore' },
 	{ value: 'bypass', label: 'Bypass' },
@@ -26,11 +27,21 @@ interface Props {
 	className?: string;
 	value?: PermissionMode;
 	disabled?: boolean;
+	autoEnabled?: boolean;
 	onChange?: (value: PermissionMode) => void;
 }
 
-export function PermissionModeSelect({ className, value, disabled, onChange }: Props) {
+export function PermissionModeSelect({
+	className,
+	value,
+	disabled,
+	autoEnabled = false,
+	onChange,
+}: Props) {
 	const { t } = useTranslation();
+	const availableModes = autoEnabled
+		? PERMISSION_MODES
+		: PERMISSION_MODES.filter((mode) => mode.value !== 'auto');
 
 	const displayLabel = value
 		? (PERMISSION_MODES.find((m) => m.value === value)?.label ?? value)
@@ -56,7 +67,7 @@ export function PermissionModeSelect({ className, value, disabled, onChange }: P
 			<DropdownMenuContent align="start" className="min-w-48">
 				<DropdownMenuGroup>
 					<DropdownMenuLabel>{t('permission-mode.label')}</DropdownMenuLabel>
-					{PERMISSION_MODES.map((mode) => (
+					{availableModes.map((mode) => (
 						<Tooltip key={mode.value}>
 							<TooltipTrigger asChild>
 								<DropdownMenuItem onSelect={() => onChange?.(mode.value)}>

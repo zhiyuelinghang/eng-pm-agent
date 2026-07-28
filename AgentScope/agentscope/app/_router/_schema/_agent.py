@@ -5,7 +5,7 @@ import warnings
 from pydantic import BaseModel, Field
 
 from ....agent import ContextConfig, ReActConfig
-from ...storage import AgentCallConfig, InviteConfig
+from ...storage import AgentCallConfig, AgentModelPolicy, InviteConfig
 from ..._service import AgentView
 
 
@@ -24,6 +24,13 @@ class CreateAgentRequest(BaseModel):
     react_config: ReActConfig = Field(
         default_factory=ReActConfig,
         description="ReAct loop configuration.",
+    )
+    model_policy: AgentModelPolicy = Field(
+        default_factory=AgentModelPolicy,
+        description=(
+            "Agent-specific model selection. Defaults to following the "
+            "current conversation."
+        ),
     )
     invite_config: InviteConfig = Field(
         default_factory=InviteConfig,
@@ -63,6 +70,12 @@ class UpdateAgentRequest(BaseModel):
     react_config: ReActConfig | None = Field(
         default=None,
         description="New ReAct loop configuration.",
+    )
+    model_policy: AgentModelPolicy | None = Field(
+        default=None,
+        description=(
+            "New agent model policy. Omit to retain the existing policy."
+        ),
     )
     invite_config: InviteConfig | None = Field(
         default=None,

@@ -18,6 +18,7 @@ from ._service import (
     IndexTaskConsumer,
     IndexWorker,
     KnowledgeBaseService,
+    PermissionReviewService,
     ResourceAccessService,
     SessionService,
 )
@@ -93,6 +94,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         app.state.resource_access_service = resource_access_service
 
+        permission_review_service = PermissionReviewService(
+            storage=storage,
+            access=resource_access_service,
+        )
+        app.state.permission_review_service = permission_review_service
+
         chat_service = ChatService(
             storage=storage,
             workspace_manager=workspace_manager,
@@ -105,6 +112,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             extra_agent_tools=app.state.extra_agent_tools,
             custom_subagent_templates=app.state.custom_subagent_templates,
             custom_agent_cls=app.state.custom_agent_cls,
+            permission_review_service=permission_review_service,
         )
         app.state.chat_service = chat_service
 

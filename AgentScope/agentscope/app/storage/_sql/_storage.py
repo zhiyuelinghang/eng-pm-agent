@@ -26,6 +26,9 @@ from .._model import (
     KnowledgeBaseRecord,
     KnowledgeDocumentRecord,
     KnowledgeDocumentStatus,
+    PermissionReviewAuditRecord,
+    PermissionReviewerConfigData,
+    PermissionReviewerConfigRecord,
     ScheduleRecord,
     SessionRecord,
     SessionConfig,
@@ -41,6 +44,8 @@ from ._tables import (
     KnowledgeBaseRow,
     KnowledgeDocumentRow,
     MessageRow,
+    PermissionReviewAuditRow,
+    PermissionReviewerConfigRow,
     ScheduleRow,
     SessionRow,
     TeamRow,
@@ -387,6 +392,93 @@ class AsyncSQLAlchemyStorage(StorageBase):
                 ).scalar_one()
             await sess.commit()
         return record
+
+    # ------------------------------------------------------------------
+    # Built-in permission reviewer
+    # ------------------------------------------------------------------
+
+    async def get_permission_reviewer_config(
+        self,
+        user_id: str,
+    ) -> PermissionReviewerConfigRecord | None:
+        """Return the single reviewer configuration owned by *user_id*."""
+        from sqlalchemy import select
+
+        async with self._session() as sess:
+            row = (
+                await sess.execute(
+                    select(PermissionReviewerConfigRow).where(
+                        PermissionReviewerConfigRow.user_id == user_id,
+                    ),
+                )
+            ).scalar_one_or_none()
+        return (
+            _to_record(row, PermissionReviewerConfigRecord)
+            if row is not None
+            else None
+        )
+
+    async def upsert_permission_reviewer_config(
+        self,
+        user_id: str,
+        data: PermissionReviewerConfigData,
+    ) -> PermissionReviewerConfigRecord:
+        """Create or atomically replace the user's reviewer configuration."""
+        from hashlib import sha256
+
+        record_id = sha256(
+            f"permission-reviewer:{user_id}".encode("utf-8"),
+        ).hexdigest()
+        existing = await self.get_permission_reviewer_config(user_id)
+        record = PermissionReviewerConfigRecord(
+            id=record_id,
+            user_id=user_id,
+            data=data,
+        )
+        if existing is not None:
+            record.created_at = existing.created_at
+        await self._write_row(PermissionReviewerConfigRow, record)
+        return record
+
+    async def append_permission_review_audit(
+        self,
+        record: PermissionReviewAuditRecord,
+    ) -> PermissionReviewAuditRecord:
+        """Append one immutable permission review audit record."""
+        await self._write_row(
+            PermissionReviewAuditRow,
+            record,
+            preserve_created_at=False,
+        )
+        return record
+
+    async def list_permission_review_audits(
+        self,
+        user_id: str,
+        limit: int = 50,
+    ) -> list[PermissionReviewAuditRecord]:
+        """Return newest reviewer audit records for *user_id*."""
+        from sqlalchemy import select
+
+        safe_limit = max(1, min(limit, 200))
+        async with self._session() as sess:
+            rows = (
+                (
+                    await sess.execute(
+                        select(PermissionReviewAuditRow)
+                        .where(
+                            PermissionReviewAuditRow.user_id == user_id,
+                        )
+                        .order_by(PermissionReviewAuditRow.created_at.desc())
+                        .limit(safe_limit),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [
+            _to_record(row, PermissionReviewAuditRecord) for row in rows
+        ]
 
     # ------------------------------------------------------------------
     # Cascade-delete internals — every ``_delete_*_impl`` runs on the

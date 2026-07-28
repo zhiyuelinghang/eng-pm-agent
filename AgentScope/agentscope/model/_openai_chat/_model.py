@@ -254,8 +254,10 @@ class OpenAIChatModel(ChatModelBase):
             }
             kwargs["modalities"] = ["text", "audio"]
 
-        if self.extra_body is not None:
-            kwargs["extra_body"] = dict(self.extra_body)
+        extra_body = dict(self.extra_body or {})
+        extra_body.update(self._get_request_body_overrides())
+        if extra_body:
+            kwargs["extra_body"] = extra_body
 
         kwargs.update(generate_kwargs)
 

@@ -34,6 +34,10 @@ class PermissionMode(Enum):
     |               |   and fall through to the default ASK unless    |                                |
     |               |   an allow rule matches.                        |                                |
     +---------------+--------------------------------------------------+--------------------------------+
+    | AUTO          | Apply DEFAULT checks, then send ordinary ASK    | Interactive sessions using     |
+    |               | decisions to the configured built-in reviewer. | the built-in AI reviewer       |
+    |               | Safety ASKs always remain human-only.           |                                |
+    +---------------+--------------------------------------------------+--------------------------------+
     | ACCEPT_EDITS  | - Auto-allow file writes in working directories | User present, rapid iteration  |
     |               | - Auto-allow file reads in working directories  | development                    |
     |               | - Auto-allow filesystem commands (mkdir, rm,     |                                |
@@ -68,6 +72,9 @@ class PermissionMode(Enum):
             only auto-allow path is the tool's own ``check_permissions``
             returning ALLOW (currently just ``Bash`` for recognized
             read-only commands like ``ls``/``git status``).
+        AUTO: Auto-review mode - applies the DEFAULT checks first, then
+            lets an application-provided reviewer resolve ordinary ASK
+            decisions. Safety ASKs remain human-only.
         ACCEPT_EDITS: Accept edits mode - automatically allows file
             edits within working directories (including filesystem
             bash commands whose every target is in a working dir).
@@ -79,6 +86,7 @@ class PermissionMode(Enum):
     """  # noqa: E501
 
     DEFAULT = "default"
+    AUTO = "auto"
     ACCEPT_EDITS = "accept_edits"
     EXPLORE = "explore"
     BYPASS = "bypass"

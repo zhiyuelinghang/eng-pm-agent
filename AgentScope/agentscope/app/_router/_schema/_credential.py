@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Request / response schemas for the credential router."""
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -11,6 +11,10 @@ from ..._service import (
     CredentialView,
 )
 from ....credential import CredentialModelDefinition
+from ...storage import (
+    PermissionReviewAuditRecord,
+    PermissionReviewerConfigData,
+)
 
 
 class CreateCredentialRequest(BaseModel):
@@ -65,6 +69,14 @@ class UpdateCredentialModelCatalogRequest(BaseModel):
         default_factory=list,
         description="Built-in embedding model identifiers to hide.",
     )
+    model_default_parameters: dict[str, dict[str, Any]] | None = Field(
+        default=None,
+        description=(
+            "Default inference parameters keyed by chat model identifier. "
+            "Omitting this field preserves existing defaults for compatibility "
+            "with older clients."
+        ),
+    )
 
 
 class TestCredentialModelRequest(BaseModel):
@@ -107,9 +119,34 @@ class CredentialModelCatalogResponse(BaseModel):
     hidden_embedding_model_ids: list[str] = Field(
         description="The exact persisted hidden embedding model identifiers.",
     )
+    model_default_parameters: dict[str, dict[str, Any]] = Field(
+        description="Persisted default inference parameters by chat model.",
+    )
     total: int = Field(description="Number of enabled candidate models.")
     discovery_supported: bool = Field(
         description="Whether GET /models discovery is supported.",
     )
     last_discovery_at: datetime | None = Field(default=None)
     last_discovery_error: str | None = Field(default=None)
+
+
+class PermissionReviewerConfigResponse(BaseModel):
+    """Current per-user configuration of the built-in permission reviewer."""
+
+    config: PermissionReviewerConfigData
+    updated_at: datetime | None = None
+
+
+class UpdatePermissionReviewerConfigRequest(PermissionReviewerConfigData):
+    """Replace the built-in permission reviewer configuration."""
+
+
+class TestPermissionReviewerConfigRequest(PermissionReviewerConfigData):
+    """Test a reviewer binding without persisting it."""
+
+
+class ListPermissionReviewAuditsResponse(BaseModel):
+    """Newest model-assisted permission decisions for the current user."""
+
+    audits: list[PermissionReviewAuditRecord]
+    total: int

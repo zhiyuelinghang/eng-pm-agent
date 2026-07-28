@@ -15,6 +15,9 @@ from ._model import (
     KnowledgeBaseRecord,
     KnowledgeDocumentRecord,
     KnowledgeDocumentStatus,
+    PermissionReviewAuditRecord,
+    PermissionReviewerConfigData,
+    PermissionReviewerConfigRecord,
     ScheduleRecord,
     SessionRecord,
     SessionConfig,
@@ -65,6 +68,12 @@ class RedisStorage(StorageBase):
         # Index keys (Redis Sets — store all IDs for a given scope)
         credential_index: str = "agentscope:user:{user_id}:credentials"
         agent_index: str = "agentscope:user:{user_id}:agents"
+        permission_reviewer_config: str = (
+            "agentscope:user:{user_id}:permission_reviewer_config"
+        )
+        permission_review_audits: str = (
+            "agentscope:user:{user_id}:permission_review_audits"
+        )
         session_index: str = (
             "agentscope:user:{user_id}:agent:{agent_id}:sessions"
         )
@@ -227,6 +236,84 @@ class RedisStorage(StorageBase):
     def get_client(self) -> Redis:
         """Get the underlying Redis client instance."""
         return self._client
+
+    # ------------------------------------------------------------------
+    # Built-in permission reviewer
+    # ------------------------------------------------------------------
+
+    async def get_permission_reviewer_config(
+        self,
+        user_id: str,
+    ) -> PermissionReviewerConfigRecord | None:
+        """Return the user's built-in reviewer configuration."""
+        key = self._key(
+            self.key_config.permission_reviewer_config,
+            user_id=user_id,
+        )
+        raw = await self._client.get(key)
+        return (
+            PermissionReviewerConfigRecord.model_validate_json(raw)
+            if raw
+            else None
+        )
+
+    async def upsert_permission_reviewer_config(
+        self,
+        user_id: str,
+        data: PermissionReviewerConfigData,
+    ) -> PermissionReviewerConfigRecord:
+        """Create or replace the user's built-in reviewer configuration."""
+        from hashlib import sha256
+
+        existing = await self.get_permission_reviewer_config(user_id)
+        record = PermissionReviewerConfigRecord(
+            id=sha256(
+                f"permission-reviewer:{user_id}".encode("utf-8"),
+            ).hexdigest(),
+            user_id=user_id,
+            data=data,
+        )
+        if existing is not None:
+            record.created_at = existing.created_at
+        record.updated_at = datetime.now()
+        key = self._key(
+            self.key_config.permission_reviewer_config,
+            user_id=user_id,
+        )
+        await self._set_with_ttl(key, record.model_dump_json())
+        return record
+
+    async def append_permission_review_audit(
+        self,
+        record: PermissionReviewAuditRecord,
+    ) -> PermissionReviewAuditRecord:
+        """Append one reviewer decision to the user's bounded audit list."""
+        key = self._key(
+            self.key_config.permission_review_audits,
+            user_id=record.user_id,
+        )
+        record.updated_at = datetime.now()
+        await self._client.lpush(key, record.model_dump_json())
+        await self._client.ltrim(key, 0, 199)
+        await self._touch_ttl(key)
+        return record
+
+    async def list_permission_review_audits(
+        self,
+        user_id: str,
+        limit: int = 50,
+    ) -> list[PermissionReviewAuditRecord]:
+        """Return the user's newest reviewer audit records."""
+        key = self._key(
+            self.key_config.permission_review_audits,
+            user_id=user_id,
+        )
+        safe_limit = max(1, min(limit, 200))
+        raw_records = await self._client.lrange(key, 0, safe_limit - 1)
+        return [
+            PermissionReviewAuditRecord.model_validate_json(raw)
+            for raw in raw_records
+        ]
 
     async def _generate_credential_name(
         self,

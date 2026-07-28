@@ -36,6 +36,8 @@ interface Props {
 	allowClear?: boolean;
 	/** Override the label of the "clear selection" item. */
 	clearLabel?: string;
+	/** Disable model changes while still showing the effective model. */
+	disabled?: boolean;
 }
 
 export function LlmSelect({
@@ -46,6 +48,7 @@ export function LlmSelect({
 	placeholder,
 	allowClear = false,
 	clearLabel,
+	disabled = false,
 }: Props) {
 	const { groups, loading, refetch } = useAvailableModels();
 	const { t } = useTranslation();
@@ -68,7 +71,12 @@ export function LlmSelect({
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
-				<Button variant="outline" size="sm" className="justify-between gap-1">
+				<Button
+					variant="outline"
+					size="sm"
+					className="justify-between gap-1"
+					disabled={disabled}
+				>
 					<span className="truncate">{displayLabel}</span>
 					<ChevronDown className="size-3.5 opacity-50" />
 				</Button>

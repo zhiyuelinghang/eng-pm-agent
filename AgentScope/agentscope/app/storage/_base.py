@@ -12,6 +12,9 @@ from ._model import (
     KnowledgeBaseRecord,
     KnowledgeDocumentRecord,
     KnowledgeDocumentStatus,
+    PermissionReviewAuditRecord,
+    PermissionReviewerConfigData,
+    PermissionReviewerConfigRecord,
     ScheduleRecord,
     SessionRecord,
     SessionConfig,
@@ -41,6 +44,47 @@ class StorageBase(ABC):
 
     async def aclose(self) -> None:
         """Release underlying connection resources. Default is a no-op."""
+
+    async def get_permission_reviewer_config(
+        self,
+        user_id: str,
+    ) -> PermissionReviewerConfigRecord | None:
+        """Return the user's built-in permission reviewer configuration.
+
+        Custom storage backends predating this feature may keep the default
+        ``None`` result; human confirmation then remains active.
+        """
+        return None
+
+    async def upsert_permission_reviewer_config(
+        self,
+        user_id: str,
+        data: PermissionReviewerConfigData,
+    ) -> PermissionReviewerConfigRecord:
+        """Create or replace the user's permission reviewer configuration."""
+        raise NotImplementedError(
+            "This storage backend does not persist permission reviewer "
+            "configuration.",
+        )
+
+    async def append_permission_review_audit(
+        self,
+        record: PermissionReviewAuditRecord,
+    ) -> PermissionReviewAuditRecord:
+        """Persist one automatic permission-review decision.
+
+        The compatibility default is a no-op so a custom storage backend does
+        not disable the reviewer merely because it has no audit store yet.
+        """
+        return record
+
+    async def list_permission_review_audits(
+        self,
+        user_id: str,
+        limit: int = 50,
+    ) -> list[PermissionReviewAuditRecord]:
+        """Return the user's newest permission-review audit records."""
+        return []
 
     @abstractmethod
     async def upsert_credential(

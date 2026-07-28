@@ -28,6 +28,10 @@ from ._credential import (
     UpdateCredentialModelCatalogRequest,
     ListCredentialsResponse,
     ListCredentialSchemasResponse,
+    ListPermissionReviewAuditsResponse,
+    PermissionReviewerConfigResponse,
+    TestPermissionReviewerConfigRequest,
+    UpdatePermissionReviewerConfigRequest,
 )
 from ._knowledge_base import (
     CreateKnowledgeBaseRequest,
@@ -80,6 +84,10 @@ __all__ = [
     "UpdateCredentialModelCatalogRequest",
     "ListCredentialsResponse",
     "ListCredentialSchemasResponse",
+    "ListPermissionReviewAuditsResponse",
+    "PermissionReviewerConfigResponse",
+    "TestPermissionReviewerConfigRequest",
+    "UpdatePermissionReviewerConfigRequest",
     # Knowledge base
     "CreateKnowledgeBaseRequest",
     "CreateKnowledgeBaseResponse",

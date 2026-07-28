@@ -1,13 +1,24 @@
 # -*- coding: utf-8 -*-
 """Storage models for persisted resources."""
 
-from ._agent import AgentCallConfig, AgentRecord, AgentData, InviteConfig
+from ._agent import (
+    AgentCallConfig,
+    AgentData,
+    AgentModelPolicy,
+    AgentRecord,
+    InviteConfig,
+)
 from ._credential import CredentialRecord
 from ._knowledge_base import KnowledgeBaseData, KnowledgeBaseRecord
 from ._knowledge_document import (
     KnowledgeDocumentData,
     KnowledgeDocumentRecord,
     KnowledgeDocumentStatus,
+)
+from ._permission_review import (
+    PermissionReviewAuditRecord,
+    PermissionReviewerConfigData,
+    PermissionReviewerConfigRecord,
 )
 from ._schedule import ScheduleData, ScheduleRecord, ScheduleSource
 from ._session import (
@@ -25,6 +36,7 @@ from ._user import UserRecord
 __all__ = [
     "AgentCallConfig",
     "AgentData",
+    "AgentModelPolicy",
     "AgentRecord",
     "CredentialRecord",
     "KnowledgeBaseData",
@@ -32,6 +44,9 @@ __all__ = [
     "KnowledgeDocumentData",
     "KnowledgeDocumentRecord",
     "KnowledgeDocumentStatus",
+    "PermissionReviewAuditRecord",
+    "PermissionReviewerConfigData",
+    "PermissionReviewerConfigRecord",
     "ScheduleData",
     "ScheduleRecord",
     "ScheduleSource",

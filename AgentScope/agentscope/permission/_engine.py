@@ -85,6 +85,8 @@ class PermissionEngine:
         is self-contained and readable in isolation:
 
         - DEFAULT      → :meth:`_check_default`
+        - AUTO         → :meth:`_check_default`, followed by an optional
+          application reviewer in the Agent execution layer
         - EXPLORE      → :meth:`_check_explore`
         - ACCEPT_EDITS → :meth:`_check_accept_edits`
         - BYPASS       → :meth:`_check_bypass`
@@ -103,6 +105,8 @@ class PermissionEngine:
         """
         mode = self.context.mode
         if mode == PermissionMode.DEFAULT:
+            return await self._check_default(tool, tool_input)
+        if mode == PermissionMode.AUTO:
             return await self._check_default(tool, tool_input)
         if mode == PermissionMode.EXPLORE:
             return await self._check_explore(tool, tool_input)

@@ -15,10 +15,11 @@ import type {
 	AgentCallConfig,
 	AgentView,
 	ChatModelConfig,
+	PermissionMode,
 	SessionKnowledgeConfig,
 	TTSModelConfig,
 } from '@/api';
-import { sessionApi } from '@/api';
+import { credentialApi, sessionApi } from '@/api';
 import MCPSvg from '@/assets/images/mcp.svg?react';
 import { ChatContent } from '@/components/chat/ChatContent.tsx';
 import { SubagentHitlCard } from '@/components/chat/SubagentHitlCard';
@@ -147,7 +148,7 @@ export function ChatViewport({
 }: ChatViewportProps) {
 	const { t } = useTranslation();
 	const { sessions, refetch: refetchSessions } = useSessions(agentId);
-	const { groups } = useAvailableModels();
+	const { groups, loading: modelsLoading } = useAvailableModels();
 
 	// When the viewport agent differs from the outer page's selected
 	// agent (i.e. user drilled into a team member), `refetchSessions`
@@ -166,7 +167,10 @@ export function ChatViewport({
 	const [selectedTTSModel, setSelectedTTSModel] = useState<TTSModelConfig | null>(null);
 	const [selectedKnowledgeConfig, setSelectedKnowledgeConfig] =
 		useState<SessionKnowledgeConfig | null>(null);
-	const [selectedPermissionMode, setSelectedPermissionMode] = useState<string>('default');
+	const [selectedPermissionMode, setSelectedPermissionMode] = useState<PermissionMode>('default');
+	const [permissionReviewerEnabled, setPermissionReviewerEnabled] = useState<boolean | null>(
+		null,
+	);
 	const [credentialOpen, setCredentialOpen] = useState(false);
 	const [credentialRefetchTrigger, setCredentialRefetchTrigger] = useState(0);
 	const [tasksContext, setTasksContext] = useState<TaskContext | null>(null);
@@ -174,6 +178,21 @@ export function ChatViewport({
 	// Dock layout: columns laid out left→right, each holding up to 2
 	// panels stacked top→bottom. Open order determines placement.
 	const [panelLayout, setPanelLayout] = useState<PanelKey[][]>([]);
+
+	useEffect(() => {
+		let active = true;
+		void credentialApi
+			.permissionReviewer()
+			.then((response) => {
+				if (active) setPermissionReviewerEnabled(response.config.enabled);
+			})
+			.catch(() => {
+				if (active) setPermissionReviewerEnabled(null);
+			});
+		return () => {
+			active = false;
+		};
+	}, []);
 
 	const handleStateUpdated = useCallback((value: Record<string, unknown>) => {
 		if (value.tasks_context) {
@@ -205,6 +224,11 @@ export function ChatViewport({
 		() => agents.find((agent) => agent.id === agentId) ?? null,
 		[agents, agentId],
 	);
+	const agentFixedModel =
+		activeAgent?.data.model_policy?.mode === 'fixed'
+			? activeAgent.data.model_policy.chat_model_config
+			: null;
+	const effectiveSelectedModel = agentFixedModel ?? selectedModel;
 
 	// Toggle a panel open/closed from the top-bar buttons.
 	const togglePanel = useCallback((key: PanelKey) => {
@@ -401,15 +425,16 @@ export function ChatViewport({
 	}, [sessionId]);
 
 	const selectedModelCard = useMemo(() => {
-		if (!selectedModel) return null;
-		const items = groups[selectedModel.type];
+		if (!effectiveSelectedModel) return null;
+		const items = groups[effectiveSelectedModel.type];
 		if (!items) return null;
-		for (const { models } of items) {
-			const card = models.find((m) => m.name === selectedModel.model);
+		for (const { credential, models } of items) {
+			if (credential.id !== effectiveSelectedModel.credential_id) continue;
+			const card = models.find((m) => m.name === effectiveSelectedModel.model);
 			if (card) return card;
 		}
 		return null;
-	}, [groups, selectedModel?.type, selectedModel?.model]);
+	}, [effectiveSelectedModel, groups]);
 
 	/**
 	 * Pick the first model the available-models endpoint surfaces, used
@@ -485,6 +510,8 @@ export function ChatViewport({
 
 		if (sessionModel) {
 			setSelectedModel(sessionModel);
+		} else if (agentFixedModel) {
+			setSelectedModel(null);
 		} else {
 			const firstModel = getFirstAvailableModel();
 			if (firstModel) {
@@ -503,7 +530,7 @@ export function ChatViewport({
 		setSelectedFallbackModel(view.session.config.fallback_chat_model_config ?? null);
 		setSelectedTTSModel(view.session.config.tts_model_config ?? null);
 		setSelectedKnowledgeConfig(view.session.config.knowledge_config ?? null);
-	}, [view, groups, sessionId, agentId]);
+	}, [view, groups, sessionId, agentId, agentFixedModel]);
 
 	// Sync selectedPermissionMode when the session changes. Same
 	// loading-window guard as above — don't reset the displayed mode
@@ -511,7 +538,7 @@ export function ChatViewport({
 	useEffect(() => {
 		if (!view) return;
 		const mode = (view.session.state?.permission_context as Record<string, unknown>)
-			?.mode as string;
+			?.mode as PermissionMode;
 		setSelectedPermissionMode(mode ?? 'default');
 	}, [sessionId, view]);
 
@@ -523,7 +550,7 @@ export function ChatViewport({
 	 *   because the primary selector does not allow clearing.
 	 */
 	const handleLlmChange = async (config: ChatModelConfig | null) => {
-		if (!config || !sessionId || !agentId) return;
+		if (agentFixedModel || !config || !sessionId || !agentId) return;
 		setSelectedModel(config);
 		await sessionApi.update(sessionId, agentId, { chat_model_config: config });
 		await refetchSessions();
@@ -571,12 +598,26 @@ export function ChatViewport({
 	 *
 	 * @param mode - New permission mode (e.g. `default`, `explore`).
 	 */
-	const handlePermissionModeChange = async (mode: string) => {
-		setSelectedPermissionMode(mode);
-		if (!sessionId || !agentId) return;
-		await sessionApi.update(sessionId, agentId, { permission_mode: mode });
-		await refetchSessions();
-	};
+	const handlePermissionModeChange = useCallback(
+		async (mode: PermissionMode) => {
+			if (!sessionId || !agentId) return;
+			const previousMode = selectedPermissionMode;
+			setSelectedPermissionMode(mode);
+			try {
+				await sessionApi.update(sessionId, agentId, { permission_mode: mode });
+				await refetchSessions();
+			} catch (error) {
+				setSelectedPermissionMode(previousMode);
+				throw error;
+			}
+		},
+		[agentId, refetchSessions, selectedPermissionMode, sessionId],
+	);
+
+	useEffect(() => {
+		if (permissionReviewerEnabled !== false || selectedPermissionMode !== 'auto') return;
+		void handlePermissionModeChange('default').catch(() => undefined);
+	}, [handlePermissionModeChange, permissionReviewerEnabled, selectedPermissionMode]);
 
 	return (
 		<>
@@ -591,13 +632,26 @@ export function ChatViewport({
 								>
 									<SidebarTrigger className="md:hidden" />
 									<LlmSelect
-										value={selectedModel}
+										value={effectiveSelectedModel}
 										onChange={handleLlmChange}
 										onAddCredential={() => setCredentialOpen(true)}
 										refetchTrigger={credentialRefetchTrigger}
+										disabled={agentFixedModel !== null}
 									/>
+									{agentFixedModel && (
+										<Badge variant="secondary">
+											{t('chat.model.agentFixed')}
+										</Badge>
+									)}
+									{!modelsLoading &&
+										effectiveSelectedModel &&
+										!selectedModelCard && (
+											<Badge variant="destructive">
+												{t('chat.model.unavailable')}
+											</Badge>
+										)}
 									<ModelParametersPopover
-										selectedModel={selectedModel}
+										selectedModel={effectiveSelectedModel}
 										modelCard={selectedModelCard}
 										onChange={handleParametersChange}
 										selectedFallbackModel={selectedFallbackModel}
@@ -610,6 +664,7 @@ export function ChatViewport({
 									<PermissionModeSelect
 										value={selectedPermissionMode}
 										disabled={!sessionId}
+										autoEnabled={permissionReviewerEnabled === true}
 										onChange={handlePermissionModeChange}
 									/>
 									<DropdownMenu>
@@ -681,7 +736,7 @@ export function ChatViewport({
 									className={'max-w-[var(--chat-content-w)] w-full'}
 									msgs={msgs}
 									phase={phase}
-									disabled={selectedModel === null}
+									disabled={effectiveSelectedModel === null}
 									onSend={send}
 									onUserConfirm={onUserConfirm}
 									onInterrupt={interrupt}

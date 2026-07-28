@@ -204,6 +204,7 @@ class DeepSeekChatModel(ChatModelBase):
         kwargs.setdefault("extra_body", {})
         kwargs["extra_body"].setdefault("thinking", {})
         kwargs["extra_body"]["thinking"].setdefault("type", thinking_type)
+        kwargs["extra_body"].update(self._get_request_body_overrides())
 
         fmt_tools, fmt_tool_choice = self._format_tools(tools, tool_choice)
 

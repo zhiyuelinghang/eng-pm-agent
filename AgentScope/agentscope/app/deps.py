@@ -11,6 +11,7 @@ from ._manager import (
 from ._service import (
     ChatService,
     KnowledgeBaseService,
+    PermissionReviewService,
     ResourceAccessService,
     SessionService,
 )
@@ -98,6 +99,13 @@ async def get_resource_access_service(
             credential / agent / knowledge base records.
     """
     return request.app.state.resource_access_service
+
+
+async def get_permission_review_service(
+    request: Request,
+) -> PermissionReviewService:
+    """Return the application-wide built-in permission review service."""
+    return request.app.state.permission_review_service
 
 
 async def get_session_service(request: Request) -> SessionService:

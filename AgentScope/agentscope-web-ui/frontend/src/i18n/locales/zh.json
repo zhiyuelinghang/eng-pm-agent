@@ -13,6 +13,7 @@
 		"delete": "删除",
 		"deleting": "删除中…",
 		"disabled": "已禁用",
+		"enabled": "已启用",
 		"edit": "编辑",
 		"error": "出错了",
 		"information": "信息",
@@ -124,6 +125,10 @@
 		"inputPlaceholder": "输入消息...",
 		"placeholder": "输入消息...",
 		"send": "发送",
+		"model": {
+			"agentFixed": "智能体固定",
+			"unavailable": "模型目录不可用"
+		},
 		"confirmToolCall": "允许此操作？",
 		"subagentConfirmTitle": "{{name}} 请求确认",
 		"newSession": "新会话",
@@ -158,6 +163,31 @@
 			},
 			"system-prompt": {
 				"label": "系统提示词"
+			}
+		},
+		"model-policy": {
+			"legend": "模型配置",
+			"description": "为此智能体固定专用模型与参数；未固定时跟随当前会话选择。",
+			"mode": {
+				"label": "模型策略",
+				"inherit": "跟随会话",
+				"fixed": "固定模型",
+				"inherit_sessionDescription": "使用聊天界面为当前会话选择的模型。",
+				"fixedDescription": "始终使用下方配置的模型和参数，聊天界面不能覆盖。"
+			},
+			"credential": "模型凭证",
+			"credentialPlaceholder": "选择凭证",
+			"model": "模型",
+			"modelPlaceholder": "选择模型",
+			"parameters": "智能体专用参数",
+			"parametersDescription": "只保存此智能体需要覆盖的参数；未填写项继续继承凭证中的模型默认值。",
+			"customDescription": "用于厂商未声明的思考或扩展参数，并随此智能体的每次模型请求发送。",
+			"unavailable": "当前不可选",
+			"unavailableDescription": "保存的模型已被隐藏、删除或暂时不在当前凭证目录中。请重新选择后再保存。",
+			"errors": {
+				"model_required": "固定模型策略必须选择凭证和模型。",
+				"invalid_json": "自定义请求参数不是有效的 JSON。",
+				"object_required": "自定义请求参数必须是 JSON 对象。"
 			}
 		},
 		"context-config": {
@@ -333,6 +363,7 @@
 		"manualAdd": "手动添加",
 		"manualModelTitle": "手动添加模型",
 		"manualModelDescription": "选择用途并填写厂商要求的准确模型 ID；再次添加同名模型可更新其类型。",
+		"manualModelCustomParametersDescription": "如果该模型没有声明思考能力，可在添加时直接填写厂商要求的 JSON 参数；留空则不附加自定义参数，添加后仍可继续修改。",
 		"editModelTitle": "编辑模型",
 		"editModelDescription": "可修改模型 ID、显示名称和模型类型。模型 ID 是实际发送给厂商的值。",
 		"modelType": "模型类型",
@@ -369,6 +400,68 @@
 		},
 		"modelProbe": {
 			"failed": "无法识别该 Embedding 模型，请检查模型 ID、API 地址和凭证。"
+		},
+		"modelDefaults": {
+			"action": "配置模型默认参数",
+			"title": "模型默认参数",
+			"description": "配置 {{model}} 的默认推理参数，包括思考模式和思考强度。",
+			"inheritanceTitle": "所有使用场景默认继承",
+			"inheritanceDescription": "业务智能体、团队成员、定时任务和系统内置智能体都会读取这里的默认值；会话或专用配置可以单独覆盖。",
+			"configured": "已配置 {{count}} 项",
+			"reset": "恢复厂商默认值",
+			"save": "保存默认参数",
+			"saved": "模型默认参数已保存。",
+			"customTitle": "自定义请求参数（JSON）",
+			"customDescription": "模型未声明的厂商参数可在这里配置，并会合并进实际请求体。发生同名冲突时，此处的自定义值优先；模型、消息、工具等 AgentScope 核心字段不可覆盖。",
+			"customRequired": "未声明思考参数",
+			"customPlaceholder": "{\n  \"enable_thinking\": true\n}",
+			"customExamplesLabel": "按当前厂商选择一种写法，例如：",
+			"customExamples": "OpenAI 兼容：{\"enable_thinking\":true}\nResponses：{\"reasoning\":{\"effort\":\"low\"}}\nAnthropic：{\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":5000}}",
+			"customInvalid": "JSON 格式不正确，请检查括号、引号和逗号。",
+			"customObjectRequired": "自定义请求参数必须是一个 JSON 对象。"
+		},
+		"permissionReviewer": {
+			"systemGroup": "系统内置智能体",
+			"shortTitle": "权限审核员",
+			"builtIn": "内置",
+			"title": "系统权限审核员",
+			"subtitle": "为选择 Auto 权限模式的会话提供独立、隔离的智能审核。",
+			"systemBadge": "系统内置 · 不参与业务会话",
+			"securityTitle": "权限引擎仍是不可绕过的安全边界",
+			"securityDescription": "审核员只处理原权限结果为“需要确认”的操作。明确拒绝、危险路径和破坏性操作不会被自动放行；模型故障或判断不清时固定转人工。",
+			"bindingTitle": "独立模型绑定",
+			"bindingDescription": "审核模型不跟随聊天会话，可单独使用更强的模型与专用额度。",
+			"credential": "主审核凭证",
+			"model": "主审核模型",
+			"selectCredential": "选择凭证",
+			"selectModel": "选择对话模型",
+			"fallbackCredential": "备用凭证（可选）",
+			"fallbackModel": "备用模型（可选）",
+			"noFallback": "不使用备用模型",
+			"confidence": "自动决策最低置信度",
+			"maxRisk": "允许自动决策的最高风险",
+			"timeout": "单次审核超时",
+			"seconds": "秒",
+			"test": "测试审核模型",
+			"testing": "正在测试…",
+			"save": "保存配置",
+			"saved": "权限审核员配置已保存。",
+			"testPassed": "审核链路测试通过 · {{latency}} ms",
+			"testFailed": "审核链路测试失败",
+			"auditTitle": "最近审核记录",
+			"auditDescription": "仅记录自动审核的结论；敏感字段会在发送和保存前脱敏。",
+			"noAudits": "暂无自动审核记录。",
+			"actions": {
+				"allow_once": "本次允许",
+				"deny": "拒绝",
+				"human_required": "转人工"
+			},
+			"risks": {
+				"low": "低风险",
+				"medium": "中风险",
+				"high": "高风险",
+				"critical": "严重风险"
+			}
 		}
 	},
 	"knowledge": {
@@ -467,6 +560,7 @@
 		"trigger-tooltip": "权限模式",
 		"label": "权限模式",
 		"default-tooltip": "默认模式：所有操作需要明确授权（最安全）",
+		"auto-tooltip": "智能审核模式：普通确认先由内置权限审核员判断，高风险、低置信度或审核失败时转交人工",
 		"accept_edits-tooltip": "自动允许工作目录内的文件读写及文件系统命令（mkdir、rm、mv 等），其他操作按正常规则处理",
 		"explore-tooltip": "只读模式：允许读取/Grep/Glob 工具，禁止写入/编辑/Bash 等修改操作",
 		"bypass-tooltip": "所有操作自动允许，无需权限检查（适用于可信/沙箱环境）",
@@ -555,7 +649,32 @@
 		"ttsEmpty": "暂无可用的语音合成模型。",
 		"ttsParameters": "参数",
 		"ttsParametersDescription": "调整所选语音合成模型的参数。",
-		"noTts": "不使用语音合成"
+		"noTts": "不使用语音合成",
+		"fields": {
+			"max_tokens": "最大输出 Token",
+			"thinking_enable": "开启思考模式",
+			"reasoning_effort": "思考强度",
+			"thinking_budget": "思考预算",
+			"temperature": "随机性（Temperature）",
+			"top_p": "Top P",
+			"top_k": "Top K",
+			"parallel_tool_calls": "允许并行工具调用",
+			"voice": "语音"
+		},
+		"fieldDescriptions": {
+			"thinking_enable": "控制该模型是否启用深度思考或推理输出。",
+			"reasoning_effort": "控制模型投入到推理过程中的计算强度；具体档位由厂商和模型决定。",
+			"thinking_budget": "允许模型用于思考过程的最大 Token 数量。"
+		},
+		"values": {
+			"none": "无",
+			"minimal": "极低",
+			"low": "低",
+			"medium": "中",
+			"high": "高",
+			"xhigh": "极高",
+			"max": "最高"
+		}
 	},
 	"setup": {
 		"title": "连接到服务器",

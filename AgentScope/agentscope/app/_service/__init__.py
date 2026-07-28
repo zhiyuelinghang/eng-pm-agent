@@ -15,16 +15,22 @@ from ._credential_models import (
     build_credential_embedding_model_catalog,
     build_credential_model_catalog,
     discover_credential_models,
+    normalize_credential_model_parameters,
     supports_model_discovery,
     test_credential_embedding_model,
     test_credential_model,
+)
+from ._permission_review import (
+    ModelPermissionReviewer,
+    PermissionReviewerTestResult,
+    PermissionReviewService,
 )
 from ._embedding import get_embedding_model
 from ._index_sweeper import IndexSweeper
 from ._index_task_consumer import IndexTaskConsumer
 from ._index_worker import IndexWorker
 from ._knowledge_base import KnowledgeBaseService
-from ._model import get_model
+from ._model import get_model, resolve_effective_chat_model_config
 from ._tts_model import get_tts_model
 from ._session import SessionService, SessionStatus
 from ._session_projection import SessionProjection
@@ -38,6 +44,9 @@ __all__ = [
     "CredentialModelEntry",
     "CredentialModelTestResult",
     "CredentialView",
+    "ModelPermissionReviewer",
+    "PermissionReviewerTestResult",
+    "PermissionReviewService",
     "IndexSweeper",
     "IndexTaskConsumer",
     "IndexWorker",
@@ -52,8 +61,10 @@ __all__ = [
     "build_credential_embedding_model_catalog",
     "build_credential_model_catalog",
     "discover_credential_models",
+    "normalize_credential_model_parameters",
     "get_embedding_model",
     "get_model",
+    "resolve_effective_chat_model_config",
     "get_tts_model",
     "get_toolkit",
     "supports_model_discovery",

@@ -95,6 +95,10 @@ from ..permission import (
     PermissionBehavior,
     PermissionEngine,
     PermissionDecision,
+    PermissionMode,
+    PermissionReviewAction,
+    PermissionReviewRequest,
+    PermissionReviewerBase,
     PermissionRule,
 )
 from ._structured_output_tool import _GenerateStructuredOutput
@@ -123,6 +127,7 @@ class Agent:
         context_config: ContextConfig | None = None,
         react_config: ReActConfig | None = None,
         injection_config: InjectionConfig | None = None,
+        permission_reviewer: PermissionReviewerBase | None = None,
     ) -> None:
         """Initialize the agent class in AgentScope.
 
@@ -159,6 +164,11 @@ class Agent:
                 The runtime state injection config, which controls how the
                 time, (plan) tasks and context usage are injected into the
                 context to help the agent better reason and act.
+            permission_reviewer (`PermissionReviewerBase | None`, optional):
+                Optional application-provided second-stage reviewer. It is
+                consulted only in AUTO mode when the normal permission engine
+                would ask a human, and can allow the invocation once, deny it,
+                or leave it for human confirmation.
         """
         self.name = name
         self._system_prompt = system_prompt
@@ -173,6 +183,7 @@ class Agent:
 
         # The permission engine
         self._engine = PermissionEngine(self.state.permission_context)
+        self._permission_reviewer = permission_reviewer
 
         # The offloader/workspace
         self.offloader = offloader
@@ -2017,6 +2028,67 @@ class Agent:
                 tool,
                 parsed_input,
             )
+
+        # AUTO mode may use an application-provided reviewer for ordinary ASK
+        # decisions. Explicit DENY decisions never reach this branch, and
+        # bypass-immune safety ASKs always remain human-only.
+        if (
+            self._permission_reviewer is not None
+            and self.state.permission_context.mode == PermissionMode.AUTO
+            and decision.behavior
+            in (PermissionBehavior.ASK, PermissionBehavior.PASSTHROUGH)
+            and not decision.bypass_immune
+        ):
+            user_intent = ""
+            for context_msg in reversed(self.state.context):
+                if context_msg.role == "user":
+                    user_intent = context_msg.get_text_content() or ""
+                    break
+            try:
+                review = await self._permission_reviewer.review(
+                    PermissionReviewRequest(
+                        agent_name=self.name,
+                        tool_name=tool.name,
+                        tool_description=tool.description,
+                        tool_input=parsed_input,
+                        user_intent=user_intent[-6000:],
+                        permission_mode=(
+                            self.state.permission_context.mode.value
+                        ),
+                        permission_reason=decision.decision_reason,
+                        working_directories=list(
+                            self.state.permission_context
+                            .working_directories.keys(),
+                        ),
+                        bypass_immune=decision.bypass_immune,
+                    ),
+                )
+            except Exception:  # pylint: disable=broad-except
+                logger.exception(
+                    "Permission reviewer failed for tool %s; "
+                    "falling back to human confirmation.",
+                    tool.name,
+                )
+            else:
+                if review.action == PermissionReviewAction.ALLOW_ONCE:
+                    decision = PermissionDecision(
+                        behavior=PermissionBehavior.ALLOW,
+                        message=(
+                            f"Permission granted once for {tool.name} "
+                            "by the built-in reviewer."
+                        ),
+                        decision_reason=review.reason,
+                        updated_input=parsed_input,
+                    )
+                elif review.action == PermissionReviewAction.DENY:
+                    decision = PermissionDecision(
+                        behavior=PermissionBehavior.DENY,
+                        message=(
+                            f"Permission denied for {tool.name} by the "
+                            f"built-in reviewer: {review.reason}"
+                        ),
+                        decision_reason=review.reason,
+                    )
 
         # ===================================================================
         # Step 3: Handle the permission and execute the tool call if allowed

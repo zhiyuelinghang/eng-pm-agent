@@ -210,6 +210,8 @@ interface Props {
 	selectedTTSModel: TTSModelConfig | null;
 	/** Called when the user picks a TTS model+voice or disables TTS. */
 	onTTSChange: (config: TTSModelConfig | null) => void;
+	/** Whether the conversation may override primary-model parameters. */
+	showPrimaryParameters?: boolean;
 }
 
 /**
@@ -229,6 +231,7 @@ export function ModelParametersPopover({
 	onFallbackChange,
 	selectedTTSModel,
 	onTTSChange,
+	showPrimaryParameters = false,
 }: Props) {
 	const [values, setValues] = useState<Record<string, unknown>>({});
 	const { t } = useTranslation();
@@ -242,7 +245,7 @@ export function ModelParametersPopover({
 
 	useEffect(() => {
 		setValues(selectedModel?.parameters ?? {});
-	}, [selectedModel?.model]);
+	}, [selectedModel?.credential_id, selectedModel?.model, selectedModel?.parameters]);
 
 	const handleChange = useCallback(
 		(key: string, value: unknown) => {
@@ -342,73 +345,77 @@ export function ModelParametersPopover({
 				</DropdownMenuSub>
 
 				{/* ----- Primary model parameters ----- */}
-				<DropdownMenuSub>
-					<DropdownMenuSubTrigger>
-						{t('model-parameters.parametersLabel')}
-					</DropdownMenuSubTrigger>
-					<DropdownMenuSubContent className="w-80 max-h-96 overflow-y-auto p-3">
-						<div className="mb-3">
-							<p className="text-sm font-medium">{t('model-parameters.title')}</p>
-							<p className="text-muted-foreground text-xs">
-								{t('model-parameters.description')}
-							</p>
-						</div>
-						{entries.length === 0 ? (
-							<p className="text-muted-foreground text-xs">
-								{t('model-parameters.empty')}
-							</p>
-						) : (
-							<div
-								className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-3"
-								onPointerDown={(e) => e.stopPropagation()}
-								onKeyDown={(e) => e.stopPropagation()}
-							>
-								{entries.map(([key, prop]) => {
-									const { type: effectiveType, enumValues } = resolveType(prop);
-									const label = prop.title ?? key;
-									const isRequired = required.includes(key);
-									const fieldProps: FieldProps = {
-										id: `param-${key}`,
-										label,
-										required: isRequired,
-										prop,
-										value: values[key],
-										onChange: (v) => handleChange(key, v),
-									};
-
-									let field: React.ReactNode;
-									if (effectiveType === 'boolean') {
-										field = <BooleanField {...fieldProps} />;
-									} else if (enumValues) {
-										field = <EnumField {...fieldProps} />;
-									} else if (
-										effectiveType === 'number' ||
-										effectiveType === 'integer'
-									) {
-										field = <NumberField {...fieldProps} />;
-									} else {
-										field = <StringField {...fieldProps} />;
-									}
-
-									return (
-										<Tooltip key={key}>
-											<TooltipTrigger asChild>
-												<div className="col-span-2 grid grid-cols-subgrid items-center">
-													{field}
-												</div>
-											</TooltipTrigger>
-											{prop.description && (
-												<TooltipContent side="left">
-													{prop.description}
-												</TooltipContent>
-											)}
-										</Tooltip>
-									);
-								})}
+				{showPrimaryParameters && (
+					<DropdownMenuSub>
+						<DropdownMenuSubTrigger>
+							{t('model-parameters.parametersLabel')}
+						</DropdownMenuSubTrigger>
+						<DropdownMenuSubContent className="w-80 max-h-96 overflow-y-auto p-3">
+							<div className="mb-3">
+								<p className="text-sm font-medium">{t('model-parameters.title')}</p>
+								<p className="text-muted-foreground text-xs">
+									{t('model-parameters.description')}
+								</p>
 							</div>
-						)}
-					</DropdownMenuSubContent>
-				</DropdownMenuSub>
+							{entries.length === 0 ? (
+								<p className="text-muted-foreground text-xs">
+									{t('model-parameters.empty')}
+								</p>
+							) : (
+								<div
+									className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-3"
+									onPointerDown={(e) => e.stopPropagation()}
+									onKeyDown={(e) => e.stopPropagation()}
+								>
+									{entries.map(([key, prop]) => {
+										const { type: effectiveType, enumValues } =
+											resolveType(prop);
+										const label = prop.title ?? key;
+										const isRequired = required.includes(key);
+										const fieldProps: FieldProps = {
+											id: `param-${key}`,
+											label,
+											required: isRequired,
+											prop,
+											value:
+												values[key] ?? modelCard?.default_parameters?.[key],
+											onChange: (v) => handleChange(key, v),
+										};
+
+										let field: React.ReactNode;
+										if (effectiveType === 'boolean') {
+											field = <BooleanField {...fieldProps} />;
+										} else if (enumValues) {
+											field = <EnumField {...fieldProps} />;
+										} else if (
+											effectiveType === 'number' ||
+											effectiveType === 'integer'
+										) {
+											field = <NumberField {...fieldProps} />;
+										} else {
+											field = <StringField {...fieldProps} />;
+										}
+
+										return (
+											<Tooltip key={key}>
+												<TooltipTrigger asChild>
+													<div className="col-span-2 grid grid-cols-subgrid items-center">
+														{field}
+													</div>
+												</TooltipTrigger>
+												{prop.description && (
+													<TooltipContent side="left">
+														{prop.description}
+													</TooltipContent>
+												)}
+											</Tooltip>
+										);
+									})}
+								</div>
+							)}
+						</DropdownMenuSubContent>
+					</DropdownMenuSub>
+				)}
 
 				{/* ----- TTS ----- */}
 				<DropdownMenuSub>

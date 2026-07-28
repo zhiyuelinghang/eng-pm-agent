@@ -7,10 +7,10 @@ import copy
 import json
 import re
 from time import perf_counter
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, Field, SecretStr
 
 from ...credential import (
     CredentialBase,
@@ -18,7 +18,13 @@ from ...credential import (
 )
 from ...embedding import EmbeddingModelCard
 from ...message import UserMsg
-from ...model import ChatResponse, FinishedReason, ModelCard
+from ...model import (
+    CUSTOM_REQUEST_BODY_KEY,
+    ChatResponse,
+    FinishedReason,
+    ModelCard,
+    validate_custom_request_body,
+)
 from ...types import ErrorType
 from ._errors import _classify_error
 
@@ -52,6 +58,7 @@ class CredentialModelEntry(ModelCard):
 
     source: Literal["builtin", "discovered", "manual"]
     enabled: bool
+    default_parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class CredentialEmbeddingModelEntry(EmbeddingModelCard):
@@ -335,10 +342,77 @@ def build_credential_model_catalog(
                 **card.model_dump(),
                 "source": source,
                 "enabled": name not in hidden,
+                "default_parameters": (
+                    credential.model_catalog.model_default_parameters.get(
+                        name,
+                        {},
+                    )
+                ),
             },
         )
         for name, (card, source) in merged.items()
     ]
+
+
+def normalize_credential_model_parameters(
+    credential: CredentialBase,
+    model_name: str,
+    parameters: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate and normalise defaults for one credential-scoped model.
+
+    Validation uses both the resolved model card (to honour model-specific
+    hidden/unsupported fields) and the provider adapter's Pydantic parameter
+    class (to enforce types, ranges, and enum values).
+    """
+    candidate = next(
+        (
+            item
+            for item in build_credential_model_catalog(credential)
+            if item.name == model_name
+        ),
+        None,
+    )
+    if candidate is None:
+        raise ValueError(
+            f"Model {model_name!r} is not present in this credential.",
+        )
+
+    request_body_was_submitted = CUSTOM_REQUEST_BODY_KEY in parameters
+    request_body = parameters.get(CUSTOM_REQUEST_BODY_KEY, {})
+    regular_parameters = {
+        key: value
+        for key, value in parameters.items()
+        if key != CUSTOM_REQUEST_BODY_KEY
+    }
+
+    schema_properties = candidate.parameter_schema.get("properties", {})
+    allowed = set(schema_properties)
+    unknown = sorted(set(regular_parameters) - allowed)
+    if unknown:
+        raise ValueError(
+            f"Model {model_name!r} does not support parameter(s): "
+            + ", ".join(unknown),
+        )
+
+    parameter_cls = credential.get_chat_model_class().Parameters
+    try:
+        parsed = parameter_cls.model_validate(regular_parameters)
+    except Exception as exc:
+        raise ValueError(
+            f"Invalid parameters for model {model_name!r}: {exc}",
+        ) from exc
+
+    result = parsed.model_dump(
+        mode="json",
+        include=set(regular_parameters),
+        exclude_none=True,
+    )
+    if request_body_was_submitted:
+        normalized_request_body = validate_custom_request_body(request_body)
+        if normalized_request_body:
+            result[CUSTOM_REQUEST_BODY_KEY] = normalized_request_body
+    return result
 
 
 def _embedding_parameter_schema(credential: CredentialBase) -> dict:
@@ -543,7 +617,16 @@ async def test_credential_model(
 
     async def _invoke() -> None:
         model_cls = credential.get_chat_model_class()
-        parameters = model_cls.Parameters()
+        defaults = credential.model_catalog.model_default_parameters.get(
+            model_name,
+            {},
+        )
+        parameter_values = dict(defaults)
+        request_body_overrides = parameter_values.pop(
+            CUSTOM_REQUEST_BODY_KEY,
+            {},
+        )
+        parameters = model_cls.Parameters(**parameter_values)
         client_kwargs: dict[str, int | float] = {}
         credential_type = getattr(credential, "type", None)
         if credential_type in _OPENAI_SDK_CREDENTIAL_TYPES:
@@ -569,6 +652,7 @@ async def test_credential_model(
             max_retries=0,
             client_kwargs=client_kwargs,
         )
+        model.set_request_body_overrides(request_body_overrides)
         response = await model(
             [
                 UserMsg(

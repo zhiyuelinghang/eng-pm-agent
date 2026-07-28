@@ -1,4 +1,5 @@
 import {
+	Braces,
 	CircleAlert,
 	CircleCheck,
 	CircleX,
@@ -11,6 +12,8 @@ import {
 	Pencil,
 	RefreshCw,
 	RotateCcw,
+	SlidersHorizontal,
+	ShieldCheck,
 	Trash2,
 } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
@@ -27,6 +30,8 @@ import type {
 	TTSModelCard,
 } from '@/api';
 import { InputTypeBadges } from '@/components/badge/InputTypeBadges';
+import { ModelDefaultParametersDialog } from '@/components/credential/ModelDefaultParametersDialog';
+import { PermissionReviewerPanel } from '@/components/credential/PermissionReviewerPanel';
 import { CreateCredentialDialog } from '@/components/dialog/CreateCredentialDialog';
 import { DeleteDialog } from '@/components/dialog/DeleteDialog';
 import { EditCredentialDialog } from '@/components/dialog/EditCredentialDialog';
@@ -71,9 +76,13 @@ import {
 	SidebarMenuItem,
 } from '@/components/ui/sidebar';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Textarea } from '@/components/ui/textarea';
 import { useCredentials } from '@/hooks/useCredentials';
 import { useTranslation } from '@/i18n/useI18n';
+import { CUSTOM_REQUEST_BODY_KEY, parseCustomRequestBody } from '@/lib/model-parameters';
 import { formatNumber } from '@/utils/common.ts';
+
+const SYSTEM_PERMISSION_REVIEWER_ID = '__system_permission_reviewer__';
 
 // ─── Masked value ─────────────────────────────────────────────────────────────
 
@@ -165,8 +174,9 @@ interface ManualModelInput {
 interface ManualModelDialogProps {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	onSave: (model: ManualModelInput) => Promise<void>;
+	onSave: (model: ManualModelInput, customRequestBody: Record<string, unknown>) => Promise<void>;
 	initialModel?: ManualModelInput | null;
+	initialCustomRequestBody?: Record<string, unknown>;
 }
 
 function ManualModelDialog({
@@ -174,47 +184,72 @@ function ManualModelDialog({
 	onOpenChange,
 	onSave,
 	initialModel,
+	initialCustomRequestBody,
 }: ManualModelDialogProps) {
 	const { t } = useTranslation();
 	const [name, setName] = useState('');
 	const [label, setLabel] = useState('');
 	const [modelType, setModelType] = useState<'chat' | 'embedding'>('chat');
+	const [customRequestText, setCustomRequestText] = useState('');
 	const [submitting, setSubmitting] = useState(false);
 	const [errorMessage, setErrorMessage] = useState<string | null>(null);
-	const [probeFailure, setProbeFailure] =
-		useState<CredentialModelTestResponse | null>(null);
+	const [customRequestError, setCustomRequestError] = useState<string | null>(null);
+	const [probeFailure, setProbeFailure] = useState<CredentialModelTestResponse | null>(null);
 
 	useEffect(() => {
 		if (!open) return;
 		setName(initialModel?.name ?? '');
 		setLabel(initialModel?.label ?? '');
 		setModelType(initialModel?.model_type ?? 'chat');
+		setCustomRequestText(
+			initialCustomRequestBody && Object.keys(initialCustomRequestBody).length > 0
+				? JSON.stringify(initialCustomRequestBody, null, 2)
+				: '',
+		);
 		setErrorMessage(null);
+		setCustomRequestError(null);
 		setProbeFailure(null);
-	}, [initialModel, open]);
+	}, [initialCustomRequestBody, initialModel, open]);
 
 	const handleSave = async () => {
 		const trimmedName = name.trim();
 		if (!trimmedName) return;
 
+		let customRequestBody: Record<string, unknown> = {};
+		const trimmedCustomRequest = customRequestText.trim();
+		if (modelType === 'chat' && trimmedCustomRequest) {
+			try {
+				customRequestBody = parseCustomRequestBody(trimmedCustomRequest);
+			} catch (error) {
+				if (error instanceof Error && error.message === 'object_required') {
+					setCustomRequestError(t('credential.modelDefaults.customObjectRequired'));
+					return;
+				}
+				setCustomRequestError(t('credential.modelDefaults.customInvalid'));
+				return;
+			}
+		}
+
 		setSubmitting(true);
 		setErrorMessage(null);
+		setCustomRequestError(null);
 		setProbeFailure(null);
 		try {
-			await onSave({
-				model_type: modelType,
-				name: trimmedName,
-				label: label.trim() || null,
-			});
+			await onSave(
+				{
+					model_type: modelType,
+					name: trimmedName,
+					label: label.trim() || null,
+				},
+				customRequestBody,
+			);
 			onOpenChange(false);
 		} catch (error) {
 			if (error instanceof ModelProbeFailure) {
 				setProbeFailure(error.result);
 			}
 			setErrorMessage(
-				error instanceof Error
-					? error.message
-					: t('credential.modelProbe.failed'),
+				error instanceof Error ? error.message : t('credential.modelProbe.failed'),
 			);
 		} finally {
 			setSubmitting(false);
@@ -223,7 +258,7 @@ function ManualModelDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="!w-[460px] !max-w-[460px]">
+			<DialogContent className="max-h-[85vh] !w-[560px] !max-w-[560px] overflow-y-auto">
 				<DialogHeader>
 					<DialogTitle>
 						{t(
@@ -242,14 +277,10 @@ function ManualModelDialog({
 				</DialogHeader>
 				<div className="grid gap-4">
 					<div className="grid gap-1.5">
-						<Label htmlFor="manual-model-type">
-							{t('credential.modelType')}
-						</Label>
+						<Label htmlFor="manual-model-type">{t('credential.modelType')}</Label>
 						<Select
 							value={modelType}
-							onValueChange={(value) =>
-								setModelType(value as 'chat' | 'embedding')
-							}
+							onValueChange={(value) => setModelType(value as 'chat' | 'embedding')}
 							disabled={submitting}
 						>
 							<SelectTrigger id="manual-model-type" className="w-full">
@@ -271,9 +302,7 @@ function ManualModelDialog({
 						)}
 					</div>
 					<div className="grid gap-1.5">
-						<Label htmlFor="manual-model-name">
-							{t('credential.modelId')}
-						</Label>
+						<Label htmlFor="manual-model-name">{t('credential.modelId')}</Label>
 						<Input
 							id="manual-model-name"
 							value={name}
@@ -283,9 +312,7 @@ function ManualModelDialog({
 						/>
 					</div>
 					<div className="grid gap-1.5">
-						<Label htmlFor="manual-model-label">
-							{t('credential.modelLabel')}
-						</Label>
+						<Label htmlFor="manual-model-label">{t('credential.modelLabel')}</Label>
 						<Input
 							id="manual-model-label"
 							value={label}
@@ -293,15 +320,45 @@ function ManualModelDialog({
 							placeholder={t('credential.modelLabelPlaceholder')}
 						/>
 					</div>
+					{modelType === 'chat' && (
+						<div className="grid gap-2 rounded-lg border bg-muted/20 p-4">
+							<Label
+								htmlFor="manual-model-custom-request"
+								className="flex items-center gap-2"
+							>
+								<Braces className="size-4" />
+								{t('credential.modelDefaults.customTitle')}
+							</Label>
+							<p className="text-xs leading-relaxed text-muted-foreground">
+								{t('credential.manualModelCustomParametersDescription')}
+							</p>
+							<Textarea
+								id="manual-model-custom-request"
+								value={customRequestText}
+								onChange={(event) => {
+									setCustomRequestText(event.target.value);
+									setCustomRequestError(null);
+								}}
+								placeholder={t('credential.modelDefaults.customPlaceholder')}
+								className="min-h-28 resize-y font-mono text-xs"
+								aria-invalid={Boolean(customRequestError)}
+								disabled={submitting}
+							/>
+							{customRequestError && (
+								<p className="text-xs text-destructive">{customRequestError}</p>
+							)}
+							<pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-background p-2 text-[11px] leading-relaxed text-muted-foreground">
+								{t('credential.modelDefaults.customExamples')}
+							</pre>
+						</div>
+					)}
 					{errorMessage && (
 						<div className="rounded-lg border border-destructive/25 bg-destructive/5 px-3 py-2 text-sm">
 							<div className="flex items-start gap-2 text-destructive">
 								<CircleAlert className="mt-0.5 size-4 shrink-0" />
 								<span>{errorMessage}</span>
 							</div>
-							{probeFailure && (
-								<ProviderRawResponse result={probeFailure} />
-							)}
+							{probeFailure && <ProviderRawResponse result={probeFailure} />}
 						</div>
 					)}
 				</div>
@@ -319,11 +376,7 @@ function ManualModelDialog({
 						) : (
 							<PlusCircle className="size-3.5" />
 						)}
-						{t(
-							initialModel
-								? 'credential.saveModel'
-								: 'credential.addModel',
-						)}
+						{t(initialModel ? 'credential.saveModel' : 'credential.addModel')}
 					</Button>
 				</DialogFooter>
 			</DialogContent>
@@ -337,6 +390,7 @@ interface ModelCardItemProps {
 	model: CredentialModelEntry;
 	onRemove: () => void;
 	onEdit?: () => void;
+	onConfigure: () => void;
 	onTest: () => void;
 	disabled: boolean;
 	testDisabled: boolean;
@@ -348,6 +402,7 @@ function ModelCardItem({
 	model,
 	onRemove,
 	onEdit,
+	onConfigure,
 	onTest,
 	disabled,
 	testDisabled,
@@ -366,7 +421,14 @@ function ModelCardItem({
 				? 'secondary'
 				: 'outline';
 
-	const reasoning = model.input_types.includes('application/x-thinking');
+	const parameterProperties =
+		(model.parameter_schema.properties as Record<string, unknown> | undefined) ?? {};
+	const reasoning =
+		model.output_types.includes('application/x-thinking') ||
+		'thinking_enable' in parameterProperties ||
+		'reasoning_effort' in parameterProperties ||
+		'thinking_budget' in parameterProperties;
+	const configuredParameterCount = Object.keys(model.default_parameters).length;
 
 	return (
 		<Card className="shadow">
@@ -393,10 +455,26 @@ function ModelCardItem({
 								{t('credential.reasoning')}
 							</Badge>
 						) : null}
+						{configuredParameterCount > 0 && (
+							<Badge variant="default" className="text-[10px]">
+								{t('credential.modelDefaults.configured', {
+									count: configuredParameterCount,
+								})}
+							</Badge>
+						)}
 					</div>
 				</div>
 				<CardAction>
 					<div className="flex items-center gap-1">
+						<Button
+							size="icon-sm"
+							variant="ghost"
+							onClick={onConfigure}
+							disabled={disabled}
+							tooltip={t('credential.modelDefaults.action')}
+						>
+							<SlidersHorizontal />
+						</Button>
 						{onEdit && (
 							<Button
 								size="icon-sm"
@@ -465,11 +543,7 @@ function ModelCardItem({
 					disabled={testDisabled}
 					tooltip={t('credential.modelTest.tooltip')}
 				>
-					{testing ? (
-						<Loader2 className="animate-spin" />
-					) : (
-						<FlaskConical />
-					)}
+					{testing ? <Loader2 className="animate-spin" /> : <FlaskConical />}
 					{testing
 						? t('credential.modelTest.testing')
 						: testResult
@@ -587,11 +661,7 @@ function EmbeddingModelCardItem({
 					disabled={testDisabled}
 					tooltip={t('credential.modelTest.tooltip')}
 				>
-					{testing ? (
-						<Loader2 className="animate-spin" />
-					) : (
-						<FlaskConical />
-					)}
+					{testing ? <Loader2 className="animate-spin" /> : <FlaskConical />}
 					{testing
 						? t('credential.modelTest.testing')
 						: testResult
@@ -603,8 +673,7 @@ function EmbeddingModelCardItem({
 						result={testResult}
 						successText={t('credential.modelTest.embeddingPassed', {
 							latency: testResult.latency_ms,
-							dimensions:
-								testResult.dimensions ?? model.dimensions,
+							dimensions: testResult.dimensions ?? model.dimensions,
 						})}
 					/>
 				)}
@@ -676,12 +745,12 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 	const [discovering, setDiscovering] = useState(false);
 	const [catalogSaving, setCatalogSaving] = useState(false);
 	const [manualModelOpen, setManualModelOpen] = useState(false);
-	const [editingManualModel, setEditingManualModel] =
-		useState<CredentialModelDefinition | null>(null);
+	const [editingManualModel, setEditingManualModel] = useState<CredentialModelDefinition | null>(
+		null,
+	);
+	const [configuringModel, setConfiguringModel] = useState<CredentialModelEntry | null>(null);
 	const [testingModel, setTestingModel] = useState<string | null>(null);
-	const [testResults, setTestResults] = useState<
-		Record<string, CredentialModelTestResponse>
-	>({});
+	const [testResults, setTestResults] = useState<Record<string, CredentialModelTestResponse>>({});
 
 	const type = credential.data.type as string | undefined;
 
@@ -710,6 +779,7 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 		setTestResults({});
 		setEditingManualModel(null);
 		setManualModelOpen(false);
+		setConfiguringModel(null);
 		void loadModels();
 	}, [loadModels]);
 
@@ -718,6 +788,7 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 			manualModels: CredentialModelDefinition[],
 			hiddenModelIds: string[],
 			hiddenEmbeddingModelIds: string[],
+			modelDefaultParameters?: Record<string, Record<string, unknown>>,
 		) => {
 			setCatalogSaving(true);
 			try {
@@ -725,13 +796,15 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 					manual_models: manualModels,
 					hidden_model_ids: hiddenModelIds,
 					hidden_embedding_model_ids: hiddenEmbeddingModelIds,
+					model_default_parameters:
+						modelDefaultParameters ?? catalog?.model_default_parameters ?? {},
 				});
 				setCatalog(result);
 			} finally {
 				setCatalogSaving(false);
 			}
 		},
-		[credential.id],
+		[credential.id, catalog?.model_default_parameters],
 	);
 
 	const handleDiscover = async () => {
@@ -750,7 +823,10 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 		}
 	};
 
-	const handleAddManualModel = async (input: ManualModelInput) => {
+	const handleAddManualModel = async (
+		input: ManualModelInput,
+		customRequestBody: Record<string, unknown>,
+	) => {
 		if (!catalog) return;
 		const original = editingManualModel;
 		let model: CredentialModelDefinition;
@@ -787,8 +863,7 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 				dimensions: probe.dimensions,
 			};
 		} else {
-			const existingChat =
-				original?.model_type === 'chat' ? original : null;
+			const existingChat = original?.model_type === 'chat' ? original : null;
 			model = {
 				...(existingChat ?? {}),
 				...input,
@@ -800,24 +875,41 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 			};
 		}
 		const replacedNames = new Set(
-			[model.name, original?.name].filter(
-				(value): value is string => Boolean(value),
-			),
+			[model.name, original?.name].filter((value): value is string => Boolean(value)),
 		);
 		const manualModels = [
-			...catalog.manual_models.filter(
-				(item) => !replacedNames.has(item.name),
-			),
+			...catalog.manual_models.filter((item) => !replacedNames.has(item.name)),
 			model,
 		];
+		const modelDefaultParameters = {
+			...catalog.model_default_parameters,
+		};
+		const previousParameters =
+			input.model_type === 'chat'
+				? {
+						...(original
+							? catalog.model_default_parameters[original.name]
+							: catalog.model_default_parameters[model.name]),
+					}
+				: {};
+		if (original && original.name !== model.name) {
+			delete modelDefaultParameters[original.name];
+		}
+		if (input.model_type === 'chat' && Object.keys(customRequestBody).length > 0) {
+			previousParameters[CUSTOM_REQUEST_BODY_KEY] = customRequestBody;
+		} else {
+			delete previousParameters[CUSTOM_REQUEST_BODY_KEY];
+		}
+		if (Object.keys(previousParameters).length > 0) {
+			modelDefaultParameters[model.name] = previousParameters;
+		} else {
+			delete modelDefaultParameters[model.name];
+		}
 		await saveCatalog(
 			manualModels,
-			catalog.hidden_model_ids.filter(
-				(id) => !replacedNames.has(id),
-			),
-			catalog.hidden_embedding_model_ids.filter(
-				(id) => !replacedNames.has(id),
-			),
+			catalog.hidden_model_ids.filter((id) => !replacedNames.has(id)),
+			catalog.hidden_embedding_model_ids.filter((id) => !replacedNames.has(id)),
+			modelDefaultParameters,
 		);
 	};
 
@@ -826,14 +918,10 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 		setManualModelOpen(true);
 	};
 
-	const handleOpenEditModel = (
-		modelType: 'chat' | 'embedding',
-		modelName: string,
-	) => {
+	const handleOpenEditModel = (modelType: 'chat' | 'embedding', modelName: string) => {
 		if (!catalog) return;
 		const definition = catalog.manual_models.find(
-			(item) =>
-				item.model_type === modelType && item.name === modelName,
+			(item) => item.model_type === modelType && item.name === modelName,
 		);
 		if (!definition) return;
 		setEditingManualModel(definition);
@@ -845,30 +933,7 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 		if (model.source === 'manual') {
 			await saveCatalog(
 				catalog.manual_models.filter(
-					(item) =>
-						item.name !== model.name || item.model_type !== 'chat',
-				),
-				catalog.hidden_model_ids,
-				catalog.hidden_embedding_model_ids,
-			);
-			return;
-		}
-		await saveCatalog(catalog.manual_models, [
-			...catalog.hidden_model_ids.filter((id) => id !== model.name),
-			model.name,
-		], catalog.hidden_embedding_model_ids);
-	};
-
-	const handleRemoveEmbeddingModel = async (
-		model: CredentialEmbeddingModelEntry,
-	) => {
-		if (!catalog) return;
-		if (model.source === 'manual') {
-			await saveCatalog(
-				catalog.manual_models.filter(
-					(item) =>
-						item.name !== model.name ||
-						item.model_type !== 'embedding',
+					(item) => item.name !== model.name || item.model_type !== 'chat',
 				),
 				catalog.hidden_model_ids,
 				catalog.hidden_embedding_model_ids,
@@ -877,14 +942,27 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 		}
 		await saveCatalog(
 			catalog.manual_models,
-			catalog.hidden_model_ids,
-			[
-				...catalog.hidden_embedding_model_ids.filter(
-					(id) => id !== model.name,
-				),
-				model.name,
-			],
+			[...catalog.hidden_model_ids.filter((id) => id !== model.name), model.name],
+			catalog.hidden_embedding_model_ids,
 		);
+	};
+
+	const handleRemoveEmbeddingModel = async (model: CredentialEmbeddingModelEntry) => {
+		if (!catalog) return;
+		if (model.source === 'manual') {
+			await saveCatalog(
+				catalog.manual_models.filter(
+					(item) => item.name !== model.name || item.model_type !== 'embedding',
+				),
+				catalog.hidden_model_ids,
+				catalog.hidden_embedding_model_ids,
+			);
+			return;
+		}
+		await saveCatalog(catalog.manual_models, catalog.hidden_model_ids, [
+			...catalog.hidden_embedding_model_ids.filter((id) => id !== model.name),
+			model.name,
+		]);
 	};
 
 	const handleRestoreModel = async (modelName: string) => {
@@ -901,16 +979,11 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 		await saveCatalog(
 			catalog.manual_models,
 			catalog.hidden_model_ids,
-			catalog.hidden_embedding_model_ids.filter(
-				(id) => id !== modelName,
-			),
+			catalog.hidden_embedding_model_ids.filter((id) => id !== modelName),
 		);
 	};
 
-	const handleTestModel = async (
-		modelType: 'chat' | 'embedding',
-		modelName: string,
-	) => {
+	const handleTestModel = async (modelType: 'chat' | 'embedding', modelName: string) => {
 		const testKey = `${modelType}:${modelName}`;
 		setTestingModel(testKey);
 		try {
@@ -925,6 +998,27 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 		} finally {
 			setTestingModel(null);
 		}
+	};
+
+	const handleSaveModelDefaults = async (
+		modelName: string,
+		parameters: Record<string, unknown>,
+	) => {
+		if (!catalog) return;
+		const nextDefaults = {
+			...catalog.model_default_parameters,
+		};
+		if (Object.keys(parameters).length === 0) {
+			delete nextDefaults[modelName];
+		} else {
+			nextDefaults[modelName] = parameters;
+		}
+		await saveCatalog(
+			catalog.manual_models,
+			catalog.hidden_model_ids,
+			catalog.hidden_embedding_model_ids,
+			nextDefaults,
+		);
 	};
 
 	// Fields to display: use schema properties order, skip id/type/const fields
@@ -945,10 +1039,8 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 	const name = (credential.data.name as string | undefined) ?? credential.id;
 	const activeModels = catalog?.models.filter((model) => model.enabled) ?? [];
 	const hiddenModels = catalog?.models.filter((model) => !model.enabled) ?? [];
-	const activeEmbeddingModels =
-		catalog?.embedding_models.filter((model) => model.enabled) ?? [];
-	const hiddenEmbeddingModels =
-		catalog?.embedding_models.filter((model) => !model.enabled) ?? [];
+	const activeEmbeddingModels = catalog?.embedding_models.filter((model) => model.enabled) ?? [];
+	const hiddenEmbeddingModels = catalog?.embedding_models.filter((model) => !model.enabled) ?? [];
 
 	return (
 		<div className="flex flex-col gap-y-6 p-6 overflow-y-auto h-full">
@@ -1052,9 +1144,7 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 							size="sm"
 							onClick={handleOpenAddModel}
 							disabled={
-								!credential.editable ||
-								catalogSaving ||
-								testingModel !== null
+								!credential.editable || catalogSaving || testingModel !== null
 							}
 						>
 							<Plus />
@@ -1065,12 +1155,8 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 
 				{catalog?.last_discovery_error && (
 					<div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
-						<div className="font-medium">
-							{t('credential.discoveryFallbackTitle')}
-						</div>
-						<div className="mt-0.5 text-xs">
-							{catalog.last_discovery_error}
-						</div>
+						<div className="font-medium">{t('credential.discoveryFallbackTitle')}</div>
+						<div className="mt-0.5 text-xs">{catalog.last_discovery_error}</div>
 					</div>
 				)}
 
@@ -1104,6 +1190,7 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 												key={model.name}
 												model={model}
 												onRemove={() => handleRemoveModel(model)}
+												onConfigure={() => setConfiguringModel(model)}
 												onEdit={
 													model.source === 'manual'
 														? () =>
@@ -1113,17 +1200,14 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 																)
 														: undefined
 												}
-												onTest={() =>
-													handleTestModel('chat', model.name)
-												}
+												onTest={() => handleTestModel('chat', model.name)}
 												disabled={
 													!credential.editable ||
 													catalogSaving ||
 													testingModel !== null
 												}
 												testDisabled={
-													testingModel !== null ||
-													catalogSaving
+													testingModel !== null || catalogSaving
 												}
 												testing={testingModel === testKey}
 												testResult={testResults[testKey]}
@@ -1146,9 +1230,7 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 											<EmbeddingModelCardItem
 												key={model.name}
 												model={model}
-												onRemove={() =>
-													handleRemoveEmbeddingModel(model)
-												}
+												onRemove={() => handleRemoveEmbeddingModel(model)}
 												onEdit={
 													model.source === 'manual'
 														? () =>
@@ -1159,10 +1241,7 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 														: undefined
 												}
 												onTest={() =>
-													handleTestModel(
-														'embedding',
-														model.name,
-													)
+													handleTestModel('embedding', model.name)
 												}
 												disabled={
 													!credential.editable ||
@@ -1170,8 +1249,7 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 													testingModel !== null
 												}
 												testDisabled={
-													testingModel !== null ||
-													catalogSaving
+													testingModel !== null || catalogSaving
 												}
 												testing={testingModel === testKey}
 												testResult={testResults[testKey]}
@@ -1230,8 +1308,7 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 				{hiddenEmbeddingModels.length > 0 && (
 					<div className="rounded-lg border bg-muted/20">
 						<div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
-							{t('credential.hiddenModels')} (
-							{hiddenEmbeddingModels.length})
+							{t('credential.hiddenModels')} ({hiddenEmbeddingModels.length})
 						</div>
 						<div className="divide-y">
 							{hiddenEmbeddingModels.map((model) => (
@@ -1255,9 +1332,7 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 									<Button
 										size="sm"
 										variant="ghost"
-										onClick={() =>
-											handleRestoreEmbeddingModel(model.name)
-										}
+										onClick={() => handleRestoreEmbeddingModel(model.name)}
 										disabled={
 											!credential.editable ||
 											catalogSaving ||
@@ -1291,6 +1366,15 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 				</>
 			)}
 
+			<ModelDefaultParametersDialog
+				open={configuringModel !== null}
+				onOpenChange={(open) => {
+					if (!open) setConfiguringModel(null);
+				}}
+				model={configuringModel}
+				onSave={handleSaveModelDefaults}
+			/>
+
 			<ManualModelDialog
 				open={manualModelOpen}
 				onOpenChange={(open) => {
@@ -1299,6 +1383,13 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 				}}
 				onSave={handleAddManualModel}
 				initialModel={editingManualModel}
+				initialCustomRequestBody={
+					editingManualModel
+						? (catalog?.model_default_parameters[editingManualModel.name]?.[
+								CUSTOM_REQUEST_BODY_KEY
+							] as Record<string, unknown> | undefined)
+						: undefined
+				}
 			/>
 		</div>
 	);
@@ -1310,7 +1401,7 @@ export const CredentialPage = () => {
 	const { t } = useTranslation();
 	const { credentials, loading, remove, refetch } = useCredentials();
 	const [schemas, setSchemas] = useState<CredentialSchema[]>([]);
-	const [selectedId, setSelectedId] = useState<string | null>(null);
+	const [selectedId, setSelectedId] = useState<string | null>(SYSTEM_PERMISSION_REVIEWER_ID);
 	const [createOpen, setCreateOpen] = useState(false);
 	const [createDefaultType, setCreateDefaultType] = useState<string | undefined>();
 	const [editOpen, setEditOpen] = useState(false);
@@ -1387,6 +1478,37 @@ export const CredentialPage = () => {
 						</Empty>
 					) : (
 						<>
+							<SidebarGroup>
+								<SidebarGroupLabel>
+									{t('credential.permissionReviewer.systemGroup')}
+								</SidebarGroupLabel>
+								<SidebarGroupContent>
+									<SidebarMenu>
+										<SidebarMenuItem>
+											<SidebarMenuButton
+												isActive={
+													selectedId === SYSTEM_PERMISSION_REVIEWER_ID
+												}
+												onClick={() =>
+													setSelectedId(SYSTEM_PERMISSION_REVIEWER_ID)
+												}
+											>
+												<ShieldCheck />
+												<span className="min-w-0 flex-1 truncate">
+													{t('credential.permissionReviewer.shortTitle')}
+												</span>
+												<Badge
+													variant="secondary"
+													className="text-[10px] px-1 py-0"
+												>
+													{t('credential.permissionReviewer.builtIn')}
+												</Badge>
+											</SidebarMenuButton>
+										</SidebarMenuItem>
+									</SidebarMenu>
+								</SidebarGroupContent>
+							</SidebarGroup>
+
 							{/* Configured credentials lead — this is what the user actually set up. */}
 							{configuredGroups.length > 0 && (
 								<SidebarGroup>
@@ -1465,7 +1587,9 @@ export const CredentialPage = () => {
 
 			{/* Right detail */}
 			<main className="flex-1 min-h-0 overflow-hidden">
-				{selectedCredential ? (
+				{selectedId === SYSTEM_PERMISSION_REVIEWER_ID ? (
+					<PermissionReviewerPanel credentials={credentials} />
+				) : selectedCredential ? (
 					<DetailPanel
 						key={selectedCredential.id}
 						credential={selectedCredential}

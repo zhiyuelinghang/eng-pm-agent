@@ -22,14 +22,89 @@ from ._schema import (
     CreateAgentResponse,
     UpdateAgentRequest,
 )
-from .._service import AgentView, ResourceAccessService, SessionService
-from ..storage import StorageBase, AgentData, AgentRecord
+from .._service import (
+    AgentView,
+    ResourceAccessService,
+    SessionService,
+    build_credential_model_catalog,
+    normalize_credential_model_parameters,
+)
+from ..storage import (
+    AgentData,
+    AgentModelPolicy,
+    AgentRecord,
+    StorageBase,
+)
+from ...credential import CredentialFactory
 
 agent_router = APIRouter(
     prefix="/agent",
     tags=["agent"],
     responses={404: {"description": "Not found"}},
 )
+
+
+async def _validate_model_policy(
+    user_id: str,
+    policy: AgentModelPolicy,
+    access: ResourceAccessService,
+) -> AgentModelPolicy:
+    """Validate and normalize an agent's fixed model configuration."""
+    if policy.mode != "fixed" or policy.chat_model_config is None:
+        return policy
+
+    config = policy.chat_model_config
+    record = await access.resolve_credential(
+        user_id,
+        config.credential_id,
+    )
+    credential = CredentialFactory.from_dict(record.data)
+    credential_type = getattr(credential, "type", None)
+    if config.type != credential_type:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "Agent model provider type does not match the selected "
+                "credential."
+            ),
+        )
+
+    candidate = next(
+        (
+            model
+            for model in build_credential_model_catalog(credential)
+            if model.name == config.model
+        ),
+        None,
+    )
+    if candidate is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"Model {config.model!r} is not present in the selected "
+                "credential."
+            ),
+        )
+
+    try:
+        parameters = normalize_credential_model_parameters(
+            credential,
+            config.model,
+            config.parameters,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    return policy.model_copy(
+        update={
+            "chat_model_config": config.model_copy(
+                update={"parameters": parameters},
+            ),
+        },
+    )
 
 
 @agent_router.get(
@@ -172,6 +247,7 @@ async def create_agent(
     body: CreateAgentRequest,
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
+    access: ResourceAccessService = Depends(get_resource_access_service),
 ) -> CreateAgentResponse:
     """Create and persist a new agent configuration.
 
@@ -196,11 +272,17 @@ async def create_agent(
             :func:`update_agent`.
     """
     try:
+        model_policy = await _validate_model_policy(
+            user_id,
+            body.model_policy,
+            access,
+        )
         data = AgentData(
             name=body.name,
             system_prompt=body.system_prompt,
             context_config=body.context_config,
             react_config=body.react_config,
+            model_policy=model_policy,
             invite_config=body.invite_config,
             call_config=body.call_config,
         )
@@ -266,6 +348,15 @@ async def update_agent(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=exc.errors(),
         ) from exc
+    updated_data = updated_data.model_copy(
+        update={
+            "model_policy": await _validate_model_policy(
+                user_id,
+                updated_data.model_policy,
+                access,
+            ),
+        },
+    )
     if agent_id in updated_data.call_config.allowed_agent_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

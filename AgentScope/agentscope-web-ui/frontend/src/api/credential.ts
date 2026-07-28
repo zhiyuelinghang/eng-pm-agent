@@ -7,6 +7,10 @@ import type {
 	CredentialListResponse,
 	CredentialView,
 	CredentialSchemasResponse,
+	PermissionReviewAuditListResponse,
+	PermissionReviewerConfig,
+	PermissionReviewerConfigResponse,
+	PermissionReviewerTestResponse,
 	UpdateCredentialRequest,
 	UpdateCredentialModelCatalogRequest,
 	TestCredentialModelRequest,
@@ -52,6 +56,27 @@ export const credentialApi = {
 		client.post<CredentialModelTestResponse>(
 			`/credential/${encodeURIComponent(credentialId)}/models/embedding/probe`,
 			body,
+		),
+
+	permissionReviewer: () =>
+		client.get<PermissionReviewerConfigResponse>('/credential/system/permission-reviewer'),
+
+	updatePermissionReviewer: (body: PermissionReviewerConfig) =>
+		client.put<PermissionReviewerConfigResponse>(
+			'/credential/system/permission-reviewer',
+			body,
+		),
+
+	testPermissionReviewer: (body: PermissionReviewerConfig) =>
+		client.post<PermissionReviewerTestResponse>(
+			'/credential/system/permission-reviewer/test',
+			body,
+		),
+
+	permissionReviewerAudits: (limit = 20) =>
+		client.get<PermissionReviewAuditListResponse>(
+			'/credential/system/permission-reviewer/audits',
+			{ limit: String(limit) },
 		),
 
 	delete: (credentialId: string) => client.delete(`/credential/${credentialId}`),
