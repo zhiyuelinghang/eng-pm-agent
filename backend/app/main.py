@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
 from .api import router
+from .agent_tool_gateway import router as agent_tool_router
 from .config import get_settings
 from .db import Base, SessionLocal, engine
 from .models import (Attachment, DailyReport, DocumentFolder, DocumentFolderItem, Project, ProjectChange,
@@ -268,6 +269,7 @@ settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(router)
+app.include_router(agent_tool_router)
 
 
 @app.get("/health")

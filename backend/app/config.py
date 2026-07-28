@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     ai_model: str = "gpt-4.1-mini"
     agentscope_base_url: str = "http://127.0.0.1:18642"
     agentscope_service_token: str = ""
+    dobby_agent_tool_token: str = ""
     agentscope_request_timeout_seconds: float = 150.0
     agentscope_poll_interval_seconds: float = 0.35
 
@@ -25,6 +26,11 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+    @property
+    def effective_agent_tool_token(self) -> str:
+        """Return the internal AgentScope -> Dobby gateway credential."""
+        return self.dobby_agent_tool_token.strip() or self.agentscope_service_token.strip()
 
 
 @lru_cache

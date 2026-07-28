@@ -27,6 +27,7 @@ from agentscope.rag import (
     TextParser,
     WordParser,
 )
+from scripts.dobby_agent_tools import create_dobby_agent_tools
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -157,6 +158,7 @@ app = create_app(
             os.getenv("AGENTSCOPE_MANAGEMENT_TOKEN_TTL_SECONDS", "28800"),
         ),
     ),
+    extra_agent_tools=create_dobby_agent_tools,
     extra_middlewares=[
         Middleware(
             CORSMiddleware,
