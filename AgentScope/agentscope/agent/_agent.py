@@ -87,6 +87,7 @@ from ..message import (
 )
 from ..tool import (
     Toolkit,
+    ToolBase,
     ToolChunk,
     ToolChoice,
     ToolResponse,
@@ -95,10 +96,6 @@ from ..permission import (
     PermissionBehavior,
     PermissionEngine,
     PermissionDecision,
-    PermissionMode,
-    PermissionReviewAction,
-    PermissionReviewRequest,
-    PermissionReviewerBase,
     PermissionRule,
 )
 from ._structured_output_tool import _GenerateStructuredOutput
@@ -127,7 +124,6 @@ class Agent:
         context_config: ContextConfig | None = None,
         react_config: ReActConfig | None = None,
         injection_config: InjectionConfig | None = None,
-        permission_reviewer: PermissionReviewerBase | None = None,
     ) -> None:
         """Initialize the agent class in AgentScope.
 
@@ -145,8 +141,8 @@ class Agent:
             middlewares (`list[MiddlewareBase] | None`, optional):
                 Middlewares applied to the agent to modify its behavior
                 without altering its source code. Supported hook points
-                include: reply, reasoning, acting, model call, and system
-                prompt retrieval.
+                include: reply, reasoning, permission checking, acting, model
+                call, context compression, and system prompt retrieval.
             state (`AgentState | None`, optional):
                 The agent state. A new state will be created if not provided.
             offloader (`Offloader | None`, optional):
@@ -164,11 +160,6 @@ class Agent:
                 The runtime state injection config, which controls how the
                 time, (plan) tasks and context usage are injected into the
                 context to help the agent better reason and act.
-            permission_reviewer (`PermissionReviewerBase | None`, optional):
-                Optional application-provided second-stage reviewer. It is
-                consulted only in AUTO mode when the normal permission engine
-                would ask a human, and can allow the invocation once, deny it,
-                or leave it for human confirmation.
         """
         self.name = name
         self._system_prompt = system_prompt
@@ -183,7 +174,6 @@ class Agent:
 
         # The permission engine
         self._engine = PermissionEngine(self.state.permission_context)
-        self._permission_reviewer = permission_reviewer
 
         # The offloader/workspace
         self.offloader = offloader
@@ -203,6 +193,9 @@ class Agent:
         ]
         self._reasoning_middlewares = [
             _ for _ in middlewares if _.is_implemented("on_reasoning")
+        ]
+        self._check_permission_middlewares = [
+            _ for _ in middlewares if _.is_implemented("on_check_permission")
         ]
         self._acting_middlewares = [
             _ for _ in middlewares if _.is_implemented("on_acting")
@@ -1927,6 +1920,91 @@ class Agent:
         async for evt in self._execute_tool_call(tool_call, kept_rules):
             await queue.put(evt)
 
+    async def _check_permission(
+        self,
+        tool_call: ToolCallBlock,
+        tool: ToolBase,
+        tool_input: dict[str, Any],
+    ) -> PermissionDecision:
+        """Run permission checking through the middleware onion.
+
+        The middleware chain receives copies of the tool call and tool input;
+        changes to these copies do not alter the eventual tool invocation. A
+        call already allowed by user confirmation still traverses the
+        middleware chain, but skips re-evaluation by the built-in engine.
+
+        Args:
+            tool_call (`ToolCallBlock`):
+                The validated tool call metadata.
+            tool (`ToolBase`):
+                The resolved tool instance.
+            tool_input (`dict[str, Any]`):
+                The parsed and schema-validated tool input.
+
+        Returns:
+            `PermissionDecision`:
+                The decision that the agent should consume.
+        """
+        if not self._check_permission_middlewares:
+            return await self._check_permission_impl(
+                tool_call,
+                tool,
+                tool_input,
+            )
+
+        # Copy so middleware cannot mutate what the agent consumes later.
+        tool_call = deepcopy(tool_call)
+        tool_input = deepcopy(tool_input)
+
+        async def execute_chain(
+            index: int = 0,
+            tool_call: ToolCallBlock = tool_call,
+            tool: ToolBase = tool,
+            tool_input: dict[str, Any] = tool_input,
+        ) -> PermissionDecision:
+            """Execute the check_permission middleware chain."""
+            if index >= len(self._check_permission_middlewares):
+                return await self._check_permission_impl(
+                    tool_call,
+                    tool,
+                    tool_input,
+                )
+
+            middleware = self._check_permission_middlewares[index]
+            input_kwargs = {
+                "tool_call": tool_call,
+                "tool": tool,
+                "tool_input": tool_input,
+            }
+
+            async def next_handler(**kwargs: Any) -> PermissionDecision:
+                return await execute_chain(
+                    index + 1,
+                    **{**input_kwargs, **kwargs},
+                )
+
+            return await middleware.on_check_permission(
+                agent=self,
+                input_kwargs=input_kwargs,
+                next_handler=next_handler,
+            )
+
+        return await execute_chain()
+
+    async def _check_permission_impl(
+        self,
+        tool_call: ToolCallBlock,
+        tool: ToolBase,
+        tool_input: dict[str, Any],
+    ) -> PermissionDecision:
+        """Core permission resolution, wrapped by ``on_check_permission``."""
+        if tool_call.state == ToolCallState.ALLOWED:
+            return PermissionDecision(
+                behavior=PermissionBehavior.ALLOW,
+                message="Already allowed by user confirmation.",
+            )
+        return await self._engine.check_permission(tool, tool_input)
+
     async def _execute_tool_call(
         self,
         tool_call: ToolCallBlock,
@@ -2017,78 +2095,11 @@ class Agent:
         # ===================================================================
         # Step 2: Check permission by toolkit and permission engine
         # ===================================================================
-        if tool_call.state == ToolCallState.ALLOWED:
-            # Already allowed by user confirmation, skip permission checking
-            decision = PermissionDecision(
-                behavior=PermissionBehavior.ALLOW,
-                message="Already allowed by user confirmation.",
-            )
-        else:
-            decision = await self._engine.check_permission(
-                tool,
-                parsed_input,
-            )
-
-        # AUTO mode may use an application-provided reviewer for ordinary ASK
-        # decisions. Explicit DENY decisions never reach this branch, and
-        # bypass-immune safety ASKs always remain human-only.
-        if (
-            self._permission_reviewer is not None
-            and self.state.permission_context.mode == PermissionMode.AUTO
-            and decision.behavior
-            in (PermissionBehavior.ASK, PermissionBehavior.PASSTHROUGH)
-            and not decision.bypass_immune
-        ):
-            user_intent = ""
-            for context_msg in reversed(self.state.context):
-                if context_msg.role == "user":
-                    user_intent = context_msg.get_text_content() or ""
-                    break
-            try:
-                review = await self._permission_reviewer.review(
-                    PermissionReviewRequest(
-                        agent_name=self.name,
-                        tool_name=tool.name,
-                        tool_description=tool.description,
-                        tool_input=parsed_input,
-                        user_intent=user_intent[-6000:],
-                        permission_mode=(
-                            self.state.permission_context.mode.value
-                        ),
-                        permission_reason=decision.decision_reason,
-                        working_directories=list(
-                            self.state.permission_context
-                            .working_directories.keys(),
-                        ),
-                        bypass_immune=decision.bypass_immune,
-                    ),
-                )
-            except Exception:  # pylint: disable=broad-except
-                logger.exception(
-                    "Permission reviewer failed for tool %s; "
-                    "falling back to human confirmation.",
-                    tool.name,
-                )
-            else:
-                if review.action == PermissionReviewAction.ALLOW_ONCE:
-                    decision = PermissionDecision(
-                        behavior=PermissionBehavior.ALLOW,
-                        message=(
-                            f"Permission granted once for {tool.name} "
-                            "by the built-in reviewer."
-                        ),
-                        decision_reason=review.reason,
-                        updated_input=parsed_input,
-                    )
-                elif review.action == PermissionReviewAction.DENY:
-                    decision = PermissionDecision(
-                        behavior=PermissionBehavior.DENY,
-                        message=(
-                            f"Permission denied for {tool.name} by the "
-                            f"built-in reviewer: {review.reason}"
-                        ),
-                        decision_reason=review.reason,
-                    )
+        decision = await self._check_permission(
+            tool_call,
+            tool,
+            parsed_input,
+        )
 
         # ===================================================================
         # Step 3: Handle the permission and execute the tool call if allowed

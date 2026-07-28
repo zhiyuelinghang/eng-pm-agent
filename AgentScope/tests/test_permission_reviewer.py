@@ -11,7 +11,10 @@ from agentscope.app import create_app
 from agentscope.app._router._schema import UpdateSessionRequest
 from agentscope.app._router._session import update_session
 from agentscope.app.message_bus import InMemoryMessageBus
-from agentscope.app._service._permission_review import ModelPermissionReviewer
+from agentscope.app._service._permission_review import (
+    ModelPermissionReviewer,
+    PermissionReviewerMiddleware,
+)
 from agentscope.app.storage import (
     AsyncSQLAlchemyStorage,
     PermissionReviewAuditRecord,
@@ -127,7 +130,7 @@ class AgentPermissionReviewerIntegrationTest(IsolatedAsyncioTestCase):
             model=model,
             toolkit=Toolkit(tools=[tool]),
             state=state,
-            permission_reviewer=reviewer,
+            middlewares=[PermissionReviewerMiddleware(reviewer)],
         )
         events = [
             event async for event in agent._execute_tool_call(tool_call)

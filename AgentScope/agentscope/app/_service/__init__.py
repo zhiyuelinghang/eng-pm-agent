@@ -22,6 +22,7 @@ from ._credential_models import (
 )
 from ._permission_review import (
     ModelPermissionReviewer,
+    PermissionReviewerMiddleware,
     PermissionReviewerTestResult,
     PermissionReviewService,
 )
@@ -45,6 +46,7 @@ __all__ = [
     "CredentialModelTestResult",
     "CredentialView",
     "ModelPermissionReviewer",
+    "PermissionReviewerMiddleware",
     "PermissionReviewerTestResult",
     "PermissionReviewService",
     "IndexSweeper",

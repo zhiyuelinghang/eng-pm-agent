@@ -40,7 +40,10 @@ from ._tts_model import get_tts_model
 from ._toolkit import get_toolkit
 from ._session_projection import SessionProjection
 from ._projectors import SubagentHitlProjector
-from ._permission_review import PermissionReviewService
+from ._permission_review import (
+    PermissionReviewerMiddleware,
+    PermissionReviewService,
+)
 
 from ..._logging import logger
 from ...agent import Agent, ModelConfig
@@ -509,6 +512,11 @@ class ChatService:
             )
             else None
         )
+        if permission_reviewer is not None:
+            middlewares.append(
+                PermissionReviewerMiddleware(permission_reviewer),
+            )
+
         agent_kwargs = dict(
             name=agent_record.data.name,
             system_prompt=agent_record.data.system_prompt,
@@ -521,25 +529,6 @@ class ChatService:
             middlewares=middlewares,
             offloader=workspace,
         )
-        if permission_reviewer is not None:
-            import inspect
-
-            init_parameters = inspect.signature(
-                self._agent_cls.__init__,
-            ).parameters.values()
-            if any(
-                parameter.name == "permission_reviewer"
-                or parameter.kind == inspect.Parameter.VAR_KEYWORD
-                for parameter in init_parameters
-            ):
-                agent_kwargs["permission_reviewer"] = permission_reviewer
-            else:
-                logger.warning(
-                    "Configured permission reviewer was not attached because "
-                    "custom agent class %s does not accept "
-                    "'permission_reviewer'. Human confirmation remains active.",
-                    self._agent_cls.__name__,
-                )
         agent = self._agent_cls(**agent_kwargs)
 
         # ----------------------------------------------------------------

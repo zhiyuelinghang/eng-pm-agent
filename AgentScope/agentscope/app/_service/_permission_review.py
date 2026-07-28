@@ -3,23 +3,28 @@
 
 This service deliberately sits in the application layer: it resolves the
 user's independently configured credential/model, records audit entries, and
-provides a small :class:`PermissionReviewerBase` implementation to the core
-Agent.  It is not an ``AgentRecord`` and therefore cannot be listed, invited,
-deleted, or chatted with as a business agent.
+provides a small :class:`PermissionReviewerBase` implementation through the
+standard permission middleware hook. It is not an ``AgentRecord`` and
+therefore cannot be listed, invited, deleted, or chatted with as a business
+agent.
 """
 import asyncio
 import json
 import re
 from time import perf_counter
-from typing import Any, Literal
+from typing import Any, Awaitable, Callable, Literal, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from ..._logging import logger
 from ...credential import CredentialFactory
 from ...message import SystemMsg, UserMsg
+from ...middleware import MiddlewareBase
 from ...model import ChatModelBase
 from ...permission import (
+    PermissionBehavior,
+    PermissionDecision,
+    PermissionMode,
     PermissionReviewAction,
     PermissionReviewRequest,
     PermissionReviewResult,
@@ -36,6 +41,9 @@ from ..storage import (
 from ._access import ResourceAccessService
 from ._credential_models import build_credential_model_catalog
 from ._model import get_model
+
+if TYPE_CHECKING:
+    from ...agent import Agent
 
 
 _RISK_ORDER = {
@@ -158,6 +166,91 @@ def _force_human_reason(
     if _DESTRUCTIVE_COMMAND.search(serialized):
         return "命令包含删除、终止进程或破坏性修改，必须人工确认。"
     return None
+
+
+class PermissionReviewerMiddleware(MiddlewareBase):
+    """Apply a configured reviewer after the built-in permission engine.
+
+    The middleware never overrides an explicit denial or a bypass-immune
+    safety confirmation. Reviewer failures fail closed by returning the
+    original human-confirmation decision unchanged.
+    """
+
+    def __init__(self, reviewer: PermissionReviewerBase) -> None:
+        """Bind one request-scoped reviewer implementation."""
+        self._reviewer = reviewer
+
+    async def on_check_permission(
+        self,
+        agent: "Agent",
+        input_kwargs: dict,
+        next_handler: Callable[..., Awaitable[PermissionDecision]],
+    ) -> PermissionDecision:
+        """Review ordinary AUTO-mode confirmation decisions."""
+        decision = await next_handler(**input_kwargs)
+        if (
+            agent.state.permission_context.mode != PermissionMode.AUTO
+            or decision.behavior
+            not in (PermissionBehavior.ASK, PermissionBehavior.PASSTHROUGH)
+            or decision.bypass_immune
+        ):
+            return decision
+
+        tool = input_kwargs["tool"]
+        tool_input = input_kwargs["tool_input"]
+        user_intent = ""
+        for context_msg in reversed(agent.state.context):
+            if context_msg.role == "user":
+                user_intent = context_msg.get_text_content() or ""
+                break
+
+        try:
+            review = await self._reviewer.review(
+                PermissionReviewRequest(
+                    agent_name=agent.name,
+                    tool_name=tool.name,
+                    tool_description=tool.description,
+                    tool_input=tool_input,
+                    user_intent=user_intent[-6000:],
+                    permission_mode=(
+                        agent.state.permission_context.mode.value
+                    ),
+                    permission_reason=decision.decision_reason,
+                    working_directories=list(
+                        agent.state.permission_context
+                        .working_directories.keys(),
+                    ),
+                    bypass_immune=decision.bypass_immune,
+                ),
+            )
+        except Exception:  # pylint: disable=broad-except
+            logger.exception(
+                "Permission reviewer failed for tool %s; "
+                "falling back to human confirmation.",
+                tool.name,
+            )
+            return decision
+
+        if review.action == PermissionReviewAction.ALLOW_ONCE:
+            return PermissionDecision(
+                behavior=PermissionBehavior.ALLOW,
+                message=(
+                    f"Permission granted once for {tool.name} "
+                    "by the built-in reviewer."
+                ),
+                decision_reason=review.reason,
+                updated_input=tool_input,
+            )
+        if review.action == PermissionReviewAction.DENY:
+            return PermissionDecision(
+                behavior=PermissionBehavior.DENY,
+                message=(
+                    f"Permission denied for {tool.name} by the "
+                    f"built-in reviewer: {review.reason}"
+                ),
+                decision_reason=review.reason,
+            )
+        return decision
 
 
 class ModelPermissionReviewer(PermissionReviewerBase):

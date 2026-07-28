@@ -910,19 +910,21 @@ class CustomRequestBodyAdapterTest(IsolatedAsyncioTestCase):
         client.chat.completions.create = AsyncMock(
             side_effect=RuntimeError("captured"),
         )
-        model = DashScopeChatModel(
-            credential=DashScopeCredential(api_key="secret"),
-            model="future-qwen-model",
-            stream=False,
-        )
-        model.set_request_body_overrides({"enable_thinking": True})
-
-        with patch("openai.AsyncClient", return_value=client):
-            with self.assertRaisesRegex(RuntimeError, "captured"):
-                await model._call_api(
-                    model.model,
-                    [UserMsg(name="user", content="test")],
-                )
+        with patch("openai.AsyncClient", return_value=client) as client_cls:
+            model = DashScopeChatModel(
+                credential=DashScopeCredential(api_key="secret"),
+                model="future-qwen-model",
+                stream=False,
+            )
+            model.set_request_body_overrides({"enable_thinking": True})
+            for _ in range(2):
+                with self.assertRaisesRegex(RuntimeError, "captured"):
+                    await model._call_api(
+                        model.model,
+                        [UserMsg(name="user", content="test")],
+                    )
+            client_cls.assert_called_once()
+            self.assertEqual(client.chat.completions.create.await_count, 2)
 
         request = client.chat.completions.create.await_args.kwargs
         self.assertTrue(request["extra_body"]["enable_thinking"])
@@ -932,21 +934,21 @@ class CustomRequestBodyAdapterTest(IsolatedAsyncioTestCase):
         client.responses.create = AsyncMock(
             side_effect=RuntimeError("captured"),
         )
-        model = OpenAIResponseModel(
-            credential=OpenAICredential(api_key="secret"),
-            model="future-reasoning-model",
-            stream=False,
-        )
-        model.set_request_body_overrides(
-            {"reasoning": {"effort": "low"}},
-        )
-
-        with patch("openai.AsyncClient", return_value=client):
+        with patch("openai.AsyncClient", return_value=client) as client_cls:
+            model = OpenAIResponseModel(
+                credential=OpenAICredential(api_key="secret"),
+                model="future-reasoning-model",
+                stream=False,
+            )
+            model.set_request_body_overrides(
+                {"reasoning": {"effort": "low"}},
+            )
             with self.assertRaisesRegex(RuntimeError, "captured"):
                 await model._call_api(
                     model.model,
                     [UserMsg(name="user", content="test")],
                 )
+            client_cls.assert_called_once()
 
         request = client.responses.create.await_args.kwargs
         self.assertEqual(
@@ -959,26 +961,29 @@ class CustomRequestBodyAdapterTest(IsolatedAsyncioTestCase):
         client.messages.create = AsyncMock(
             side_effect=RuntimeError("captured"),
         )
-        model = AnthropicChatModel(
-            credential=AnthropicCredential(api_key="secret"),
-            model="future-claude-model",
-            stream=False,
-        )
-        model.set_request_body_overrides(
-            {
-                "thinking": {
-                    "type": "enabled",
-                    "budget_tokens": 5000,
+        with patch(
+            "anthropic.AsyncAnthropic",
+            return_value=client,
+        ) as client_cls:
+            model = AnthropicChatModel(
+                credential=AnthropicCredential(api_key="secret"),
+                model="future-claude-model",
+                stream=False,
+            )
+            model.set_request_body_overrides(
+                {
+                    "thinking": {
+                        "type": "enabled",
+                        "budget_tokens": 5000,
+                    },
                 },
-            },
-        )
-
-        with patch("anthropic.AsyncAnthropic", return_value=client):
+            )
             with self.assertRaisesRegex(RuntimeError, "captured"):
                 await model._call_api(
                     model.model,
                     [UserMsg(name="user", content="test")],
                 )
+            client_cls.assert_called_once()
 
         request = client.messages.create.await_args.kwargs
         self.assertEqual(
