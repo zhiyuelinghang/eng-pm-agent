@@ -29,6 +29,8 @@ from .._model import (
     PermissionReviewAuditRecord,
     PermissionReviewerConfigData,
     PermissionReviewerConfigRecord,
+    PlatformSettingsData,
+    PlatformSettingsRecord,
     ScheduleRecord,
     SessionRecord,
     SessionConfig,
@@ -46,6 +48,7 @@ from ._tables import (
     MessageRow,
     PermissionReviewAuditRow,
     PermissionReviewerConfigRow,
+    PlatformSettingsRow,
     ScheduleRow,
     SessionRow,
     TeamRow,
@@ -438,6 +441,53 @@ class AsyncSQLAlchemyStorage(StorageBase):
         if existing is not None:
             record.created_at = existing.created_at
         await self._write_row(PermissionReviewerConfigRow, record)
+        return record
+
+    # ------------------------------------------------------------------
+    # Platform-wide settings
+    # ------------------------------------------------------------------
+
+    async def get_platform_settings(
+        self,
+        user_id: str,
+    ) -> PlatformSettingsRecord | None:
+        """Return the single platform-settings record for *user_id*."""
+        from sqlalchemy import select
+
+        async with self._session() as sess:
+            row = (
+                await sess.execute(
+                    select(PlatformSettingsRow).where(
+                        PlatformSettingsRow.user_id == user_id,
+                    ),
+                )
+            ).scalar_one_or_none()
+        return (
+            _to_record(row, PlatformSettingsRecord)
+            if row is not None
+            else None
+        )
+
+    async def upsert_platform_settings(
+        self,
+        user_id: str,
+        data: PlatformSettingsData,
+    ) -> PlatformSettingsRecord:
+        """Create or atomically replace the platform-wide settings."""
+        from hashlib import sha256
+
+        record_id = sha256(
+            f"platform-settings:{user_id}".encode("utf-8"),
+        ).hexdigest()
+        existing = await self.get_platform_settings(user_id)
+        record = PlatformSettingsRecord(
+            id=record_id,
+            user_id=user_id,
+            data=data,
+        )
+        if existing is not None:
+            record.created_at = existing.created_at
+        await self._write_row(PlatformSettingsRow, record)
         return record
 
     async def append_permission_review_audit(

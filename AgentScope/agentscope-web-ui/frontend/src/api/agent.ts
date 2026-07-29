@@ -5,6 +5,8 @@ import type {
 	AgentSchemaV2Response,
 	CreateAgentRequest,
 	CreateAgentResponse,
+	PlatformSettings,
+	UpdatePlatformSettingsRequest,
 	UpdateAgentRequest,
 } from './types';
 
@@ -20,4 +22,9 @@ export const agentApi = {
 		client.patch<AgentView>(`/agent/${agentId}`, body, undefined, options),
 
 	delete: (agentId: string) => client.delete(`/agent/${agentId}`),
+
+	getPlatformSettings: () => client.get<PlatformSettings>('/agent/platform/settings'),
+
+	updatePlatformSettings: (body: UpdatePlatformSettingsRequest) =>
+		client.put<PlatformSettings>('/agent/platform/settings', body),
 };

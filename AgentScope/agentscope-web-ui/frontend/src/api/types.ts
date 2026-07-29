@@ -120,6 +120,14 @@ export interface AgentListResponse {
 	total: number;
 }
 
+export interface PlatformSettings {
+	global_main_agent_id: string | null;
+}
+
+export interface UpdatePlatformSettingsRequest {
+	global_main_agent_id: string;
+}
+
 /**
  * @deprecated Superseded by {@link AgentSchemaV2Response}. Kept only for
  * legacy consumers still calling `GET /agent/schema`. The new form flow

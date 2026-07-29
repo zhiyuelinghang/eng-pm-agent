@@ -27,7 +27,7 @@ interface Props {
 	onChange: (key: keyof PlatformAgentConfig, value: unknown) => void;
 }
 
-const ROLES: PlatformAgentRole[] = ['global_main', 'business', 'system_internal'];
+const ROLES: PlatformAgentRole[] = ['business', 'system_internal'];
 const PERMISSION_MODES: PermissionMode[] = [
 	'auto',
 	'default',
@@ -72,12 +72,18 @@ export function AgentPlatformConfigFields({ values, onChange }: Props) {
 				</FieldLabel>
 				<Select
 					value={role}
+					disabled={role === 'global_main'}
 					onValueChange={(value) => onChange('role', value as PlatformAgentRole)}
 				>
 					<SelectTrigger id="agent-platform-role" className="w-full">
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>
+						{role === 'global_main' && (
+							<SelectItem value="global_main" disabled>
+								{t('agent-form.platform-config.role.options.global_main')}
+							</SelectItem>
+						)}
 						{ROLES.map((value) => (
 							<SelectItem key={value} value={value}>
 								{t(`agent-form.platform-config.role.options.${value}`)}
@@ -104,6 +110,7 @@ export function AgentPlatformConfigFields({ values, onChange }: Props) {
 					<Checkbox
 						id="agent-platform-enabled"
 						checked={values.enabled ?? true}
+						disabled={role === 'global_main'}
 						onCheckedChange={(checked) => onChange('enabled', checked === true)}
 					/>
 					<FieldLabel htmlFor="agent-platform-enabled" className="font-normal">

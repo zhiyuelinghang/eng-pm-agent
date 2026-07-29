@@ -304,15 +304,26 @@ class AgentInvite(_TeamToolBase):
                 self._caller_owner_id,
                 self._agent_id,
             )
+            from .._service._platform_settings import (
+                get_global_main_agent_id,
+            )
+
+            global_main_agent_id = await get_global_main_agent_id(
+                self._storage,
+                self._caller_owner_id,
+                legacy_record=caller,
+            )
+            caller_is_global_main = (
+                caller is not None and global_main_agent_id == caller.id
+            )
             global_main_target_allowed = (
-                caller is not None
-                and caller.data.platform_config.role == "global_main"
+                caller_is_global_main
                 and invited.data.platform_config.enabled
-                and invited.data.platform_config.role != "global_main"
+                and invited.id != global_main_agent_id
             )
             configured_target_allowed = (
                 caller is not None
-                and caller.data.platform_config.role != "global_main"
+                and not caller_is_global_main
                 and caller.data.call_config.allows(invited.id)
             )
             if (
@@ -341,9 +352,9 @@ class AgentInvite(_TeamToolBase):
                     fresh.data.invite_config.invite_description or ""
                 ).strip()
                 or (
-                    caller.data.platform_config.role == "global_main"
+                    caller_is_global_main
                     and (
-                        fresh.data.platform_config.role == "global_main"
+                        fresh.id == global_main_agent_id
                         or not fresh.data.platform_config.enabled
                     )
                 )

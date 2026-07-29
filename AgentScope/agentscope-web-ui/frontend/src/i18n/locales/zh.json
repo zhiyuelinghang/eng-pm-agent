@@ -23,6 +23,7 @@
 		"logout": "退出管理中心",
 		"model": "模型",
 		"name": "名称",
+		"platformSettings": "平台设置",
 		"no": "否",
 		"noData": "暂无数据",
 		"readOnly": "只读",
@@ -48,6 +49,30 @@
 	},
 	"brand": {
 		"managementCenter": "Dobby 智能体管理中心"
+	},
+	"platform-settings": {
+		"title": "平台设置",
+		"description": "集中管理影响整个 Dobby 平台的智能体运行配置。",
+		"saved": "平台总控智能体已更新",
+		"main": {
+			"title": "平台总控智能体",
+			"description": "普通对话统一由该智能体承接；它拥有全部已启用且允许协同的子智能体调用权限。",
+			"selector": "总控智能体",
+			"placeholder": "选择一个智能体",
+			"requirement": "这里只显示已启用、可编辑且配置了固定对话模型的智能体。",
+			"noDescription": "暂无平台说明",
+			"ready": "可用",
+			"model": "固定模型",
+			"permission": "平台权限模式",
+			"notConfigured": "未配置",
+			"unconfiguredTitle": "尚未设置平台总控",
+			"unconfigured": "请选择一个智能体并保存。保存后普通对话才有唯一、明确的入口。",
+			"noCandidates": "暂无符合条件的智能体。请先创建并启用一个使用固定对话模型的智能体。",
+			"invalidCurrentTitle": "当前总控配置不可用",
+			"invalidCurrent": "当前智能体已被停用或缺少固定模型，请选择另一个可用智能体。",
+			"effect": "切换后立即对整个平台生效。原总控会恢复为业务智能体；现总控不能直接停用或删除。",
+			"save": "设为平台总控"
+		}
 	},
 	"error": {
 		"description": "页面遇到意外错误。你可以重试或返回首页。",
@@ -200,7 +225,7 @@
 			"role": {
 				"label": "平台角色",
 				"options": {
-					"global_main": "全局主智能体",
+					"global_main": "平台总控智能体（由平台设置指定）",
 					"business": "业务智能体",
 					"system_internal": "系统内置智能体"
 				},
@@ -210,7 +235,7 @@
 					"system_internal": "只供系统内部流程使用，不会显示在业务工具目录中。"
 				}
 			},
-			"globalMainNotice": "保存后，平台此前配置的全局主智能体会自动降级为业务智能体；此配置对整个平台生效。全局主智能体可调用全部已启用且允许协同的非主智能体。",
+			"globalMainNotice": "该智能体当前由“平台设置”指定为总控。请前往平台设置切换；总控不能在此处直接停用或更改角色。",
 			"enabled": "允许平台运行",
 			"published": "发布到平台",
 			"catalogDescription": "平台展示说明",
@@ -235,7 +260,7 @@
 				"static": "Static（每轮自动检索）",
 				"topK": "召回条数"
 			},
-			"visibilityNotice": "业务工具目录只展示“业务智能体 + 已启用 + 已发布”；全局主智能体和系统内置智能体始终隐藏。"
+			"visibilityNotice": "业务工具目录只展示“业务智能体 + 已启用 + 已发布”；平台总控在独立的平台设置中指定，系统内置智能体始终隐藏。"
 		},
 		"context-config": {
 			"legend": "上下文配置",

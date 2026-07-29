@@ -15,6 +15,8 @@ from ._model import (
     PermissionReviewAuditRecord,
     PermissionReviewerConfigData,
     PermissionReviewerConfigRecord,
+    PlatformSettingsData,
+    PlatformSettingsRecord,
     ScheduleRecord,
     SessionRecord,
     SessionConfig,
@@ -77,6 +79,27 @@ class StorageBase(ABC):
         not disable the reviewer merely because it has no audit store yet.
         """
         return record
+
+    async def get_platform_settings(
+        self,
+        user_id: str,
+    ) -> PlatformSettingsRecord | None:
+        """Return the platform-wide settings for this config namespace.
+
+        The compatibility default lets third-party storage implementations
+        continue operating until they add persistence for this setting.
+        """
+        return None
+
+    async def upsert_platform_settings(
+        self,
+        user_id: str,
+        data: PlatformSettingsData,
+    ) -> PlatformSettingsRecord:
+        """Create or replace the platform-wide settings record."""
+        raise NotImplementedError(
+            "This storage backend does not persist platform settings.",
+        )
 
     async def list_permission_review_audits(
         self,

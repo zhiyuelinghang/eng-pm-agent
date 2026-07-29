@@ -18,6 +18,8 @@ from ._model import (
     PermissionReviewAuditRecord,
     PermissionReviewerConfigData,
     PermissionReviewerConfigRecord,
+    PlatformSettingsData,
+    PlatformSettingsRecord,
     ScheduleRecord,
     SessionRecord,
     SessionConfig,
@@ -70,6 +72,9 @@ class RedisStorage(StorageBase):
         agent_index: str = "agentscope:user:{user_id}:agents"
         permission_reviewer_config: str = (
             "agentscope:user:{user_id}:permission_reviewer_config"
+        )
+        platform_settings: str = (
+            "agentscope:user:{user_id}:platform_settings"
         )
         permission_review_audits: str = (
             "agentscope:user:{user_id}:permission_review_audits"
@@ -278,6 +283,52 @@ class RedisStorage(StorageBase):
         record.updated_at = datetime.now()
         key = self._key(
             self.key_config.permission_reviewer_config,
+            user_id=user_id,
+        )
+        await self._set_with_ttl(key, record.model_dump_json())
+        return record
+
+    # ------------------------------------------------------------------
+    # Platform-wide settings
+    # ------------------------------------------------------------------
+
+    async def get_platform_settings(
+        self,
+        user_id: str,
+    ) -> PlatformSettingsRecord | None:
+        """Return the platform-wide settings for this config namespace."""
+        key = self._key(
+            self.key_config.platform_settings,
+            user_id=user_id,
+        )
+        raw = await self._client.get(key)
+        return (
+            PlatformSettingsRecord.model_validate_json(raw)
+            if raw
+            else None
+        )
+
+    async def upsert_platform_settings(
+        self,
+        user_id: str,
+        data: PlatformSettingsData,
+    ) -> PlatformSettingsRecord:
+        """Create or replace the platform-wide settings."""
+        from hashlib import sha256
+
+        existing = await self.get_platform_settings(user_id)
+        record = PlatformSettingsRecord(
+            id=sha256(
+                f"platform-settings:{user_id}".encode("utf-8"),
+            ).hexdigest(),
+            user_id=user_id,
+            data=data,
+        )
+        if existing is not None:
+            record.created_at = existing.created_at
+        record.updated_at = datetime.now()
+        key = self._key(
+            self.key_config.platform_settings,
             user_id=user_id,
         )
         await self._set_with_ttl(key, record.model_dump_json())

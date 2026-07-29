@@ -2,6 +2,7 @@ import {
 	BotMessageSquare,
 	Calendars,
 	Compass,
+	Crown,
 	KeyRound,
 	Languages,
 	LibraryBig,
@@ -80,6 +81,19 @@ export function AppSidebar() {
 									className="px-2.5 md:px-2"
 								>
 									<BotMessageSquare />
+								</SidebarMenuButton>
+							</SidebarMenuItem>
+							<SidebarMenuItem>
+								<SidebarMenuButton
+									tooltip={{
+										children: t('common.platformSettings'),
+										hidden: false,
+									}}
+									isActive={location.pathname === '/platform-settings'}
+									onClick={() => navigate('/platform-settings')}
+									className="px-2"
+								>
+									<Crown />
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>

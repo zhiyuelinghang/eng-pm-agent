@@ -130,6 +130,28 @@ class PermissionReviewerConfigRow(_JsonRecordMixin):
     _indexed_fields = ("user_id",)
 
 
+class PlatformSettingsRow(_JsonRecordMixin):
+    """The single platform-wide settings record per config namespace."""
+
+    __tablename__ = "platform_settings"
+
+    user_id: Mapped[str] = mapped_column(
+        String(_ID_LEN),
+        nullable=False,
+        index=True,
+    )
+
+    __table_args__ = (
+        Index(
+            "ux_platform_settings_user",
+            "user_id",
+            unique=True,
+        ),
+    )
+
+    _indexed_fields = ("user_id",)
+
+
 class PermissionReviewAuditRow(_JsonRecordMixin):
     """Audit trail for model-assisted permission decisions."""
 

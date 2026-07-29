@@ -218,9 +218,14 @@ time or interval"
             user_id,
             ResourceKind.AGENT,
         )
-        caller_is_global_main = (
-            agent_record.data.platform_config.role == "global_main"
+        from ._platform_settings import get_global_main_agent_id
+
+        global_main_agent_id = await get_global_main_agent_id(
+            storage,
+            user_id,
+            legacy_record=agent_record,
         )
+        caller_is_global_main = global_main_agent_id == agent_record.id
         invitable_pool = [
             view
             for view in visible_agents
@@ -229,7 +234,7 @@ time or interval"
                 (
                     caller_is_global_main
                     and view.data.platform_config.enabled
-                    and view.data.platform_config.role != "global_main"
+                    and view.id != global_main_agent_id
                 )
                 or (
                     not caller_is_global_main

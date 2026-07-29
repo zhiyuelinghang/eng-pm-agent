@@ -20,6 +20,8 @@ from ._agent import (
     UpdateAgentRequest,
     PlatformAgentCatalogItem,
     PlatformAgentCatalogResponse,
+    PlatformSettingsResponse,
+    UpdatePlatformSettingsRequest,
 )
 from ._credential import (
     CreateCredentialRequest,
@@ -75,6 +77,8 @@ __all__ = [
     "UpdateAgentRequest",
     "PlatformAgentCatalogItem",
     "PlatformAgentCatalogResponse",
+    "PlatformSettingsResponse",
+    "UpdatePlatformSettingsRequest",
     "ListSchedulesResponse",
     # Chat
     "ChatRequest",

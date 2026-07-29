@@ -23,6 +23,7 @@
 		"logout": "Sign out",
 		"model": "Model",
 		"name": "Name",
+		"platformSettings": "Platform settings",
 		"no": "No",
 		"noData": "No data",
 		"readOnly": "Read-only",
@@ -48,6 +49,30 @@
 	},
 	"brand": {
 		"managementCenter": "Dobby Agent Management Center"
+	},
+	"platform-settings": {
+		"title": "Platform settings",
+		"description": "Manage agent runtime settings shared by the entire Dobby platform.",
+		"saved": "The platform main agent has been updated",
+		"main": {
+			"title": "Platform main agent",
+			"description": "This agent handles ordinary conversations and may collaborate with every enabled, invitable sub-agent.",
+			"selector": "Main agent",
+			"placeholder": "Select an agent",
+			"requirement": "Only enabled, editable agents with a fixed chat model are shown.",
+			"noDescription": "No platform description",
+			"ready": "Ready",
+			"model": "Fixed model",
+			"permission": "Platform permission mode",
+			"notConfigured": "Not configured",
+			"unconfiguredTitle": "No platform main agent",
+			"unconfigured": "Select an agent and save it to create one explicit entry point for ordinary conversations.",
+			"noCandidates": "No eligible agents. Create and enable an agent with a fixed chat model first.",
+			"invalidCurrentTitle": "The current main-agent configuration is unavailable",
+			"invalidCurrent": "The current agent is disabled or has no fixed model. Select another available agent.",
+			"effect": "Changes apply to the whole platform immediately. The former main becomes a business agent; the current main cannot be disabled or deleted directly.",
+			"save": "Set as platform main"
+		}
 	},
 	"error": {
 		"description": "The page hit an unexpected error. You can retry or go back home.",
@@ -200,7 +225,7 @@
 			"role": {
 				"label": "Platform role",
 				"options": {
-					"global_main": "Global main agent",
+					"global_main": "Platform main agent (managed globally)",
 					"business": "Business agent",
 					"system_internal": "Internal system agent"
 				},
@@ -210,7 +235,7 @@
 					"system_internal": "Used only by internal system flows and never shown in the business-tool catalogue."
 				}
 			},
-			"globalMainNotice": "Saving demotes the platform's previous global main agent to a business agent. This setting applies to the entire platform, and the global main agent may call every enabled, invitable non-main agent.",
+			"globalMainNotice": "This agent is selected as the main agent in Platform Settings. Switch it there; its role and enabled state cannot be changed here.",
 			"enabled": "Allow platform execution",
 			"published": "Publish to platform",
 			"catalogDescription": "Platform description",
@@ -235,7 +260,7 @@
 				"static": "Static retrieval",
 				"topK": "Top K"
 			},
-			"visibilityNotice": "The Business Tools catalogue only shows enabled, published business agents. Global-main and internal agents are always hidden."
+			"visibilityNotice": "The Business Tools catalogue only shows enabled, published business agents. Select the platform main in Platform Settings; internal agents stay hidden."
 		},
 		"context-config": {
 			"legend": "Context Config",

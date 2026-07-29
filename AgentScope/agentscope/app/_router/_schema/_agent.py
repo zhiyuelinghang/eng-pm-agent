@@ -145,6 +145,24 @@ class PlatformAgentCatalogResponse(BaseModel):
     total: int
 
 
+class PlatformSettingsResponse(BaseModel):
+    """Platform-wide settings managed independently from agent records."""
+
+    global_main_agent_id: str | None = Field(
+        default=None,
+        description="The single agent used for ordinary platform chat.",
+    )
+
+
+class UpdatePlatformSettingsRequest(BaseModel):
+    """Select the single platform global-main agent."""
+
+    global_main_agent_id: str = Field(
+        min_length=1,
+        description="ID of an enabled agent with a fixed chat model.",
+    )
+
+
 class AgentSchemaResponse(BaseModel):
     """**Deprecated.** JSON Schema fragments used by the frontend to
     render the agent create / edit forms.

@@ -163,9 +163,11 @@ class PlatformAgentConfig(BaseModel):
     role: Literal["global_main", "business", "system_internal"] = Field(
         default="business",
         description=(
-            "Platform role. ``global_main`` is the single default agent used "
-            "by ordinary platform chat, ``business`` is published in the "
-            "business-tool catalogue, and ``system_internal`` stays hidden."
+            "Platform role. ``business`` is published in the business-tool "
+            "catalogue and ``system_internal`` stays hidden. "
+            "``global_main`` is a compatibility value derived from the "
+            "platform-wide main-agent setting and must not be assigned "
+            "directly."
         ),
         title="Platform Role",
     )

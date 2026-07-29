@@ -1,17 +1,24 @@
 """Regression tests for the engineering-platform integration contract."""
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock
+
+from fastapi import HTTPException
 
 from agentscope.agent import ContextConfig, ReActConfig
 from agentscope.app._router._agent import (
     _demote_other_global_main_agents,
     _normalise_platform_agent_data,
+    delete_agent,
     get_platform_agent_catalog,
+    update_platform_settings,
 )
 from agentscope.app._router._schema import (
     CreateSessionRequest,
+    UpdatePlatformSettingsRequest,
     UpdateSessionRequest,
 )
 from agentscope.app._router._session import create_session, update_session
@@ -23,9 +30,12 @@ from agentscope.app.storage import (
     AgentRecord,
     ChatModelConfig,
     PlatformAgentConfig,
+    PlatformSettingsData,
+    PlatformSettingsRecord,
     SessionConfig,
     SessionRecord,
 )
+from agentscope.app.storage import AsyncSQLAlchemyStorage
 
 
 USER_ID = "platform-test"
@@ -131,10 +141,23 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                 return_value=[_view(record) for record in records],
             ),
         )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        global_main_agent_id="main",
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=records),
+            upsert_agent=AsyncMock(),
+        )
 
         catalog = await get_platform_agent_catalog(
             user_id=USER_ID,
             access=access,
+            storage=storage,
         )
 
         self.assertEqual(catalog.global_main.id, "main")
@@ -144,6 +167,58 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             ["first", "later"],
         )
         self.assertEqual(catalog.total, 2)
+
+    async def test_platform_settings_pointer_selects_exactly_one_main(
+        self,
+    ) -> None:
+        old_main = _record(
+            "old",
+            "Old",
+            role="global_main",
+            fixed_model=True,
+        )
+        selected = _record(
+            "selected",
+            "Selected",
+            fixed_model=True,
+        )
+        storage = SimpleNamespace(
+            get_agent=AsyncMock(return_value=selected),
+            list_agents=AsyncMock(return_value=[old_main, selected]),
+            upsert_agent=AsyncMock(return_value="agent"),
+            upsert_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        global_main_agent_id="selected",
+                    ),
+                ),
+            ),
+        )
+
+        response = await update_platform_settings(
+            body=UpdatePlatformSettingsRequest(
+                global_main_agent_id="selected",
+            ),
+            user_id=USER_ID,
+            storage=storage,
+        )
+
+        self.assertEqual(response.global_main_agent_id, "selected")
+        updated = {
+            call.args[1].id: call.args[1]
+            for call in storage.upsert_agent.await_args_list
+        }
+        self.assertEqual(
+            updated["old"].data.platform_config.role,
+            "business",
+        )
+        self.assertEqual(updated["old"].data.call_config.scope, "selected")
+        self.assertEqual(
+            updated["selected"].data.platform_config.role,
+            "global_main",
+        )
+        self.assertEqual(updated["selected"].data.call_config.scope, "all")
 
     async def test_selecting_main_demotes_the_previous_main(self) -> None:
         old_main = _record("old", "Old", role="global_main")
@@ -159,6 +234,43 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         demoted = storage.upsert_agent.await_args.args[1]
         self.assertEqual(demoted.id, "old")
         self.assertEqual(demoted.data.platform_config.role, "business")
+        self.assertEqual(demoted.data.call_config.scope, "selected")
+
+    async def test_current_main_cannot_be_deleted(self) -> None:
+        main = _record(
+            "main",
+            "Main",
+            role="global_main",
+            fixed_model=True,
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        global_main_agent_id="main",
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[main]),
+            upsert_agent=AsyncMock(),
+        )
+        access = SimpleNamespace(
+            resolve_for_edit=AsyncMock(return_value=(USER_ID, main)),
+        )
+        session_service = SimpleNamespace(delete_agent=AsyncMock())
+
+        with self.assertRaises(HTTPException) as context:
+            await delete_agent(
+                agent_id="main",
+                user_id=USER_ID,
+                session_service=session_service,
+                storage=storage,
+                access=access,
+            )
+
+        self.assertEqual(context.exception.status_code, 409)
+        session_service.delete_agent.assert_not_awaited()
 
     async def test_fixed_agent_model_is_enforced_when_session_is_created(
         self,
@@ -233,3 +345,37 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             session_config.chat_model_config.model,
             "latest-fixed-model",
         )
+
+    async def test_platform_settings_round_trip_through_sqlite(self) -> None:
+        storage = AsyncSQLAlchemyStorage(
+            "sqlite+aiosqlite:///:memory:",
+            create_tables=True,
+        )
+        async with storage:
+            saved = await storage.upsert_platform_settings(
+                USER_ID,
+                PlatformSettingsData(global_main_agent_id="main"),
+            )
+            loaded = await storage.get_platform_settings(USER_ID)
+
+        self.assertIsNotNone(loaded)
+        self.assertEqual(loaded.id, saved.id)
+        self.assertEqual(loaded.data.global_main_agent_id, "main")
+
+    async def test_alembic_creates_platform_settings_table(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "platform-settings.db"
+            storage = AsyncSQLAlchemyStorage(
+                f"sqlite+aiosqlite:///{db_path.as_posix()}",
+                create_tables=False,
+                auto_migrate=True,
+            )
+            async with storage:
+                saved = await storage.upsert_platform_settings(
+                    USER_ID,
+                    PlatformSettingsData(global_main_agent_id="main"),
+                )
+                self.assertEqual(
+                    saved.data.global_main_agent_id,
+                    "main",
+                )
