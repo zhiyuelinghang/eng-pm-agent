@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul
 setlocal
 
@@ -8,6 +8,9 @@ set "BACKEND_DIR=%ROOT%backend"
 set "PYTHON_EXE=%ROOT%python-3.13.14\python.exe"
 set "URL=http://127.0.0.1:38429/"
 set "API_URL=http://127.0.0.1:38430/health"
+set "OPEN_BROWSER=1"
+
+if /I "%~1"=="--no-browser" set "OPEN_BROWSER=0"
 
 title Eng PM Agent AI Workspace
 
@@ -54,7 +57,7 @@ start "Eng PM Agent API" /b "%PYTHON_EXE%" -m uvicorn app.main:app --app-dir "%B
 
 set /a RETRIES=0
 :WAIT_API
-powershell -NoProfile -Command "try { (Invoke-WebRequest -UseBasicParsing -Uri '%API_URL%' -TimeoutSec 1).StatusCode -eq 200 } catch { exit 1 }" >nul 2>nul
+netstat -ano | findstr /R /C:":38430 .*LISTENING" >nul 2>nul
 if not errorlevel 1 goto API_READY
 set /a RETRIES+=1
 if %RETRIES% GEQ 15 goto API_TIMEOUT
@@ -69,7 +72,7 @@ goto START_FRONTEND
 echo Backend API did not become ready within 15 seconds. Check the logs in this window before logging in.
 
 :START_FRONTEND
-start "" "%URL%"
+if "%OPEN_BROWSER%"=="1" start "" "%URL%"
 cd /d "%FRONTEND_DIR%"
 echo Starting frontend development server on port 38429...
 echo Keep this window open to view frontend and API logs.
