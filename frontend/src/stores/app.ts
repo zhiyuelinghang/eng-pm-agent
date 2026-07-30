@@ -3,7 +3,22 @@ import { defineStore } from 'pinia'
 import api, { type ApiEnvelope } from '@/api/client'
 import type { DailyReport, DirConfig, FillPackage, Member, OperationLog, PlatformFieldMapping, Project, ProjectInformationRecord, QualityMetric, RemindRule, RiskDraft, RiskSource, Task, WbsItem, WbsRiskLink } from '@/types'
 
-type ApiProject = { id: number; project_name: string; owner_unit?: string; description?: string; status: Project['status']; created_at: string }
+type ApiProject = {
+  id: number
+  name: string
+  engineering_type_description?: string
+  contract_start_date?: string
+  contract_end_date?: string
+  contract_duration_days?: number
+  contract_amount_wan_yuan?: number
+  construction_unit_name?: string
+  general_contractor_unit_name?: string
+  supervision_unit_name?: string
+  design_unit_name?: string
+  survey_unit_name?: string
+  created_at: string
+  updated_at?: string
+}
 type ApiMember = { id: number; project_id: number; user_id: number; member_role: string; display_name?: string; phone?: string; responsibilities: string[]; user: { real_name: string; title?: string; email?: string; phone?: string } }
 type ApiWbs = { id: number; project_id: number; parent_id?: number; code: string; name: string; level: number; planned_start?: string; planned_finish?: string; progress: number; status: WbsItem['status']; responsible_user_id?: number; raw_data?: { supervision?: WbsItem['supervision'] } }
 type ApiRisk = { id: number; project_id: number; name: string; level: RiskSource['level']; risk_type: string; planned_start?: string; planned_finish?: string; responsible_user_id?: number; confirmer_user_id?: number; material_requirements: string[]; control_requirements?: string }
@@ -54,6 +69,10 @@ export const useAppStore = defineStore('app', () => {
   const notifications = ref<NotificationRecord[]>([])
   const loading = ref(false)
   const loadError = ref('')
+  const projectSetupRefreshVersion = ref(0)
+  const projectCatalogLoaded = ref(false)
+  let projectCatalogToken = ''
+  let projectCatalogPromise: Promise<void> | null = null
 
   const currentProject = computed(() => projects.value.find(p => p.id === currentProjectId.value))
   const members = computed(() => allMembers.value.filter(m => m.projectId === currentProjectId.value))
@@ -80,7 +99,24 @@ export const useAppStore = defineStore('app', () => {
   function getMemberName(memberId: string) { return memberMap.value[memberId]?.name ?? (memberId || '未指派') }
   function getWbsName(wbsId: string) { return allWbsItems.value.find(w => w.id === wbsId)?.name ?? wbsId }
   function getRiskName(riskId: string) { return allRiskSources.value.find(r => r.id === riskId)?.name ?? riskId }
-  function mapProject(row: ApiProject): Project { return { id: id(row.id), name: row.project_name, ownerUnit: row.owner_unit ?? '', description: row.description, status: row.status, createdAt: row.created_at } }
+  function mapProject(row: ApiProject): Project {
+    return {
+      id: id(row.id),
+      name: row.name,
+      engineeringTypeDescription: row.engineering_type_description,
+      contractStartDate: row.contract_start_date,
+      contractEndDate: row.contract_end_date,
+      contractDurationDays: row.contract_duration_days,
+      contractAmountWanYuan: row.contract_amount_wan_yuan,
+      constructionUnitName: row.construction_unit_name,
+      generalContractorUnitName: row.general_contractor_unit_name,
+      supervisionUnitName: row.supervision_unit_name,
+      designUnitName: row.design_unit_name,
+      surveyUnitName: row.survey_unit_name,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    }
+  }
   function mapMember(row: ApiMember): Member { return { id: id(row.user_id), name: row.display_name || row.user.real_name, title: row.user.title || row.member_role, phone: row.phone || row.user.phone || '', email: row.user.email || '', role: row.responsibilities || [], projectId: id(row.project_id) } }
   function mapWbs(row: ApiWbs): WbsItem { return { id: id(row.id), projectId: id(row.project_id), parentId: row.parent_id ? id(row.parent_id) : null, code: row.code, name: row.name, level: row.level, planStart: row.planned_start || '', planEnd: row.planned_finish || '', progress: row.progress, status: row.status, responsibleId: id(row.responsible_user_id), supervision: row.raw_data?.supervision } }
   function mapRisk(row: ApiRisk): RiskSource { return { id: id(row.id), projectId: id(row.project_id), name: row.name, level: row.level, type: row.risk_type, controlStart: row.planned_start || '', controlEnd: row.planned_finish || '', responsibleId: id(row.responsible_user_id), confirmatorId: id(row.confirmer_user_id), materials: row.material_requirements || [], controlMeasures: row.control_requirements } }
@@ -126,13 +162,68 @@ export const useAppStore = defineStore('app', () => {
     allTasks.value = taskResult.data.data.map(mapTask); allDailyReports.value = dailyResult.data.data.map(mapDaily); informationRecords.value = informationResult.data.data.map(mapInformationRecord); allRiskDrafts.value = draftResult.data.data.map(mapDraft); allFillPackages.value = fillResult.data.data.map(mapFill); attachments.value = attachmentResult.data.data.map(mapAttachment); documentFolders.value = folderResult.data.data.map(mapDocumentFolder); logs.value = logResult.data.data.map(mapLog); projectSettings.value = settingsResult.data.data; dashboard.value = dashboardResult.data.data; projectChanges.value = changesResult.data.data; notifications.value = notificationsResult.data.data
   }
 
+  async function loadProjectCatalog(force = false) {
+    const token = sessionStorage.getItem('access_token') || ''
+    if (!token) {
+      projectCatalogLoaded.value = false
+      projectCatalogToken = ''
+      return
+    }
+    if (!force && projectCatalogLoaded.value && projectCatalogToken === token) return
+    if (!force && projectCatalogPromise) return projectCatalogPromise
+
+    projectCatalogPromise = (async () => {
+      const response = await api.get<ApiEnvelope<ApiProject[]>>('/projects')
+      projects.value = response.data.data.map(mapProject)
+      if (!projects.value.some(project => project.id === currentProjectId.value)) {
+        currentProjectId.value = projects.value[0]?.id || ''
+      }
+      projectCatalogToken = token
+      projectCatalogLoaded.value = true
+    })()
+
+    try {
+      await projectCatalogPromise
+    } catch (error) {
+      projectCatalogLoaded.value = false
+      throw error
+    } finally {
+      projectCatalogPromise = null
+    }
+  }
+
   async function initialize() {
     if (!sessionStorage.getItem('access_token')) return
-    loading.value = true; loadError.value = ''
-    try { const response = await api.get<ApiEnvelope<ApiProject[]>>('/projects'); projects.value = response.data.data.map(mapProject); currentProjectId.value = currentProjectId.value || projects.value[0]?.id || ''; await loadProjectData() } catch { loadError.value = '无法连接工程管理服务，请确认后端已启动。' } finally { loading.value = false }
+    loading.value = true
+    loadError.value = ''
+    try {
+      await loadProjectCatalog()
+      await loadProjectData()
+    } catch {
+      loadError.value = '无法连接工程管理服务，请确认后端已启动。'
+    } finally {
+      loading.value = false
+    }
   }
   async function selectProject(projectId: string) { currentProjectId.value = projectId; await loadProjectData(projectId) }
-  async function createProject(payload: { project_name: string; owner_unit?: string; description?: string }, selectCreated = true) { const response = await api.post<ApiEnvelope<ApiProject>>('/projects', payload); const project = mapProject(response.data.data); projects.value.unshift(project); if (selectCreated) { currentProjectId.value = project.id; await loadProjectData(project.id) }; return project }
+  async function createProject(payload: { name: string }) {
+    const response = await api.post<ApiEnvelope<ApiProject>>('/projects', payload)
+    const project = mapProject(response.data.data)
+    projects.value.unshift(project)
+    currentProjectId.value = project.id
+    projectCatalogLoaded.value = true
+    return project
+  }
+  function requestProjectSetupRefresh() {
+    projectSetupRefreshVersion.value += 1
+  }
+  function resetSession() {
+    projects.value = []
+    currentProjectId.value = ''
+    projectCatalogLoaded.value = false
+    projectCatalogToken = ''
+    projectCatalogPromise = null
+  }
   async function createProjectChange(payload: { category: string; title: string; content: string }) { await api.post(`/projects/${currentProjectId.value}/changes`, payload); await loadProjectData() }
   async function readNotification(notificationId: number) { await api.post(`/notifications/${notificationId}/read`); await loadProjectData() }
   async function saveProjectSettings(payload: DirConfig & { reminderRules: RemindRule[] }, projectId = currentProjectId.value) { await api.put(`/projects/${projectId}/settings`, { main_dir: payload.mainDir, archive_dir: payload.archiveDir, temp_dir: payload.tempDir, failed_dir: payload.failedDir, backup_dir: payload.backupDir, scan_interval: payload.scanInterval, enabled: payload.enabled, reminder_rules: payload.reminderRules }); if (projectId === currentProjectId.value) await loadProjectData(projectId) }
@@ -173,5 +264,5 @@ export const useAppStore = defineStore('app', () => {
   async function removeWbsRiskLink(linkId: string) { await api.delete(`/wbs-risk-links/${linkId}`); await loadProjectData() }
   function addLog(log: OperationLog) { if (!currentProjectId.value) return; void api.post(`/projects/${currentProjectId.value}/operation-logs`, { action: log.action, detail: log.detail }).then(() => loadProjectData()) }
 
-  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, selectProject, createProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, uploadAttachment, updateAttachmentCategory, createDocumentFolder, searchDocuments, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, fetchProjectConfigScope, saveMember, updateMember, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
+  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, uploadAttachment, updateAttachmentCategory, createDocumentFolder, searchDocuments, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, fetchProjectConfigScope, saveMember, updateMember, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
 })

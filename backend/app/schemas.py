@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -22,10 +22,7 @@ class PasswordChangeInput(BaseModel):
 
 
 class ProjectInput(BaseModel):
-    project_name: str = Field(min_length=1, max_length=200)
-    owner_unit: str | None = None
-    description: str | None = None
-    status: str = "active"
+    name: str = Field(min_length=1, max_length=200)
 
 
 class ProjectSettingsInput(BaseModel):
@@ -55,7 +52,7 @@ class MemberInput(BaseModel):
     phone: str | None = None
     email: str | None = None
     title: str | None = None
-    system_role: str = "member"
+    system_role: Literal["admin", "user"] = "user"
     member_role: str = "member"
     responsibilities: list[str] = Field(default_factory=list)
 
@@ -201,13 +198,17 @@ class AgentConversationInput(BaseModel):
     agent_id: str | None = Field(default=None, max_length=64)
     conversation_type: str = Field(
         default="business",
-        pattern="^(general|business)$",
+        pattern="^(general|business|initialization)$",
     )
     title: str | None = Field(default=None, max_length=300)
 
 
 class AgentConversationMessageInput(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
+    initialization_file_ids: list[int] = Field(
+        default_factory=list,
+        max_length=20,
+    )
 
 
 class AgentConversationConfirmInput(BaseModel):

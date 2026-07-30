@@ -5,16 +5,16 @@ import type {
 
 export const mockProjects: Project[] = [
   {
-    id: 'p1', name: '合流污水一期复线工程（总管部分）', ownerUnit: '上海市排水公司', status: 'active',
-    description: '城市排水系统复线改造，全长 3.8km，含顶管、明挖、接收井等工序。', createdAt: '2026-05-01',
+    id: 'p1', name: '合流污水一期复线工程（总管部分）', constructionUnitName: '上海市排水公司',
+    engineeringTypeDescription: '城市排水系统复线改造，全长 3.8km，含顶管、明挖、接收井等工序。', createdAt: '2026-05-01',
   },
   {
-    id: 'p2', name: '苏州河沿线排水系统提标改造工程', ownerUnit: '上海城投水务集团', status: 'active',
-    description: '沿线泵站、截流井及管网提标改造，覆盖 5 个施工片区。', createdAt: '2026-04-10',
+    id: 'p2', name: '苏州河沿线排水系统提标改造工程', constructionUnitName: '上海城投水务集团',
+    engineeringTypeDescription: '沿线泵站、截流井及管网提标改造，覆盖 5 个施工片区。', createdAt: '2026-04-10',
   },
   {
-    id: 'p3', name: '浦东新区雨污混接整治三期工程', ownerUnit: '浦东新区生态环境局', status: 'inactive',
-    description: '居民区和市政道路雨污混接排查整治，当前处于进场筹备与方案报审阶段。', createdAt: '2026-06-01',
+    id: 'p3', name: '浦东新区雨污混接整治三期工程', constructionUnitName: '浦东新区生态环境局',
+    engineeringTypeDescription: '居民区和市政道路雨污混接排查整治，当前处于进场筹备与方案报审阶段。', createdAt: '2026-06-01',
   },
 ]
 

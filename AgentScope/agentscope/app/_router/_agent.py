@@ -149,6 +149,49 @@ async def _synchronise_global_main_agent_roles(
         await storage.upsert_agent(global_config_id, updated)
 
 
+async def _synchronise_project_initializer_role(
+    storage: StorageBase,
+    global_config_id: str,
+    selected_agent_id: str | None,
+) -> None:
+    """Keep the selected initializer hidden and unable to call other agents."""
+    if selected_agent_id is None:
+        return
+    record = await storage.get_agent(global_config_id, selected_agent_id)
+    if record is None:
+        return
+    platform_config = record.data.platform_config
+    call_config = record.data.call_config
+    if (
+        platform_config.role == "system_internal"
+        and not platform_config.published
+        and call_config.scope == "none"
+    ):
+        return
+    updated = record.model_copy(
+        update={
+            "data": record.data.model_copy(
+                update={
+                    "platform_config": platform_config.model_copy(
+                        update={
+                            "role": "system_internal",
+                            "published": False,
+                        },
+                    ),
+                    "call_config": call_config.model_copy(
+                        update={
+                            "scope": "none",
+                            "allowed_agent_ids": [],
+                        },
+                    ),
+                },
+            ),
+            "updated_at": datetime.now(),
+        },
+    )
+    await storage.upsert_agent(global_config_id, updated)
+
+
 async def _load_platform_settings(
     storage: StorageBase,
     global_config_id: str,
@@ -160,6 +203,11 @@ async def _load_platform_settings(
             storage,
             global_config_id,
             existing.data.global_main_agent_id,
+        )
+        await _synchronise_project_initializer_role(
+            storage,
+            global_config_id,
+            existing.data.project_initializer_agent_id,
         )
         return existing
 
@@ -193,6 +241,11 @@ async def _load_platform_settings(
         storage,
         global_config_id,
         selected_id,
+    )
+    await _synchronise_project_initializer_role(
+        storage,
+        global_config_id,
+        data.project_initializer_agent_id,
     )
     return settings
 
@@ -435,6 +488,7 @@ async def get_platform_agent_catalog(
     """
     settings = await _load_platform_settings(storage, user_id)
     selected_id = settings.data.global_main_agent_id
+    initializer_id = settings.data.project_initializer_agent_id
     entries = await access.list_resource(user_id, ResourceKind.AGENT)
     items = [_catalog_item(entry) for entry in entries]
     selected_item = next(
@@ -449,11 +503,26 @@ async def get_platform_agent_catalog(
         selected_item = selected_item.model_copy(
             update={"role": "global_main", "published": False},
         )
+    initializer_item = next(
+        (
+            item
+            for item in items
+            if item.id == initializer_id
+            and item.id != selected_id
+            and item.enabled
+        ),
+        None,
+    )
+    if initializer_item is not None:
+        initializer_item = initializer_item.model_copy(
+            update={"role": "system_internal", "published": False},
+        )
     business_agents = sorted(
         (
             item
             for item in items
             if item.id != selected_id
+            and item.id != initializer_id
             and item.role == "business"
             and item.enabled
             and item.published
@@ -462,6 +531,7 @@ async def get_platform_agent_catalog(
     )
     return PlatformAgentCatalogResponse(
         global_main=selected_item,
+        project_initializer=initializer_item,
         business_agents=business_agents,
         total=len(business_agents),
     )
@@ -480,6 +550,9 @@ async def get_platform_settings(
     settings = await _load_platform_settings(storage, user_id)
     return PlatformSettingsResponse(
         global_main_agent_id=settings.data.global_main_agent_id,
+        project_initializer_agent_id=(
+            settings.data.project_initializer_agent_id
+        ),
     )
 
 
@@ -493,43 +566,95 @@ async def update_platform_settings(
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
 ) -> PlatformSettingsResponse:
-    """Select the only agent used for ordinary platform conversations."""
-    selected = await storage.get_agent(
-        user_id,
-        body.global_main_agent_id,
-    )
-    if selected is None or selected.source != "user":
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="The selected platform main agent does not exist.",
-        )
-    if not selected.data.platform_config.enabled:
+    """Update global agent assignments without exposing per-account settings."""
+    if not body.model_fields_set:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="The platform main agent must be enabled.",
+            detail="At least one platform setting must be provided.",
         )
+    current = await _load_platform_settings(storage, user_id)
+    global_main_agent_id = current.data.global_main_agent_id
+    project_initializer_agent_id = (
+        current.data.project_initializer_agent_id
+    )
+
+    async def validate_candidate(
+        agent_id: str,
+        purpose: str,
+    ) -> AgentRecord:
+        selected = await storage.get_agent(user_id, agent_id)
+        if selected is None or selected.source != "user":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"The selected {purpose} agent does not exist.",
+            )
+        if not selected.data.platform_config.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"The {purpose} agent must be enabled.",
+            )
+        if (
+            selected.data.model_policy.mode != "fixed"
+            or selected.data.model_policy.chat_model_config is None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"The {purpose} agent must use a fixed chat model.",
+            )
+        return selected
+
+    if "global_main_agent_id" in body.model_fields_set:
+        if body.global_main_agent_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="The platform main agent cannot be cleared.",
+            )
+        await validate_candidate(
+            body.global_main_agent_id,
+            "platform main",
+        )
+        global_main_agent_id = body.global_main_agent_id
+    if "project_initializer_agent_id" in body.model_fields_set:
+        if body.project_initializer_agent_id is not None:
+            await validate_candidate(
+                body.project_initializer_agent_id,
+                "project initializer",
+            )
+        project_initializer_agent_id = body.project_initializer_agent_id
     if (
-        selected.data.model_policy.mode != "fixed"
-        or selected.data.model_policy.chat_model_config is None
+        global_main_agent_id is not None
+        and global_main_agent_id == project_initializer_agent_id
     ):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="The platform main agent must use a fixed chat model.",
+            detail=(
+                "The platform main agent and project initializer must be "
+                "different agents."
+            ),
         )
 
     settings = await storage.upsert_platform_settings(
         user_id,
         PlatformSettingsData(
-            global_main_agent_id=body.global_main_agent_id,
+            global_main_agent_id=global_main_agent_id,
+            project_initializer_agent_id=project_initializer_agent_id,
         ),
     )
     await _synchronise_global_main_agent_roles(
         storage,
         user_id,
-        body.global_main_agent_id,
+        settings.data.global_main_agent_id,
+    )
+    await _synchronise_project_initializer_role(
+        storage,
+        user_id,
+        settings.data.project_initializer_agent_id,
     )
     return PlatformSettingsResponse(
         global_main_agent_id=settings.data.global_main_agent_id,
+        project_initializer_agent_id=(
+            settings.data.project_initializer_agent_id
+        ),
     )
 
 
@@ -641,6 +766,9 @@ async def update_agent(
     settings = await _load_platform_settings(storage, owner_id)
     selected_id = settings.data.global_main_agent_id
     is_selected_main = selected_id == agent_id
+    is_selected_initializer = (
+        settings.data.project_initializer_agent_id == agent_id
+    )
     if (
         body.platform_config is not None
         and body.platform_config.role == "global_main"
@@ -721,6 +849,44 @@ async def update_agent(
                 ),
             },
         )
+    if is_selected_initializer:
+        if not updated_data.platform_config.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Select another project initializer before disabling "
+                    "the current one."
+                ),
+            )
+        if (
+            updated_data.model_policy.mode != "fixed"
+            or updated_data.model_policy.chat_model_config is None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "The current project initializer must keep a fixed "
+                    "chat model. Select another initializer first."
+                ),
+            )
+        updated_data = updated_data.model_copy(
+            update={
+                "platform_config": (
+                    updated_data.platform_config.model_copy(
+                        update={
+                            "role": "system_internal",
+                            "published": False,
+                        },
+                    )
+                ),
+                "call_config": updated_data.call_config.model_copy(
+                    update={
+                        "scope": "none",
+                        "allowed_agent_ids": [],
+                    },
+                ),
+            },
+        )
     if agent_id in updated_data.call_config.allowed_agent_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -779,6 +945,14 @@ async def delete_agent(
             detail=(
                 "Select another platform main agent before deleting the "
                 "current one."
+            ),
+        )
+    if settings.data.project_initializer_agent_id == agent_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Select another project initializer or clear the assignment "
+                "before deleting the current one."
             ),
         )
     deleted = await session_service.delete_agent(owner_id, agent_id)

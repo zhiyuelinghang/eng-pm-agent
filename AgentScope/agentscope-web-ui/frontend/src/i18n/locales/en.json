@@ -72,6 +72,22 @@
 			"invalidCurrent": "The current agent is disabled or has no fixed model. Select another available agent.",
 			"effect": "Changes apply to the whole platform immediately. The former main becomes a business agent; the current main cannot be disabled or deleted directly.",
 			"save": "Set as platform main"
+		},
+		"initializer": {
+			"title": "Project initialization agent",
+			"description": "The project setup page uses this built-in agent for guided questions and attachment-based extraction.",
+			"selector": "Initialization agent",
+			"placeholder": "Select a dedicated agent",
+			"requirement": "The agent must be enabled with a fixed chat model and must differ from the platform main agent.",
+			"internal": "System built-in",
+			"saved": "The project initialization agent has been updated",
+			"unconfiguredTitle": "No project initialization agent",
+			"unconfigured": "Select and save an agent before the project setup page can start initialization conversations.",
+			"noCandidates": "No eligible agents. Create and enable an agent with a fixed chat model first.",
+			"invalidCurrentTitle": "The current initialization agent is unavailable",
+			"invalidCurrent": "The current agent is disabled or has no fixed model. Select another available agent.",
+			"effect": "The selected agent is hidden and cannot collaborate with other agents. It may read the current project and submit a review draft, but it cannot write formal project data.",
+			"save": "Set as initializer"
 		}
 	},
 	"error": {

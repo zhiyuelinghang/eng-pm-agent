@@ -18,7 +18,15 @@ from .security import hash_password
 def seed_admin() -> None:
     with SessionLocal() as db:
         if not db.scalar(select(User).where(User.username == "admin")):
-            db.add(User(username="admin", real_name="系统管理员", password_hash=hash_password("ChangeMe123!"), role="superadmin"))
+            db.add(
+                User(
+                    username="admin",
+                    real_name="系统管理员",
+                    identity_card_no="SYSTEM_ADMIN",
+                    password_hash=hash_password("ChangeMe123!"),
+                    role="admin",
+                ),
+            )
             db.commit()
 
 
@@ -70,7 +78,7 @@ def ensure_prototype_status_data(db, project: Project) -> None:
     for username, real_name, title, member_role in member_specs:
         account = db.scalar(select(User).where(User.username == username))
         if not account:
-            account = User(username=username, real_name=real_name, title=title, password_hash=hash_password("ChangeMe123!"), role="member")
+            account = User(username=username, real_name=real_name, title=title, password_hash=hash_password("ChangeMe123!"), role="user")
             db.add(account)
             db.flush()
         users[real_name] = account
@@ -261,7 +269,6 @@ def seed_prototype_project() -> None:
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
     seed_admin()
-    seed_prototype_project()
     yield
 
 

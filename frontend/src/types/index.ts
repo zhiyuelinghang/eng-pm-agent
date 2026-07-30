@@ -12,10 +12,18 @@ export type FillStatus = 'pending' | 'filling' | 'submitted' | 'failed'
 export interface Project {
   id: string
   name: string
-  ownerUnit: string
-  status: 'active' | 'inactive' | 'archived'
-  description?: string
+  engineeringTypeDescription?: string
+  contractStartDate?: string
+  contractEndDate?: string
+  contractDurationDays?: number
+  contractAmountWanYuan?: number
+  constructionUnitName?: string
+  generalContractorUnitName?: string
+  supervisionUnitName?: string
+  designUnitName?: string
+  surveyUnitName?: string
   createdAt: string
+  updatedAt?: string
 }
 
 export interface Member {

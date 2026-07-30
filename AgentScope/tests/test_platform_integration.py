@@ -135,6 +135,13 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             _record("disabled", "Disabled", enabled=False),
             _record("draft", "Draft", published=False),
             _record("internal", "Internal", role="system_internal"),
+            _record(
+                "initializer",
+                "Initializer",
+                role="system_internal",
+                published=False,
+                fixed_model=True,
+            ),
         ]
         access = SimpleNamespace(
             list_resource=AsyncMock(
@@ -142,11 +149,13 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             ),
         )
         storage = SimpleNamespace(
+            get_agent=AsyncMock(return_value=records[-1]),
             get_platform_settings=AsyncMock(
                 return_value=PlatformSettingsRecord(
                     user_id=USER_ID,
                     data=PlatformSettingsData(
                         global_main_agent_id="main",
+                        project_initializer_agent_id="initializer",
                     ),
                 ),
             ),
@@ -162,6 +171,11 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(catalog.global_main.id, "main")
         self.assertTrue(catalog.global_main.model_ready)
+        self.assertEqual(catalog.project_initializer.id, "initializer")
+        self.assertEqual(
+            catalog.project_initializer.role,
+            "system_internal",
+        )
         self.assertEqual(
             [item.id for item in catalog.business_agents],
             ["first", "later"],
@@ -184,6 +198,14 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         )
         storage = SimpleNamespace(
             get_agent=AsyncMock(return_value=selected),
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        global_main_agent_id="old",
+                    ),
+                ),
+            ),
             list_agents=AsyncMock(return_value=[old_main, selected]),
             upsert_agent=AsyncMock(return_value="agent"),
             upsert_platform_settings=AsyncMock(
@@ -219,6 +241,72 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             "global_main",
         )
         self.assertEqual(updated["selected"].data.call_config.scope, "all")
+
+    async def test_project_initializer_is_hidden_and_cannot_collaborate(
+        self,
+    ) -> None:
+        main = _record(
+            "main",
+            "Main",
+            role="global_main",
+            fixed_model=True,
+        )
+        initializer = _record(
+            "initializer",
+            "Initializer",
+            fixed_model=True,
+        )
+        storage = SimpleNamespace(
+            get_agent=AsyncMock(return_value=initializer),
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        global_main_agent_id="main",
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[main, initializer]),
+            upsert_agent=AsyncMock(return_value="agent"),
+            upsert_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        global_main_agent_id="main",
+                        project_initializer_agent_id="initializer",
+                    ),
+                ),
+            ),
+        )
+
+        response = await update_platform_settings(
+            body=UpdatePlatformSettingsRequest(
+                project_initializer_agent_id="initializer",
+            ),
+            user_id=USER_ID,
+            storage=storage,
+        )
+
+        self.assertEqual(
+            response.project_initializer_agent_id,
+            "initializer",
+        )
+        updated_initializer = next(
+            call.args[1]
+            for call in storage.upsert_agent.await_args_list
+            if call.args[1].id == "initializer"
+        )
+        self.assertEqual(
+            updated_initializer.data.platform_config.role,
+            "system_internal",
+        )
+        self.assertFalse(
+            updated_initializer.data.platform_config.published,
+        )
+        self.assertEqual(
+            updated_initializer.data.call_config.scope,
+            "none",
+        )
 
     async def test_selecting_main_demotes_the_previous_main(self) -> None:
         old_main = _record("old", "Old", role="global_main")

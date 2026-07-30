@@ -136,9 +136,10 @@ class PlatformAgentCatalogItem(BaseModel):
 
 
 class PlatformAgentCatalogResponse(BaseModel):
-    """Global main-agent selection and published business-agent catalogue."""
+    """Agents exposed to the engineering platform by their global purpose."""
 
     global_main: PlatformAgentCatalogItem | None = None
+    project_initializer: PlatformAgentCatalogItem | None = None
     business_agents: list[PlatformAgentCatalogItem] = Field(
         default_factory=list,
     )
@@ -152,14 +153,27 @@ class PlatformSettingsResponse(BaseModel):
         default=None,
         description="The single agent used for ordinary platform chat.",
     )
+    project_initializer_agent_id: str | None = Field(
+        default=None,
+        description="The hidden agent used for project initialization.",
+    )
 
 
 class UpdatePlatformSettingsRequest(BaseModel):
-    """Select the single platform global-main agent."""
+    """Update one or both platform-wide agent assignments."""
 
-    global_main_agent_id: str = Field(
+    global_main_agent_id: str | None = Field(
+        default=None,
         min_length=1,
         description="ID of an enabled agent with a fixed chat model.",
+    )
+    project_initializer_agent_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "ID of an enabled agent with a fixed chat model to use for "
+            "project-initialization conversations."
+        ),
     )
 
 

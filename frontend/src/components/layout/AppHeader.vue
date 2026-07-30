@@ -25,7 +25,7 @@
           <div class="proj-status-dot"></div>
           <div class="proj-info">
             <span class="proj-name">{{ currentProject?.name ?? '未选项目' }}</span>
-            <span class="proj-meta">{{ currentProject?.ownerUnit ?? '—' }}</span>
+            <span class="proj-meta">{{ currentProject?.constructionUnitName || '基础信息待完善' }}</span>
           </div>
           <n-icon :size="13" style="color:var(--text-muted);flex-shrink:0"><ChevronDown /></n-icon>
         </button>
@@ -71,7 +71,7 @@ const projectOptions = computed(() =>
         h('div', { style: 'width:6px;height:6px;border-radius:50%;background:#047857;flex-shrink:0;margin-top:2px' }),
         h('div', { style: 'flex:1;min-width:0' }, [
           h('div', { style: 'font-size:14px;font-weight:500;color:#1B2430;line-height:1.45' }, p.name),
-          h('div', { style: 'font-size:12px;color:#667085;line-height:1.5' }, p.ownerUnit),
+          h('div', { style: 'font-size:12px;color:#667085;line-height:1.5' }, p.constructionUnitName || '基础信息待完善'),
         ]),
         p.id === store.currentProjectId
           ? h(NIcon, { size: 14, color: '#E8590C' }, { default: () => h(Check) })

@@ -11,11 +11,25 @@
     </div>
 
     <nav class="nav-list">
-      <router-link v-for="item in menus" :key="item.path" :to="item.path" class="nav-item">
-        <n-icon :size="16" class="nav-icon"><component :is="item.icon" /></n-icon>
-        <span class="nav-label">{{ item.title }}</span>
-        <span v-if="item.badge && item.badge > 0" class="nav-badge">{{ item.badge > 9 ? '9+' : item.badge }}</span>
-      </router-link>
+      <template v-for="item in menus" :key="item.path">
+        <button
+          v-if="item.requiresProject && !hasProjects"
+          type="button"
+          class="nav-item is-disabled"
+          aria-disabled="true"
+          title="请先创建项目"
+          @click="handleBlockedMenu"
+        >
+          <n-icon :size="16" class="nav-icon"><component :is="item.icon" /></n-icon>
+          <span class="nav-label">{{ item.title }}</span>
+          <n-icon :size="13" class="nav-lock"><Lock /></n-icon>
+        </button>
+        <router-link v-else :to="item.path" class="nav-item" @click="handleMenuClick(item.path)">
+          <n-icon :size="16" class="nav-icon"><component :is="item.icon" /></n-icon>
+          <span class="nav-label">{{ item.title }}</span>
+          <span v-if="item.badge && item.badge > 0" class="nav-badge">{{ item.badge > 9 ? '9+' : item.badge }}</span>
+        </router-link>
+      </template>
     </nav>
 
     <div class="sidebar-footer">
@@ -35,31 +49,43 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
-import { NIcon } from 'naive-ui'
+import { NIcon, useMessage } from 'naive-ui'
 import {
-  ChartBar, Folder, Home, ListCheck, Logout, MessageCircle, Robot, Settings, Tools, UserCircle,
+  ChartBar, Folder, Home, ListCheck, Lock, Logout, MessageCircle, Robot, Settings, Tools, UserCircle,
 } from '@vicons/tabler'
 
 const router = useRouter()
 const store = useAppStore()
+const message = useMessage()
+const hasProjects = computed(() => store.projects.length > 0)
 const currentUserId = computed(() => sessionStorage.getItem('current_user_id') || '')
 const currentMember = computed(() => store.members.find(member => member.id === currentUserId.value))
 const currentUserName = computed(() => sessionStorage.getItem('current_user_name') || currentMember.value?.name || '当前用户')
-const currentUserTitle = computed(() => currentMember.value?.title || '项目成员')
+const currentUserTitle = computed(() => sessionStorage.getItem('user_role') === 'admin' ? '管理员' : currentMember.value?.title || '普通用户')
 const userInitial = computed(() => currentUserName.value.trim().slice(0, 1) || '用')
 
 const menus = computed(() => [
-  { path: '/workbench', title: '工作首页', icon: Home, badge: store.overdueTasks.length + store.waitingConfirmTasks.length },
-  { path: '/ai', title: '智能协同', icon: MessageCircle, badge: store.pendingDrafts.length },
-  { path: '/tasks', title: '任务管理', icon: ListCheck, badge: store.pendingTasks.length + store.processingTasks.length },
-  { path: '/project', title: '项目状态', icon: ChartBar, badge: 0 },
-  { path: '/docs', title: '工程资料', icon: Folder, badge: store.pendingDailyReports.length + store.pendingFills.length },
-  { path: '/tools', title: '业务工具', icon: Tools, badge: 0 },
-  { path: '/profile', title: '个人设置', icon: UserCircle, badge: 0 },
-  { path: '/settings', title: '工程配置', icon: Settings, badge: 0 },
+  { path: '/workbench', title: '工作首页', icon: Home, badge: store.overdueTasks.length + store.waitingConfirmTasks.length, requiresProject: true },
+  { path: '/ai', title: '智能协同', icon: MessageCircle, badge: store.pendingDrafts.length, requiresProject: true },
+  { path: '/tasks', title: '任务管理', icon: ListCheck, badge: store.pendingTasks.length + store.processingTasks.length, requiresProject: true },
+  { path: '/project', title: '项目状态', icon: ChartBar, badge: 0, requiresProject: true },
+  { path: '/docs', title: '工程资料', icon: Folder, badge: store.pendingDailyReports.length + store.pendingFills.length, requiresProject: true },
+  { path: '/tools', title: '业务工具', icon: Tools, badge: 0, requiresProject: true },
+  { path: '/profile', title: '个人设置', icon: UserCircle, badge: 0, requiresProject: false },
+  { path: '/settings', title: '工程配置', icon: Settings, badge: 0, requiresProject: false },
 ])
 
+const handleBlockedMenu = () => {
+  message.warning('请先创建项目')
+  void router.push({ path: '/settings', query: { projectRequired: '1' } })
+}
+
+const handleMenuClick = (path: string) => {
+  if (path === '/settings') store.requestProjectSetupRefresh()
+}
+
 const handleLogout = () => {
+  store.resetSession()
   sessionStorage.removeItem('logged_in')
   sessionStorage.removeItem('access_token')
   sessionStorage.removeItem('user_role')
@@ -115,13 +141,18 @@ const handleLogout = () => {
 }
 .nav-item {
   display: flex;
+  width: 100%;
   align-items: center;
   gap: 9px;
   min-height: 42px;
   padding: 10px 10px;
+  border: 0;
   border-radius: 7px;
+  background: transparent;
   color: rgba(255,255,255,0.68);
   text-decoration: none;
+  text-align: left;
+  font-family: inherit;
   font-size: 14px;
   font-weight: 600;
   transition: var(--transition);
@@ -129,6 +160,12 @@ const handleLogout = () => {
   position: relative;
 }
 .nav-item:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.nav-item.is-disabled {
+  color: rgba(255,255,255,0.34);
+  cursor: not-allowed;
+}
+.nav-item.is-disabled:hover { color: rgba(255,255,255,0.42); background: rgba(255,255,255,0.035); }
+.nav-item.is-disabled:focus-visible { outline: 2px solid rgba(255,255,255,0.3); outline-offset: -2px; }
 .nav-item.router-link-active {
   background: #f1f6f2;
   color: #102528;
@@ -137,6 +174,7 @@ const handleLogout = () => {
 .nav-item.router-link-active .nav-icon { color: var(--color-primary); }
 .nav-icon { font-size: 15px; flex-shrink: 0; color: inherit; }
 .nav-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nav-lock { flex: 0 0 auto; color: rgba(255,255,255,0.26); }
 .nav-badge {
   margin-left: auto;
   background: var(--color-primary);

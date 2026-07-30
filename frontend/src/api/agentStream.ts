@@ -3,12 +3,13 @@ import type { AgentRuntimeEvent, ApiAgentMessage } from '@/types/agentRuntime'
 
 export type AgentStreamAccepted = {
   conversation_id: number
-  user_message: ApiAgentMessage
+  user_message?: ApiAgentMessage
   runtime_status: string
+  message?: string
 }
 
 export type AgentStreamDone = {
-  message: ApiAgentMessage
+  message: ApiAgentMessage | null
   runtime_status: string
 }
 
@@ -28,9 +29,9 @@ export class AgentStreamError extends Error {
   }
 }
 
-function streamUrl(conversationId: number): string {
+function streamUrl(conversationId: number, action: 'messages' | 'confirm'): string {
   const base = apiBaseUrl.replace(/\/$/, '')
-  return `${base}/agent-conversations/${conversationId}/messages/stream`
+  return `${base}/agent-conversations/${conversationId}/${action}/stream`
 }
 
 async function dispatchFrame(
@@ -60,21 +61,22 @@ async function dispatchFrame(
   }
 }
 
-export async function streamAgentConversationMessage(
+async function streamAgentConversationRequest(
   conversationId: number,
-  content: string,
+  action: 'messages' | 'confirm',
+  body: Record<string, unknown>,
   handlers: AgentStreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
   const token = sessionStorage.getItem('access_token')
-  const response = await fetch(streamUrl(conversationId), {
+  const response = await fetch(streamUrl(conversationId, action), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Accept: 'text/event-stream',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(body),
     signal,
   })
   if (!response.ok) {
@@ -128,4 +130,40 @@ export async function streamAgentConversationMessage(
   } finally {
     reader.releaseLock()
   }
+}
+
+export async function streamAgentConversationMessage(
+  conversationId: number,
+  content: string,
+  handlers: AgentStreamHandlers,
+  signal?: AbortSignal,
+  requestExtras: { initialization_file_ids?: number[] } = {},
+): Promise<void> {
+  return streamAgentConversationRequest(
+    conversationId,
+    'messages',
+    { content, ...requestExtras },
+    handlers,
+    signal,
+  )
+}
+
+export async function streamAgentConversationConfirmation(
+  conversationId: number,
+  payload: {
+    reply_id: string
+    tool_call: Record<string, unknown>
+    confirmed: boolean
+    rules?: Array<Record<string, unknown>>
+  },
+  handlers: AgentStreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamAgentConversationRequest(
+    conversationId,
+    'confirm',
+    payload,
+    handlers,
+    signal,
+  )
 }

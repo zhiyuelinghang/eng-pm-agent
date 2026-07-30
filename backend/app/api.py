@@ -23,8 +23,14 @@ from .agentscope_client import (
 )
 from .config import get_settings
 from .db import SessionLocal, get_db
-from .models import (AgentConversation, AgentConversationMessage, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectMember, ProjectSettings, ProjectStatusSnapshot,
+from .models import (AgentConversation, AgentConversationMessage, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectInitializationDraft, ProjectInitializationFile, ProjectMember, ProjectSettings, ProjectStatusSnapshot,
                       QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsRiskLink)
+from .project_initialization import (
+    ApplyInitializationDraftInput,
+    InitializationApplyError,
+    apply_initialization_draft,
+    build_initialization_state,
+)
 from .schemas import (AttachmentUpdate, DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
                       LoginRequest, MemberInput, PasswordChangeInput, ProfileUpdate, ProjectInput, RiskInput, TaskFlowGenerateInput, TaskInput, TaskTransitionInput,
                       WbsInput, WbsRiskLinkInput, OperationLogInput, PlatformFieldMappingInput, ProjectSettingsInput,
@@ -56,13 +62,13 @@ def get_current_user(credentials: HTTPAuthorizationCredentials | None = Depends(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="请先登录")
     payload = decode_access_token(credentials.credentials)
     user = db.get(User, int(payload["sub"]))
-    if not user or user.status != "active":
+    if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="账号不可用")
     return user
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:
-    if user.role not in {"admin", "superadmin"}:
+    if user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要管理员权限")
     return user
 
@@ -81,13 +87,12 @@ def project_for_user_or_403(
 ) -> Project:
     """Resolve a project while enforcing current platform membership."""
     project = project_or_404(db, project_id)
-    if user.role in {"admin", "superadmin"}:
+    if user.role == "admin":
         return project
     membership = db.scalar(
         select(ProjectMember).where(
             ProjectMember.project_id == project_id,
             ProjectMember.user_id == user.id,
-            ProjectMember.status == "active",
         ),
     )
     if membership is None:
@@ -273,6 +278,7 @@ def _public_agent_catalog_item(item: dict[str, Any] | None) -> dict[str, Any] | 
             "model_ready",
             "sort_order",
             "permission_mode",
+            "knowledge_config",
         )
     }
 
@@ -290,6 +296,16 @@ def _catalog_agent_for_conversation(
                 detail=(
                     "平台全局主智能体已停用或发生切换，请刷新页面后开始"
                     "新的主智能体会话"
+                ),
+            )
+    elif conversation.conversation_type == "initialization":
+        selected = catalog.get("project_initializer")
+        if selected is None or selected.get("id") != conversation.agent_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "项目初始化智能体已停用或发生切换，请刷新工程配置页"
+                    "后重新开始初始化会话"
                 ),
             )
     else:
@@ -328,6 +344,140 @@ def _agent_conversation_or_404(
     return conversation
 
 
+INITIALIZATION_FILE_SUFFIXES = {
+    ".txt",
+    ".md",
+    ".csv",
+    ".xlsx",
+    ".docx",
+    ".pdf",
+}
+INITIALIZATION_FILE_MAX_BYTES = 30 * 1024 * 1024
+
+
+def _public_initialization_file(
+    row: ProjectInitializationFile,
+) -> dict[str, Any]:
+    return {
+        "id": row.id,
+        "project_id": row.project_id,
+        "conversation_id": row.conversation_id,
+        "uploaded_by_user_id": row.uploaded_by_user_id,
+        "file_name": row.file_name,
+        "content_type": row.content_type,
+        "file_size": row.file_size,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    }
+
+
+def _initialization_files_for_message(
+    db: Session,
+    conversation: AgentConversation,
+    file_ids: list[int],
+) -> list[ProjectInitializationFile]:
+    unique_ids = list(dict.fromkeys(file_ids))
+    if not unique_ids:
+        return []
+    if conversation.conversation_type != "initialization":
+        raise HTTPException(
+            status_code=422,
+            detail="只有项目初始化会话可以携带初始化附件",
+        )
+    rows = db.scalars(
+        select(ProjectInitializationFile).where(
+            ProjectInitializationFile.id.in_(unique_ids),
+            ProjectInitializationFile.project_id == conversation.project_id,
+            ProjectInitializationFile.conversation_id == conversation.id,
+        ),
+    ).all()
+    by_id = {row.id: row for row in rows}
+    if any(file_id not in by_id for file_id in unique_ids):
+        raise HTTPException(
+            status_code=422,
+            detail="初始化附件不存在或不属于当前会话",
+        )
+    return [by_id[file_id] for file_id in unique_ids]
+
+
+def _initialization_file_context(
+    files: list[ProjectInitializationFile],
+) -> str:
+    if not files:
+        return ""
+    items = [
+        {
+            "file_id": item.id,
+            "file_name": item.file_name,
+            "content_type": item.content_type,
+            "file_size": item.file_size,
+        }
+        for item in files
+    ]
+    return (
+        "\n<initialization-files>\n"
+        "以下附件只在本项目初始化会话中可用。必须调用 "
+        "dobby_read_project_initialization_file 按 file_id 读取，"
+        "不得根据文件名猜测内容：\n"
+        f"{json.dumps(items, ensure_ascii=False)}\n"
+        "</initialization-files>"
+    )
+
+
+def _initialization_agent_instruction(
+    conversation: AgentConversation,
+) -> str:
+    if conversation.conversation_type != "initialization":
+        return ""
+    return (
+        "\n<project-initialization-role>\n"
+        "你是当前项目的专用初始化助手。项目名称已经由用户创建，不得修改。"
+        "你的任务是通过问答和原始附件补全工程基本信息、人员、WBS、风险源"
+        "与质量指标。\n"
+        "工作规则：\n"
+        "1. 先调用 dobby_get_project_initialization_state，确认正式业务数据、"
+        "最新草稿摘要和当前会话可读取的附件。必须明确区分正式业务数据与"
+        "尚未确认的草稿数据；正式表为空不代表草稿为空。\n"
+        "2. 如果 latest_draft 不为空，回答草稿内容或继续补充数据前，必须"
+        "调用 dobby_get_project_initialization_draft 按需读取相关分区。"
+        "新增风险或质量指标时，应读取草稿 WBS 并使用其中编码完成匹配，"
+        "不得因为正式 WBS 尚未入库就重新解析全部旧附件。\n"
+        "3. 已有草稿的日常补充必须调用 "
+        "dobby_update_project_initialization_draft 增量更新，只提交本次"
+        "改变的分区，并使用读取草稿返回的最新 revision。只有尚无草稿，"
+        "或用户明确要求从全部原始资料整体重建时，才调用 "
+        "dobby_submit_project_initialization_draft。\n"
+        "4. 新附件或用户要求重新核验原文时，必须调用 "
+        "dobby_read_project_initialization_file 读取；"
+        "平台不会把解析文本直接塞进提示词。大文件应按工作表或分页分段读取。\n"
+        "5. 只使用用户明确提供、附件实际包含、正式业务工具或草稿读取工具"
+        "返回的信息；缺失字段应询问用户，不得猜测。\n"
+        "6. 读取表格时必须区分数值 0 与空单元格：0 是真实数据，必须原样"
+        "提交；只有原始单元格为空时才使用 null。每条 WBS 都要明确提交"
+        "上级编码、计划开始、计划完成、进度、状态和优先级，缺失项填 null。\n"
+        "7. WBS 编码表示层级和同级自然顺序，但不表示前置依赖。上级编码只能"
+        "由点分编码的直接前缀确定，根节点上级必须为 null；层级等于编码段数。"
+        "不得把空值改写成“顶级 WBS”“未提供”等文本。predecessor_wbs_codes "
+        "只能来自附件或用户明确给出的前置关系；没有明确前置关系时必须传空"
+        "数组，禁止根据相邻编码、名称或日期自行推断前置关系。\n"
+        "8. WBS、风险和质量指标必须使用 WBS 编码建立关系，并在提交前检查"
+        "父子编码、明确给出的前置工序和关联编码是否真实存在。同一上级下，"
+        "按 WBS 编码自然顺序排列的工序，其计划开始时间不得倒退。附件中每一"
+        "条带 WBS 编码的记录都必须提交，不得因为名称像占位符而静默丢弃。"
+        "发现时间线、前置日期、父子关系或占位内容异常时必须保留原值并交给"
+        "用户核对，不得自行解释、补造依赖或改写原始计划。\n"
+        "9. 提交和增量更新工具都只保存待确认草稿，不会写入正式业务表；"
+        "不得声称已经入库。\n"
+        "10. 必须检查草稿工具返回的校验结果。只要存在错误或警告，就要在回复"
+        "中简要说明发现了哪些问题，并明确提示用户点击 Dobby 平台中的“核对"
+        "草稿”查看、修正或确认；不得只说整理完成，也不得把问题隐藏在工具"
+        "结果中。\n"
+        "11. 用户必须在 Dobby 平台核对并确认草稿后，平台才会执行正式写入；"
+        "你不能绕过这一确认步骤，也不能创建登录账号或设置初始密码。\n"
+        "</project-initialization-role>"
+    )
+
+
 def _build_agent_project_context(
     db: Session,
     project: Project,
@@ -337,7 +487,7 @@ def _build_agent_project_context(
     wbs_items = db.scalars(
         select(WbsItem)
         .where(WbsItem.project_id == project.id)
-        .order_by(WbsItem.code)
+        .order_by(WbsItem.sort_order, WbsItem.wbs_code)
         .limit(30),
     ).all()
     risks = db.scalars(
@@ -374,13 +524,21 @@ def _build_agent_project_context(
         "以下内容由工程管理平台后端按当前登录用户和项目权限注入，只能作为"
         "本次任务的项目事实；不得假设用户拥有未列出的项目或权限。\n"
         f"当前用户：{user.real_name}（用户ID {user.id}，系统角色 {user.role}）\n"
-        f"当前项目：{project.project_name}（项目ID {project.id}）\n"
-        f"所属单位：{project.owner_unit or '未填写'}\n"
-        f"项目说明：{(project.description or '未填写')[:500]}\n"
+        f"当前项目：{project.name}（项目ID {project.id}）\n"
+        "工程类型说明："
+        f"{(project.engineering_type_description or '未填写')[:500]}\n"
+        "参建单位："
+        f"建设单位={project.construction_unit_name or '未填写'}；"
+        f"总包单位={project.general_contractor_unit_name or '未填写'}；"
+        f"监理单位={project.supervision_unit_name or '未填写'}；"
+        f"设计单位={project.design_unit_name or '未填写'}；"
+        f"勘察单位={project.survey_unit_name or '未填写'}\n"
         "WBS："
         + (
             "；".join(
-                f"{item.code} {item.name}（进度{item.progress}%／{item.status}）"
+                f"{item.wbs_code} {item.name}"
+                f"（进度{item.progress_percent or 0}%／"
+                f"{item.status_text or '未设置'}）"
                 for item in wbs_items
             )
             or "暂无"
@@ -388,7 +546,8 @@ def _build_agent_project_context(
         + "\n风险源："
         + (
             "；".join(
-                f"{item.name}（{item.level}／{item.status}）"
+                f"{item.serial_no} {item.risk_part}"
+                f"（{item.risk_level}／{item.related_process_name}）"
                 for item in risks
             )
             or "暂无"
@@ -435,6 +594,8 @@ def _persist_agent_reply(
     conversation_id: int,
     reply: AgentScopeReply,
     trace_summary: dict[str, Any] | None = None,
+    *,
+    audit_new: bool = True,
 ) -> dict[str, Any] | None:
     """Persist a streamed AgentScope reply using a fresh DB session.
 
@@ -476,7 +637,7 @@ def _persist_agent_reply(
         conversation.last_error = None
         conversation.updated_at = datetime.now(UTC)
         user = db.get(User, conversation.user_id)
-        if is_new and user is not None:
+        if is_new and user is not None and audit_new:
             audit(
                 db,
                 user,
@@ -491,6 +652,97 @@ def _persist_agent_reply(
         return serialize(assistant)
 
 
+def _agentscope_assistant_groups(
+    messages: list[dict[str, Any]],
+) -> list[list[dict[str, Any]]]:
+    """Group assistant replies belonging to each AgentScope user turn."""
+    groups: list[list[dict[str, Any]]] = []
+    current: list[dict[str, Any]] = []
+    for message in messages:
+        role = str(message.get("role") or "")
+        if role == "user":
+            if current:
+                groups.append(current)
+                current = []
+        elif role == "assistant":
+            current.append(message)
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _agentscope_reply_from_group(
+    messages: list[dict[str, Any]],
+    live_status: str,
+) -> AgentScopeReply:
+    """Project one AgentScope turn into the platform's durable reply shape."""
+    last = messages[-1]
+    finished_reason = str(last.get("finished_reason") or "")
+    if last.get("error") or finished_reason == "error":
+        status_value = "error"
+    elif finished_reason == "interrupted":
+        status_value = "interrupted"
+    elif last.get("finished_at") is not None:
+        status_value = "completed"
+    else:
+        status_value = live_status
+    content = AgentScopeClient._message_text(last)
+    if not content:
+        content = (
+            "智能体执行已中断，未产生可显示的文本。"
+            if status_value == "interrupted"
+            else "智能体尚未产生可显示的文本。"
+        )
+    return AgentScopeReply(
+        status=status_value,
+        content=content,
+        message_id=(
+            str(last.get("id"))
+            if last.get("id") is not None
+            else None
+        ),
+        raw_message=last,
+        raw_messages=messages,
+    )
+
+
+def _reconcile_agent_conversation_messages(
+    conversation: AgentConversation,
+) -> None:
+    """Recover finished/parked AgentScope replies missing from platform DB."""
+    if not conversation.agentscope_session_id:
+        return
+    client = _agentscope_client()
+    live_status = client.session_status(
+        conversation.agentscope_session_id,
+        conversation.agent_id,
+    )
+    # The active SSE request owns persistence while a turn is running.
+    # Reconciliation is for interrupted/disconnected/parked/finished turns.
+    # Parked statuses are intentionally included by the caller: an interrupt
+    # can race with the original SSE persistence and temporarily restore
+    # ``awaiting_permission`` after the interrupt endpoint set
+    # ``interrupting``. Re-reading history must still reconcile the eventual
+    # interrupted AgentScope message.
+    if live_status == "running":
+        return
+    payload = client.list_messages(
+        conversation.agentscope_session_id,
+        conversation.agent_id,
+    )
+    messages = [
+        item
+        for item in payload.get("messages", [])
+        if isinstance(item, dict)
+    ]
+    for group in _agentscope_assistant_groups(messages):
+        _persist_agent_reply(
+            conversation.id,
+            _agentscope_reply_from_group(group, live_status),
+            audit_new=False,
+        )
+
+
 def _record_agent_turn_error(conversation_id: int, detail: str) -> None:
     """Persist a transport/runtime failure after an SSE response has begun."""
     with SessionLocal() as db:
@@ -499,6 +751,18 @@ def _record_agent_turn_error(conversation_id: int, detail: str) -> None:
             return
         conversation.status = "error"
         conversation.last_error = detail
+        conversation.updated_at = datetime.now(UTC)
+        db.commit()
+
+
+def _mark_agent_turn_running(conversation_id: int) -> None:
+    """Persist that AgentScope accepted a resumed confirmation turn."""
+    with SessionLocal() as db:
+        conversation = db.get(AgentConversation, conversation_id)
+        if conversation is None:
+            return
+        conversation.status = "running"
+        conversation.last_error = None
         conversation.updated_at = datetime.now(UTC)
         db.commit()
 
@@ -519,6 +783,8 @@ async def _persist_agent_reply_after_disconnect(
     """Finish persistence when the browser closes an in-flight stream."""
     try:
         reply = await asyncio.shield(chat_task)
+        if reply.projected:
+            return
         await asyncio.to_thread(
             _persist_agent_reply,
             conversation_id,
@@ -538,8 +804,6 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict[str, Any
     user = db.scalar(select(User).where(User.username == payload.username))
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
-    if user.status != "active":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="账号不可用")
     return ok({"access_token": create_access_token(user.id, user.role), "token_type": "bearer", "user": serialize(user)})
 
 
@@ -589,6 +853,9 @@ def get_agent_catalog(
             "global_main": _public_agent_catalog_item(
                 catalog.get("global_main"),
             ),
+            "project_initializer": _public_agent_catalog_item(
+                catalog.get("project_initializer"),
+            ),
             "business_agents": business_agents,
             "total": len(business_agents),
         },
@@ -600,7 +867,7 @@ def list_agent_conversations(
     project_id: int,
     conversation_type: str | None = Query(
         default=None,
-        pattern="^(general|business)$",
+        pattern="^(general|business|initialization)$",
     ),
     agent_id: str | None = Query(default=None, max_length=64),
     db: Session = Depends(get_db),
@@ -617,21 +884,23 @@ def list_agent_conversations(
         )
     if conversation_type == "general" and not agent_id:
         try:
-            current_main = _agentscope_client().get_catalog().get(
+            selected_agent = _agentscope_client().get_catalog().get(
                 "global_main",
             )
         except AgentScopeGatewayError as exc:
             _raise_agentscope_http_error(exc)
-        if current_main is None:
+        if selected_agent is None:
             return ok([])
         statement = statement.where(
-            AgentConversation.agent_id == str(current_main["id"]),
+            AgentConversation.agent_id == str(selected_agent["id"]),
         )
     if agent_id:
         statement = statement.where(AgentConversation.agent_id == agent_id)
-    rows = db.scalars(
-        statement.order_by(AgentConversation.updated_at.desc()),
-    ).all()
+    if conversation_type == "initialization":
+        statement = statement.order_by(AgentConversation.id.asc()).limit(1)
+    else:
+        statement = statement.order_by(AgentConversation.updated_at.desc())
+    rows = db.scalars(statement).all()
     return ok([serialize(row) for row in rows])
 
 
@@ -643,6 +912,19 @@ def create_agent_conversation(
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     project = project_for_user_or_403(db, project_id, user)
+    if payload.conversation_type == "initialization":
+        existing = db.scalar(
+            select(AgentConversation)
+            .where(
+                AgentConversation.project_id == project.id,
+                AgentConversation.user_id == user.id,
+                AgentConversation.conversation_type == "initialization",
+            )
+            .order_by(AgentConversation.id.asc()),
+        )
+        if existing is not None:
+            return ok(serialize(existing), "已复用现有项目初始化会话")
+
     client = _agentscope_client()
     try:
         catalog = client.get_catalog()
@@ -652,6 +934,13 @@ def create_agent_conversation(
                 raise HTTPException(
                     status_code=409,
                     detail="AgentScope 尚未配置已启用的全局主智能体",
+                )
+        elif payload.conversation_type == "initialization":
+            selected_agent = catalog.get("project_initializer")
+            if selected_agent is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="AgentScope 尚未配置已启用的项目初始化智能体",
                 )
         else:
             if not payload.agent_id:
@@ -681,9 +970,13 @@ def create_agent_conversation(
             conversation_type=payload.conversation_type,
             title=payload.title
             or (
-                f"{selected_agent['name']} · {project.project_name}"
+                f"{selected_agent['name']} · {project.name}"
                 if payload.conversation_type == "business"
-                else f"{project.project_name} · 智能协同"
+                else (
+                    f"{project.name} · 项目初始化"
+                    if payload.conversation_type == "initialization"
+                    else f"{project.name} · 智能协同"
+                )
             ),
             status="creating",
         )
@@ -714,13 +1007,176 @@ def create_agent_conversation(
         _raise_agentscope_http_error(exc)
 
 
+@router.get(
+    "/projects/{project_id}/agent-conversations/{conversation_id}"
+    "/initialization-files",
+)
+def list_project_initialization_files(
+    project_id: int,
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    conversation = _agent_conversation_or_404(db, conversation_id, user)
+    if (
+        conversation.project_id != project_id
+        or conversation.conversation_type != "initialization"
+    ):
+        raise HTTPException(status_code=404, detail="项目初始化会话不存在")
+    rows = db.scalars(
+        select(ProjectInitializationFile)
+        .where(
+            ProjectInitializationFile.project_id == project_id,
+            ProjectInitializationFile.conversation_id == conversation_id,
+        )
+        .order_by(ProjectInitializationFile.created_at),
+    ).all()
+    return ok([serialize(row) for row in rows])
+
+
+@router.post(
+    "/projects/{project_id}/agent-conversations/{conversation_id}"
+    "/initialization-files",
+)
+def upload_project_initialization_file(
+    project_id: int,
+    conversation_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    conversation = _agent_conversation_or_404(db, conversation_id, user)
+    if (
+        conversation.project_id != project_id
+        or conversation.conversation_type != "initialization"
+    ):
+        raise HTTPException(status_code=404, detail="项目初始化会话不存在")
+    safe_name = Path(file.filename or "attachment").name
+    suffix = Path(safe_name).suffix.lower()
+    if suffix not in INITIALIZATION_FILE_SUFFIXES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "初始化附件仅支持 TXT、Markdown、CSV、XLSX、DOCX 和 PDF"
+            ),
+        )
+    content = file.file.read(INITIALIZATION_FILE_MAX_BYTES + 1)
+    if len(content) > INITIALIZATION_FILE_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="单个初始化附件不能超过 30MB")
+    digest = hashlib.sha256(content).hexdigest()
+    duplicate = db.scalar(
+        select(ProjectInitializationFile).where(
+            ProjectInitializationFile.conversation_id == conversation.id,
+            ProjectInitializationFile.file_name == safe_name,
+            ProjectInitializationFile.file_hash == digest,
+        ),
+    )
+    if duplicate is not None:
+        return ok(
+            _public_initialization_file(duplicate),
+            "相同初始化附件已存在",
+        )
+
+    settings = get_settings()
+    folder = (
+        settings.upload_dir
+        / "project-initialization"
+        / str(project_id)
+        / str(conversation_id)
+    )
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / (
+        f"{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}_{safe_name}"
+    )
+    target.write_bytes(content)
+    row = ProjectInitializationFile(
+        project_id=project_id,
+        conversation_id=conversation.id,
+        uploaded_by_user_id=user.id,
+        file_name=safe_name,
+        storage_path=str(target),
+        content_type=file.content_type,
+        file_size=len(content),
+        file_hash=digest,
+    )
+    db.add(row)
+    db.flush()
+    audit(
+        db,
+        user,
+        "上传项目初始化附件",
+        f"上传初始化附件「{safe_name}」",
+        project_id,
+        "project_initialization_file",
+        row.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return ok(_public_initialization_file(row), "初始化附件已上传")
+
+
+@router.delete("/project-initialization-files/{file_id}")
+def delete_project_initialization_file(
+    file_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    row = db.get(ProjectInitializationFile, file_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="初始化附件不存在")
+    conversation = _agent_conversation_or_404(
+        db,
+        row.conversation_id,
+        user,
+    )
+    if conversation.conversation_type != "initialization":
+        raise HTTPException(status_code=404, detail="初始化附件不存在")
+    path = Path(row.storage_path)
+    db.delete(row)
+    audit(
+        db,
+        user,
+        "删除项目初始化附件",
+        f"删除初始化附件「{row.file_name}」",
+        row.project_id,
+        "project_initialization_file",
+        row.id,
+    )
+    db.commit()
+    with suppress(OSError):
+        path.unlink()
+    return ok({}, "初始化附件已删除")
+
+
 @router.get("/agent-conversations/{conversation_id}/messages")
 def list_agent_conversation_messages(
     conversation_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    _agent_conversation_or_404(db, conversation_id, user)
+    conversation = _agent_conversation_or_404(db, conversation_id, user)
+    reconciled = False
+    if conversation.status in {
+        "creating",
+        "running",
+        "interrupting",
+        "awaiting_permission",
+        "awaiting_external_result",
+        "error",
+    } or conversation.last_error:
+        try:
+            _reconcile_agent_conversation_messages(conversation)
+            reconciled = True
+        except AgentScopeGatewayError:
+            # Local history must remain readable while AgentScope is
+            # temporarily unavailable.
+            pass
+    if reconciled:
+        # Reconciliation persists through a separate session so it can also
+        # finish after an SSE client disconnects. End this request session's
+        # earlier read transaction before selecting rows, otherwise SQLite
+        # may return the pre-reconciliation message snapshot.
+        db.rollback()
     rows = db.scalars(
         select(AgentConversationMessage)
         .where(AgentConversationMessage.conversation_id == conversation_id)
@@ -761,16 +1217,32 @@ def create_agent_conversation_message(
         db.commit()
         _raise_agentscope_http_error(exc)
 
+    initialization_files = _initialization_files_for_message(
+        db,
+        conversation,
+        payload.initialization_file_ids,
+    )
     user_message = AgentConversationMessage(
         conversation_id=conversation.id,
         role="user",
         content=payload.content,
-        extra_data={},
+        extra_data={
+            "initialization_files": [
+                {
+                    "id": item.id,
+                    "name": item.file_name,
+                    "size": item.file_size,
+                }
+                for item in initialization_files
+            ],
+        },
     )
     db.add(user_message)
     db.flush()
     injected_content = (
         _build_agent_project_context(db, project, user)
+        + _initialization_agent_instruction(conversation)
+        + _initialization_file_context(initialization_files)
         + "\n<user-request>\n"
         + payload.content
         + "\n</user-request>"
@@ -866,11 +1338,25 @@ def stream_agent_conversation_message(
         db.commit()
         _raise_agentscope_http_error(exc)
 
+    initialization_files = _initialization_files_for_message(
+        db,
+        conversation,
+        payload.initialization_file_ids,
+    )
     user_message = AgentConversationMessage(
         conversation_id=conversation.id,
         role="user",
         content=payload.content,
-        extra_data={},
+        extra_data={
+            "initialization_files": [
+                {
+                    "id": item.id,
+                    "name": item.file_name,
+                    "size": item.file_size,
+                }
+                for item in initialization_files
+            ],
+        },
     )
     db.add(user_message)
     conversation.status = "running"
@@ -881,6 +1367,8 @@ def stream_agent_conversation_message(
 
     injected_content = (
         _build_agent_project_context(db, project, user)
+        + _initialization_agent_instruction(conversation)
+        + _initialization_file_context(initialization_files)
         + "\n<user-request>\n"
         + payload.content
         + "\n</user-request>"
@@ -932,8 +1420,15 @@ def stream_agent_conversation_message(
                         waiting.add(event_task)
                     completed, _ = await asyncio.wait(
                         waiting,
+                        timeout=15.0,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+                    if not completed:
+                        # Keep browsers and reverse proxies from treating a
+                        # quiet but still-running agent turn as a dead
+                        # connection. SSE comments are ignored by the client.
+                        yield ": dobby-agent-heartbeat\n\n"
+                        continue
 
                     if event_task is not None and event_task in completed:
                         try:
@@ -1163,6 +1658,284 @@ def confirm_agent_conversation_tool(
     )
 
 
+@router.post("/agent-conversations/{conversation_id}/confirm/stream")
+def stream_agent_conversation_tool_confirmation(
+    conversation_id: int,
+    payload: AgentConversationConfirmInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Submit a HITL decision and relay the resumed AgentScope turn."""
+    conversation = _agent_conversation_or_404(db, conversation_id, user)
+    if not conversation.agentscope_session_id:
+        raise HTTPException(status_code=409, detail="智能体会话尚未完成初始化")
+
+    client = _agentscope_client()
+    try:
+        catalog = client.get_catalog()
+        _catalog_agent_for_conversation(catalog, conversation)
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+
+    agent_id = conversation.agent_id
+    session_id = conversation.agentscope_session_id
+
+    accepted_payload = {
+        "conversation_id": conversation.id,
+        "runtime_status": "running",
+        "message": (
+            f"已允许「{payload.tool_call.get('name', '工具')}」，"
+            "智能体正在继续执行。"
+            if payload.confirmed
+            else f"已拒绝「{payload.tool_call.get('name', '工具')}」，"
+            "智能体正在处理确认结果。"
+        ),
+    }
+
+    async def relay() -> Any:
+        confirm_task: asyncio.Task[AgentScopeReply] | None = None
+        event_task: asyncio.Task[dict[str, Any]] | None = None
+        reply_handed_off = False
+        trace_summary: dict[str, Any] = {
+            "model_names": [],
+            "tasks_context": None,
+            "team_update_count": 0,
+            "subagent_hitl": [],
+        }
+        try:
+            async with client.event_stream(session_id, agent_id) as events:
+                submission = await asyncio.to_thread(
+                    client.submit_tool_confirmation,
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    reply_id=payload.reply_id,
+                    tool_call=payload.tool_call,
+                    confirmed=payload.confirmed,
+                    rules=payload.rules,
+                )
+                await asyncio.to_thread(
+                    _mark_agent_turn_running,
+                    conversation_id,
+                )
+                confirm_task = asyncio.create_task(
+                    asyncio.to_thread(
+                        client.wait_for_tool_confirmation,
+                        agent_id=agent_id,
+                        session_id=session_id,
+                        reply_id=payload.reply_id,
+                        tool_call=payload.tool_call,
+                        submission=submission,
+                    ),
+                )
+                event_task = asyncio.create_task(anext(events))
+                # Do not acknowledge until AgentScope has validated that this
+                # exact tool call is still waiting and accepted the decision.
+                yield _sse_frame("accepted", accepted_payload)
+
+                while True:
+                    waiting: set[asyncio.Task[Any]] = {confirm_task}
+                    if event_task is not None:
+                        waiting.add(event_task)
+                    completed, _ = await asyncio.wait(
+                        waiting,
+                        timeout=15.0,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if not completed:
+                        yield ": dobby-agent-heartbeat\n\n"
+                        continue
+
+                    if event_task is not None and event_task in completed:
+                        try:
+                            runtime_event = event_task.result()
+                        except StopAsyncIteration:
+                            event_task = None
+                        else:
+                            event_type = str(runtime_event.get("type") or "")
+                            if event_type == "MODEL_CALL_START":
+                                model_name = str(
+                                    runtime_event.get("model_name") or "",
+                                )
+                                if (
+                                    model_name
+                                    and model_name
+                                    not in trace_summary["model_names"]
+                                ):
+                                    trace_summary["model_names"].append(
+                                        model_name,
+                                    )
+                            elif (
+                                event_type == "CUSTOM"
+                                and runtime_event.get("name")
+                                == "state_updated"
+                            ):
+                                value = runtime_event.get("value") or {}
+                                trace_summary["tasks_context"] = value.get(
+                                    "tasks_context",
+                                )
+                            elif (
+                                event_type == "CUSTOM"
+                                and runtime_event.get("name")
+                                == "team_updated"
+                            ):
+                                trace_summary["team_update_count"] += 1
+                            elif (
+                                event_type == "CUSTOM"
+                                and runtime_event.get("name")
+                                == "subagent_require_user_confirm"
+                            ):
+                                value = runtime_event.get("value") or {}
+                                key = (
+                                    str(value.get("worker_session_id") or ""),
+                                    str(value.get("reply_id") or ""),
+                                )
+                                trace_summary["subagent_hitl"] = [
+                                    entry
+                                    for entry in trace_summary[
+                                        "subagent_hitl"
+                                    ]
+                                    if (
+                                        str(
+                                            entry.get("worker_session_id")
+                                            or "",
+                                        ),
+                                        str(entry.get("reply_id") or ""),
+                                    )
+                                    != key
+                                ]
+                                trace_summary["subagent_hitl"].append(value)
+                            elif (
+                                event_type == "CUSTOM"
+                                and runtime_event.get("name")
+                                == "subagent_user_confirm_result"
+                            ):
+                                value = runtime_event.get("value") or {}
+                                key = (
+                                    str(value.get("worker_session_id") or ""),
+                                    str(value.get("reply_id") or ""),
+                                )
+                                trace_summary["subagent_hitl"] = [
+                                    entry
+                                    for entry in trace_summary[
+                                        "subagent_hitl"
+                                    ]
+                                    if (
+                                        str(
+                                            entry.get("worker_session_id")
+                                            or "",
+                                        ),
+                                        str(entry.get("reply_id") or ""),
+                                    )
+                                    != key
+                                ]
+                            yield _sse_frame("agent_event", runtime_event)
+                            event_task = asyncio.create_task(anext(events))
+
+                    if confirm_task in completed:
+                        reply = confirm_task.result()
+                        break
+
+                if event_task is not None and not event_task.done():
+                    event_task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await event_task
+
+            if reply.projected:
+                reply_handed_off = True
+                yield _sse_frame(
+                    "done",
+                    {
+                        "message": None,
+                        "runtime_status": reply.status,
+                    },
+                )
+                return
+
+            persisted = await asyncio.to_thread(
+                _persist_agent_reply,
+                conversation_id,
+                reply,
+                trace_summary,
+            )
+            if persisted is None:
+                raise AgentScopeGatewayError(
+                    "平台会话已被删除，无法保存智能体回复。",
+                    status_code=409,
+                )
+            reply_handed_off = True
+            yield _sse_frame(
+                "done",
+                {
+                    "message": persisted,
+                    "runtime_status": reply.status,
+                },
+            )
+        except asyncio.CancelledError:
+            if confirm_task is not None:
+                asyncio.create_task(
+                    _persist_agent_reply_after_disconnect(
+                        confirm_task,
+                        conversation_id,
+                        trace_summary,
+                    ),
+                )
+                reply_handed_off = True
+            raise
+        except Exception as exc:  # noqa: BLE001
+            if event_task is not None and not event_task.done():
+                event_task.cancel()
+            if confirm_task is not None and not confirm_task.done():
+                asyncio.create_task(
+                    _persist_agent_reply_after_disconnect(
+                        confirm_task,
+                        conversation_id,
+                        trace_summary,
+                    ),
+                )
+                reply_handed_off = True
+            elif confirm_task is not None:
+                await asyncio.to_thread(
+                    _record_agent_turn_error,
+                    conversation_id,
+                    str(exc),
+                )
+                reply_handed_off = True
+            status_code = (
+                exc.status_code
+                if isinstance(exc, AgentScopeGatewayError)
+                else 500
+            )
+            yield _sse_frame(
+                "error",
+                {
+                    "detail": str(exc),
+                    "status_code": status_code,
+                },
+            )
+        finally:
+            if event_task is not None and not event_task.done():
+                event_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await event_task
+            if confirm_task is not None and not reply_handed_off:
+                asyncio.create_task(
+                    _persist_agent_reply_after_disconnect(
+                        confirm_task,
+                        conversation_id,
+                        trace_summary,
+                    ),
+                )
+
+    return StreamingResponse(
+        relay(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/projects")
 def list_projects(db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
     return ok([serialize(row) for row in db.scalars(select(Project).order_by(Project.updated_at.desc())).all()])
@@ -1170,9 +1943,12 @@ def list_projects(db: Session = Depends(get_db), _: User = Depends(get_current_u
 
 @router.post("/projects")
 def create_project(payload: ProjectInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
-    project = Project(**payload.model_dump())
+    project_name = payload.name.strip()
+    if not project_name:
+        raise HTTPException(status_code=422, detail="项目名称不能为空")
+    project = Project(name=project_name)
     db.add(project); db.flush()
-    audit(db, user, "创建项目", f"创建项目「{project.project_name}」", project.id, "project", project.id)
+    audit(db, user, "创建项目", f"创建项目「{project.name}」", project.id, "project", project.id)
     db.commit(); db.refresh(project)
     return ok(serialize(project), "项目已创建")
 
@@ -1180,10 +1956,152 @@ def create_project(payload: ProjectInput, db: Session = Depends(get_db), user: U
 @router.patch("/projects/{project_id}")
 def update_project(project_id: int, payload: ProjectInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
     project = project_or_404(db, project_id)
-    for key, value in payload.model_dump().items(): setattr(project, key, value)
-    audit(db, user, "更新项目", f"更新项目「{project.project_name}」", project.id, "project", project.id)
+    project_name = payload.name.strip()
+    if not project_name:
+        raise HTTPException(status_code=422, detail="项目名称不能为空")
+    project.name = project_name
+    audit(db, user, "更新项目", f"更新项目「{project.name}」", project.id, "project", project.id)
     db.commit(); db.refresh(project)
     return ok(serialize(project), "项目已更新")
+
+
+@router.get("/projects/{project_id}/initialization-state")
+def get_project_initialization_state(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project = project_for_user_or_403(db, project_id, user)
+    return ok(build_initialization_state(db, project))
+
+
+def _initialization_draft_review(
+    db: Session,
+    draft: ProjectInitializationDraft,
+) -> dict[str, Any]:
+    data = serialize(draft)
+    payload = draft.payload if isinstance(draft.payload, dict) else {}
+    personnel = (
+        payload.get("personnel", [])
+        if isinstance(payload.get("personnel", []), list)
+        else []
+    )
+    identity_cards = [
+        str(item.get("identity_card_no"))
+        for item in personnel
+        if isinstance(item, dict) and item.get("identity_card_no")
+    ]
+    existing_cards = set(
+        db.scalars(
+            select(User.identity_card_no).where(
+                User.identity_card_no.in_(identity_cards),
+            ),
+        ).all(),
+    ) if identity_cards else set()
+    data["required_personnel_credentials"] = [
+        {
+            "identity_card_no": str(item["identity_card_no"]),
+            "real_name": str(item.get("real_name") or ""),
+            "position_name": str(item.get("position_name") or ""),
+        }
+        for item in personnel
+        if (
+            isinstance(item, dict)
+            and item.get("identity_card_no")
+            and str(item["identity_card_no"]) not in existing_cards
+        )
+    ]
+    data["summary"] = {
+        "project_fields": sum(
+            value not in (None, "")
+            for value in (
+                payload.get("project", {}).values()
+                if isinstance(payload.get("project"), dict)
+                else []
+            )
+        ),
+        "personnel": len(personnel),
+        "wbs": len(payload.get("wbs", []))
+        if isinstance(payload.get("wbs"), list)
+        else 0,
+        "risks": len(payload.get("risks", []))
+        if isinstance(payload.get("risks"), list)
+        else 0,
+        "quality_requirements": len(payload.get("quality_requirements", []))
+        if isinstance(payload.get("quality_requirements"), list)
+        else 0,
+    }
+    return data
+
+
+@router.get("/projects/{project_id}/initialization-drafts/latest")
+def get_latest_project_initialization_draft(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    draft = db.scalar(
+        select(ProjectInitializationDraft)
+        .where(ProjectInitializationDraft.project_id == project_id)
+        .order_by(ProjectInitializationDraft.updated_at.desc()),
+    )
+    return ok(_initialization_draft_review(db, draft) if draft else None)
+
+
+@router.get("/projects/{project_id}/initialization-drafts/{draft_id}")
+def get_project_initialization_draft(
+    project_id: int,
+    draft_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    draft = db.get(ProjectInitializationDraft, draft_id)
+    if draft is None or draft.project_id != project_id:
+        raise HTTPException(status_code=404, detail="初始化草稿不存在")
+    return ok(_initialization_draft_review(db, draft))
+
+
+@router.post("/projects/{project_id}/initialization-drafts/{draft_id}/apply")
+def apply_project_initialization_draft(
+    project_id: int,
+    draft_id: int,
+    payload: ApplyInitializationDraftInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+) -> dict[str, Any]:
+    project = project_for_user_or_403(db, project_id, user)
+    draft = db.get(ProjectInitializationDraft, draft_id)
+    if draft is None or draft.project_id != project_id:
+        raise HTTPException(status_code=404, detail="初始化草稿不存在")
+    try:
+        result = apply_initialization_draft(db, draft, payload)
+        audit(
+            db,
+            user,
+            "确认项目初始化草稿",
+            f"确认初始化草稿第 {draft.revision} 版并写入项目",
+            project.id,
+            "project_initialization_draft",
+            draft.id,
+        )
+        db.commit()
+        db.refresh(draft)
+    except InitializationApplyError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(exc), "issues": exc.issues},
+        ) from exc
+    return ok(
+        {
+            "draft": serialize(draft),
+            "result": result,
+            "initialization_state": build_initialization_state(db, project),
+        },
+        "项目初始化数据已确认入库",
+    )
 
 
 @router.get("/projects/{project_id}/settings")
@@ -1747,44 +2665,107 @@ def material_assistant_reply(project_id: int, payload: CollaborationMessageInput
     wbs_items = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id).order_by(WbsItem.code).limit(50)).all()
     risk_sources = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id).order_by(RiskSource.updated_at.desc()).limit(50)).all()
     quality_metrics = db.scalars(select(QualityMetric).where(QualityMetric.project_id == project_id).order_by(QualityMetric.updated_at.desc()).limit(50)).all()
-    field_mappings = db.scalars(select(PlatformFieldMapping).where(PlatformFieldMapping.project_id == project_id).order_by(PlatformFieldMapping.platform_name, PlatformFieldMapping.target_field).limit(50)).all()
 
-    missing: list[str] = []
-    if not project.owner_unit: missing.append("所属单位")
-    if not project.description: missing.append("工程说明")
+    attachment_ids = list(dict.fromkeys(payload.attachment_ids))
+    attachment_rows: list[tuple[Attachment, str | None]] = []
+    if attachment_ids:
+        selected_rows = db.execute(
+            select(Attachment, AttachmentText.content)
+            .outerjoin(AttachmentText, AttachmentText.attachment_id == Attachment.id)
+            .where(
+                Attachment.project_id == project_id,
+                Attachment.id.in_(attachment_ids),
+            )
+        ).all()
+        row_by_id = {attachment.id: (attachment, content) for attachment, content in selected_rows}
+        if any(attachment_id not in row_by_id for attachment_id in attachment_ids):
+            raise HTTPException(status_code=422, detail="附件不存在或不属于当前项目")
+        attachment_rows = [row_by_id[attachment_id] for attachment_id in attachment_ids]
+
+    project_fields = [
+        ("工程类型说明", project.engineering_type_description),
+        ("合同开工日期", project.contract_start_date),
+        ("合同竣工日期", project.contract_end_date),
+        ("合同工期", project.contract_duration_days),
+        ("合同金额", project.contract_amount_wan_yuan),
+        ("建设单位", project.construction_unit_name),
+        ("总包单位", project.general_contractor_unit_name),
+        ("监理单位", project.supervision_unit_name),
+        ("设计单位", project.design_unit_name),
+        ("勘察单位", project.survey_unit_name),
+    ]
+    missing = [label for label, value in project_fields if value is None or value == ""]
     if not members: missing.append("项目成员与岗位")
     if not wbs_items: missing.append("WBS 工序基线")
     if not risk_sources: missing.append("风险源")
     if not quality_metrics: missing.append("质量指标")
-    if not field_mappings: missing.append("填报字段映射")
 
     setup_context = (
-        f"项目名称：{project.project_name}；所属单位：{project.owner_unit or '未填写'}；工程说明：{(project.description or '未填写')[:360]}\n"
+        f"项目名称：{project.name}\n"
+        + "项目基本信息："
+        + "；".join(f"{label}：{value if value is not None and value != '' else '未填写'}" for label, value in project_fields)
+        + "\n"
         f"项目成员：{len(members)} 人；WBS 工序：{len(wbs_items)} 项；风险源：{len(risk_sources)} 项；"
-        f"质量指标：{len(quality_metrics)} 项；字段映射：{len(field_mappings)} 项\n"
+        f"质量指标：{len(quality_metrics)} 项\n"
         "当前缺失项：" + ("、".join(missing) if missing else "无")
     )
+    attachment_context_parts: list[str] = []
+    remaining_chars = 50000
+    for attachment, extracted_text in attachment_rows:
+        clean_text = (extracted_text or "").strip()
+        text_limit = min(12000, remaining_chars)
+        excerpt = clean_text[:text_limit] if text_limit > 0 else ""
+        remaining_chars -= len(excerpt)
+        attachment_context_parts.append(
+            f"附件：{attachment.file_name}（{attachment.category}）\n"
+            + (excerpt if excerpt else "[未提取到可读文本]")
+        )
+    attachment_context = "\n\n".join(attachment_context_parts) or "本轮未上传附件"
+
     settings = get_settings()
     if settings.ai_api_key:
         prompt = (
-            "你是工程项目初始化与基础配置助手。职责仅限检查和补全项目基本信息、项目成员与责任、WBS 工序基线、"
-            "风险源、质量指标、填报字段映射等基础配置。不得声称连接、读取或管理项目资料库，不得承担资料归档、"
-            "资料识别、任务协同或项目状态分析。未知内容必须标为待确认，不能编造。请给出简洁、可执行的配置建议。"
-            f"\n用户请求：{payload.content}\n当前基础配置：{setup_context}"
+            "你是工程项目初始化助手。你的目标是通过用户问答和本轮上传附件，补全项目基本信息、项目人员、"
+            "WBS、风险源以及工序质量指标。项目名称已经创建，除非用户明确要求，否则不要建议修改项目名称。"
+            "只能提取附件和用户请求中明确存在的事实；无法确定、存在冲突或缺少依据的内容必须标记为待确认，严禁编造。"
+            "不得声称已经把识别结果写入数据库，必须先输出待核对结果，等待用户确认。"
+            "请按“已识别信息、待确认信息、建议下一步”组织简洁回答。"
+            f"\n\n用户请求：{payload.content}\n\n当前项目数据：\n{setup_context}\n\n本轮附件内容：\n{attachment_context}"
         )
         try:
-            response = httpx.post(f"{settings.ai_base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {settings.ai_api_key}"}, json={"model": settings.ai_model, "messages": [{"role": "system", "content": "仅协助工程项目初始化与基础数据补全，并明确功能边界。"}, {"role": "user", "content": prompt}]}, timeout=30)
+            response = httpx.post(f"{settings.ai_base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {settings.ai_api_key}"}, json={"model": settings.ai_model, "messages": [{"role": "system", "content": "从问答和附件中提取工程项目初始化数据，先核对，确认后才能入库。"}, {"role": "user", "content": prompt}]}, timeout=30)
             response.raise_for_status()
             answer = response.json()["choices"][0]["message"]["content"]
-            return ok({"content": answer}, "Dobby 已生成基础配置建议")
+            return ok({
+                "content": answer,
+                "attachments": [
+                    {"id": attachment.id, "name": attachment.file_name, "extracted": bool((text or "").strip())}
+                    for attachment, text in attachment_rows
+                ],
+            }, "Dobby 已生成项目初始化核对结果")
         except (httpx.HTTPError, KeyError, IndexError, TypeError):
             pass
 
+    attachment_names = "、".join(attachment.file_name for attachment, _ in attachment_rows)
+    readable_count = sum(1 for _, text in attachment_rows if (text or "").strip())
     if missing:
-        answer = f"当前项目初始化仍缺少：{'、'.join(missing)}。建议先补齐项目基本信息和成员责任，再依次维护 WBS、风险源、质量指标与字段映射；不涉及工程资料库连接或资料归档。"
+        answer = (
+            (f"已接收本轮附件：{attachment_names}；其中 {readable_count} 份已提取到可读内容。" if attachment_rows else "")
+            + f"当前项目仍待完善：{'、'.join(missing)}。"
+            + "请继续说明相关信息；识别结果会先交给你核对，确认后才能写入项目。"
+        )
     else:
-        answer = "当前项目的基础配置项已具备。建议继续核对成员责任、WBS 编码与日期、风险等级、质量要求及字段映射是否准确；资料管理和任务协同请在对应模块中处理。"
-    return ok({"content": answer}, "Dobby 已生成基础配置建议")
+        answer = (
+            (f"已接收本轮附件：{attachment_names}；其中 {readable_count} 份已提取到可读内容。" if attachment_rows else "")
+            + "当前项目初始化数据已具备，请继续核对人员责任、WBS 编码与日期、风险等级以及工序质量指标是否准确。"
+        )
+    return ok({
+        "content": answer,
+        "attachments": [
+            {"id": attachment.id, "name": attachment.file_name, "extracted": bool((text or "").strip())}
+            for attachment, text in attachment_rows
+        ],
+    }, "Dobby 已生成项目初始化核对结果")
 
 
 def extract_attachment_text(content: bytes, suffix: str) -> str:

@@ -147,7 +147,7 @@ const connectors = reactive<ConnectorConfig[]>([
 ])
 
 const profileInitial = computed(() => (profile.real_name || currentUserName).trim().slice(0, 1) || '用')
-const roleLabel = computed(() => ({ superadmin: '系统管理员', admin: '管理员', member: '项目成员' }[profile.role] || '项目成员'))
+const roleLabel = computed(() => ({ admin: '管理员', user: '普通用户' }[profile.role] || '普通用户'))
 const profileUpdatedAt = computed(() => profile.updated_at ? `资料更新于 ${formatTime(profile.updated_at)}` : '个人资料尚未更新')
 const configuredConnectorCount = computed(() => connectors.filter(item => item.configured).length)
 const activeConnector = computed(() => connectors.find(item => item.key === activeConnectorKey.value))

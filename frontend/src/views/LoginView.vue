@@ -99,7 +99,7 @@ const handleLogin = async () => {
     const { access_token, user } = response.data.data
     sessionStorage.setItem('access_token', access_token)
     sessionStorage.setItem('logged_in', '1')
-    sessionStorage.setItem('user_role', ['admin', 'superadmin'].includes(user.role) ? 'ops' : 'site')
+    sessionStorage.setItem('user_role', user.role)
     sessionStorage.setItem('current_user_id', String(user.id))
     sessionStorage.setItem('current_user_name', user.real_name)
     await store.initialize()

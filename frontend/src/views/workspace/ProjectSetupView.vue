@@ -5,47 +5,158 @@
         <div class="project-navigator-head"><h2>项目</h2><button type="button" class="link-button" @click="openProjectCreate">新建项目</button></div>
         <div class="project-navigator-list">
           <button v-for="project in store.projects" :key="project.id" class="project-nav-item" :class="{ active: project.id === configProjectId }" @click="selectConfigProject(project.id)">
-            <span class="project-status-dot"></span><span class="project-nav-info"><strong>{{ project.name }}</strong><small>{{ project.ownerUnit || '未填写所属单位' }}</small></span><em>{{ project.status === 'active' ? '进行中' : project.status }}</em>
+            <strong class="project-nav-name">{{ project.name }}</strong>
           </button>
-          <p v-if="!store.projects.length" class="empty">还没有项目。请新建第一份工程资料。</p>
+          <div v-if="!store.projectCatalogLoaded" class="project-list-loading" aria-label="正在加载项目">
+            <i></i><span></span><small></small>
+          </div>
+          <div v-else-if="!store.projects.length" class="project-list-empty">
+            <span><n-icon :size="18"><ListDetails /></n-icon></span>
+            <strong>暂无项目</strong>
+            <p>创建后会显示在这里，方便切换和继续完善。</p>
+            <button type="button" @click="openProjectCreate"><n-icon :size="15"><Plus /></n-icon>创建第一个项目</button>
+          </div>
         </div>
       </aside>
 
       <main v-if="configProjectId" class="project-config-panel">
-        <section class="project-context">
-          <div class="project-context-title"><span class="project-status-dot"></span><h1>{{ configProject?.name }}</h1></div>
-          <dl class="project-context-meta"><div><dt>负责人</dt><dd>{{ configProject?.ownerUnit || '未填写所属单位' }}</dd></div><div><dt>状态</dt><dd><span class="project-status-dot"></span>{{ configProject?.status === 'active' ? '进行中' : configProject?.status }}</dd></div><div class="configuration-progress"><dt>配置完成度</dt><dd><span class="progress-track"><i :style="{ width: `${configurationProgress.percent}%` }"></i></span>{{ configurationProgress.percent }}%（{{ configurationProgress.completed }}/{{ configurationProgress.total }}）</dd></div></dl>
-        </section>
-
-        <div v-if="projectCreateOpen" class="setup-modal-backdrop" @click.self="closeProjectCreate">
-      <section class="setup-modal" role="dialog" aria-modal="true" aria-labelledby="project-create-title">
-        <div class="setup-modal-head"><div><h2 id="project-create-title">新建工程项目</h2></div><button type="button" class="modal-close" aria-label="关闭新建工程项目窗口" :disabled="submitting" @click="closeProjectCreate">关闭</button></div>
-        <form class="form-stack project-create-form" @submit.prevent="submitProject">
-          <label>项目名称<input v-model.trim="projectForm.project_name" required placeholder="例如：真如社区卫生服务中心扩建项目"></label>
-          <label>所属单位<input v-model.trim="projectForm.owner_unit" placeholder="建设单位或管理单位"></label>
-          <label>工程说明<textarea v-model.trim="projectForm.description" rows="4" placeholder="工程范围、阶段和当前重点"></textarea></label>
-          <div class="setup-modal-actions"><button type="button" class="modal-secondary" :disabled="submitting" @click="closeProjectCreate">取消</button><button type="submit" class="primary" :disabled="submitting">创建并进入配置</button></div>
-        </form>
-      </section>
-        </div>
-
       <div class="project-config-scroll">
       <nav class="project-workspace-tabs" aria-label="项目资料工作台">
-        <button v-for="tab in workspaceTabs" :key="tab.key" type="button" :class="{ active: activeWorkspaceTab === tab.key }" @click="activeWorkspaceTab = tab.key"><strong>{{ tab.label }}</strong><span>{{ tab.hint }}</span></button>
+        <button v-for="tab in workspaceTabs" :key="tab.key" type="button" :class="{ active: activeWorkspaceTab === tab.key }" @click="selectWorkspaceTab(tab.key)"><strong>{{ tab.label }}</strong><span>{{ tab.hint }}</span></button>
       </nav>
 
       <section v-if="activeWorkspaceTab === 'agent'" class="material-agent-workspace">
-        <header class="material-workspace-head material-agent-head">
-          <div><span>Dobby 配置助手</span><h2>项目初始化与基础数据补全</h2><p>检查当前项目的基础配置，协助补全成员、WBS、风险、质量和字段映射；对话不会保存。</p></div>
-        </header>
-        <div class="agent-context-summary"><article><span>项目成员</span><strong>{{ configScope.members.length }}</strong><small>人已配置</small></article><article><span>WBS 工序</span><strong>{{ configScope.wbsItems.length }}</strong><small>项已配置</small></article><article><span>待补全配置</span><strong>{{ setupMissingItems.length }}</strong><small>项基础数据</small></article></div>
-        <div class="material-agent-chat">
-          <div class="material-agent-messages">
-            <div v-if="!materialAgentMessages.length" class="material-agent-welcome"><strong>我是 Dobby，负责协助完成当前项目的初始化配置。</strong><p>我会检查项目基本信息、成员责任、WBS、风险源、质量指标和字段映射，指出缺失项并给出补全建议；资料归档、任务协同和项目状态分析由对应模块负责。</p><div><button v-for="suggestion in materialAgentSuggestions" :key="suggestion" type="button" @click="askMaterialAgent(suggestion)">{{ suggestion }}</button></div></div>
-            <article v-for="item in materialAgentMessages" :key="item.id" :class="['material-agent-message', item.role]"><span>{{ item.role === 'assistant' ? 'D' : '我' }}</span><div><small>{{ item.role === 'assistant' ? 'Dobby · 项目配置助手' : '你的指令' }}</small><p>{{ item.content }}</p></div></article>
+        <div class="material-agent-chat" :class="{ 'has-draft': materialAgentDraft }">
+          <div
+            ref="materialAgentViewport"
+            class="material-agent-messages"
+            :class="{ empty: !materialAgentMessages.length && !materialAgentStreamingTrace }"
+            :aria-busy="materialAgentConversationLoading"
+          >
+            <div
+              v-if="materialAgentConversationLoading && !materialAgentMessages.length && !materialAgentStreamingTrace"
+              class="material-agent-history-loading"
+              aria-live="polite"
+            >
+              <span aria-hidden="true"></span>
+              <strong>正在读取历史对话</strong>
+              <p>正在同步当前项目的初始化会话，请稍候。</p>
+            </div>
+            <div v-else-if="!materialAgentMessages.length && !materialAgentStreamingTrace" class="material-agent-welcome">
+              <span class="material-agent-welcome-mark" aria-hidden="true">D</span>
+              <div>
+                <small>项目初始化</small>
+                <strong>从现有资料开始完善项目</strong>
+                <p>直接说明已知信息，或添加工程说明、人员表、WBS、风险清单和质量指标文件。整理结果会先交给你核对，确认后再写入项目。</p>
+              </div>
+            </div>
+            <article v-for="item in materialAgentMessages" :key="item.id" :class="['material-agent-message', item.role]">
+              <span>{{ item.role === 'assistant' ? 'D' : '我' }}</span>
+              <div>
+                <small>{{ item.role === 'assistant' ? 'Dobby · 项目初始化助手' : '你的指令' }}</small>
+                <AgentMessageContent
+                  v-if="item.role === 'assistant'"
+                  :content="item.content"
+                  :runtime-trace="item.runtimeTrace"
+                  @confirm="confirmMaterialAgentToolCall"
+                />
+                <p v-else>{{ item.content }}</p>
+                <ul v-if="item.attachments?.length" class="material-agent-message-files">
+                  <li v-for="file in item.attachments" :key="file.id"><n-icon :size="14"><Paperclip /></n-icon>{{ file.name }}<small>{{ formatFileSize(file.size) }}</small></li>
+                </ul>
+              </div>
+            </article>
+            <article v-if="materialAgentStreamingTrace" class="material-agent-message assistant">
+              <span>D</span>
+              <div>
+                <small>Dobby · 项目初始化助手</small>
+                <AgentMessageContent
+                  :runtime-trace="materialAgentStreamingTrace"
+                  streaming
+                  @confirm="confirmMaterialAgentToolCall"
+                />
+              </div>
+            </article>
           </div>
           <p v-if="materialAgentError" class="material-agent-error">{{ materialAgentError }}</p>
-          <form class="material-agent-composer" @submit.prevent="sendMaterialAgentMessage"><textarea v-model="materialAgentPrompt" :disabled="materialAgentLoading" placeholder="例如：检查项目成员、WBS、风险源和质量指标还有哪些未配置"></textarea><button type="submit" class="primary" :disabled="materialAgentLoading || !materialAgentPrompt.trim()">{{ materialAgentLoading ? '正在分析…' : '发送给 Dobby' }}</button></form>
+          <section
+            v-if="materialAgentDraft"
+            class="initialization-draft-dock"
+            :class="[`status-${materialAgentDraft.status}`, { collapsed: initializationDraftCollapsed }]"
+            aria-label="项目初始化草稿"
+          >
+            <button
+              v-if="initializationDraftCollapsed"
+              type="button"
+              class="initialization-draft-collapsed"
+              aria-controls="initialization-draft-content"
+              aria-expanded="false"
+              @click="initializationDraftCollapsed = false"
+            >
+              <span class="initialization-draft-dot" aria-hidden="true"></span>
+              <strong>{{ materialAgentDraft.status === 'applied' ? '初始化草稿已写入项目' : '有待确认草稿' }}</strong>
+              <n-icon :size="16" aria-hidden="true"><ChevronUp /></n-icon>
+            </button>
+            <div v-else id="initialization-draft-content" class="initialization-draft-content">
+              <header class="initialization-draft-head">
+                <div class="initialization-draft-title">
+                  <span class="initialization-draft-dot" aria-hidden="true"></span>
+                  <div>
+                    <small>初始化草稿</small>
+                    <strong>{{ initializationDraftStatusLabel(materialAgentDraft.status) }}</strong>
+                  </div>
+                  <em>{{ materialAgentDraft.status === 'applied' ? '已写入项目' : '等待平台确认' }}</em>
+                </div>
+                <div class="initialization-draft-actions">
+                  <button
+                    type="button"
+                    class="initialization-draft-collapse"
+                    aria-controls="initialization-draft-content"
+                    aria-expanded="true"
+                    @click="initializationDraftCollapsed = true"
+                  >
+                    <n-icon :size="15" aria-hidden="true"><ChevronDown /></n-icon>
+                    <span>收起</span>
+                  </button>
+                  <button type="button" class="initialization-draft-review" @click="openInitializationDraftReview">
+                    {{ materialAgentDraft.status === 'applied' ? '查看内容' : '核对草稿' }}
+                  </button>
+                </div>
+              </header>
+              <div class="initialization-draft-summary">
+                <span><strong>{{ materialAgentDraft.summary.project_fields }}</strong>项工程信息</span>
+                <span><strong>{{ materialAgentDraft.summary.personnel }}</strong>名人员</span>
+                <span><strong>{{ materialAgentDraft.summary.wbs }}</strong>项 WBS</span>
+                <span><strong>{{ materialAgentDraft.summary.risks }}</strong>项风险</span>
+                <span><strong>{{ materialAgentDraft.summary.quality_requirements }}</strong>项质量指标</span>
+              </div>
+              <footer class="initialization-draft-meta">
+                <span>{{ materialAgentDraft.validation_issues.length ? initializationDraftIssueSummary : '结构校验已通过，确认前不会写入项目' }}</span>
+                <small v-if="materialAgentDraft.source_files.length">来源：{{ materialAgentDraft.source_files.join('、') }}</small>
+                <small v-else>来源：本次问答</small>
+              </footer>
+            </div>
+          </section>
+          <form class="material-agent-composer" @submit.prevent="sendMaterialAgentMessage">
+            <input ref="materialAgentFileInput" class="visually-hidden" type="file" multiple accept=".xlsx,.csv,.docx,.pdf,.txt,.md" @change="selectMaterialAgentFiles">
+            <div v-if="materialAgentFiles.length" class="material-agent-file-tray">
+              <div class="material-agent-file-head"><span>已选择 {{ materialAgentFiles.length }} 个附件</span><button type="button" @click="clearMaterialAgentFiles">清空</button></div>
+              <ul>
+                <li v-for="(file, index) in materialAgentFiles" :key="`${file.name}-${file.size}-${file.lastModified}`">
+                  <n-icon :size="17"><Paperclip /></n-icon>
+                  <span><strong>{{ file.name }}</strong><small>{{ formatFileSize(file.size) }}</small></span>
+                  <button type="button" :aria-label="`移除附件 ${file.name}`" @click="removeMaterialAgentFile(index)"><n-icon :size="15"><X /></n-icon></button>
+                </li>
+              </ul>
+            </div>
+            <div class="material-agent-composer-row">
+              <button type="button" class="material-agent-attach" title="添加项目附件" aria-label="添加项目附件" :disabled="materialAgentLoading" @click="openMaterialAgentFilePicker"><n-icon :size="19"><Paperclip /></n-icon></button>
+              <textarea v-model="materialAgentPrompt" :disabled="materialAgentLoading" placeholder="描述需要补充的工程信息，或添加附件"></textarea>
+              <button v-if="materialAgentLoading || materialAgentStopping" type="button" class="material-agent-stop" :disabled="materialAgentStopping" @click="stopMaterialAgentMessage">{{ materialAgentStopping ? '正在停止…' : '停止分析' }}</button>
+              <button v-else type="submit" class="primary" :disabled="!materialAgentPrompt.trim() && !materialAgentFiles.length">发送给 Dobby</button>
+            </div>
+            <small class="material-agent-composer-hint">支持 XLSX、DOCX、PDF、CSV、TXT、Markdown；原始附件交由 AgentScope 初始化助手解析</small>
+          </form>
         </div>
       </section>
 
@@ -219,22 +330,406 @@
       </template>
       </div>
       </main>
+
+      <section v-else class="project-empty-stage">
+        <div v-if="!store.projectCatalogLoaded" class="project-empty-loading" aria-label="正在加载项目">
+          <i></i><span></span><span></span><button type="button" disabled></button>
+        </div>
+        <div v-else class="project-empty-content">
+          <div v-if="projectRequiredNotice" class="project-required-notice">
+            <n-icon :size="17"><Shield /></n-icon>
+            <span><strong>当前功能需要项目</strong>请先完成项目创建，其他业务菜单随后自动开放。</span>
+          </div>
+          <span class="project-empty-kicker">项目初始化</span>
+          <h1>先建立项目，再逐步补全工程资料</h1>
+          <p class="project-empty-description">首次创建只需要填写项目名称。项目建立后，可通过 Dobby 配置助手问答或上传附件，继续完善人员、WBS、风险源和质量指标。</p>
+          <button type="button" class="project-empty-primary" @click="openProjectCreate">
+            <n-icon :size="18"><Plus /></n-icon>
+            新建工程项目
+          </button>
+          <ol class="project-init-path">
+            <li><span>01</span><div><strong>创建项目</strong><small>只填写项目名称</small></div></li>
+            <li><span>02</span><div><strong>补充资料</strong><small>问答或上传附件</small></div></li>
+            <li><span>03</span><div><strong>核对入库</strong><small>确认后形成项目数据</small></div></li>
+          </ol>
+        </div>
+      </section>
+
+      <div v-if="projectCreateOpen" class="setup-modal-backdrop" @click.self="closeProjectCreate">
+        <section class="setup-modal" role="dialog" aria-modal="true" aria-labelledby="project-create-title">
+          <div class="setup-modal-head">
+            <div><h2 id="project-create-title">新建工程项目</h2><p>先创建项目，其他工程信息将在初始化阶段逐步补全。</p></div>
+          </div>
+          <form class="form-stack project-create-form" @submit.prevent="submitProject">
+            <label>项目名称<input v-model.trim="projectForm.name" required maxlength="200" autofocus placeholder="请输入项目名称"></label>
+            <div class="setup-modal-actions"><button type="button" class="modal-secondary" :disabled="submitting" @click="closeProjectCreate">取消</button><button type="submit" class="primary" :disabled="submitting || !projectForm.name.trim()">创建项目</button></div>
+          </form>
+        </section>
+      </div>
+
+      <div v-if="initializationDraftReviewOpen && materialAgentDraft" class="setup-modal-backdrop initialization-review-backdrop" @click.self="closeInitializationDraftReview">
+        <section class="setup-modal initialization-review-modal" role="dialog" aria-modal="true" aria-labelledby="initialization-review-title">
+          <header class="setup-modal-head">
+            <div><h2 id="initialization-review-title" :title="configProjectName">{{ configProjectName }} · 初始化草稿核对</h2></div>
+            <button type="button" class="modal-close" :disabled="initializationDraftApplying" aria-label="关闭核对窗口" @click="closeInitializationDraftReview"><n-icon :size="17"><X /></n-icon></button>
+          </header>
+
+          <div class="initialization-review-body">
+            <section v-if="draftProjectFields.length" class="initialization-review-section initialization-project-section">
+              <header class="initialization-project-head">
+                <div><h3>工程基本信息</h3><p>核对从项目资料中识别的合同信息与参建单位。</p></div>
+                <span>{{ draftProjectFields.length }} 项已识别</span>
+              </header>
+              <article v-if="draftProjectDescription" class="initialization-project-description">
+                <span>{{ draftProjectDescription.label }}</span>
+                <p>{{ draftProjectDescription.value }}</p>
+              </article>
+              <div v-if="draftProjectContractFields.length" class="initialization-project-contract-grid">
+                <article v-for="item in draftProjectContractFields" :key="item.key">
+                  <span>{{ item.label }}</span>
+                  <strong>{{ item.value }}</strong>
+                </article>
+              </div>
+              <div v-if="draftProjectUnitFields.length" class="initialization-project-units">
+                <h4>参建单位</h4>
+                <dl>
+                  <div
+                    v-for="item in draftProjectUnitFields"
+                    :key="item.key"
+                    :class="{ primary: item.key === 'construction_unit_name' }"
+                  >
+                    <dt>{{ item.label }}</dt>
+                    <dd>{{ item.value }}</dd>
+                  </div>
+                </dl>
+              </div>
+            </section>
+
+            <section v-if="materialAgentDraft.payload.personnel.length" class="initialization-review-data-section">
+              <button type="button" class="initialization-review-data-toggle" :class="{ expanded: initializationReviewExpanded.personnel }" :aria-expanded="initializationReviewExpanded.personnel" @click="initializationReviewExpanded.personnel = !initializationReviewExpanded.personnel">
+                <n-icon :size="16" aria-hidden="true"><ChevronDown /></n-icon>
+                <span><strong>人员</strong><small>身份、岗位与证书信息</small></span>
+                <em>{{ materialAgentDraft.payload.personnel.length }} 人</em>
+              </button>
+              <ul v-show="initializationReviewExpanded.personnel"><li v-for="item in materialAgentDraft.payload.personnel" :key="item.identity_card_no"><strong>{{ item.real_name }}</strong><span>{{ item.position_name }} · 证书 {{ item.certificate_no }}</span></li></ul>
+            </section>
+
+            <section v-if="materialAgentDraft.payload.wbs.length" class="initialization-review-data-section">
+              <button type="button" class="initialization-review-data-toggle" :class="{ expanded: initializationReviewExpanded.wbs }" :aria-expanded="initializationReviewExpanded.wbs" @click="initializationReviewExpanded.wbs = !initializationReviewExpanded.wbs">
+                <n-icon :size="16" aria-hidden="true"><ChevronDown /></n-icon>
+                <span><strong>WBS</strong><small>工序计划、执行状态与层级关系</small></span>
+                <em>{{ materialAgentDraft.payload.wbs.length }} 项</em>
+              </button>
+              <div v-show="initializationReviewExpanded.wbs" class="initialization-wbs-content">
+                <div class="initialization-wbs-toolbar">
+                  <div>
+                    <strong>树形工序结构</strong>
+                    <span>当前显示 {{ visibleInitializationWbsRows.length }}/{{ materialAgentDraft.payload.wbs.length }} 项</span>
+                    <em v-if="initializationWbsSequenceWarningCount" class="sequence-warning">
+                      <n-icon :size="15" aria-hidden="true"><AlertTriangle /></n-icon>
+                      {{ initializationWbsSequenceWarningCount }} 项时间线异常
+                    </em>
+                    <em v-if="initializationWbsDependencyWarningCount">
+                      <n-icon :size="15" aria-hidden="true"><AlertTriangle /></n-icon>
+                      {{ initializationWbsDependencyWarningCount }} 项依赖日期需核对
+                    </em>
+                  </div>
+                  <div>
+                    <button type="button" @click="expandAllInitializationWbs">全部展开</button>
+                    <button type="button" @click="collapseAllInitializationWbs">全部收起</button>
+                  </div>
+                </div>
+                <div class="initialization-wbs-table-wrap">
+                  <table class="initialization-wbs-table">
+                    <thead>
+                      <tr>
+                        <th>WBS 编码</th>
+                        <th>工序名称</th>
+                        <th>计划开始</th>
+                        <th>计划完成</th>
+                        <th>进度</th>
+                        <th>状态</th>
+                        <th>优先级</th>
+                        <th>前置 WBS</th>
+                        <th>上级</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr
+                        v-for="row in visibleInitializationWbsRows"
+                        :key="row.item.wbs_code"
+                        :class="{
+                          'is-wbs-group': row.hasChildren,
+                          'has-sequence-warning': row.sequenceWarnings.length,
+                          'has-dependency-warning': row.dependencyWarnings.length,
+                        }"
+                        :title="[...row.sequenceWarnings, ...row.dependencyWarnings].join('；')"
+                      >
+                        <td><strong>{{ row.item.wbs_code }}</strong></td>
+                        <td class="initialization-wbs-name">
+                          <div
+                            class="initialization-wbs-tree-node"
+                            :class="{ root: row.depth === 0 }"
+                            :style="{ '--wbs-depth': row.depth }"
+                          >
+                            <button
+                              v-if="row.hasChildren"
+                              type="button"
+                              class="initialization-wbs-node-toggle"
+                              :class="{ collapsed: isInitializationWbsCollapsed(row.item.wbs_code) }"
+                              :aria-label="`${isInitializationWbsCollapsed(row.item.wbs_code) ? '展开' : '收起'} ${row.item.wbs_code} ${row.item.name}`"
+                              :aria-expanded="!isInitializationWbsCollapsed(row.item.wbs_code)"
+                              @click="toggleInitializationWbsNode(row.item.wbs_code)"
+                            >
+                              <n-icon :size="14" aria-hidden="true"><ChevronDown /></n-icon>
+                            </button>
+                            <span v-else class="initialization-wbs-leaf" aria-hidden="true"></span>
+                            <span class="initialization-wbs-node-copy">
+                              <strong>{{ row.item.name }}</strong>
+                              <small v-if="row.item.item_type">{{ row.item.item_type }}</small>
+                              <em v-if="row.sequenceWarnings.length">时间线异常</em>
+                            </span>
+                          </div>
+                        </td>
+                        <td>{{ formatInitializationDate(row.item.planned_start_at) }}</td>
+                        <td>{{ formatInitializationDate(row.item.planned_finish_at) }}</td>
+                        <td>{{ formatInitializationProgress(row.item.progress_percent) }}</td>
+                        <td>{{ row.item.status_text || '' }}</td>
+                        <td>{{ row.item.priority_text || '' }}</td>
+                        <td class="initialization-wbs-dependencies">
+                          <span v-for="code in row.item.predecessor_wbs_codes || []" :key="code">{{ code }}</span>
+                          <em v-if="row.dependencyWarnings.length">需核对</em>
+                        </td>
+                        <td>{{ row.item.parent_wbs_code || '' }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="materialAgentDraft.payload.risks.length" class="initialization-review-data-section">
+              <button type="button" class="initialization-review-data-toggle" :class="{ expanded: initializationReviewExpanded.risks }" :aria-expanded="initializationReviewExpanded.risks" @click="initializationReviewExpanded.risks = !initializationReviewExpanded.risks">
+                <n-icon :size="16" aria-hidden="true"><ChevronDown /></n-icon>
+                <span><strong>风险源</strong><small>风险部位、评价条件与关联工序</small></span>
+                <em>{{ materialAgentDraft.payload.risks.length }} 项</em>
+              </button>
+              <div v-show="initializationReviewExpanded.risks" class="initialization-risk-list">
+                <article v-for="item in materialAgentDraft.payload.risks" :key="`${item.serial_no}-${item.risk_part}`" class="initialization-risk-card">
+                  <header class="initialization-risk-head">
+                    <div>
+                      <span>序号 {{ item.serial_no }}</span>
+                      <h4>{{ item.risk_part }}</h4>
+                    </div>
+                    <strong>{{ item.risk_level }}</strong>
+                  </header>
+                  <dl class="initialization-risk-facts">
+                    <div>
+                      <dt>关联工序</dt>
+                      <dd>
+                        <code v-if="item.related_wbs_code">{{ item.related_wbs_code }}</code>
+                        <span>{{ item.related_process_name }}</span>
+                      </dd>
+                    </div>
+                    <div v-if="item.risk_window_start_date || item.risk_window_end_date">
+                      <dt>风险窗口</dt>
+                      <dd class="initialization-risk-window">
+                        <time v-if="item.risk_window_start_date" :datetime="item.risk_window_start_date">{{ formatInitializationDate(item.risk_window_start_date) }}</time>
+                        <span v-if="item.risk_window_start_date && item.risk_window_end_date">至</span>
+                        <time v-if="item.risk_window_end_date" :datetime="item.risk_window_end_date">{{ formatInitializationDate(item.risk_window_end_date) }}</time>
+                      </dd>
+                    </div>
+                  </dl>
+                  <div class="initialization-risk-details">
+                    <section>
+                      <h5>风险评价条件</h5>
+                      <p>{{ item.evaluation_condition }}</p>
+                    </section>
+                    <section v-if="item.summary">
+                      <h5>风险情况简述</h5>
+                      <p>{{ item.summary }}</p>
+                    </section>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section v-if="materialAgentDraft.payload.quality_requirements.length" class="initialization-review-data-section">
+              <button type="button" class="initialization-review-data-toggle" :class="{ expanded: initializationReviewExpanded.quality }" :aria-expanded="initializationReviewExpanded.quality" @click="initializationReviewExpanded.quality = !initializationReviewExpanded.quality">
+                <n-icon :size="16" aria-hidden="true"><ChevronDown /></n-icon>
+                <span><strong>质量指标</strong><small>按 WBS 编码关联质量要求</small></span>
+                <em>{{ materialAgentDraft.payload.quality_requirements.length }} 项</em>
+              </button>
+              <ul v-show="initializationReviewExpanded.quality"><li v-for="(item, index) in materialAgentDraft.payload.quality_requirements" :key="`${item.wbs_code}-${index}`"><strong>{{ item.quality_acceptance_item }}</strong><span>WBS {{ item.wbs_code }} · {{ item.inspection_frequency }}</span></li></ul>
+            </section>
+
+            <section v-if="materialAgentDraft.validation_issues.length" class="initialization-review-section draft-issues">
+              <header><h3>校验结果</h3><span>{{ materialAgentDraft.validation_issues.length }} 项</span></header>
+              <ul><li v-for="(issue, index) in materialAgentDraft.validation_issues" :key="`${issue.path}-${index}`" :class="issue.level"><strong>{{ issue.level === 'error' ? '错误' : '待补充' }}</strong><span>{{ issue.path }} · {{ issue.message }}</span></li></ul>
+              <label v-if="draftHasWarnings && !draftHasErrors" class="initialization-partial-confirm"><input v-model="initializationDraftAllowPartial" type="checkbox">我已核对待补充项，确认先按当前草稿完成部分初始化</label>
+            </section>
+
+            <section v-if="initializationCredentialForms.length" class="initialization-review-section">
+              <header><h3>新人员登录账号</h3><span>由管理员设置，不交给智能体生成</span></header>
+              <div class="initialization-credential-list">
+                <div v-for="credential in initializationCredentialForms" :key="credential.identity_card_no">
+                  <p><strong>{{ credential.real_name }}</strong><span>{{ credential.position_name }} · {{ credential.identity_card_no }}</span></p>
+                  <label>登录账号<input v-model.trim="credential.username" autocomplete="off" maxlength="64" placeholder="设置唯一登录账号"></label>
+                  <label>初始密码<input v-model="credential.initial_password" type="password" autocomplete="new-password" maxlength="128" placeholder="至少 8 位"></label>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          <footer class="initialization-review-actions">
+            <span v-if="materialAgentDraft.status === 'applied'">该版本已经写入正式项目数据。</span>
+            <span v-else-if="!isPlatformAdmin">只有平台管理员可以确认正式入库。</span>
+            <span v-else>确认后将以该草稿整体写入项目基础数据。</span>
+            <button type="button" class="modal-secondary" :disabled="initializationDraftApplying" @click="closeInitializationDraftReview">关闭</button>
+            <button v-if="materialAgentDraft.status !== 'applied' && isPlatformAdmin" type="button" class="primary" :disabled="!canApplyInitializationDraft" @click="applyInitializationDraft">{{ initializationDraftApplying ? '正在入库…' : '确认并写入项目' }}</button>
+          </footer>
+        </section>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { NIcon, useMessage } from 'naive-ui'
-import { ArrowsLeftRight, Link, ListDetails, MessageCircle, Pencil, Plus, Search, Shield, ShieldLock, Users, X } from '@vicons/tabler'
+import { AlertTriangle, ArrowsLeftRight, ChevronDown, ChevronUp, Link, ListDetails, MessageCircle, Paperclip, Pencil, Plus, Search, Shield, ShieldLock, Users, X } from '@vicons/tabler'
 import api, { type ApiEnvelope } from '@/api/client'
+import {
+  streamAgentConversationConfirmation,
+  streamAgentConversationMessage,
+} from '@/api/agentStream'
+import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
 import { useAppStore, type ProjectConfigScope } from '@/stores/app'
 import type { DirConfig, Member, PlatformFieldMapping, QualityMetric, RemindRule, RiskLevel, RiskSource, WbsItem } from '@/types'
+import {
+  applyAgentRuntimeEvent,
+  createEmptyRuntimeTrace,
+  runtimeTraceFromExtraData,
+  type AgentRuntimeTrace,
+  type AgentToolCallBlock,
+  type ApiAgentMessage,
+} from '@/types/agentRuntime'
 
 type WorkspaceTab = 'agent' | 'manual' | 'connections'
 type ManualSection = 'members' | 'wbs' | 'quality' | 'risks' | 'mappings' | 'monitor'
-type MaterialAgentMessage = { id: string; role: 'assistant' | 'user'; content: string }
-type ApiMaterialAssistantReply = { content: string }
+type InitializationAttachment = { id: string; name: string; size: number }
+type MaterialAgentMessage = {
+  id: string
+  role: 'assistant' | 'user'
+  content: string
+  attachments?: InitializationAttachment[]
+  runtimeTrace?: AgentRuntimeTrace | null
+}
+type ApiAgentConversation = {
+  id: number
+  project_id: number
+  user_id: number
+  agent_id: string
+  agent_name: string
+  conversation_type: 'initialization'
+  title: string
+  agentscope_session_id?: string | null
+  status: string
+}
+type ApiInitializationFile = {
+  id: number
+  project_id: number
+  conversation_id: number
+  file_name: string
+  file_size: number
+}
+type InitializationDraftIssue = {
+  level: 'error' | 'warning'
+  path: string
+  message: string
+}
+type InitializationDraftPersonnel = {
+  serial_no: number
+  real_name: string
+  identity_card_no: string
+  position_name: string
+  certificate_no: string
+  responsibility_description: string
+}
+type InitializationDraftWbs = {
+  wbs_code: string
+  parent_wbs_code?: string | null
+  predecessor_wbs_codes?: string[]
+  name: string
+  planned_start_at?: string | null
+  planned_finish_at?: string | null
+  progress_percent?: number | string | null
+  status_text?: string | null
+  priority_text?: string | null
+  duration_hours?: number | string | null
+  level?: number | null
+  item_type?: string | null
+}
+type InitializationWbsTreeRow = {
+  item: InitializationDraftWbs
+  depth: number
+  ancestorCodes: string[]
+  hasChildren: boolean
+  sequenceWarnings: string[]
+  dependencyWarnings: string[]
+}
+type InitializationDraftRisk = {
+  serial_no: number
+  related_wbs_code?: string | null
+  related_process_name: string
+  risk_part: string
+  risk_level: string
+  evaluation_condition: string
+  risk_window_start_date?: string | null
+  risk_window_end_date?: string | null
+  summary?: string | null
+}
+type InitializationDraftQuality = {
+  wbs_code: string
+  quality_acceptance_item: string
+  inspection_frequency: string
+}
+type ApiInitializationDraft = {
+  id: number
+  project_id: number
+  conversation_id: number
+  status: 'invalid' | 'ready' | 'applied' | 'rejected'
+  revision: number
+  payload: {
+    project: Record<string, string | number | null>
+    personnel: InitializationDraftPersonnel[]
+    wbs: InitializationDraftWbs[]
+    risks: InitializationDraftRisk[]
+    quality_requirements: InitializationDraftQuality[]
+  }
+  validation_issues: InitializationDraftIssue[]
+  source_files: string[]
+  required_personnel_credentials: Array<{
+    identity_card_no: string
+    real_name: string
+    position_name: string
+  }>
+  summary: {
+    project_fields: number
+    personnel: number
+    wbs: number
+    risks: number
+    quality_requirements: number
+  }
+}
+type InitializationCredentialForm = {
+  identity_card_no: string
+  real_name: string
+  position_name: string
+  username: string
+  initial_password: string
+}
 type ProjectConnectorKey = 'wecom' | 'feishu' | 'dingtalk'
 type ProjectConnectorConfig = {
   key: ProjectConnectorKey
@@ -252,9 +747,12 @@ type ProjectConnectorConfig = {
 
 const store = useAppStore()
 const message = useMessage()
+const route = useRoute()
+const router = useRouter()
 const submitting = ref(false)
 const configProjectId = ref('')
-const configProject = computed(() => store.projects.find(project => project.id === configProjectId.value))
+const configProjectName = computed(() => store.projects.find(project => project.id === configProjectId.value)?.name || '当前项目')
+const projectRequiredNotice = computed(() => route.query.projectRequired === '1')
 const configScope = reactive<ProjectConfigScope>({ members: [], wbsItems: [], riskSources: [], qualityMetrics: [], platformMappings: [], dirConfig: { mainDir: '', archiveDir: '', tempDir: '', failedDir: '', backupDir: '', scanInterval: 30, enabled: false }, remindRules: [] })
 const activeWorkspaceTab = ref<WorkspaceTab>('agent')
 const workspaceTabs: Array<{ key: WorkspaceTab; label: string; hint: string }> = [
@@ -263,7 +761,7 @@ const workspaceTabs: Array<{ key: WorkspaceTab; label: string; hint: string }> =
   { key: 'connections', label: '连接配置', hint: '协同工具' },
 ]
 const projectCreateOpen = ref(false)
-const projectForm = reactive({ project_name: '', owner_unit: '', description: '' })
+const projectForm = reactive({ name: '' })
 const memberForm = reactive({ name: '', username: '', title: '' })
 const wbsForm = reactive({ code: '', name: '', planned_start: '', planned_finish: '' })
 const riskForm = reactive<{ name: string; level: RiskLevel; risk_type: string; materials: string }>({ name: '', level: 'medium', risk_type: '', materials: '' })
@@ -281,9 +779,45 @@ const editorQualityForm = reactive<{ wbsId: string; name: string; requirement: s
 const editorRiskForm = reactive<{ name: string; level: RiskLevel; type: string; materials: string; controlMeasures: string }>({ name: '', level: 'medium', type: '', materials: '', controlMeasures: '' })
 const editorMappingForm = reactive({ platformName: '监管填报平台', sourceField: 'draft_content', targetField: '', transformRule: '', required: false, enabled: true })
 const materialAgentMessages = ref<MaterialAgentMessage[]>([])
+const materialAgentConversationLoading = ref(false)
 const materialAgentPrompt = ref('')
-const materialAgentLoading = ref(false)
+const materialAgentSending = ref(false)
+const materialAgentConfirming = ref(false)
+const materialAgentLoading = computed(
+  () => materialAgentSending.value || materialAgentConfirming.value,
+)
+const materialAgentStopping = ref(false)
 const materialAgentError = ref('')
+const materialAgentFileInput = ref<HTMLInputElement | null>(null)
+const materialAgentFiles = ref<File[]>([])
+const materialAgentViewport = ref<HTMLElement | null>(null)
+const materialAgentConversationId = ref<number | null>(null)
+const materialAgentConversationStatus = ref('')
+const materialAgentStreamingTrace = ref<AgentRuntimeTrace | null>(null)
+let materialAgentStreamAbortController: AbortController | null = null
+let materialAgentConfirmAbortController: AbortController | null = null
+let materialAgentReconcileSequence = 0
+let materialConversationLoadSequence = 0
+const activeMaterialAgentStatuses = new Set([
+  'creating',
+  'running',
+  'interrupting',
+  'awaiting_permission',
+  'awaiting_external_result',
+])
+const materialAgentDraft = ref<ApiInitializationDraft | null>(null)
+const initializationDraftCollapsed = ref(false)
+const initializationDraftReviewOpen = ref(false)
+const collapsedInitializationWbsCodes = ref<Set<string>>(new Set())
+const initializationReviewExpanded = reactive({
+  personnel: true,
+  wbs: true,
+  risks: true,
+  quality: true,
+})
+const initializationDraftApplying = ref(false)
+const initializationDraftAllowPartial = ref(false)
+const initializationCredentialForms = ref<InitializationCredentialForm[]>([])
 const activeProjectConnectorKey = ref<ProjectConnectorKey>('wecom')
 const projectConnectors = reactive<ProjectConnectorConfig[]>([
   { key: 'wecom', label: '企业微信', description: '配置当前项目使用的企业微信应用或项目群机器人。', connectionLabel: '企业 ID / 机器人 Webhook', connectionPlaceholder: '输入企业 ID 或项目群机器人 Webhook', secretLabel: '应用 Secret / 签名密钥', connectionId: '', secret: '', configured: false, updatedAt: '', icon: MessageCircle },
@@ -293,25 +827,6 @@ const projectConnectors = reactive<ProjectConnectorConfig[]>([
 const activeProjectConnector = computed(() => projectConnectors.find(item => item.key === activeProjectConnectorKey.value))
 const configuredProjectConnectorCount = computed(() => projectConnectors.filter(item => item.configured).length)
 const projectConnectorStorageKey = computed(() => `dobby-project-connectors:${configProjectId.value || 'current'}`)
-const setupCompletionItems = computed(() => [
-  { label: '项目基本信息', done: Boolean(configProject.value?.name && configProject.value?.ownerUnit) },
-  { label: '项目成员与岗位', done: configScope.members.length > 0 },
-  { label: 'WBS 工序基线', done: configScope.wbsItems.length > 0 },
-  { label: '风险源', done: configScope.riskSources.length > 0 },
-  { label: '质量指标', done: configScope.qualityMetrics.length > 0 },
-  { label: '填报字段映射', done: configScope.platformMappings.length > 0 },
-])
-const setupMissingItems = computed(() => setupCompletionItems.value.filter(item => !item.done))
-const materialAgentSuggestions = computed(() => [
-  '检查项目成员、WBS、风险源和质量指标哪些尚未配置',
-  '根据项目当前信息整理一份基础配置补全清单',
-  '检查字段映射是否具备初始化条件',
-])
-const configurationProgress = computed(() => {
-  const completed = setupCompletionItems.value.filter(item => item.done).length
-  const total = setupCompletionItems.value.length
-  return { completed, total, percent: Math.round((completed / total) * 100) }
-})
 const manualSections = computed(() => [
   { key: 'members' as const, label: '项目成员', description: '维护成员账号、岗位与协作责任。', count: configScope.members.length, icon: Users },
   { key: 'wbs' as const, label: 'WBS 工序', description: '维护工序基线，供进度、日报和预警匹配。', count: configScope.wbsItems.length, icon: ListDetails },
@@ -327,6 +842,197 @@ const filteredWbsItems = computed(() => configScope.wbsItems.filter(item => matc
 const filteredQualityMetrics = computed(() => configScope.qualityMetrics.filter(item => matchesManualSearch(item.name, item.requirement, item.inspectionFrequency, configWbsName(item.wbsId || ''))))
 const filteredRisks = computed(() => configScope.riskSources.filter(item => matchesManualSearch(item.name, item.type, item.materials.join(' '), item.controlMeasures)))
 const filteredMappings = computed(() => configScope.platformMappings.filter(item => matchesManualSearch(item.platformName, item.targetField, item.sourceField, item.transformRule)))
+const isPlatformAdmin = computed(() => sessionStorage.getItem('user_role') === 'admin')
+const draftHasErrors = computed(() => materialAgentDraft.value?.validation_issues.some(item => item.level === 'error') ?? false)
+const draftHasWarnings = computed(() => materialAgentDraft.value?.validation_issues.some(item => item.level === 'warning') ?? false)
+const initializationDraftIssueSummary = computed(() => {
+  const issues = materialAgentDraft.value?.validation_issues || []
+  const errors = issues.filter(item => item.level === 'error').length
+  const warnings = issues.length - errors
+  return [
+    errors ? `${errors} 项结构错误` : '',
+    warnings ? `${warnings} 项待补充内容` : '',
+  ].filter(Boolean).join('，')
+})
+const initializationWbsTree = computed(() => {
+  const items = materialAgentDraft.value?.payload.wbs || []
+  const itemByCode = new Map(items.map(item => [item.wbs_code, item]))
+  const childrenByParent = new Map<string, InitializationDraftWbs[]>()
+  const roots: InitializationDraftWbs[] = []
+  const compareWbsCode = (left: InitializationDraftWbs, right: InitializationDraftWbs) => (
+    left.wbs_code.localeCompare(right.wbs_code, 'zh-CN', {
+      numeric: true,
+      sensitivity: 'base',
+    })
+  )
+
+  for (const item of items) {
+    const parentCode = item.parent_wbs_code || ''
+    if (parentCode && itemByCode.has(parentCode)) {
+      const siblings = childrenByParent.get(parentCode) || []
+      siblings.push(item)
+      childrenByParent.set(parentCode, siblings)
+    } else {
+      roots.push(item)
+    }
+  }
+  roots.sort(compareWbsCode)
+  for (const siblings of childrenByParent.values()) siblings.sort(compareWbsCode)
+
+  const dependencyWarningsByCode = new Map<string, string[]>()
+  for (const item of items) {
+    const itemStart = item.planned_start_at ? Date.parse(item.planned_start_at) : Number.NaN
+    const warnings = (item.predecessor_wbs_codes || []).flatMap((predecessorCode) => {
+      const predecessor = itemByCode.get(predecessorCode)
+      const predecessorFinish = predecessor?.planned_finish_at
+        ? Date.parse(predecessor.planned_finish_at)
+        : Number.NaN
+      if (
+        Number.isFinite(itemStart)
+        && Number.isFinite(predecessorFinish)
+        && itemStart < predecessorFinish
+      ) {
+        return [`计划开始早于前置 WBS ${predecessorCode} 的计划完成`]
+      }
+      return []
+    })
+    dependencyWarningsByCode.set(item.wbs_code, warnings)
+  }
+
+  const sequenceWarningsByCode = new Map<string, string[]>()
+  const siblingGroups = [roots, ...childrenByParent.values()]
+  for (const siblings of siblingGroups) {
+    let latestStartedItem: InitializationDraftWbs | null = null
+    for (const item of siblings) {
+      const itemStart = item.planned_start_at
+        ? Date.parse(item.planned_start_at)
+        : Number.NaN
+      if (!Number.isFinite(itemStart)) continue
+      const latestStart = latestStartedItem?.planned_start_at
+        ? Date.parse(latestStartedItem.planned_start_at)
+        : Number.NaN
+      if (
+        latestStartedItem
+        && Number.isFinite(latestStart)
+        && itemStart < latestStart
+      ) {
+        sequenceWarningsByCode.set(item.wbs_code, [
+          `计划开始早于编码在前的同级 WBS ${latestStartedItem.wbs_code}`,
+        ])
+      }
+      if (!latestStartedItem || !Number.isFinite(latestStart) || itemStart >= latestStart) {
+        latestStartedItem = item
+      }
+    }
+  }
+
+  const rows: InitializationWbsTreeRow[] = []
+  const visited = new Set<string>()
+  const append = (
+    item: InitializationDraftWbs,
+    depth: number,
+    ancestorCodes: string[],
+  ) => {
+    if (visited.has(item.wbs_code)) return
+    visited.add(item.wbs_code)
+    const children = childrenByParent.get(item.wbs_code) || []
+    rows.push({
+      item,
+      depth,
+      ancestorCodes,
+      hasChildren: children.length > 0,
+      sequenceWarnings: sequenceWarningsByCode.get(item.wbs_code) || [],
+      dependencyWarnings: dependencyWarningsByCode.get(item.wbs_code) || [],
+    })
+    for (const child of children) {
+      append(child, depth + 1, [...ancestorCodes, item.wbs_code])
+    }
+  }
+  for (const root of roots) append(root, 0, [])
+  for (const item of items) {
+    if (!visited.has(item.wbs_code)) append(item, 0, [])
+  }
+
+  return {
+    rows,
+    groupCodes: [...childrenByParent.keys()],
+    sequenceWarningCount: [...sequenceWarningsByCode.values()].filter(warnings => warnings.length).length,
+    dependencyWarningCount: [...dependencyWarningsByCode.values()].filter(warnings => warnings.length).length,
+  }
+})
+const visibleInitializationWbsRows = computed(() => {
+  const collapsedCodes = collapsedInitializationWbsCodes.value
+  return initializationWbsTree.value.rows.filter(
+    row => !row.ancestorCodes.some(code => collapsedCodes.has(code)),
+  )
+})
+const initializationWbsDependencyWarningCount = computed(
+  () => initializationWbsTree.value.dependencyWarningCount,
+)
+const initializationWbsSequenceWarningCount = computed(
+  () => initializationWbsTree.value.sequenceWarningCount,
+)
+const projectFieldLabels: Record<string, string> = {
+  engineering_type_description: '工程类型说明',
+  contract_start_date: '合同开工',
+  contract_end_date: '合同竣工',
+  contract_duration_days: '合同工期',
+  contract_amount_wan_yuan: '合同金额',
+  construction_unit_name: '建设单位',
+  general_contractor_unit_name: '总承包单位',
+  supervision_unit_name: '监理单位',
+  design_unit_name: '设计单位',
+  survey_unit_name: '勘察单位',
+}
+const draftProjectFields = computed(() => Object.entries(materialAgentDraft.value?.payload.project || {})
+  .filter(([, value]) => value !== null && value !== '')
+  .map(([key, value]) => ({
+    key,
+    label: projectFieldLabels[key] || key,
+    value: key === 'contract_duration_days'
+      ? `${value} 天`
+      : key === 'contract_amount_wan_yuan'
+        ? `${value} 万元`
+        : String(value),
+  })))
+const draftProjectDescription = computed(() => (
+  draftProjectFields.value.find(item => item.key === 'engineering_type_description')
+))
+const draftProjectContractFields = computed(() => {
+  const keys = new Set([
+    'contract_start_date',
+    'contract_end_date',
+    'contract_duration_days',
+    'contract_amount_wan_yuan',
+  ])
+  return draftProjectFields.value.filter(item => keys.has(item.key))
+})
+const draftProjectUnitFields = computed(() => {
+  const keys = new Set([
+    'construction_unit_name',
+    'general_contractor_unit_name',
+    'supervision_unit_name',
+    'design_unit_name',
+    'survey_unit_name',
+  ])
+  return draftProjectFields.value.filter(item => keys.has(item.key))
+})
+const canApplyInitializationDraft = computed(() => {
+  const draft = materialAgentDraft.value
+  if (
+    !draft
+    || !isPlatformAdmin.value
+    || draft.status !== 'ready'
+    || initializationDraftApplying.value
+    || draftHasErrors.value
+    || (draftHasWarnings.value && !initializationDraftAllowPartial.value)
+  ) return false
+  const usernames = initializationCredentialForms.value.map(item => item.username.trim())
+  if (new Set(usernames).size !== usernames.length) return false
+  return initializationCredentialForms.value.every(item => (
+    item.username.trim().length > 0 && item.initial_password.length >= 8
+  ))
+})
 
 function selectManualSection(section: ManualSection) {
   manualSection.value = section
@@ -441,14 +1147,34 @@ function selectConfigProject(projectId: string) {
   if (projectId !== configProjectId.value) configProjectId.value = projectId
 }
 
+function selectWorkspaceTab(tab: WorkspaceTab) {
+  activeWorkspaceTab.value = tab
+  if (tab !== 'agent' || !configProjectId.value) return
+  void loadMaterialAgentConversation(configProjectId.value)
+  void loadInitializationDraft(configProjectId.value)
+}
+
 watch(() => [store.currentProjectId, store.projects.length] as const, () => {
   if (!configProjectId.value) configProjectId.value = store.currentProjectId || store.projects[0]?.id || ''
 }, { immediate: true })
 
 watch(configProjectId, projectId => {
+  cancelMaterialAgentRequests()
+  materialAgentReconcileSequence += 1
+  materialAgentSending.value = false
+  materialAgentConfirming.value = false
+  materialAgentStopping.value = false
   activeWorkspaceTab.value = 'agent'
   materialAgentMessages.value = []
   materialAgentError.value = ''
+  materialAgentConversationId.value = null
+  materialAgentConversationStatus.value = ''
+  materialAgentStreamingTrace.value = null
+  materialAgentDraft.value = null
+  initializationDraftCollapsed.value = false
+  initializationDraftReviewOpen.value = false
+  initializationCredentialForms.value = []
+  clearMaterialAgentFiles()
   activeProjectConnectorKey.value = 'wecom'
   configScope.members = []
   configScope.wbsItems = []
@@ -459,7 +1185,16 @@ watch(configProjectId, projectId => {
   monitorRules.value = []
   loadProjectConnectorSettings()
   void loadConfigProjectScope(projectId)
+  void loadMaterialAgentConversation(projectId)
+  void loadInitializationDraft(projectId)
 }, { immediate: true })
+
+watch(() => store.projectSetupRefreshVersion, () => {
+  if (!configProjectId.value) return
+  activeWorkspaceTab.value = 'agent'
+  void loadMaterialAgentConversation(configProjectId.value)
+  void loadInitializationDraft(configProjectId.value)
+})
 
 function loadProjectConnectorSettings() {
   for (const connector of projectConnectors) {
@@ -501,24 +1236,706 @@ function saveProjectConnector() {
   message.success(`${connector.label}连接信息已保存；敏感凭据未写入浏览器。`)
 }
 
-async function sendMaterialAgentMessage() {
-  const content = materialAgentPrompt.value.trim()
-  if (!content || !configProjectId.value) return
-  materialAgentLoading.value = true
-  materialAgentError.value = ''
-  try {
-    materialAgentMessages.value = [...materialAgentMessages.value, { id: `user-${Date.now()}`, role: 'user', content }]
-    materialAgentPrompt.value = ''
-    const response = await api.post<ApiEnvelope<ApiMaterialAssistantReply>>(`/projects/${configProjectId.value}/material-assistant`, { content })
-    materialAgentMessages.value = [...materialAgentMessages.value, { id: `dobby-${Date.now()}`, role: 'assistant', content: response.data.data.content }]
-  } catch (error: any) {
-    materialAgentError.value = error.response?.data?.detail || '项目配置助手暂时无法处理这条请求。'
-  } finally {
-    materialAgentLoading.value = false
+function attachmentsFromMessage(item: ApiAgentMessage): InitializationAttachment[] {
+  const raw = item.extra_data?.initialization_files
+  if (!Array.isArray(raw)) return []
+  return raw.flatMap((value) => {
+    if (!value || typeof value !== 'object') return []
+    const file = value as Record<string, unknown>
+    const id = Number(file.id)
+    const name = String(file.name || '')
+    const size = Number(file.size) || 0
+    return Number.isFinite(id) && name ? [{ id: String(id), name, size }] : []
+  })
+}
+
+function mapMaterialAgentMessage(item: ApiAgentMessage): MaterialAgentMessage {
+  const attachments = attachmentsFromMessage(item)
+  return {
+    id: String(item.id),
+    role: item.role,
+    content: item.content,
+    attachments: attachments.length ? attachments : undefined,
+    runtimeTrace: runtimeTraceFromExtraData(item.extra_data),
   }
 }
 
-function askMaterialAgent(content: string) { materialAgentPrompt.value = content; void sendMaterialAgentMessage() }
+async function scrollMaterialAgentToEnd(behavior: ScrollBehavior = 'auto') {
+  await nextTick()
+  materialAgentViewport.value?.scrollTo({
+    top: materialAgentViewport.value.scrollHeight,
+    behavior,
+  })
+}
+
+async function loadMaterialAgentConversation(
+  projectId = configProjectId.value,
+): Promise<boolean> {
+  if (!projectId) return false
+  const sequence = ++materialConversationLoadSequence
+  materialAgentConversationLoading.value = true
+  materialAgentError.value = ''
+  try {
+    const response = await api.get<ApiEnvelope<ApiAgentConversation[]>>(
+      `/projects/${projectId}/agent-conversations`,
+      { params: { conversation_type: 'initialization' } },
+    )
+    if (sequence !== materialConversationLoadSequence || projectId !== configProjectId.value) return false
+    const conversation = [...response.data.data].sort((left, right) => left.id - right.id)[0]
+    if (!conversation) {
+      materialAgentConversationId.value = null
+      materialAgentConversationStatus.value = ''
+      materialAgentMessages.value = []
+      materialAgentError.value = ''
+      return true
+    }
+    materialAgentConversationId.value = conversation.id
+    const messages = await api.get<ApiEnvelope<ApiAgentMessage[]>>(
+      `/agent-conversations/${conversation.id}/messages`,
+    )
+    // The message endpoint reconciles a disconnected/finished AgentScope
+    // turn. Read the conversation once more afterwards so the UI receives
+    // the post-reconciliation status instead of its earlier SQLite snapshot.
+    const refreshedConversations = await api.get<ApiEnvelope<ApiAgentConversation[]>>(
+      `/projects/${projectId}/agent-conversations`,
+      { params: { conversation_type: 'initialization' } },
+    )
+    if (sequence !== materialConversationLoadSequence || projectId !== configProjectId.value) return false
+    materialAgentMessages.value = messages.data.data.map(mapMaterialAgentMessage)
+    materialAgentConversationStatus.value = (
+      refreshedConversations.data.data.find(item => item.id === conversation.id)?.status
+      || conversation.status
+    )
+    materialAgentError.value = ''
+    void scrollMaterialAgentToEnd()
+    return true
+  } catch (error: any) {
+    if (sequence === materialConversationLoadSequence) {
+      materialAgentError.value = error.response?.data?.detail || '项目初始化会话加载失败。'
+    }
+    return false
+  } finally {
+    if (sequence === materialConversationLoadSequence) {
+      materialAgentConversationLoading.value = false
+    }
+  }
+}
+
+async function loadInitializationDraft(projectId = configProjectId.value) {
+  if (!projectId) return
+  try {
+    const response = await api.get<ApiEnvelope<ApiInitializationDraft | null>>(
+      `/projects/${projectId}/initialization-drafts/latest`,
+    )
+    if (projectId !== configProjectId.value) return
+    const nextDraft = response.data.data
+    const previousDraft = materialAgentDraft.value
+    if (
+      nextDraft
+      && (
+        !previousDraft
+        || nextDraft.id !== previousDraft.id
+        || nextDraft.revision !== previousDraft.revision
+      )
+    ) {
+      initializationDraftCollapsed.value = false
+    }
+    materialAgentDraft.value = nextDraft
+  } catch (error: any) {
+    if (projectId === configProjectId.value) {
+      materialAgentError.value = error.response?.data?.detail || '初始化草稿加载失败。'
+    }
+  }
+}
+
+function initializationDraftStatusLabel(status: ApiInitializationDraft['status']) {
+  return {
+    invalid: '草稿需要修正',
+    ready: '草稿可以核对',
+    applied: '初始化已完成',
+    rejected: '草稿已退回',
+  }[status]
+}
+
+function formatInitializationDate(value?: string | null) {
+  if (!value) return ''
+  return value.slice(0, 10)
+}
+
+function formatInitializationProgress(value?: number | string | null) {
+  if (value === null || value === undefined || value === '') return ''
+  const progress = Number(value)
+  return Number.isFinite(progress) ? `${progress}%` : String(value)
+}
+
+function isInitializationWbsCollapsed(code: string) {
+  return collapsedInitializationWbsCodes.value.has(code)
+}
+
+function toggleInitializationWbsNode(code: string) {
+  const next = new Set(collapsedInitializationWbsCodes.value)
+  if (next.has(code)) next.delete(code)
+  else next.add(code)
+  collapsedInitializationWbsCodes.value = next
+}
+
+function expandAllInitializationWbs() {
+  collapsedInitializationWbsCodes.value = new Set()
+}
+
+function collapseAllInitializationWbs() {
+  collapsedInitializationWbsCodes.value = new Set(initializationWbsTree.value.groupCodes)
+}
+
+function openInitializationDraftReview() {
+  const draft = materialAgentDraft.value
+  if (!draft) return
+  Object.assign(initializationReviewExpanded, {
+    personnel: true,
+    wbs: true,
+    risks: true,
+    quality: true,
+  })
+  collapsedInitializationWbsCodes.value = new Set()
+  initializationDraftAllowPartial.value = false
+  initializationCredentialForms.value = draft.required_personnel_credentials.map(item => ({
+    ...item,
+    username: '',
+    initial_password: '',
+  }))
+  initializationDraftReviewOpen.value = true
+}
+
+function closeInitializationDraftReview() {
+  if (!initializationDraftApplying.value) initializationDraftReviewOpen.value = false
+}
+
+function initializationApplyError(error: any) {
+  const detail = error.response?.data?.detail
+  if (typeof detail === 'string') return detail
+  if (detail && typeof detail === 'object') {
+    return String(detail.message || '初始化草稿入库失败。')
+  }
+  return error.message || '初始化草稿入库失败。'
+}
+
+async function applyInitializationDraft() {
+  const draft = materialAgentDraft.value
+  if (!draft || !canApplyInitializationDraft.value) return
+  initializationDraftApplying.value = true
+  try {
+    await api.post(
+      `/projects/${configProjectId.value}/initialization-drafts/${draft.id}/apply`,
+      {
+        allow_partial: initializationDraftAllowPartial.value,
+        personnel_credentials: initializationCredentialForms.value.map(item => ({
+          identity_card_no: item.identity_card_no,
+          username: item.username.trim(),
+          initial_password: item.initial_password,
+        })),
+      },
+      { timeout: 60_000 },
+    )
+    await Promise.all([
+      loadInitializationDraft(),
+      loadConfigProjectScope(),
+    ])
+    message.success('项目初始化数据已确认入库。')
+  } catch (error: any) {
+    message.error(initializationApplyError(error))
+  } finally {
+    initializationDraftApplying.value = false
+  }
+}
+
+async function ensureMaterialAgentConversation(signal?: AbortSignal): Promise<number> {
+  if (materialAgentConversationId.value) return materialAgentConversationId.value
+  const response = await api.post<ApiEnvelope<ApiAgentConversation>>(
+    `/projects/${configProjectId.value}/agent-conversations`,
+    { conversation_type: 'initialization' },
+    { signal },
+  )
+  materialAgentConversationId.value = response.data.data.id
+  materialAgentConversationStatus.value = response.data.data.status
+  return response.data.data.id
+}
+
+async function uploadMaterialAgentFiles(
+  conversationId: number,
+  files: File[],
+  signal?: AbortSignal,
+): Promise<ApiInitializationFile[]> {
+  const uploaded: ApiInitializationFile[] = []
+  for (const file of files) {
+    const form = new FormData()
+    form.append('file', file)
+    const response = await api.post<ApiEnvelope<ApiInitializationFile>>(
+      `/projects/${configProjectId.value}/agent-conversations/${conversationId}/initialization-files`,
+      form,
+      { timeout: 60_000, signal },
+    )
+    uploaded.push(response.data.data)
+  }
+  return uploaded
+}
+
+async function sendMaterialAgentMessage() {
+  const requestedContent = materialAgentPrompt.value.trim()
+  if (!configProjectId.value || materialAgentLoading.value || materialAgentStopping.value) return
+  const selectedFiles = [...materialAgentFiles.value]
+  if (!requestedContent && !selectedFiles.length) return
+  const controller = new AbortController()
+  materialAgentStreamAbortController = controller
+  materialAgentSending.value = true
+  materialAgentError.value = ''
+  try {
+    const conversationId = await ensureMaterialAgentConversation(controller.signal)
+    const uploadedFiles = await uploadMaterialAgentFiles(
+      conversationId,
+      selectedFiles,
+      controller.signal,
+    )
+    const content = requestedContent || '请读取并分析这些项目初始化附件，整理需要我核对的初始化信息。'
+    const attachments = uploadedFiles.map(file => ({
+      id: String(file.id),
+      name: file.file_name,
+      size: file.file_size,
+    }))
+    materialAgentMessages.value = [
+      ...materialAgentMessages.value,
+      {
+        id: `user-${Date.now()}`,
+        role: 'user',
+        content,
+        attachments: attachments.length ? attachments : undefined,
+      },
+    ]
+    materialAgentPrompt.value = ''
+    clearMaterialAgentFiles()
+    materialAgentStreamingTrace.value = createEmptyRuntimeTrace()
+    await scrollMaterialAgentToEnd()
+    const completion: { message: ApiAgentMessage | null } = { message: null }
+    await streamAgentConversationMessage(
+      conversationId,
+      content,
+      {
+        onAccepted: payload => {
+          materialAgentConversationStatus.value = payload.runtime_status
+        },
+        onEvent: async runtimeEvent => {
+          materialAgentStreamingTrace.value = applyAgentRuntimeEvent(
+            materialAgentStreamingTrace.value,
+            runtimeEvent,
+          )
+          await scrollMaterialAgentToEnd()
+        },
+        onDone: payload => {
+          completion.message = payload.message
+          materialAgentConversationStatus.value = payload.runtime_status
+        },
+      },
+      controller.signal,
+      { initialization_file_ids: uploadedFiles.map(file => file.id) },
+    )
+    if (completion.message) {
+      materialAgentMessages.value = [
+        ...materialAgentMessages.value,
+        mapMaterialAgentMessage(completion.message),
+      ]
+    }
+    materialAgentStreamingTrace.value = null
+    await loadInitializationDraft()
+    await scrollMaterialAgentToEnd('smooth')
+  } catch (error: any) {
+    materialAgentStreamingTrace.value = null
+    if (!isMaterialAgentCancellation(error)) {
+      materialAgentError.value = error.response?.data?.detail || error.message || '项目初始化助手暂时无法处理这条请求。'
+    }
+  } finally {
+    if (materialAgentStreamAbortController === controller) {
+      materialAgentStreamAbortController = null
+    }
+    materialAgentSending.value = false
+  }
+}
+
+function cloneMaterialAgentTrace(trace: AgentRuntimeTrace): AgentRuntimeTrace {
+  return JSON.parse(JSON.stringify(trace)) as AgentRuntimeTrace
+}
+
+function traceHasPendingMaterialToolCall(
+  trace: AgentRuntimeTrace | null | undefined,
+  replyId: string,
+  toolCallId: string,
+) {
+  if (!trace || !activeMaterialAgentStatuses.has(trace.status)) return false
+  const messageCall = trace.messages.some(runtimeMessage =>
+    runtimeMessage.id === replyId
+    && !runtimeMessage.finished_at
+    && runtimeMessage.content.some(block =>
+      block.type === 'tool_call'
+      && block.id === toolCallId
+      && block.state === 'asking',
+    ),
+  )
+  if (messageCall) return true
+  return trace.subagentHitl.some(entry =>
+    entry.reply_id === replyId
+    && (entry.event.tool_calls || []).some(call =>
+      call.id === toolCallId && call.state === 'asking',
+    ),
+  )
+}
+
+function hasPendingMaterialToolCall(replyId: string, toolCallId: string) {
+  return materialAgentMessages.value.some(item =>
+    traceHasPendingMaterialToolCall(item.runtimeTrace, replyId, toolCallId),
+  )
+}
+
+function markMaterialAgentToolDecision(
+  replyId: string,
+  toolCallId: string,
+  confirmed: boolean,
+) {
+  materialAgentMessages.value = materialAgentMessages.value.map((item) => {
+    if (!item.runtimeTrace) return item
+    const trace = cloneMaterialAgentTrace(item.runtimeTrace)
+    let changed = false
+    trace.subagentHitl = trace.subagentHitl.filter((entry) => {
+      const matches = (
+        entry.reply_id === replyId
+        && (entry.event.tool_calls || []).some(call => call.id === toolCallId)
+      )
+      changed ||= matches
+      return !matches
+    })
+    for (const runtimeMessage of trace.messages) {
+      if (runtimeMessage.id !== replyId) continue
+      const call = runtimeMessage.content.find(block =>
+        block.type === 'tool_call' && block.id === toolCallId,
+      )
+      if (!call || call.type !== 'tool_call') continue
+      call.state = confirmed ? 'allowed' : 'finished'
+      changed = true
+      if (
+        !confirmed
+        && !runtimeMessage.content.some(block =>
+          block.type === 'tool_result' && block.id === toolCallId,
+        )
+      ) {
+        runtimeMessage.content.push({
+          type: 'tool_result',
+          id: toolCallId,
+          name: call.name,
+          output: '已由用户拒绝。',
+          state: 'denied',
+        })
+      }
+    }
+    if (!changed) return item
+    trace.status = 'running'
+    return { ...item, runtimeTrace: trace }
+  })
+}
+
+function markActiveMaterialAgentMessagesInterrupted() {
+  const interruptedAt = new Date().toISOString()
+  materialAgentMessages.value = materialAgentMessages.value.map((item) => {
+    if (
+      !item.runtimeTrace
+      || !activeMaterialAgentStatuses.has(item.runtimeTrace.status)
+    ) return item
+    const trace = cloneMaterialAgentTrace(item.runtimeTrace)
+    trace.status = 'interrupted'
+    trace.subagentHitl = []
+    for (const runtimeMessage of trace.messages) {
+      if (runtimeMessage.finished_at) continue
+      runtimeMessage.finished_at = interruptedAt
+      runtimeMessage.finished_reason = 'interrupted'
+      const activeCalls = runtimeMessage.content.filter(block =>
+        block.type === 'tool_call'
+        && ['pending', 'asking', 'allowed', 'submitted'].includes(block.state),
+      )
+      for (const call of activeCalls) {
+        if (call.type !== 'tool_call') continue
+        call.state = 'finished'
+        if (!runtimeMessage.content.some(block =>
+          block.type === 'tool_result' && block.id === call.id,
+        )) {
+          runtimeMessage.content.push({
+            type: 'tool_result',
+            id: call.id,
+            name: call.name,
+            output: '任务已由用户停止。',
+            state: 'interrupted',
+          })
+        }
+      }
+    }
+    return { ...item, runtimeTrace: trace }
+  })
+}
+
+async function stopMaterialAgentMessage() {
+  const conversationId = materialAgentConversationId.value
+  if (materialAgentStopping.value) return
+  materialAgentStopping.value = true
+  let reconciling = false
+  try {
+    if (!conversationId) {
+      cancelMaterialAgentRequests()
+      return
+    }
+    const refreshed = await loadMaterialAgentConversation()
+    if (
+      refreshed
+      && !activeMaterialAgentStatuses.has(materialAgentConversationStatus.value)
+    ) {
+      cancelMaterialAgentRequests()
+      materialAgentStreamingTrace.value = null
+      message.info('该任务已经结束，页面已同步最新结果。')
+      return
+    }
+    await api.post(
+      `/agent-conversations/${conversationId}/interrupt`,
+      undefined,
+      { timeout: 30_000 },
+    )
+    materialAgentConversationStatus.value = 'interrupting'
+    markActiveMaterialAgentMessagesInterrupted()
+    cancelMaterialAgentRequests()
+    message.info('停止请求已接收，正在同步中断前已生成的内容。')
+    if (configProjectId.value) {
+      reconciling = true
+      void reconcileMaterialAgentAfterStop(
+        configProjectId.value,
+        conversationId,
+      )
+    }
+  } catch (error: any) {
+    message.error(error?.response?.data?.detail || '停止初始化助手失败。')
+    await loadMaterialAgentConversation()
+  } finally {
+    if (!reconciling) materialAgentStopping.value = false
+  }
+}
+
+async function confirmMaterialAgentToolCall(
+  replyId: string,
+  toolCall: AgentToolCallBlock,
+  confirmed: boolean,
+) {
+  const conversationId = materialAgentConversationId.value
+  if (
+    !conversationId
+    || materialAgentConfirming.value
+    || materialAgentStopping.value
+  ) return
+  materialAgentConfirming.value = true
+  materialAgentError.value = ''
+  let controller: AbortController | null = null
+  try {
+    const refreshed = await loadMaterialAgentConversation()
+    if (!refreshed) {
+      message.error(materialAgentError.value || '无法读取最新任务状态。')
+      return
+    }
+    if (!hasPendingMaterialToolCall(replyId, toolCall.id)) {
+      message.info('该操作已经处理或所属回复已经结束，页面已同步最新状态。')
+      return
+    }
+    controller = new AbortController()
+    materialAgentConfirmAbortController = controller
+    materialAgentStreamingTrace.value = createEmptyRuntimeTrace()
+    message.info(
+      confirmed
+        ? `正在允许「${toolCall.name}」执行。`
+        : `正在拒绝「${toolCall.name}」。`,
+    )
+    await streamAgentConversationConfirmation(
+      conversationId,
+      {
+        reply_id: replyId,
+        tool_call: toolCall,
+        confirmed,
+      },
+      {
+        onAccepted: payload => {
+          materialAgentConversationStatus.value = payload.runtime_status
+          markMaterialAgentToolDecision(replyId, toolCall.id, confirmed)
+          message.success(
+            payload.message
+            || (
+              confirmed
+                ? `已允许「${toolCall.name}」，智能体正在继续执行。`
+                : `已拒绝「${toolCall.name}」，智能体正在处理确认结果。`
+            ),
+          )
+        },
+        onEvent: async runtimeEvent => {
+          materialAgentStreamingTrace.value = applyAgentRuntimeEvent(
+            materialAgentStreamingTrace.value,
+            runtimeEvent,
+          )
+          await scrollMaterialAgentToEnd()
+        },
+        onDone: payload => {
+          materialAgentConversationStatus.value = payload.runtime_status
+        },
+      },
+      controller.signal,
+    )
+    await Promise.all([
+      loadMaterialAgentConversation(),
+      loadInitializationDraft(),
+    ])
+    await scrollMaterialAgentToEnd('smooth')
+  } catch (error: any) {
+    if (!isMaterialAgentCancellation(error)) {
+      materialAgentError.value = error?.response?.data?.detail || error?.message || '提交人工确认失败。'
+      message.error(materialAgentError.value)
+      await loadMaterialAgentConversation()
+    }
+  } finally {
+    materialAgentStreamingTrace.value = null
+    if (controller && materialAgentConfirmAbortController === controller) {
+      materialAgentConfirmAbortController = null
+    }
+    materialAgentConfirming.value = false
+  }
+}
+
+function cancelMaterialAgentRequests() {
+  materialAgentStreamAbortController?.abort()
+  materialAgentConfirmAbortController?.abort()
+  materialAgentStreamAbortController = null
+  materialAgentConfirmAbortController = null
+}
+
+function isMaterialAgentCancellation(error: any) {
+  return (
+    error?.name === 'AbortError'
+    || error?.name === 'CanceledError'
+    || error?.code === 'ERR_CANCELED'
+  )
+}
+
+async function waitForMaterialAgentRefresh(delay: number) {
+  if (!delay) return
+  await new Promise<void>(resolve => window.setTimeout(resolve, delay))
+}
+
+async function reconcileMaterialAgentAfterStop(
+  projectId: string,
+  conversationId: number,
+) {
+  const sequence = ++materialAgentReconcileSequence
+  const activeStatuses = new Set([
+    'creating',
+    'running',
+    'interrupting',
+    'awaiting_permission',
+    'awaiting_external_result',
+  ])
+  let synchronized = false
+  for (const delay of [0, 500, 1_000, 2_000, 4_000]) {
+    await waitForMaterialAgentRefresh(delay)
+    if (
+      sequence !== materialAgentReconcileSequence
+      || projectId !== configProjectId.value
+    ) return
+    try {
+      await Promise.all([
+        loadMaterialAgentConversation(projectId),
+        loadInitializationDraft(projectId),
+      ])
+      const response = await api.get<ApiEnvelope<ApiAgentConversation[]>>(
+        `/projects/${projectId}/agent-conversations`,
+        { params: { conversation_type: 'initialization' } },
+      )
+      const conversation = response.data.data.find(
+        item => item.id === conversationId,
+      )
+      if (!conversation || !activeStatuses.has(conversation.status)) {
+        synchronized = true
+        break
+      }
+    } catch {
+      // 下一轮继续回读；停止请求已经被后端接受。
+    }
+  }
+  if (
+    sequence !== materialAgentReconcileSequence
+    || projectId !== configProjectId.value
+  ) return
+  materialAgentStopping.value = false
+  if (synchronized) {
+    message.success('初始化助手已停止，中断前内容已同步。')
+  } else {
+    message.info('停止请求仍在后台收尾，稍后重新进入页面即可同步结果。')
+  }
+}
+
+onBeforeUnmount(() => {
+  materialConversationLoadSequence += 1
+  materialAgentConversationLoading.value = false
+  materialAgentReconcileSequence += 1
+  cancelMaterialAgentRequests()
+})
+
+function openMaterialAgentFilePicker() {
+  materialAgentFileInput.value?.click()
+}
+
+function selectMaterialAgentFiles(event: Event) {
+  const input = event.target as HTMLInputElement
+  const allowedSuffixes = new Set(['.xlsx', '.csv', '.docx', '.pdf', '.txt', '.md'])
+  const allSelected = Array.from(input.files || [])
+  const selected = allSelected.filter((file) => {
+    const suffix = file.name.includes('.')
+      ? `.${file.name.split('.').pop()?.toLowerCase()}`
+      : ''
+    return allowedSuffixes.has(suffix) && file.size <= 30 * 1024 * 1024
+  })
+  if (selected.length !== allSelected.length) {
+    message.warning('已忽略不支持的格式或超过 30 MB 的附件。')
+  }
+  if (!selected.length) {
+    input.value = ''
+    return
+  }
+  const existing = new Set(
+    materialAgentFiles.value.map(file => `${file.name}:${file.size}:${file.lastModified}`),
+  )
+  const merged = [...materialAgentFiles.value]
+  for (const file of selected) {
+    const key = `${file.name}:${file.size}:${file.lastModified}`
+    if (!existing.has(key)) {
+      merged.push(file)
+      existing.add(key)
+    }
+  }
+  materialAgentFiles.value = merged.slice(0, 20)
+  if (merged.length > 20) message.warning('一次最多发送 20 个初始化附件。')
+  materialAgentError.value = ''
+  input.value = ''
+}
+
+function removeMaterialAgentFile(index: number) {
+  materialAgentFiles.value = materialAgentFiles.value.filter((_, fileIndex) => fileIndex !== index)
+}
+
+function clearMaterialAgentFiles() {
+  materialAgentFiles.value = []
+  if (materialAgentFileInput.value) materialAgentFileInput.value.value = ''
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10240 ? 1 : 0)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
 
 async function run(action: () => Promise<unknown>, success: string) {
   submitting.value = true
@@ -526,7 +1943,15 @@ async function run(action: () => Promise<unknown>, success: string) {
 }
 function openProjectCreate() { projectCreateOpen.value = true }
 function closeProjectCreate() { if (!submitting.value) projectCreateOpen.value = false }
-function submitProject() { void run(async () => { const project = await store.createProject(projectForm, false); configProjectId.value = project.id; Object.assign(projectForm, { project_name: '', owner_unit: '', description: '' }); projectCreateOpen.value = false }, '项目已创建') }
+function submitProject() {
+  void run(async () => {
+    const project = await store.createProject({ name: projectForm.name })
+    configProjectId.value = project.id
+    projectForm.name = ''
+    projectCreateOpen.value = false
+    if (projectRequiredNotice.value) await router.replace({ path: '/settings' })
+  }, '项目已创建')
+}
 function submitMember() { void run(async () => { await store.saveMember({ name: memberForm.name, username: memberForm.username, title: memberForm.title }, configProjectId.value); Object.assign(memberForm, { name: '', username: '', title: '' }) }, '成员已添加') }
 function submitWbs() { void run(async () => { await store.createWbs(wbsForm, configProjectId.value); Object.assign(wbsForm, { code: '', name: '', planned_start: '', planned_finish: '' }) }, 'WBS 工序已添加') }
 function submitRisk() { void run(async () => { const materials = riskForm.materials.split(/[、,，]/).map(item => item.trim()).filter(Boolean); await store.createRisk({ name: riskForm.name, level: riskForm.level, risk_type: riskForm.risk_type || '综合风险', material_requirements: materials }, configProjectId.value); Object.assign(riskForm, { name: '', level: 'medium', risk_type: '', materials: '' }) }, '风险源已添加') }
@@ -546,6 +1971,37 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .panel-head p { margin:0; color:var(--text-muted); font-size:13px; }.primary { border:0; border-radius:6px; padding:9px 14px; color:#fff; background:var(--color-primary); cursor:pointer; font-weight:700; }.primary:disabled { opacity:.55; cursor:not-allowed; }
 .setup-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-top:18px; }.setup-page > .setup-grid:first-of-type { margin-top:0; }.panel { background:#fff; border:1px solid var(--border-default); border-radius:10px; padding:20px; min-width:0; }.panel-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:16px; }.panel-head h2 { margin:0 0 5px; font-size:16px; }.projects-panel { grid-column:1 / -1; }.form-stack { display:grid; gap:12px; }.form-stack label { display:grid; gap:6px; font-size:12px; font-weight:700; color:var(--text-secondary); }.form-stack input,.form-stack textarea,.compact-form input,.compact-form select { border:1px solid var(--border-emphasis); border-radius:6px; padding:9px 10px; font:inherit; background:#fff; color:var(--text-primary); }.form-stack textarea { resize:vertical; }.compact-form { display:grid; grid-template-columns:1fr 1fr 1fr auto; gap:8px; }.wbs-form { grid-template-columns:.45fr 1.25fr 1fr 1fr auto; }.risk-form { grid-template-columns:1.1fr .55fr .9fr 1.35fr auto; }.quality-form { grid-template-columns:1fr 1fr 1.4fr .8fr auto; }.mapping-form { grid-template-columns:1.2fr .9fr 1fr auto auto; }.reminder-form { grid-template-columns:1fr 1fr auto; }.directory-pair,.monitor-controls { display:grid; grid-template-columns:1fr 1fr; gap:10px; }.monitor-controls { align-items:end; grid-template-columns:1fr 1fr auto; }.check-label { display:flex !important; align-items:center; gap:7px; padding-bottom:9px; }.check-label input { width:15px; height:15px; }.link-button { border:0; padding:0; background:transparent; color:var(--color-primary); cursor:pointer; font:inherit; font-weight:700; }.item-list { display:grid; gap:0; margin-top:16px; border-top:1px solid var(--border-default); }.item-list>div { display:grid; grid-template-columns:1.2fr 1fr .8fr; gap:10px; align-items:center; padding:11px 0; border-bottom:1px solid var(--border-default); font-size:12px; }.item-list strong { font-size:13px; }.item-list span,.item-list small { color:var(--text-muted); }.empty { color:var(--text-muted); font-size:13px; padding:14px 0; }.project-row { display:flex; text-align:left; align-items:center; gap:10px; width:100%; padding:12px 4px; border:0; border-bottom:1px solid var(--border-default); background:transparent; cursor:pointer; }.project-row.active { color:var(--color-primary); }.project-row>span { width:8px; height:8px; border-radius:50%; background:var(--color-success); }.project-row div { flex:1; }.project-row strong,.project-row p { display:block; margin:0; }.project-row p,.project-row em { margin-top:3px; color:var(--text-muted); font-size: 12px; font-style:normal; }.config-summary { display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-top:18px; }.config-summary article { padding:16px; background:#f8faf9; border:1px solid var(--border-default); border-radius:9px; }.config-summary span,.config-summary p { display:block; color:var(--text-muted); font-size:12px; }.config-summary strong { display:block; margin:8px 0 3px; font-size:28px; }.config-summary p { margin:0; }
 .setup-workspace { display:grid; flex:1 1 auto; min-height:0; grid-template-columns:300px minmax(0,1fr); align-items:stretch; gap:18px; }.project-navigator { min-height:0; overflow:hidden; border:1px solid var(--border-default); border-radius:10px; background:#fff; }.project-navigator-head { display:flex; align-items:center; justify-content:space-between; min-height:64px; padding:0 18px; border-bottom:1px solid var(--border-default); }.project-navigator-head h2 { margin:0; font-size:16px; }.project-navigator-head .link-button { font-size:12px; }.project-nav-item { display:flex; align-items:flex-start; gap:10px; width:100%; min-width:0; padding:15px 16px; border:0; border-bottom:1px solid var(--border-default); border-left:3px solid transparent; background:transparent; color:var(--text-primary); font:inherit; text-align:left; cursor:pointer; transition:background .16s ease,border-color .16s ease; }.project-nav-item:hover { background:#f8fbfa; }.project-nav-item.active { border-left-color:#0f8b7a; background:#eef7f4; }.project-status-dot { flex:0 0 auto; width:9px; height:9px; margin-top:5px; border-radius:50%; background:#aebcb9; }.project-nav-item.active .project-status-dot,.project-context .project-status-dot { background:#0f8b7a; }.project-nav-info { display:grid; flex:1 1 auto; min-width:0; gap:5px; }.project-nav-info strong { overflow:hidden; color:#25413e; font-size:13px; font-weight:750; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }.project-nav-info small { overflow:hidden; color:var(--text-muted); font-size: 12px; line-height:1.3; text-overflow:ellipsis; white-space:nowrap; }.project-nav-item em { flex:0 0 auto; margin-top:3px; color:var(--text-muted); font-size: 12px; font-style:normal; white-space:nowrap; }.project-config-panel { display:grid; min-width:0; min-height:0; grid-template-rows:auto minmax(0,1fr); overflow:hidden; }.project-context { padding:20px 24px; border:1px solid var(--border-default); border-radius:10px; background:#fff; }.project-context-title { display:flex; align-items:center; gap:10px; }.project-context-title .project-status-dot { margin-top:0; }.project-context-title h1 { margin:0; color:#203936; font-size:18px; line-height:1.35; }.project-context-meta { display:grid; grid-template-columns:minmax(210px,1.2fr) 150px minmax(250px,1fr); gap:16px 24px; margin:18px 0 0; }.project-context-meta div { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:10px; min-width:0; }.project-context-meta dt { color:var(--text-muted); font-size:12px; }.project-context-meta dd { display:flex; align-items:center; min-width:0; gap:7px; margin:0; overflow:hidden; color:#46635f; font-size:12px; font-weight:650; text-overflow:ellipsis; white-space:nowrap; }.project-context-meta dd .project-status-dot { width:8px; height:8px; margin-top:0; }.configuration-progress { grid-template-columns:auto minmax(0,1fr) !important; }.progress-track { display:block; flex:1 1 auto; min-width:72px; max-width:120px; height:6px; overflow:hidden; border-radius:999px; background:#e4ece9; }.progress-track i { display:block; height:100%; border-radius:inherit; background:#0f8b7a; transition:width .2s ease; }.project-config-scroll { min-height:0; overflow-y:auto; padding-right:6px; }.project-config-scroll > .setup-grid:first-child { margin-top:18px; }
+.project-nav-name { display:block; flex:1 1 auto; min-width:0; color:#25413e; font-size:13px; font-weight:750; line-height:1.55; overflow-wrap:anywhere; white-space:normal; }
+.project-config-panel { grid-template-rows:minmax(0,1fr); }
+.project-list-empty { display:grid; justify-items:start; gap:8px; margin:14px; padding:18px; border:1px dashed #c9d9d5; border-radius:9px; background:#f8fbfa; }
+.project-list-empty > span { display:grid; width:34px; height:34px; place-items:center; border-radius:8px; color:#176d62; background:#e3f1ed; }
+.project-list-empty strong { color:#294a45; font-size:13px; }
+.project-list-empty p { margin:0; color:#778d88; font-size:12px; line-height:1.6; }
+.project-list-empty button { display:inline-flex; align-items:center; gap:5px; margin-top:4px; border:0; padding:0; color:#0f766e; background:transparent; font:inherit; font-size:12px; font-weight:800; cursor:pointer; }
+.project-list-empty button:hover { color:#0b5d56; text-decoration:underline; }
+.project-list-empty button:focus-visible,.project-empty-primary:focus-visible { outline:3px solid rgba(15,118,110,.2); outline-offset:3px; }
+.project-list-loading { display:grid; gap:9px; margin:18px; padding:6px 0; }
+.project-list-loading i,.project-list-loading span,.project-list-loading small { display:block; height:10px; border-radius:4px; background:#edf2f0; animation:project-empty-pulse 1.3s ease-in-out infinite; }
+.project-list-loading i { width:34px; height:34px; border-radius:8px; }.project-list-loading span { width:72%; }.project-list-loading small { width:48%; }
+.project-empty-stage { position:relative; min-width:0; min-height:0; overflow:hidden; border:1px solid var(--border-default); border-radius:10px; background:radial-gradient(circle at 88% 12%,rgba(15,118,110,.10),transparent 30%),linear-gradient(145deg,#fff 0%,#f7faf8 66%,#edf5f2 100%); }
+.project-empty-stage::before { position:absolute; right:-64px; bottom:-92px; width:310px; height:310px; border:1px solid rgba(15,118,110,.13); border-radius:50%; box-shadow:0 0 0 48px rgba(15,118,110,.035),0 0 0 96px rgba(15,118,110,.022); content:""; pointer-events:none; }
+.project-empty-content { position:relative; z-index:1; display:grid; align-content:center; max-width:860px; min-height:100%; margin:0 auto; padding:clamp(48px,8vh,94px) clamp(42px,7vw,92px); }
+.project-required-notice { display:flex; align-items:center; width:fit-content; max-width:100%; gap:9px; margin-bottom:30px; border:1px solid #ebcfb8; border-radius:8px; padding:10px 12px; color:#895022; background:#fff8f1; font-size:12px; line-height:1.45; }
+.project-required-notice span { display:flex; flex-wrap:wrap; gap:4px 8px; }.project-required-notice strong { color:#703b16; }
+.project-empty-kicker { color:#0f766e; font-size:12px; font-weight:850; letter-spacing:.12em; }
+.project-empty-content h1 { max-width:760px; margin:13px 0 0; color:#173a35; font-size:clamp(28px,3vw,44px); font-weight:780; line-height:1.2; letter-spacing:-.025em; }
+.project-empty-description { max-width:710px; margin:19px 0 0; color:#657d78; font-size:14px; line-height:1.9; }
+.project-empty-primary { display:inline-flex; width:fit-content; align-items:center; justify-content:center; gap:8px; margin-top:28px; border:0; border-radius:8px; padding:11px 18px; color:#fff; background:#0f766e; box-shadow:0 8px 22px rgba(15,118,110,.16); font:inherit; font-size:13px; font-weight:800; cursor:pointer; transition:transform .16s ease,background .16s ease,box-shadow .16s ease; }
+.project-empty-primary:hover { transform:translateY(-1px); background:#0b675f; box-shadow:0 11px 26px rgba(15,118,110,.22); }
+.project-init-path { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0; margin:54px 0 0; padding:0; border-top:1px solid #dbe6e2; list-style:none; }
+.project-init-path li { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:start; gap:11px; padding:18px 22px 0 0; }
+.project-init-path li+li { padding-left:22px; border-left:1px solid #dbe6e2; }
+.project-init-path li > span { color:#0f766e; font-size:12px; font-weight:850; font-variant-numeric:tabular-nums; letter-spacing:.08em; }
+.project-init-path li div { display:grid; gap:5px; }.project-init-path strong { color:#31544e; font-size:13px; }.project-init-path small { color:#83938f; font-size:12px; line-height:1.45; }
+.project-empty-loading { display:grid; align-content:center; width:min(70%,680px); min-height:100%; gap:16px; margin:0 auto; }
+.project-empty-loading i,.project-empty-loading span,.project-empty-loading button { display:block; border:0; border-radius:7px; background:#eaf0ee; animation:project-empty-pulse 1.3s ease-in-out infinite; }
+.project-empty-loading i { width:88px; height:13px; }.project-empty-loading span { width:100%; height:32px; }.project-empty-loading span:nth-of-type(2) { width:72%; height:13px; }.project-empty-loading button { width:148px; height:42px; margin-top:12px; }
+@keyframes project-empty-pulse { 0%,100% { opacity:.58; } 50% { opacity:1; } }
 .project-workspace-tabs { position:sticky; top:0; z-index:3; display:flex; gap:8px; padding:12px 0; background:var(--bg-base); }.project-workspace-tabs button { display:grid; flex:1 1 0; min-width:0; gap:2px; border:1px solid var(--border-default); border-radius:7px; padding:9px 12px; color:var(--text-secondary); background:#fff; font:inherit; text-align:left; cursor:pointer; transition:background .16s ease,border-color .16s ease,color .16s ease; }.project-workspace-tabs button:hover { border-color:#b8d2cc; background:#f7fbf9; }.project-workspace-tabs button.active { border-color:#0f8b7a; color:#174e47; background:#e8f4f0; }.project-workspace-tabs strong { overflow:hidden; font-size:12px; font-weight:800; text-overflow:ellipsis; white-space:nowrap; }.project-workspace-tabs span { overflow:hidden; color:var(--text-muted); font-size: 12px; text-overflow:ellipsis; white-space:nowrap; }.project-workspace-tabs button.active span { color:#4c7d75; }
 .material-agent-workspace { display:grid; gap:16px; padding:20px; border:1px solid var(--border-default); border-radius:10px; background:#fff; }.material-workspace-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }.material-workspace-head>div:first-child { min-width:0; }.material-workspace-head span { display:block; margin-bottom:5px; color:#0f766e; font-size: 12px; font-weight:850; letter-spacing:.05em; }.material-workspace-head h2 { margin:0 0 6px; color:#1a3935; font-size:18px; line-height:1.35; }.material-workspace-head p { max-width:76ch; margin:0; color:var(--text-muted); font-size:12px; line-height:1.65; }.material-workspace-actions { display:flex; flex:0 0 auto; align-items:center; gap:8px; }.material-workspace-actions select { min-width:0; border:1px solid var(--border-emphasis); border-radius:6px; padding:8px 9px; color:var(--text-secondary); background:#fff; font:inherit; font-size:12px; }.secondary-action { display:inline-flex; align-items:center; justify-content:center; flex:0 0 auto; border:1px solid var(--border-emphasis); border-radius:6px; padding:8px 11px; color:#315c56; background:#fff; font:inherit; font-size:12px; font-weight:750; text-decoration:none; white-space:nowrap; cursor:pointer; }.secondary-action:hover { border-color:#69a096; background:#f4faf8; }.agent-context-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }.agent-context-summary article { padding:13px 14px; border:1px solid #e0ebe8; border-radius:8px; background:#f7fbfa; }.agent-context-summary span { display:block; color:#6a8581; font-size: 12px; font-weight:750; }.agent-context-summary strong { display:block; margin:5px 0 2px; color:#1b4943; font-size:23px; line-height:1.1; }.agent-context-summary p { margin:0; color:var(--text-muted); font-size: 12px; }.material-agent-chat { display:grid; min-height:390px; grid-template-rows:minmax(260px,1fr) auto auto; border:1px solid var(--border-default); border-radius:8px; overflow:hidden; background:#fbfcfc; }.material-agent-messages { display:grid; align-content:start; gap:14px; min-height:0; overflow-y:auto; padding:18px; }.material-agent-welcome { display:grid; gap:11px; align-self:center; max-width:700px; margin:auto; padding:8px; color:#315954; text-align:center; }.material-agent-welcome strong { color:#183d38; font-size:16px; }.material-agent-welcome p { margin:0; color:var(--text-muted); font-size:13px; line-height:1.7; }.material-agent-welcome>div { display:flex; justify-content:center; flex-wrap:wrap; gap:8px; }.material-agent-welcome button { border:1px solid #b9d6cf; border-radius:999px; padding:7px 11px; color:#21675d; background:#eef8f5; font:inherit; font-size:12px; cursor:pointer; }.material-agent-message { display:flex; align-items:flex-start; gap:9px; max-width:min(92%,760px); }.material-agent-message>span { display:grid; flex:0 0 auto; place-items:center; width:28px; height:28px; border-radius:50%; color:#fff; background:#0f766e; font-size:12px; font-weight:800; }.material-agent-message>div { min-width:0; padding:10px 12px; border:1px solid #dce9e5; border-radius:4px 10px 10px; background:#fff; }.material-agent-message small { display:block; margin-bottom:4px; color:#64817d; font-size: 12px; font-weight:800; }.material-agent-message p { margin:0; color:#355652; font-size:13px; line-height:1.65; white-space:pre-wrap; }.material-agent-message.user { justify-self:end; flex-direction:row-reverse; }.material-agent-message.user>span { background:#cd5b20; }.material-agent-message.user>div { border-color:#f0d8ca; border-radius:10px 4px 10px 10px; background:#fff9f5; }.material-agent-error { margin:0; padding:8px 14px; border-top:1px solid #f2ded5; color:#b64c1e; background:#fff7f3; font-size:12px; }.material-agent-composer { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; padding:12px; border-top:1px solid var(--border-default); background:#fff; }.material-agent-composer textarea { min-height:44px; max-height:120px; resize:vertical; border:1px solid var(--border-emphasis); border-radius:6px; padding:10px; color:var(--text-primary); font:inherit; font-size:13px; }.material-agent-composer textarea:focus { outline:2px solid rgba(15,118,110,.14); outline-offset:1px; border-color:#4f978a; }
 .project-config-scroll > .setup-grid { grid-template-columns:1fr; gap:14px; }.project-config-scroll > .setup-grid .panel { padding:20px 22px; }.project-config-scroll > .setup-grid .panel-head { margin-bottom:15px; }.project-config-scroll > .setup-grid .item-list { margin-top:15px; }
@@ -562,7 +2018,200 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .project-connector-actions { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:4px; padding-top:18px; border-top:1px solid var(--border-default); }.project-connector-actions > span { color:#7a8d88; font-size:12px; }.project-connector-actions .primary { display:inline-flex; align-items:center; justify-content:center; gap:7px; white-space:nowrap; }
 .setup-modal-backdrop { position:fixed; inset:0; z-index:30; display:grid; place-items:center; padding:24px; background:rgba(15,32,35,.42); backdrop-filter:blur(2px); }.setup-modal { width:min(100%,560px); max-height:calc(100dvh - 48px); overflow:auto; padding:20px; border:1px solid rgba(28,56,57,.18); border-radius:12px; background:#fff; box-shadow:0 22px 56px rgba(15,39,42,.26); }.setup-modal-head { display:flex; justify-content:space-between; align-items:center; gap:14px; min-width:0; margin-bottom:12px; }.setup-modal-head>div { display:flex; flex:1 1 auto; align-items:baseline; gap:10px; min-width:0; }.setup-modal-head span { flex:0 0 auto; color:var(--color-primary); font-size:12px; font-weight:800; letter-spacing:.04em; white-space:nowrap; }.setup-modal-head h2 { flex:0 1 auto; overflow:hidden; min-width:0; margin:0; color:#173235; font-size:17px; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }.setup-modal-head p { flex:1 1 14rem; overflow:hidden; min-width:5rem; max-width:none; margin:0; color:var(--text-muted); font-size:12px; line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }.setup-modal-head .modal-close { flex:0 0 auto; }.modal-close,.modal-secondary { border:1px solid var(--border-emphasis); border-radius:6px; padding:8px 12px; color:var(--text-secondary); background:#fff; font:inherit; font-size:12px; font-weight:750; cursor:pointer; }.modal-close:disabled,.modal-secondary:disabled { opacity:.55; cursor:not-allowed; }.project-create-form { gap:14px; }.setup-modal-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; }.compact-form > * { min-width:0; }.compact-form input,.compact-form select { width:100%; min-width:0; }
 .project-config-scroll > .manual-config-workspace { flex:1 1 auto; min-height:0; }
-.project-config-scroll > .material-agent-workspace { display:grid; flex:1 1 auto; min-height:0; grid-template-rows:auto auto minmax(0,1fr); gap:10px; padding:14px 18px; }.material-agent-head { min-height:0; }.material-agent-head h2 { margin-bottom:3px; font-size:16px; }.material-agent-head p { max-width:none; font-size:12px; line-height:1.45; }.agent-context-summary { gap:0; overflow:hidden; border:1px solid #e0ebe8; border-radius:7px; background:#f8fbfa; }.agent-context-summary article { display:flex; align-items:baseline; gap:7px; min-width:0; padding:9px 13px; border:0; border-right:1px solid #e0ebe8; border-radius:0; background:transparent; }.agent-context-summary article:last-child { border-right:0; }.agent-context-summary span { flex:0 1 auto; overflow:hidden; color:#69847f; font-size: 12px; text-overflow:ellipsis; white-space:nowrap; }.agent-context-summary strong { flex:0 0 auto; margin:0; color:#1b4943; font-size:19px; font-variant-numeric:tabular-nums; }.agent-context-summary small { overflow:hidden; color:#7b918c; font-size: 12px; text-overflow:ellipsis; white-space:nowrap; }.material-agent-chat { min-height:0; height:100%; grid-template-rows:minmax(200px,1fr) auto auto; }
+.project-config-scroll > .material-agent-workspace { display:grid; flex:1 1 auto; min-height:0; grid-template-rows:auto auto minmax(0,1fr); gap:10px; padding:14px 18px; }.material-agent-head { min-height:0; }.material-agent-head h2 { margin-bottom:3px; font-size:16px; }.material-agent-head p { max-width:none; font-size:12px; line-height:1.45; }.agent-context-summary { gap:0; overflow:hidden; border:1px solid #e0ebe8; border-radius:7px; background:#f8fbfa; }.agent-context-summary article { display:flex; align-items:baseline; gap:7px; min-width:0; padding:9px 13px; border:0; border-right:1px solid #e0ebe8; border-radius:0; background:transparent; }.agent-context-summary article:last-child { border-right:0; }.agent-context-summary span { flex:0 1 auto; overflow:hidden; color:#69847f; font-size: 12px; text-overflow:ellipsis; white-space:nowrap; }.agent-context-summary strong { flex:0 0 auto; margin:0; color:#1b4943; font-size:19px; font-variant-numeric:tabular-nums; }.agent-context-summary small { overflow:hidden; color:#7b918c; font-size: 12px; text-overflow:ellipsis; white-space:nowrap; }.material-agent-chat { min-height:0; height:100%; grid-template-rows:minmax(200px,1fr) auto auto; }.material-agent-chat.has-draft { grid-template-rows:minmax(200px,1fr) auto auto auto; }
+.project-config-scroll > .material-agent-workspace { grid-template-rows:minmax(0,1fr); gap:0; }
+.visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); white-space:nowrap; }
+.material-agent-messages.empty { place-content:center; }
+.material-agent-history-loading { display:grid; place-items:center; gap:7px; margin:auto; padding:24px; color:#5f7873; text-align:center; }
+.material-agent-history-loading > span { width:28px; height:28px; border:3px solid #d7e6e2; border-top-color:#0f766e; border-radius:50%; animation:material-agent-history-spin .8s linear infinite; }
+.material-agent-history-loading strong { color:#244d46; font-size:14px; }
+.material-agent-history-loading p { margin:0; color:#718783; font-size:12px; line-height:1.6; }
+@keyframes material-agent-history-spin { to { transform:rotate(360deg); } }
+.material-agent-welcome { display:grid; width:min(100%,650px); max-width:none; grid-template-columns:auto minmax(0,1fr); align-items:start; gap:16px; margin:auto; padding:28px 32px; color:#315954; text-align:left; }
+.material-agent-welcome-mark { display:grid; width:46px; height:46px; place-items:center; border-radius:12px; color:#fff; background:#0f766e; box-shadow:0 9px 22px rgba(15,118,110,.18); font-size:18px; font-weight:850; }
+.material-agent-welcome > div { display:grid; justify-content:stretch; gap:0; min-width:0; }
+.material-agent-welcome small { margin:1px 0 6px; color:#0f766e; font-size:12px; font-weight:850; letter-spacing:.1em; }
+.material-agent-welcome strong { color:#173d38; font-size:18px; line-height:1.35; letter-spacing:-.015em; text-wrap:balance; }
+.material-agent-welcome p { max-width:62ch; margin:9px 0 0; color:#70837f; font-size:13px; line-height:1.75; text-wrap:pretty; }
+.material-agent-composer { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; padding:11px 12px 10px; }
+.material-agent-composer-row { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:end; gap:9px; }
+.material-agent-composer-row textarea { box-sizing:border-box; width:100%; min-height:42px; margin:0; }
+.material-agent-attach { display:grid; width:42px; height:42px; place-items:center; border:1px solid var(--border-emphasis); border-radius:7px; color:#52706b; background:#fff; cursor:pointer; transition:border-color .16s ease,color .16s ease,background .16s ease,transform .16s ease; }
+.material-agent-attach:hover:not(:disabled) { border-color:#68a096; color:#0f766e; background:#f2f8f6; }
+.material-agent-attach:active:not(:disabled) { transform:translateY(1px); }
+.material-agent-attach:disabled { opacity:.52; cursor:not-allowed; }
+.material-agent-composer-row > .primary { min-height:42px; white-space:nowrap; }
+.material-agent-stop { min-height:42px; border:0; border-radius:6px; padding:9px 14px; color:#fff; background:#3e5f5a; font:inherit; font-weight:750; white-space:nowrap; cursor:pointer; }
+.material-agent-stop:hover { background:#304f4a; }
+.material-agent-stop:disabled { opacity:.6; cursor:not-allowed; }
+.material-agent-composer-hint { padding-left:51px; color:#8a9b97; font-size:12px; line-height:1.4; }
+.material-agent-file-tray { display:grid; gap:7px; padding:9px 10px 10px; border:1px solid #dce8e5; border-radius:8px; background:#f7faf9; }
+.material-agent-file-head { display:flex; align-items:center; justify-content:space-between; gap:12px; color:#617b76; font-size:12px; }
+.material-agent-file-head button { border:0; padding:0; color:#2a7469; background:transparent; font:inherit; font-size:12px; font-weight:750; cursor:pointer; }
+.material-agent-file-head button:hover { text-decoration:underline; }
+.material-agent-file-tray ul { display:flex; gap:7px; margin:0; padding:0; overflow-x:auto; list-style:none; scrollbar-width:thin; }
+.material-agent-file-tray li { display:grid; flex:0 0 min(280px,72vw); grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px; padding:8px 9px; border:1px solid #d9e5e2; border-radius:7px; color:#347166; background:#fff; }
+.material-agent-file-tray li > span { display:grid; min-width:0; gap:2px; }
+.material-agent-file-tray strong { overflow:hidden; color:#31534e; font-size:12px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }
+.material-agent-file-tray small { color:#8a9a97; font-size:12px; font-variant-numeric:tabular-nums; }
+.material-agent-file-tray li > button { display:grid; width:26px; height:26px; place-items:center; border:0; border-radius:5px; color:#7f918d; background:transparent; cursor:pointer; transition:color .15s ease,background .15s ease; }
+.material-agent-file-tray li > button:hover { color:#a8472b; background:#fff0eb; }
+.material-agent-attach:focus-visible,.material-agent-file-tray button:focus-visible { outline:2px solid rgba(15,118,110,.24); outline-offset:2px; }
+.material-agent-message-files { display:flex; flex-wrap:wrap; gap:6px; margin:9px 0 0; padding:0; list-style:none; }
+.material-agent-message-files li { display:inline-flex; align-items:center; gap:5px; border:1px solid #ead8ce; border-radius:5px; padding:5px 7px; color:#66564f; background:#fff; font-size:12px; }
+.material-agent-message-files li small { display:inline; margin:0 0 0 2px; color:#9a8880; font-size:12px; font-weight:600; }
+.initialization-draft-dock { position:relative; z-index:2; min-width:0; border-top:1px solid #d5e4e0; background:#f6faf9; box-shadow:inset 3px 0 #0f766e; }
+.initialization-draft-dock.status-invalid { border-top-color:#efd4c7; background:#fff8f4; box-shadow:inset 3px 0 #c85829; }
+.initialization-draft-dock.status-applied { border-top-color:#d2e4da; background:#f5faf7; box-shadow:inset 3px 0 #28835b; }
+.initialization-draft-dock.collapsed { box-shadow:none; }
+.initialization-draft-content { display:grid; gap:8px; padding:10px 13px 9px 15px; }
+.initialization-draft-head { display:flex; min-width:0; align-items:center; justify-content:space-between; gap:16px; }
+.initialization-draft-title { display:flex; min-width:0; align-items:center; gap:9px; }
+.initialization-draft-title > div { display:flex; min-width:0; align-items:baseline; gap:8px; }
+.initialization-draft-title small { flex:0 0 auto; color:#78908b; font-size:12px; letter-spacing:.04em; }
+.initialization-draft-title strong { overflow:hidden; color:#234f48; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }
+.initialization-draft-title em { flex:0 0 auto; border-radius:999px; padding:3px 7px; color:#1d6c60; background:#dceeea; font-size:12px; font-style:normal; font-weight:800; white-space:nowrap; }
+.initialization-draft-dot { display:block; flex:0 0 auto; width:7px; height:7px; border-radius:50%; background:#15917f; box-shadow:0 0 0 3px rgba(21,145,127,.11); }
+.status-invalid .initialization-draft-dot { background:#c85829; box-shadow:0 0 0 3px rgba(200,88,41,.11); }
+.status-applied .initialization-draft-dot { background:#28835b; box-shadow:0 0 0 3px rgba(40,131,91,.11); }
+.initialization-draft-actions { display:flex; flex:0 0 auto; align-items:center; gap:7px; }
+.initialization-draft-actions button,.initialization-draft-collapsed { border:0; font:inherit; cursor:pointer; transition:color .16s ease,background .16s ease,transform .16s ease; }
+.initialization-draft-collapse { display:inline-flex; min-height:30px; align-items:center; gap:4px; border-radius:5px !important; padding:5px 8px; color:#657d78; background:transparent; font-size:12px !important; font-weight:700; }
+.initialization-draft-collapse:hover { color:#275c54; background:#e7f1ee; }
+.initialization-draft-review { min-height:30px; border-radius:5px !important; padding:6px 10px; color:#fff; background:#16796c; font-size:12px !important; font-weight:800; }
+.initialization-draft-review:hover { background:#0d6b5f; }
+.initialization-draft-actions button:active,.initialization-draft-collapsed:active { transform:translateY(1px); }
+.initialization-draft-actions button:focus-visible,.initialization-draft-collapsed:focus-visible { outline:2px solid rgba(15,118,110,.26); outline-offset:-2px; }
+.initialization-draft-summary { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); overflow:hidden; border:1px solid #dbe8e5; border-radius:6px; background:rgba(255,255,255,.82); }
+.initialization-draft-summary span { display:flex; min-width:0; align-items:baseline; justify-content:center; gap:3px; padding:6px 5px; border-right:1px solid #e5eeec; color:#728681; font-size:12px; text-align:center; white-space:nowrap; }
+.initialization-draft-summary span:last-child { border-right:0; }
+.initialization-draft-summary strong { color:#245c54; font-size:13px; font-variant-numeric:tabular-nums; }
+.initialization-draft-meta { display:flex; min-width:0; align-items:center; justify-content:space-between; gap:16px; }
+.initialization-draft-meta span { flex:0 0 auto; color:#58716c; font-size:12px; line-height:1.45; }
+.initialization-draft-meta small { overflow:hidden; min-width:0; color:#81918e; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.initialization-draft-collapsed { display:flex; width:100%; min-height:40px; align-items:center; gap:9px; padding:0 14px 0 16px; color:#2d5b54; background:#f6faf9; text-align:left; }
+.initialization-draft-collapsed:hover { color:#174f47; background:#edf6f3; }
+.initialization-draft-collapsed strong { flex:1 1 auto; font-size:12px; font-weight:800; }
+.initialization-draft-collapsed .n-icon { flex:0 0 auto; color:#67807a; }
+.initialization-review-backdrop { z-index:36; }.initialization-review-modal { display:grid; width:min(100%,1380px); max-height:calc(100dvh - 48px); grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; padding:0; font-size:12px; }
+.initialization-review-modal > .setup-modal-head { margin:0; padding:18px 20px 14px; border-bottom:1px solid var(--border-default); }
+.initialization-review-body { display:flex; min-height:0; flex-direction:column; gap:13px; overflow-y:auto; padding:16px 20px; background:#fbfcfc; }
+.initialization-review-body > * { flex:0 0 auto; }
+.initialization-review-section { display:grid; gap:10px; border:1px solid #dce8e5; border-radius:8px; padding:13px 14px; background:#fff; }
+.initialization-review-section > header { display:flex; align-items:center; justify-content:space-between; gap:12px; }.initialization-review-section h3 { margin:0; color:#284d47; font-size:14px; }.initialization-review-section header span { color:#80918e; font-size:12px; }
+.initialization-project-section { gap:14px; overflow:hidden; padding:0; }
+.initialization-project-head { align-items:flex-start !important; padding:14px 16px 0; }
+.initialization-project-head > div { min-width:0; }
+.initialization-project-head h3 { font-size:15px; letter-spacing:-.01em; }
+.initialization-project-head p { margin:4px 0 0; color:#7b8e8a; font-size:12px; line-height:1.5; }
+.initialization-project-head > span { flex:0 0 auto; border-radius:4px; padding:3px 6px; color:#52716b !important; background:#edf5f3; font-weight:750; }
+.initialization-project-description { margin:0 14px; border-left:3px solid #5a988e; border-radius:2px 7px 7px 2px; padding:12px 14px 13px; background:#f3f8f6; }
+.initialization-project-description span { display:block; margin-bottom:5px; color:#5e7873; font-size:12px; font-weight:800; }
+.initialization-project-description p { max-width:100ch; margin:0; color:#264a44; font-size:13px; font-weight:650; line-height:1.7; text-wrap:pretty; }
+.initialization-project-contract-grid { display:grid; grid-template-columns:1.05fr 1.05fr .8fr 1fr; gap:1px; overflow:hidden; margin:0 14px; border:1px solid #dfe9e7; border-radius:7px; background:#dfe9e7; }
+.initialization-project-contract-grid article { display:grid; min-width:0; gap:5px; padding:11px 12px; background:#fff; }
+.initialization-project-contract-grid span { color:#758985; font-size:12px; }
+.initialization-project-contract-grid strong { overflow-wrap:anywhere; color:#244d46; font-size:13px; font-variant-numeric:tabular-nums; line-height:1.45; }
+.initialization-project-units { display:grid; gap:8px; border-top:1px solid #e5eeec; padding:12px 14px 15px; }
+.initialization-project-units h4 { margin:0; color:#486760; font-size:12px; font-weight:850; }
+.initialization-project-units dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; margin:0; }
+.initialization-project-units dl > div { display:grid; min-width:0; grid-template-columns:88px minmax(0,1fr); align-items:baseline; gap:9px; border-radius:5px; padding:9px 10px; background:#f7faf9; }
+.initialization-project-units dl > div.primary { grid-column:1 / -1; border-left:2px solid #7aaaa2; background:#f0f7f5; }
+.initialization-project-units dt,.initialization-project-units dd { margin:0; font-size:12px; line-height:1.55; }
+.initialization-project-units dt { color:#758985; }
+.initialization-project-units dd { min-width:0; color:#2e514b; font-weight:700; overflow-wrap:anywhere; }
+.initialization-review-data-section { overflow:hidden; border:1px solid #dce8e5; border-radius:8px; background:#fff; }
+.initialization-review-data-toggle { display:grid; width:100%; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:9px; border:0; padding:11px 13px; color:#32635b; background:#f8fbfa; font:inherit; text-align:left; cursor:pointer; transition:background .16s ease,color .16s ease; }
+.initialization-review-data-toggle:hover { color:#1d5c52; background:#f0f7f5; }
+.initialization-review-data-toggle:focus-visible { outline:2px solid rgba(15,118,110,.24); outline-offset:-2px; }
+.initialization-review-data-toggle > .n-icon { color:#6f8984; transform:rotate(-90deg); transition:transform .18s ease; }
+.initialization-review-data-toggle.expanded > .n-icon { transform:rotate(0deg); }
+.initialization-review-data-toggle > span { display:flex; min-width:0; align-items:baseline; gap:9px; }
+.initialization-review-data-toggle strong { flex:0 0 auto; color:#28564f; font-size:13px; }
+.initialization-review-data-toggle small { overflow:hidden; color:#80928e; font-size:12px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
+.initialization-review-data-toggle em { flex:0 0 auto; color:#6b827d; font-size:12px; font-style:normal; font-variant-numeric:tabular-nums; font-weight:750; }
+.initialization-review-data-section > ul { display:grid; gap:5px; margin:0; padding:9px 11px 11px; border-top:1px solid #e5eeec; list-style:none; }
+.initialization-wbs-content { border-top:1px solid #e5eeec; background:#fff; }
+.initialization-wbs-toolbar { display:flex; min-height:44px; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid #e5eeec; background:#fbfdfc; }
+.initialization-wbs-toolbar > div { display:flex; min-width:0; align-items:center; gap:10px; }
+.initialization-wbs-toolbar strong { color:#28564f; font-size:12px; }
+.initialization-wbs-toolbar span { color:#718783; font-size:12px; font-variant-numeric:tabular-nums; }
+.initialization-wbs-toolbar em { display:inline-flex; align-items:center; gap:5px; border-radius:4px; padding:4px 7px; color:#8b5a24; background:#fff2d7; font-size:12px; font-style:normal; font-weight:750; white-space:nowrap; }
+.initialization-wbs-toolbar em.sequence-warning { color:#a53f2c; background:#ffebe5; }
+.initialization-wbs-toolbar button { border:0; border-radius:4px; padding:5px 7px; color:#287166; background:transparent; font:inherit; font-size:12px; font-weight:750; cursor:pointer; transition:color .16s ease,background .16s ease; }
+.initialization-wbs-toolbar button:hover { color:#174f47; background:#eaf4f1; }
+.initialization-wbs-toolbar button:active { transform:translateY(1px); }
+.initialization-wbs-toolbar button:focus-visible { outline:2px solid rgba(15,118,110,.24); outline-offset:1px; }
+.initialization-wbs-table-wrap { overflow-x:auto; overflow-y:hidden; background:#fff; }
+.initialization-wbs-table { width:100%; min-width:1180px; border-spacing:0; border-collapse:separate; table-layout:fixed; color:#49635e; font-size:12px; }
+.initialization-wbs-table th { padding:10px 11px; border-right:1px solid #e5eeec; border-bottom:1px solid #dce8e5; color:#5d7772; background:#f3f8f6; font-size:12px; font-weight:800; line-height:1.4; text-align:left; white-space:nowrap; }
+.initialization-wbs-table th:last-child,.initialization-wbs-table td:last-child { border-right:0; }
+.initialization-wbs-table td { padding:10px 11px; border-right:1px solid #edf2f0; border-bottom:1px solid #edf2f0; font-size:12px; line-height:1.55; vertical-align:top; }
+.initialization-wbs-table tbody tr:last-child td { border-bottom:0; }
+.initialization-wbs-table tbody tr { transition:background .16s ease; }
+.initialization-wbs-table tbody tr:hover { background:#f3f9f7; }
+.initialization-wbs-table tbody tr.is-wbs-group { background:#f9fcfb; }
+.initialization-wbs-table tbody tr.has-dependency-warning { background:#fffaf0; }
+.initialization-wbs-table tbody tr.has-dependency-warning:hover { background:#fff6e5; }
+.initialization-wbs-table tbody tr.has-sequence-warning { background:#fff5f1; }
+.initialization-wbs-table tbody tr.has-sequence-warning:hover { background:#ffebe5; }
+.initialization-wbs-table th:nth-child(1),.initialization-wbs-table td:nth-child(1) { width:92px; }
+.initialization-wbs-table th:nth-child(2),.initialization-wbs-table td:nth-child(2) { width:340px; }
+.initialization-wbs-table th:nth-child(3),.initialization-wbs-table td:nth-child(3),.initialization-wbs-table th:nth-child(4),.initialization-wbs-table td:nth-child(4) { width:104px; }
+.initialization-wbs-table th:nth-child(5),.initialization-wbs-table td:nth-child(5) { width:68px; }
+.initialization-wbs-table th:nth-child(6),.initialization-wbs-table td:nth-child(6) { width:74px; }
+.initialization-wbs-table th:nth-child(7),.initialization-wbs-table td:nth-child(7) { width:70px; }
+.initialization-wbs-table th:nth-child(8),.initialization-wbs-table td:nth-child(8) { width:126px; }
+.initialization-wbs-table th:nth-child(9),.initialization-wbs-table td:nth-child(9) { width:88px; }
+.initialization-wbs-table td:not(.initialization-wbs-name):not(.initialization-wbs-dependencies) { white-space:nowrap; }
+.initialization-wbs-table td strong { color:#28564f; font-size:12px; font-variant-numeric:tabular-nums; }
+.initialization-wbs-name { padding-left:7px !important; color:#2f514b; overflow-wrap:anywhere; }
+.initialization-wbs-tree-node { --wbs-depth:0; position:relative; display:flex; min-height:22px; align-items:flex-start; gap:7px; padding-left:calc(var(--wbs-depth) * 18px); }
+.initialization-wbs-tree-node:not(.root)::before { content:""; position:absolute; top:-11px; bottom:-11px; left:calc((var(--wbs-depth) * 18px) - 9px); border-left:1px solid #cbded9; }
+.initialization-wbs-tree-node:not(.root)::after { content:""; position:absolute; top:11px; left:calc((var(--wbs-depth) * 18px) - 9px); width:10px; border-top:1px solid #cbded9; }
+.initialization-wbs-node-toggle { position:relative; z-index:1; display:grid; flex:0 0 20px; width:20px; height:20px; place-items:center; border:1px solid #c7ddd7; border-radius:4px; padding:0; color:#39776e; background:#edf6f3; cursor:pointer; transition:color .16s ease,background .16s ease,transform .16s ease; }
+.initialization-wbs-node-toggle:hover { color:#174f47; background:#dfeeea; }
+.initialization-wbs-node-toggle:focus-visible { outline:2px solid rgba(15,118,110,.24); outline-offset:1px; }
+.initialization-wbs-node-toggle .n-icon { transition:transform .18s ease; }
+.initialization-wbs-node-toggle.collapsed .n-icon { transform:rotate(-90deg); }
+.initialization-wbs-leaf { position:relative; z-index:1; flex:0 0 20px; width:20px; height:20px; }
+.initialization-wbs-leaf::after { content:""; position:absolute; top:8px; left:7px; width:5px; height:5px; border-radius:1px; background:#91afa8; }
+.initialization-wbs-node-copy { display:flex; min-width:0; flex-wrap:wrap; align-items:baseline; gap:6px; padding-top:1px; }
+.initialization-wbs-node-copy > strong { color:#2f514b !important; font-weight:700; overflow-wrap:anywhere; }
+.initialization-wbs-node-copy > small { border-radius:3px; padding:1px 4px; color:#6c827e; background:#eef3f2; font-size:12px; font-weight:650; white-space:nowrap; }
+.initialization-wbs-node-copy > em { border-radius:3px; padding:1px 5px; color:#a53f2c; background:#ffdfd5; font-size:12px; font-style:normal; font-weight:800; white-space:nowrap; }
+.initialization-wbs-dependencies { display:flex; flex-wrap:wrap; gap:4px; white-space:normal; }
+.initialization-wbs-dependencies span { border-radius:3px; padding:2px 5px; color:#456b64; background:#eaf3f1; font-size:12px; font-variant-numeric:tabular-nums; font-weight:750; }
+.initialization-wbs-dependencies em { border-radius:3px; padding:2px 5px; color:#8b5a24; background:#fff0cf; font-size:12px; font-style:normal; font-weight:750; white-space:nowrap; }
+.initialization-risk-list { display:grid; gap:10px; border-top:1px solid #e5eeec; padding:12px; background:#f8fbfa; }
+.initialization-risk-card { overflow:hidden; border:1px solid #d9e7e3; border-left:3px solid #6d9f96; border-radius:7px; background:#fff; }
+.initialization-risk-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:12px 14px 11px; border-bottom:1px solid #e7efed; background:#fcfdfd; }
+.initialization-risk-head > div { min-width:0; }
+.initialization-risk-head span { display:block; margin-bottom:3px; color:#7c8f8b; font-size:12px; font-variant-numeric:tabular-nums; font-weight:700; }
+.initialization-risk-head h4 { margin:0; color:#294f49; font-size:14px; line-height:1.45; overflow-wrap:anywhere; text-wrap:pretty; }
+.initialization-risk-head > strong { flex:0 0 auto; border-radius:4px; padding:4px 8px; color:#935125; background:#fff0df; font-size:12px; font-weight:800; white-space:nowrap; }
+.initialization-risk-facts { display:grid; grid-template-columns:minmax(0,1.45fr) minmax(220px,.55fr); gap:1px; margin:0; border-bottom:1px solid #e7efed; background:#e7efed; }
+.initialization-risk-facts > div { display:grid; min-width:0; grid-template-columns:78px minmax(0,1fr); align-items:baseline; gap:10px; padding:10px 14px; background:#f7faf9; }
+.initialization-risk-facts dt,.initialization-risk-facts dd { margin:0; font-size:12px; line-height:1.55; }
+.initialization-risk-facts dt { color:#718681; font-weight:700; }
+.initialization-risk-facts dd { display:flex; min-width:0; flex-wrap:wrap; align-items:baseline; gap:7px; color:#31544e; font-weight:700; overflow-wrap:anywhere; }
+.initialization-risk-facts code { border-radius:3px; padding:2px 5px; color:#35685f; background:#e5f1ee; font:700 12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.initialization-risk-window { color:#45645e !important; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.initialization-risk-window > span { color:#91a09d; font-weight:600; }
+.initialization-risk-details { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; padding:12px 14px 14px; }
+.initialization-risk-details section { min-width:0; }
+.initialization-risk-details section + section { border-left:1px solid #e4ecea; padding-left:12px; }
+.initialization-risk-details h5 { margin:0 0 5px; color:#667d78; font-size:12px; font-weight:800; }
+.initialization-risk-details p { margin:0; color:#355650; font-size:12px; line-height:1.7; overflow-wrap:anywhere; text-wrap:pretty; }
+.draft-issues ul { display:grid; gap:5px; margin:8px 0 0; padding:0; list-style:none; }
+.initialization-review-data-section li,.draft-issues li { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:8px 10px; border-radius:5px; background:#f7faf9; font-size:12px; line-height:1.5; }
+.initialization-review-data-section li strong { color:#365b55; }.initialization-review-data-section li span { color:#748682; text-align:right; }
+.draft-issues li { justify-content:flex-start; }.draft-issues li strong { flex:0 0 auto; color:#9a5b28; }.draft-issues li.error strong { color:#b7432d; }.draft-issues li span { color:#5e736f; }
+.initialization-partial-confirm { display:flex; align-items:flex-start; gap:7px; color:#6f5d4d; font-size:12px; line-height:1.5; }.initialization-partial-confirm input { margin-top:2px; }
+.initialization-credential-list { display:grid; gap:9px; }.initialization-credential-list > div { display:grid; grid-template-columns:minmax(180px,1fr) minmax(150px,.7fr) minmax(150px,.7fr); align-items:end; gap:10px; border-top:1px solid #edf2f0; padding-top:10px; }
+.initialization-credential-list p { display:grid; gap:3px; margin:0; }.initialization-credential-list p strong { color:#315650; font-size:12px; }.initialization-credential-list p span { color:#7d8f8b; font-size:12px; }
+.initialization-credential-list label { display:grid; gap:5px; color:#607873; font-size:12px; font-weight:750; }.initialization-credential-list input { min-width:0; border:1px solid var(--border-emphasis); border-radius:6px; padding:8px 9px; color:#233f3b; font:inherit; font-size:12px; }
+.initialization-review-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:13px 20px; border-top:1px solid var(--border-default); background:#fff; }.initialization-review-actions > span { flex:1 1 auto; color:#738682; font-size:12px; line-height:1.5; }.initialization-review-actions .primary:disabled { opacity:.5; cursor:not-allowed; }
 .project-navigator { display:grid; grid-template-rows:auto minmax(0,1fr); }.project-navigator-list { min-height:0; overflow-y:auto; }
 .manual-config-workspace { display:grid; min-height:0; grid-template-columns:176px minmax(0,1fr); margin-top:8px; border:1px solid var(--border-default); border-radius:10px; overflow:hidden; background:#fff; }
 .manual-config-tree { display:grid; align-content:start; min-width:0; padding:10px; border-right:1px solid var(--border-default); background:#fbfcfc; overflow-y:auto; }
@@ -575,4 +2224,29 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 @media (max-width:1380px) and (min-width:1001px) { .project-config-scroll > .setup-grid { grid-template-columns:1fr; } }
 @media (max-width:1000px) { .setup-page { display:block; height:auto; min-height:100%; overflow:visible; }.setup-workspace { display:block; min-height:0; }.project-navigator { min-height:0; margin-bottom:18px; }.project-config-panel { display:block; min-width:0; overflow:visible; }.project-config-scroll { overflow:visible; padding-right:0; }.project-workspace-tabs { position:static; overflow-x:auto; }.project-workspace-tabs button { flex:0 0 155px; }.project-config-scroll > .material-agent-workspace,.project-connection-workspace { min-height:520px; }.project-connection-grid { grid-template-columns:210px minmax(0,1fr); }.manual-config-workspace { min-height:520px; grid-template-columns:1fr; }.manual-config-tree { grid-template-columns:repeat(3,minmax(150px,1fr)); grid-auto-rows:min-content; border-right:0; border-bottom:1px solid var(--border-default); overflow:auto; }.manual-config-tree-head { grid-column:1 / -1; }.setup-grid { grid-template-columns:1fr; }.config-summary { grid-template-columns:repeat(2,1fr); }.compact-form,.wbs-form,.risk-form { grid-template-columns:1fr 1fr; }.compact-form button { grid-column:span 2; } } @media (max-width:600px) { .setup-page { padding:18px; }.project-context { padding:16px; }.project-context-title h1 { font-size:16px; }.project-context-meta { grid-template-columns:1fr; gap:9px; margin-top:15px; }.project-context-meta div { grid-template-columns:60px minmax(0,1fr); }.project-nav-item { padding:13px 14px; }.material-agent-workspace,.project-connection-workspace { min-height:0; padding:15px; }.material-workspace-head,.project-connection-head { display:grid; gap:12px; }.material-workspace-actions { justify-content:space-between; }.agent-context-summary { grid-template-columns:1fr; }.project-config-scroll > .material-agent-workspace { min-height:500px; padding:14px; }.agent-context-summary article { border-right:0; border-bottom:1px solid #e0ebe8; }.agent-context-summary article:last-child { border-bottom:0; }.material-agent-chat { min-height:340px; }.material-agent-composer { grid-template-columns:1fr; }.project-connection-grid { grid-template-columns:1fr; overflow:visible; }.project-connector-list { grid-template-columns:repeat(3,minmax(0,1fr)); overflow:visible; border-right:0; border-bottom:1px solid var(--border-default); }.project-connector-list button { grid-template-columns:auto minmax(0,1fr); }.project-connector-list button > i { display:none; }.project-connector-editor { overflow:visible; padding:16px; }.project-connector-actions { align-items:stretch; flex-direction:column; }.project-connector-actions .primary { width:100%; }.manual-config-workspace { min-height:500px; }.manual-config-tree { display:flex; gap:3px; padding:7px; overflow-x:auto; }.manual-config-tree-head { display:none; }.manual-config-tree button { flex:0 0 auto; grid-template-columns:auto minmax(0,1fr); width:auto; }.manual-config-tree button em { display:none; }.manual-list-head { display:grid; padding:15px; }.manual-list-actions { width:100%; }.manual-search { width:auto; flex:1 1 auto; }.manual-editor-form { grid-template-columns:1fr; }.manual-editor-form .full-span,.manual-editor-actions { grid-column:auto; }.manual-rule-editor>div { display:grid; }.manual-editor-actions { justify-content:stretch; }.manual-editor-actions button { flex:1 1 auto; }.config-summary { grid-template-columns:1fr 1fr; }.item-list>div { grid-template-columns:1fr; gap:3px; }.panel-head { gap:10px; }.setup-modal-backdrop { padding:12px; }.setup-modal { max-height:calc(100dvh - 24px); padding:16px; border-radius:10px; }.setup-modal-head { gap:12px; }.setup-modal-actions { justify-content:stretch; }.setup-modal-actions button { flex:1 1 auto; } }
 @media (max-width:600px) { .setup-modal-head span,.setup-modal-head p { display:none; } }
+@media (max-width:1000px) {
+  .project-empty-stage,.project-empty-content { min-height:560px; }
+  .project-empty-content { box-sizing:border-box; }
+}
+@media (max-width:600px) {
+  .project-empty-stage,.project-empty-content { min-height:520px; }
+  .project-empty-content { padding:38px 24px; }
+  .project-empty-content h1 { font-size:28px; }
+  .project-empty-description { font-size:13px; }
+  .project-required-notice { align-items:flex-start; margin-bottom:24px; }
+  .project-init-path { grid-template-columns:1fr; gap:0; margin-top:38px; }
+  .project-init-path li { padding:14px 0; }
+  .project-init-path li+li { padding-left:0; border-top:1px solid #dbe6e2; border-left:0; }
+  .project-empty-stage::before { opacity:.6; }
+  .initialization-draft-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .initialization-draft-summary span { border-right:0; border-bottom:1px solid #e4efec; }
+  .initialization-project-contract-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .initialization-project-units dl { grid-template-columns:1fr; }
+  .initialization-risk-facts,.initialization-risk-details { grid-template-columns:1fr; }
+  .initialization-risk-details section + section { border-top:1px solid #e4ecea; border-left:0; padding-top:12px; padding-left:0; }
+  .initialization-project-units dl > div.primary { grid-column:auto; }
+  .initialization-credential-list > div { grid-template-columns:1fr; }
+  .initialization-review-actions { align-items:stretch; flex-wrap:wrap; }
+  .initialization-review-actions > span { flex-basis:100%; }
+}
 </style>

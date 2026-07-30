@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import hmac
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -31,6 +34,8 @@ from .models import (
     Project,
     ProjectChange,
     ProjectInformationRecord,
+    ProjectInitializationDraft,
+    ProjectInitializationFile,
     ProjectMember,
     ProjectStatusSnapshot,
     QualityMetric,
@@ -39,6 +44,15 @@ from .models import (
     TaskStatusHistory,
     User,
     WbsItem,
+)
+from .project_initialization import (
+    ProjectInitializationPayload,
+    ReadInitializationDraftArgs,
+    SubmitInitializationDraftArgs,
+    UpdateInitializationDraftArgs,
+    build_initialization_state,
+    draft_status,
+    validate_initialization_payload,
 )
 
 
@@ -58,8 +72,12 @@ ResourceName = Literal[
 ]
 OperationName = Literal[
     "get_project_overview",
+    "get_project_initialization_state",
+    "get_project_initialization_draft",
     "list_project_items",
     "search_documents",
+    "submit_project_initialization_draft",
+    "update_project_initialization_draft",
     "create_task",
     "update_task",
     "create_risk",
@@ -117,27 +135,21 @@ class UpdateTaskArgs(BaseModel):
 
 
 class CreateRiskArgs(BaseModel):
-    name: str = Field(min_length=1, max_length=300)
-    level: Literal["low", "medium", "high", "critical"] = "medium"
-    risk_type: str = Field(default="综合风险", min_length=1, max_length=100)
-    planned_start: str | None = Field(default=None, max_length=32)
-    planned_finish: str | None = Field(default=None, max_length=32)
-    responsible_user_id: int | None = None
-    confirmer_user_id: int | None = None
-    material_requirements: list[str] = Field(default_factory=list, max_length=30)
-    control_requirements: str | None = Field(default=None, max_length=4000)
+    serial_no: int = Field(gt=0)
+    related_wbs_item_id: int | None = None
+    related_process_name: str = Field(min_length=1, max_length=300)
+    risk_part: str = Field(min_length=1, max_length=300)
+    risk_level: str = Field(min_length=1, max_length=50)
+    evaluation_condition: str = Field(min_length=1, max_length=20000)
+    risk_window_start_date: date | None = None
+    risk_window_end_date: date | None = None
+    summary: str | None = Field(default=None, max_length=20000)
 
 
 class UpdateWbsArgs(BaseModel):
     wbs_item_id: int
-    progress: int = Field(ge=0, le=100)
-    status: Literal[
-        "not_started",
-        "in_progress",
-        "delayed",
-        "completed",
-        "blocked",
-    ] | None = None
+    progress_percent: Decimal = Field(ge=0, le=100)
+    status_text: str | None = Field(default=None, max_length=100)
     note: str | None = Field(default=None, max_length=1000)
 
 
@@ -168,7 +180,7 @@ class ToolContext:
 
     @property
     def is_admin(self) -> bool:
-        return self.user.role in {"admin", "superadmin"}
+        return self.user.role == "admin"
 
     @property
     def can_write(self) -> bool:
@@ -177,6 +189,10 @@ class ToolContext:
     @property
     def can_admin_write(self) -> bool:
         return self.can_write and self.is_admin
+
+    @property
+    def can_submit_initialization_draft(self) -> bool:
+        return self.conversation.conversation_type == "initialization"
 
 
 def _ok(data: Any, message: str = "ok") -> dict[str, Any]:
@@ -215,8 +231,8 @@ def resolve_tool_context(db: Session, agentscope_session_id: str) -> ToolContext
         raise HTTPException(status_code=404, detail="该会话不属于工程管理平台")
 
     user = db.get(User, conversation.user_id)
-    if user is None or user.status != "active":
-        raise HTTPException(status_code=403, detail="平台账号已停用或不存在")
+    if user is None:
+        raise HTTPException(status_code=403, detail="平台账号不存在")
 
     project = db.get(Project, conversation.project_id)
     if project is None:
@@ -226,10 +242,9 @@ def resolve_tool_context(db: Session, agentscope_session_id: str) -> ToolContext
         select(ProjectMember).where(
             ProjectMember.project_id == project.id,
             ProjectMember.user_id == user.id,
-            ProjectMember.status == "active",
         ),
     )
-    if user.role not in {"admin", "superadmin"} and membership is None:
+    if user.role != "admin" and membership is None:
         raise HTTPException(status_code=403, detail="当前账号已无权访问该项目")
 
     return ToolContext(
@@ -244,7 +259,11 @@ def _public_row(row: Any, fields: tuple[str, ...]) -> dict[str, Any]:
     data: dict[str, Any] = {}
     for name in fields:
         value = getattr(row, name)
-        data[name] = value.isoformat() if isinstance(value, datetime) else value
+        if isinstance(value, (date, datetime)):
+            value = value.isoformat()
+        elif isinstance(value, Decimal):
+            value = float(value)
+        data[name] = value
     return data
 
 
@@ -294,7 +313,6 @@ def _active_member(db: Session, project_id: int, user_id: int) -> ProjectMember:
         select(ProjectMember).where(
             ProjectMember.project_id == project_id,
             ProjectMember.user_id == user_id,
-            ProjectMember.status == "active",
         ),
     )
     if row is None:
@@ -362,18 +380,39 @@ def _overview(db: Session, context: ToolContext) -> dict[str, Any]:
     return {
         "project": _public_row(
             context.project,
-            ("id", "project_name", "owner_unit", "description", "status"),
+            (
+                "id",
+                "name",
+                "engineering_type_description",
+                "contract_start_date",
+                "contract_end_date",
+                "contract_duration_days",
+                "contract_amount_wan_yuan",
+                "construction_unit_name",
+                "general_contractor_unit_name",
+                "supervision_unit_name",
+                "design_unit_name",
+                "survey_unit_name",
+                "updated_at",
+            ),
         ),
         "current_user": {
             **_public_row(
                 context.user,
-                ("id", "real_name", "title", "org_name", "role", "status"),
+                ("id", "username", "real_name", "role"),
             ),
-            "project_member_role": (
-                context.membership.member_role if context.membership else "platform_admin"
-            ),
-            "responsibilities": (
-                context.membership.responsibilities if context.membership else []
+            "project_assignment": (
+                _public_row(
+                    context.membership,
+                    (
+                        "serial_no",
+                        "position_name",
+                        "certificate_no",
+                        "responsibility_description",
+                    ),
+                )
+                if context.membership
+                else None
             ),
         },
         "dashboard": dashboard,
@@ -384,8 +423,9 @@ def _overview(db: Session, context: ToolContext) -> dict[str, Any]:
                 Task.status.not_in(("completed", "cancelled")),
             ),
             "risks": count(RiskSource),
-            "active_risks": count(RiskSource, RiskSource.status == "active"),
             "wbs_items": count(WbsItem),
+            "quality_requirements": count(QualityMetric),
+            "project_personnel": count(ProjectMember),
             "documents": count(Attachment),
             "information_records": count(ProjectInformationRecord),
             "unread_notifications": count(
@@ -397,6 +437,9 @@ def _overview(db: Session, context: ToolContext) -> dict[str, Any]:
             "conversation_type": context.conversation.conversation_type,
             "can_write": context.can_write,
             "can_admin_write": context.can_admin_write,
+            "can_submit_initialization_draft": (
+                context.can_submit_initialization_draft
+            ),
         },
     }
 
@@ -432,56 +475,71 @@ def _list_items(
     if args.resource == "wbs":
         stmt = select(WbsItem).where(WbsItem.project_id == project_id)
         if args.status:
-            stmt = stmt.where(WbsItem.status == args.status)
+            stmt = stmt.where(WbsItem.status_text == args.status)
         if keyword:
             stmt = stmt.where(
-                or_(WbsItem.code.contains(keyword), WbsItem.name.contains(keyword)),
+                or_(
+                    WbsItem.wbs_code.contains(keyword),
+                    WbsItem.name.contains(keyword),
+                    WbsItem.description.contains(keyword),
+                ),
             )
-        rows = db.scalars(stmt.order_by(WbsItem.code).limit(args.limit)).all()
+        rows = db.scalars(
+            stmt.order_by(WbsItem.sort_order, WbsItem.wbs_code).limit(args.limit),
+        ).all()
         fields = (
-            "id", "parent_id", "code", "name", "level", "planned_start",
-            "planned_finish", "progress", "status", "responsible_user_id",
-            "raw_data", "updated_at",
+            "id", "parent_id", "sort_order", "color_value", "wbs_code",
+            "name", "assigned_to_text", "planned_start_at",
+            "planned_finish_at", "deadline_at", "progress_percent",
+            "duration_hours", "estimated_hours", "time_log_minutes",
+            "status_text", "priority_text", "description", "budget",
+            "actual_cost", "msp_uid", "msp_id", "source_created_at",
+            "source_creator", "item_type", "source_project_path", "level",
+            "updated_at",
         )
         return [_public_row(row, fields) for row in rows]
 
     if args.resource == "risks":
         stmt = select(RiskSource).where(RiskSource.project_id == project_id)
-        if args.status:
-            stmt = stmt.where(RiskSource.status == args.status)
         if keyword:
             stmt = stmt.where(
                 or_(
-                    RiskSource.name.contains(keyword),
-                    RiskSource.risk_type.contains(keyword),
-                    RiskSource.control_requirements.contains(keyword),
+                    RiskSource.related_process_name.contains(keyword),
+                    RiskSource.risk_part.contains(keyword),
+                    RiskSource.risk_level.contains(keyword),
+                    RiskSource.evaluation_condition.contains(keyword),
+                    RiskSource.summary.contains(keyword),
                 ),
             )
-        rows = db.scalars(stmt.order_by(RiskSource.updated_at.desc()).limit(args.limit)).all()
+        rows = db.scalars(
+            stmt.order_by(RiskSource.serial_no).limit(args.limit),
+        ).all()
         fields = (
-            "id", "name", "level", "risk_type", "planned_start",
-            "planned_finish", "responsible_user_id", "confirmer_user_id",
-            "material_requirements", "control_requirements", "status",
-            "updated_at",
+            "id", "serial_no", "related_wbs_item_id",
+            "related_process_name", "risk_part", "risk_level",
+            "evaluation_condition", "risk_window_start_date",
+            "risk_window_end_date", "summary", "updated_at",
         )
         return [_public_row(row, fields) for row in rows]
 
     if args.resource == "quality":
         stmt = select(QualityMetric).where(QualityMetric.project_id == project_id)
-        if args.status:
-            stmt = stmt.where(QualityMetric.status == args.status)
         if keyword:
             stmt = stmt.where(
                 or_(
-                    QualityMetric.name.contains(keyword),
-                    QualityMetric.requirement.contains(keyword),
+                    QualityMetric.wbs_code.contains(keyword),
+                    QualityMetric.quality_acceptance_item.contains(keyword),
+                    QualityMetric.control_indicator.contains(keyword),
+                    QualityMetric.related_documents.contains(keyword),
                 ),
             )
-        rows = db.scalars(stmt.order_by(QualityMetric.updated_at.desc()).limit(args.limit)).all()
+        rows = db.scalars(
+            stmt.order_by(QualityMetric.wbs_code).limit(args.limit),
+        ).all()
         fields = (
-            "id", "wbs_item_id", "name", "requirement",
-            "inspection_frequency", "required_materials", "owner_user_id",
-            "status", "updated_at",
+            "id", "wbs_code", "quality_acceptance_item",
+            "control_indicator", "inspection_frequency",
+            "related_documents", "updated_at",
         )
         return [_public_row(row, fields) for row in rows]
 
@@ -491,25 +549,29 @@ def _list_items(
             .join(User, User.id == ProjectMember.user_id)
             .where(ProjectMember.project_id == project_id)
         )
-        if args.status:
-            stmt = stmt.where(ProjectMember.status == args.status)
         if keyword:
             stmt = stmt.where(
                 or_(
-                    ProjectMember.display_name.contains(keyword),
                     User.real_name.contains(keyword),
-                    User.title.contains(keyword),
+                    User.username.contains(keyword),
+                    ProjectMember.position_name.contains(keyword),
+                    ProjectMember.certificate_no.contains(keyword),
+                    ProjectMember.responsibility_description.contains(keyword),
                 ),
             )
-        rows = db.execute(stmt.order_by(ProjectMember.id).limit(args.limit)).all()
+        rows = db.execute(
+            stmt.order_by(ProjectMember.serial_no).limit(args.limit),
+        ).all()
         return [
             {
                 "user_id": user.id,
-                "display_name": member.display_name or user.real_name,
-                "title": user.title,
-                "member_role": member.member_role,
-                "responsibilities": member.responsibilities,
-                "status": member.status,
+                "username": user.username,
+                "real_name": user.real_name,
+                "role": user.role,
+                "serial_no": member.serial_no,
+                "position_name": member.position_name,
+                "certificate_no": member.certificate_no,
+                "responsibility_description": member.responsibility_description,
             }
             for member, user in rows
         ]
@@ -624,6 +686,294 @@ def _list_items(
         "confidence", "parse_status", "status", "created_at", "updated_at",
     )
     return [_public_row(row, fields) for row in rows]
+
+
+def _get_initialization_state(
+    db: Session,
+    context: ToolContext,
+) -> dict[str, Any]:
+    state = build_initialization_state(db, context.project)
+    if context.can_submit_initialization_draft:
+        files = db.scalars(
+            select(ProjectInitializationFile)
+            .where(
+                ProjectInitializationFile.project_id == context.project.id,
+                ProjectInitializationFile.conversation_id
+                == context.conversation.id,
+            )
+            .order_by(ProjectInitializationFile.created_at),
+        ).all()
+        state["initialization_files"] = [
+            _public_row(
+                item,
+                (
+                    "id",
+                    "file_name",
+                    "content_type",
+                    "file_size",
+                    "file_hash",
+                    "created_at",
+                ),
+            )
+            for item in files
+        ]
+    return state
+
+
+def _initialization_draft_for_context(
+    db: Session,
+    context: ToolContext,
+) -> ProjectInitializationDraft | None:
+    return db.scalar(
+        select(ProjectInitializationDraft)
+        .where(
+            ProjectInitializationDraft.project_id == context.project.id,
+            ProjectInitializationDraft.conversation_id
+            == context.conversation.id,
+        )
+        .order_by(
+            ProjectInitializationDraft.updated_at.desc(),
+            ProjectInitializationDraft.id.desc(),
+        ),
+    )
+
+
+def _get_initialization_draft(
+    db: Session,
+    context: ToolContext,
+    args: ReadInitializationDraftArgs,
+) -> dict[str, Any]:
+    if not context.can_submit_initialization_draft:
+        raise HTTPException(
+            status_code=403,
+            detail="只有项目初始化智能体会话可以读取初始化草稿",
+        )
+    draft = _initialization_draft_for_context(db, context)
+    if draft is None:
+        return {
+            "draft": None,
+            "section": args.section,
+            "data": None,
+        }
+
+    payload = ProjectInitializationPayload.model_validate(draft.payload)
+    if args.section == "validation_issues":
+        section_data: dict[str, Any] | list[Any] = list(
+            draft.validation_issues or [],
+        )
+    else:
+        section_data = payload.model_dump(mode="json")[args.section]
+
+    if isinstance(section_data, list):
+        selected = section_data[
+            args.start - 1:args.start - 1 + args.limit
+        ]
+        end = args.start + len(selected) - 1 if selected else None
+        total = len(section_data)
+        next_start = end + 1 if end is not None and end < total else None
+        data: dict[str, Any] | list[Any] = selected
+    else:
+        total = 1
+        end = 1
+        next_start = None
+        data = section_data
+
+    return {
+        "draft": _public_row(
+            draft,
+            (
+                "id",
+                "project_id",
+                "conversation_id",
+                "status",
+                "revision",
+                "source_files",
+                "created_at",
+                "updated_at",
+            ),
+        ),
+        "section": args.section,
+        "start": args.start,
+        "end": end,
+        "total": total,
+        "next_start": next_start,
+        "data": data,
+    }
+
+
+def _draft_summary(
+    payload: ProjectInitializationPayload,
+    issues: list[dict[str, str]],
+) -> dict[str, int]:
+    return {
+        "personnel": len(payload.personnel),
+        "wbs": len(payload.wbs),
+        "risks": len(payload.risks),
+        "quality_requirements": len(payload.quality_requirements),
+        "errors": sum(item["level"] == "error" for item in issues),
+        "warnings": sum(item["level"] == "warning" for item in issues),
+    }
+
+
+def _submit_initialization_draft(
+    db: Session,
+    context: ToolContext,
+    args: SubmitInitializationDraftArgs,
+) -> dict[str, Any]:
+    if not context.can_submit_initialization_draft:
+        raise HTTPException(
+            status_code=403,
+            detail="只有项目初始化智能体会话可以提交初始化草稿",
+        )
+    issues = validate_initialization_payload(args.payload)
+    status_value = draft_status(issues)
+    source_files = list(dict.fromkeys(item.strip() for item in args.source_files if item.strip()))
+    if args.draft_id is None:
+        draft = ProjectInitializationDraft(
+            project_id=context.project.id,
+            conversation_id=context.conversation.id,
+            created_by_user_id=context.user.id,
+            status=status_value,
+            revision=1,
+            payload=args.payload.model_dump(mode="json"),
+            validation_issues=issues,
+            source_files=source_files,
+        )
+        db.add(draft)
+        db.flush()
+        action = "Dobby 提交项目初始化草稿"
+    else:
+        draft = db.get(ProjectInitializationDraft, args.draft_id)
+        if (
+            draft is None
+            or draft.project_id != context.project.id
+            or draft.conversation_id != context.conversation.id
+        ):
+            raise HTTPException(status_code=404, detail="初始化草稿不存在")
+        if draft.status == "applied":
+            raise HTTPException(status_code=409, detail="已入库草稿不能继续修改")
+        draft.status = status_value
+        draft.revision += 1
+        draft.payload = args.payload.model_dump(mode="json")
+        draft.validation_issues = issues
+        draft.source_files = source_files
+        action = "Dobby 更新项目初始化草稿"
+        db.flush()
+    _audit(
+        db,
+        context,
+        action,
+        f"初始化草稿第 {draft.revision} 版，状态 {draft.status}",
+        "project_initialization_draft",
+        draft.id,
+    )
+    db.commit()
+    db.refresh(draft)
+    return {
+        **_public_row(
+            draft,
+            (
+                "id",
+                "project_id",
+                "conversation_id",
+                "status",
+                "revision",
+                "payload",
+                "validation_issues",
+                "source_files",
+                "created_at",
+                "updated_at",
+            ),
+        ),
+        "summary": {
+            **_draft_summary(args.payload, issues),
+        },
+    }
+
+
+def _update_initialization_draft(
+    db: Session,
+    context: ToolContext,
+    args: UpdateInitializationDraftArgs,
+) -> dict[str, Any]:
+    if not context.can_submit_initialization_draft:
+        raise HTTPException(
+            status_code=403,
+            detail="只有项目初始化智能体会话可以更新初始化草稿",
+        )
+    draft = db.get(ProjectInitializationDraft, args.draft_id)
+    if (
+        draft is None
+        or draft.project_id != context.project.id
+        or draft.conversation_id != context.conversation.id
+    ):
+        raise HTTPException(status_code=404, detail="初始化草稿不存在")
+    if draft.status == "applied":
+        raise HTTPException(status_code=409, detail="已入库草稿不能继续修改")
+    if draft.revision != args.expected_revision:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"初始化草稿已更新，当前修订号为 {draft.revision}；"
+                "请重新读取草稿后再提交增量修改"
+            ),
+        )
+
+    current = ProjectInitializationPayload.model_validate(draft.payload)
+    merged_data = current.model_dump(mode="python")
+    patch_data = args.patch.model_dump(mode="python", exclude_unset=True)
+    if "project" in patch_data:
+        merged_project = dict(merged_data.get("project") or {})
+        merged_project.update(patch_data["project"])
+        patch_data["project"] = merged_project
+    merged_data.update(patch_data)
+    merged = ProjectInitializationPayload.model_validate(merged_data)
+    issues = validate_initialization_payload(merged)
+
+    new_source_files = [
+        item.strip()
+        for item in args.source_files
+        if item.strip()
+    ]
+    draft.status = draft_status(issues)
+    draft.revision += 1
+    draft.payload = merged.model_dump(mode="json")
+    draft.validation_issues = issues
+    draft.source_files = list(
+        dict.fromkeys([*(draft.source_files or []), *new_source_files]),
+    )
+    updated_sections = sorted(args.patch.model_fields_set)
+    _audit(
+        db,
+        context,
+        "Dobby 增量更新项目初始化草稿",
+        (
+            f"更新草稿分区：{'、'.join(updated_sections)}；"
+            f"状态 {draft.status}"
+        ),
+        "project_initialization_draft",
+        draft.id,
+    )
+    db.commit()
+    db.refresh(draft)
+    return {
+        **_public_row(
+            draft,
+            (
+                "id",
+                "project_id",
+                "conversation_id",
+                "status",
+                "revision",
+                "validation_issues",
+                "source_files",
+                "created_at",
+                "updated_at",
+            ),
+        ),
+        "updated_sections": updated_sections,
+        "summary": _draft_summary(merged, issues),
+    }
 
 
 def _search_documents(
@@ -857,21 +1207,39 @@ def _create_risk(
     args: CreateRiskArgs,
 ) -> dict[str, Any]:
     _require_admin_write(context)
-    for user_id in (args.responsible_user_id, args.confirmer_user_id):
-        if user_id is not None:
-            _active_member(db, context.project.id, user_id)
+    if args.risk_window_start_date and args.risk_window_end_date:
+        if args.risk_window_end_date < args.risk_window_start_date:
+            raise HTTPException(
+                status_code=422,
+                detail="风险窗口结束日期不能早于开始日期",
+            )
+    if args.related_wbs_item_id is not None:
+        _project_entity(
+            db,
+            WbsItem,
+            args.related_wbs_item_id,
+            context.project.id,
+            "关联 WBS 不存在",
+        )
+    duplicate = db.scalar(
+        select(RiskSource).where(
+            RiskSource.project_id == context.project.id,
+            RiskSource.serial_no == args.serial_no,
+        ),
+    )
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail="当前项目已存在相同风险序号")
     risk = RiskSource(
         project_id=context.project.id,
-        name=args.name.strip(),
-        level=args.level,
-        risk_type=args.risk_type.strip(),
-        planned_start=args.planned_start,
-        planned_finish=args.planned_finish,
-        responsible_user_id=args.responsible_user_id,
-        confirmer_user_id=args.confirmer_user_id,
-        material_requirements=args.material_requirements,
-        control_requirements=args.control_requirements,
-        status="active",
+        serial_no=args.serial_no,
+        related_wbs_item_id=args.related_wbs_item_id,
+        related_process_name=args.related_process_name.strip(),
+        risk_part=args.risk_part.strip(),
+        risk_level=args.risk_level.strip(),
+        evaluation_condition=args.evaluation_condition.strip(),
+        risk_window_start_date=args.risk_window_start_date,
+        risk_window_end_date=args.risk_window_end_date,
+        summary=args.summary,
     )
     db.add(risk)
     db.flush()
@@ -879,7 +1247,7 @@ def _create_risk(
         db,
         context,
         "Dobby 新增风险源",
-        f"新增风险源「{risk.name}」",
+        f"新增风险源「{risk.serial_no} · {risk.risk_part}」",
         "risk",
         risk.id,
     )
@@ -888,9 +1256,10 @@ def _create_risk(
     return _public_row(
         risk,
         (
-            "id", "name", "level", "risk_type", "responsible_user_id",
-            "confirmer_user_id", "material_requirements",
-            "control_requirements", "status", "created_at",
+            "id", "serial_no", "related_wbs_item_id",
+            "related_process_name", "risk_part", "risk_level",
+            "evaluation_condition", "risk_window_start_date",
+            "risk_window_end_date", "summary", "created_at",
         ),
     )
 
@@ -908,17 +1277,17 @@ def _update_wbs(
         context.project.id,
         "WBS 工序不存在",
     )
-    previous = f"{item.progress}%/{item.status}"
-    item.progress = args.progress
-    if args.status is not None:
-        item.status = args.status
+    previous = f"{item.progress_percent}%/{item.status_text or '未设置'}"
+    item.progress_percent = args.progress_percent
+    if args.status_text is not None:
+        item.status_text = args.status_text
     _audit(
         db,
         context,
         "Dobby 更新 WBS 进度",
         (
-            f"工序「{item.code} {item.name}」由 {previous} 更新为 "
-            f"{item.progress}%/{item.status}"
+            f"工序「{item.wbs_code} {item.name}」由 {previous} 更新为 "
+            f"{item.progress_percent}%/{item.status_text or '未设置'}"
             + (f"，说明：{args.note}" if args.note else "")
         ),
         "wbs",
@@ -928,7 +1297,14 @@ def _update_wbs(
     db.refresh(item)
     return _public_row(
         item,
-        ("id", "code", "name", "progress", "status", "updated_at"),
+        (
+            "id",
+            "wbs_code",
+            "name",
+            "progress_percent",
+            "status_text",
+            "updated_at",
+        ),
     )
 
 
@@ -1049,6 +1425,20 @@ def execute_tool_operation(
         if arguments:
             raise HTTPException(status_code=422, detail="该操作不接受参数")
         return _overview(db, context), "已读取当前项目概览"
+    if operation == "get_project_initialization_state":
+        if arguments:
+            raise HTTPException(status_code=422, detail="该操作不接受参数")
+        return (
+            _get_initialization_state(db, context),
+            "已读取当前项目初始化数据",
+        )
+    if operation == "get_project_initialization_draft":
+        args = _parse_args(ReadInitializationDraftArgs, arguments)
+        assert isinstance(args, ReadInitializationDraftArgs)
+        return (
+            _get_initialization_draft(db, context, args),
+            "已读取当前项目初始化草稿",
+        )
     if operation == "list_project_items":
         args = _parse_args(ListItemsArgs, arguments)
         assert isinstance(args, ListItemsArgs)
@@ -1057,6 +1447,20 @@ def execute_tool_operation(
         args = _parse_args(SearchDocumentsArgs, arguments)
         assert isinstance(args, SearchDocumentsArgs)
         return _search_documents(db, context, args), "已检索当前项目资料"
+    if operation == "submit_project_initialization_draft":
+        args = _parse_args(SubmitInitializationDraftArgs, arguments)
+        assert isinstance(args, SubmitInitializationDraftArgs)
+        return (
+            _submit_initialization_draft(db, context, args),
+            "项目初始化草稿已提交，等待用户核对",
+        )
+    if operation == "update_project_initialization_draft":
+        args = _parse_args(UpdateInitializationDraftArgs, arguments)
+        assert isinstance(args, UpdateInitializationDraftArgs)
+        return (
+            _update_initialization_draft(db, context, args),
+            "项目初始化草稿已增量更新，等待用户核对",
+        )
     if operation == "create_task":
         args = _parse_args(CreateTaskArgs, arguments)
         assert isinstance(args, CreateTaskArgs)
@@ -1101,7 +1505,48 @@ def get_agent_tool_context(
                 "read": True,
                 "write": context.can_write,
                 "admin_write": context.can_admin_write,
+                "initialization_draft": (
+                    context.can_submit_initialization_draft
+                ),
             },
+        },
+    )
+
+
+@router.get(
+    "/initialization-files/{file_id}/content",
+    dependencies=[Depends(_require_service_token)],
+    response_class=FileResponse,
+)
+def get_initialization_file_content(
+    file_id: int,
+    agentscope_session_id: str,
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """Stream one authorized raw file to the AgentScope-side parser."""
+    context = resolve_tool_context(db, agentscope_session_id)
+    if not context.can_submit_initialization_draft:
+        raise HTTPException(
+            status_code=403,
+            detail="只有项目初始化智能体可以读取初始化附件",
+        )
+    row = db.get(ProjectInitializationFile, file_id)
+    if (
+        row is None
+        or row.project_id != context.project.id
+        or row.conversation_id != context.conversation.id
+    ):
+        raise HTTPException(status_code=404, detail="初始化附件不存在")
+    path = Path(row.storage_path)
+    if not path.is_file():
+        raise HTTPException(status_code=410, detail="初始化附件文件已丢失")
+    return FileResponse(
+        path,
+        media_type=row.content_type or "application/octet-stream",
+        filename=row.file_name,
+        headers={
+            "X-Dobby-File-Extension": path.suffix.lower(),
+            "Cache-Control": "no-store",
         },
     )
 

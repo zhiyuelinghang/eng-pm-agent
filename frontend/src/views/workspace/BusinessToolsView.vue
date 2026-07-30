@@ -134,7 +134,10 @@ import { NIcon, useMessage } from 'naive-ui'
 import { ChartBar, CircleCheck, Database, FileText, Paperclip, PlayerStop, Robot, Route, Send, ShieldCheck } from '@vicons/tabler'
 import type { Component } from 'vue'
 import api, { type ApiEnvelope } from '@/api/client'
-import { streamAgentConversationMessage } from '@/api/agentStream'
+import {
+  streamAgentConversationConfirmation,
+  streamAgentConversationMessage,
+} from '@/api/agentStream'
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
 import { useAppStore } from '@/stores/app'
 import {
@@ -418,33 +421,67 @@ async function confirmToolCall(
   toolCall: AgentToolCallBlock,
   confirmed: boolean,
 ) {
-  const conversationId = conversationIds.value[selectedTool.value.id]
+  const agentId = selectedTool.value.id
+  const conversationId = conversationIds.value[agentId]
   if (!conversationId) return
+  if (submitting.value) return
+  submitting.value = true
+  streamingTraces.value = {
+    ...streamingTraces.value,
+    [agentId]: createEmptyRuntimeTrace(),
+  }
   message.info(
     confirmed
       ? `正在允许「${toolCall.name}」执行。`
       : `正在拒绝「${toolCall.name}」。`,
   )
   try {
-    const response = await api.post<ApiEnvelope<{
-      message: ApiAgentMessage | null
-      runtime_status: string
-    }>>(
-      `/agent-conversations/${conversationId}/confirm`,
+    await streamAgentConversationConfirmation(
+      conversationId,
       {
         reply_id: replyId,
         tool_call: toolCall,
         confirmed,
       },
-      { timeout: 170_000 },
+      {
+        onAccepted: payload => {
+          message.success(
+            payload.message
+            || (
+              confirmed
+                ? `已允许「${toolCall.name}」，智能体正在继续执行。`
+                : `已拒绝「${toolCall.name}」，智能体正在处理确认结果。`
+            ),
+          )
+        },
+        onEvent: async runtimeEvent => {
+          streamingTraces.value = {
+            ...streamingTraces.value,
+            [agentId]: applyAgentRuntimeEvent(
+              streamingTraces.value[agentId],
+              runtimeEvent,
+            ),
+          }
+          await nextTick()
+          threadViewport.value?.scrollTo({
+            top: threadViewport.value.scrollHeight,
+          })
+        },
+      },
     )
-    if (response.data.data.message) {
-      await loadToolConversation(selectedTool.value.id)
-    } else {
-      message.success(response.data.message)
-    }
+    await loadToolConversation(agentId)
   } catch (error: any) {
-    message.error(error?.response?.data?.detail || '提交人工确认失败。')
+    message.error(
+      error?.response?.data?.detail
+      || error?.message
+      || '提交人工确认失败。',
+    )
+  } finally {
+    streamingTraces.value = {
+      ...streamingTraces.value,
+      [agentId]: null,
+    }
+    submitting.value = false
   }
 }
 

@@ -22,7 +22,7 @@
       </ul>
     </section>
 
-    <section v-if="runtimeTrace?.subagentHitl.length" class="agent-subagent-hitl">
+    <section v-if="runtimeTrace?.subagentHitl.length && isTraceActive" class="agent-subagent-hitl">
       <header>
         <n-icon :size="16"><Users /></n-icon>
         <div>
@@ -121,7 +121,7 @@
               </section>
               <p v-else class="agent-tool-waiting">{{ block.state === 'asking' ? '该操作需要人工确认。' : '等待工具返回结果…' }}</p>
             </div>
-            <div v-if="block.state === 'asking'" class="agent-confirm">
+            <div v-if="block.state === 'asking' && isMessageRunning(runtimeMessage)" class="agent-confirm">
               <div>
                 <strong>需要人工确认</strong>
                 <span>请核对工具和参数后决定是否继续。</span>
@@ -165,20 +165,26 @@
         </div>
 
         <footer v-if="runtimeMessage.role === 'assistant'">
-          <span :class="{ running: isMessageRunning(runtimeMessage) }">
-            <n-icon :size="13">
-              <Loader v-if="isMessageRunning(runtimeMessage)" class="spin" />
-              <CircleCheck v-else />
-            </n-icon>
-            {{ isMessageRunning(runtimeMessage) ? '执行中' : '已完成' }}
-          </span>
-          <span>{{ elapsed(runtimeMessage) }}</span>
-          <span v-if="runtimeMessage.model_names?.length">{{ runtimeMessage.model_names.join('、') }}</span>
-          <span v-else-if="runtimeTrace.modelNames.length">{{ runtimeTrace.modelNames.join('、') }}</span>
-          <span v-if="runtimeMessage.usage">
-            ↑ {{ formatNumber(runtimeMessage.usage.input_tokens) }}
-            · ↓ {{ formatNumber(runtimeMessage.usage.output_tokens) }}
-          </span>
+          <div class="agent-runtime-status">
+            <span class="agent-runtime-state" :class="{ running: isMessageRunning(runtimeMessage), interrupted: isMessageInterrupted(runtimeMessage), error: Boolean(runtimeMessage.error) }">
+              <n-icon :size="13">
+                <Loader v-if="isMessageRunning(runtimeMessage)" class="spin" />
+                <AlertTriangle v-else-if="runtimeMessage.error" />
+                <Circle v-else-if="isMessageInterrupted(runtimeMessage)" />
+                <CircleCheck v-else />
+              </n-icon>
+              {{ messageStatusLabel(runtimeMessage) }}
+            </span>
+            <span>{{ elapsed(runtimeMessage) }}</span>
+          </div>
+          <div v-if="runtimeMessage.model_names?.length || runtimeTrace.modelNames.length || runtimeMessage.usage" class="agent-runtime-metrics">
+            <span v-if="runtimeMessage.model_names?.length" class="agent-runtime-model" :title="runtimeMessage.model_names.join('、')">{{ runtimeMessage.model_names.join('、') }}</span>
+            <span v-else-if="runtimeTrace.modelNames.length" class="agent-runtime-model" :title="runtimeTrace.modelNames.join('、')">{{ runtimeTrace.modelNames.join('、') }}</span>
+            <span v-if="runtimeMessage.usage" class="agent-runtime-usage">
+              ↑ {{ formatNumber(runtimeMessage.usage.input_tokens) }}
+              · ↓ {{ formatNumber(runtimeMessage.usage.output_tokens) }}
+            </span>
+          </div>
         </footer>
       </section>
     </template>
@@ -261,6 +267,16 @@ const taskProgress = computed(() => {
   const total = props.runtimeTrace?.tasksContext?.tasks.length || 0
   return total ? Math.round(completedTasks.value * 100 / total) : 0
 })
+const activeTraceStatuses = new Set([
+  'creating',
+  'running',
+  'interrupting',
+  'awaiting_permission',
+  'awaiting_external_result',
+])
+const isTraceActive = computed(() =>
+  activeTraceStatuses.has(props.runtimeTrace?.status || ''),
+)
 
 function renderMarkdown(value: string) {
   return markdown.render(value || '')
@@ -274,8 +290,16 @@ function toolResult(message: AgentRuntimeMessage, id: string) {
 
 function toolState(call: AgentToolCallBlock, message: AgentRuntimeMessage) {
   const result = toolResult(message, call.id)
-  if (call.state === 'asking') return 'asking'
-  if (!result || result.state === 'running') return 'running'
+  if (call.state === 'asking') {
+    if (isMessageRunning(message)) return 'asking'
+    if (isMessageInterrupted(message)) return 'interrupted'
+    return result?.state || 'finished'
+  }
+  if (!result || result.state === 'running') {
+    if (isMessageRunning(message)) return 'running'
+    if (isMessageInterrupted(message)) return 'interrupted'
+    return 'finished'
+  }
   return result.state
 }
 
@@ -288,6 +312,7 @@ function toolStateLabel(call: AgentToolCallBlock, message: AgentRuntimeMessage) 
     error: '失败',
     denied: '已拒绝',
     interrupted: '已中断',
+    finished: '已结束',
   } as Record<string, string>)[state] || state
 }
 
@@ -353,7 +378,19 @@ function dataUrl(block: AgentDataBlock) {
 }
 
 function isMessageRunning(message: AgentRuntimeMessage) {
-  return !message.finished_at
+  return !message.finished_at && isTraceActive.value
+}
+
+function isMessageInterrupted(message: AgentRuntimeMessage) {
+  return message.finished_reason === 'interrupted'
+}
+
+function messageStatusLabel(message: AgentRuntimeMessage) {
+  if (isMessageRunning(message)) return '执行中'
+  if (message.error || message.finished_reason === 'error') return '执行失败'
+  if (isMessageInterrupted(message)) return '已中断'
+  if (message.finished_reason === 'exceed_max_iters') return '已达执行上限'
+  return '已完成'
 }
 
 function elapsed(message: AgentRuntimeMessage) {
@@ -420,7 +457,16 @@ function formatNumber(value: number) {
 .agent-hint summary { justify-content:flex-start; }.agent-hint summary span { flex:1; }.agent-hint>.agent-markdown,.agent-hint-blocks { border-top:1px solid #e1ebe8; padding:10px 12px; background:#fff; }.agent-hint-blocks { display:grid; gap:8px; }.agent-hint-blocks img { max-width:100%; max-height:300px; border-radius:6px; }
 .agent-media { margin:0; }.agent-media img { max-width:100%; max-height:360px; border-radius:8px; object-fit:contain; }.agent-media a { color:#0d7469; font-size:12px; }
 .agent-runtime-error { display:flex; align-items:flex-start; gap:8px; border:1px solid #efcfc5; border-radius:7px; padding:9px 10px; color:#a23f25; background:#fff5f1; }.agent-runtime-error>div { display:grid; gap:2px; }.agent-runtime-error strong { font-size:12px; }.agent-runtime-error span { font-size:11px; line-height:1.5; }
-.agent-runtime-message footer { display:flex; align-items:center; flex-wrap:wrap; gap:5px 10px; color:#82928f; font-size:10px; }.agent-runtime-message footer span { display:inline-flex; align-items:center; gap:4px; }.agent-runtime-message footer span:first-child { border-radius:999px; padding:3px 7px; color:#4e6e68; background:#edf3f1; }.agent-runtime-message footer span:first-child.running { color:#0b7768; background:#e6f5f1; }
+.agent-runtime-message footer { display:flex; min-width:0; align-items:center; gap:12px; color:#82928f; font-size:12px; }
+.agent-runtime-message footer span { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+.agent-runtime-status { display:flex; min-width:0; align-items:center; gap:8px; }
+.agent-runtime-state { border-radius:999px; padding:3px 7px; color:#4e6e68; background:#edf3f1; }
+.agent-runtime-state.running { color:#0b7768; background:#e6f5f1; }
+.agent-runtime-state.interrupted { color:#8a5b19; background:#fff3dc; }
+.agent-runtime-state.error { color:#a4472d; background:#fff0ea; }
+.agent-runtime-metrics { display:flex; min-width:0; flex:0 1 auto; align-items:center; gap:10px; margin-left:auto; font-variant-numeric:tabular-nums; }
+.agent-runtime-model { display:block !important; max-width:160px; overflow:hidden; text-overflow:ellipsis; }
+.agent-runtime-usage { flex:0 0 auto; }
 .agent-starting { display:flex; align-items:center; gap:8px; color:#6f8580; font-size:12px; }.agent-starting>span { display:flex; gap:3px; }.agent-starting i { width:5px; height:5px; border-radius:50%; background:#2f8e80; animation:pulse 1.1s ease-in-out infinite; }.agent-starting i:nth-child(2){animation-delay:.15s}.agent-starting i:nth-child(3){animation-delay:.3s}
 .spin { animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }

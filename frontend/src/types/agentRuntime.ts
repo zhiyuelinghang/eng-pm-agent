@@ -264,7 +264,11 @@ export function applyAgentRuntimeEvent(
       message.finished_at = String(event.created_at || new Date().toISOString())
       message.finished_reason = String(event.finished_reason || 'completed')
       message.error = event.error || null
-      trace.status = message.error ? 'error' : 'completed'
+      trace.status = message.error
+        ? 'error'
+        : message.finished_reason === 'interrupted'
+          ? 'interrupted'
+          : 'completed'
       break
     case 'MODEL_CALL_START': {
       const modelName = String(event.model_name || '')

@@ -1,4 +1,11 @@
-import { Bot, CheckCircle2, Crown, Loader2, ShieldCheck } from 'lucide-react';
+import {
+	Bot,
+	CheckCircle2,
+	Crown,
+	FileSearch,
+	Loader2,
+	ShieldCheck,
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
@@ -39,9 +46,12 @@ export function PlatformSettingsPage() {
 	const { t } = useTranslation();
 	const { agents, loading: agentsLoading, refetch } = useAgents();
 	const [settings, setSettings] = useState<PlatformSettings | null>(null);
-	const [selectedId, setSelectedId] = useState<string>('');
+	const [mainSelectedId, setMainSelectedId] = useState<string>('');
+	const [initializerSelectedId, setInitializerSelectedId] =
+		useState<string>('');
 	const [loading, setLoading] = useState(true);
-	const [saving, setSaving] = useState(false);
+	const [savingMain, setSavingMain] = useState(false);
+	const [savingInitializer, setSavingInitializer] = useState(false);
 
 	useEffect(() => {
 		let active = true;
@@ -50,7 +60,8 @@ export function PlatformSettingsPage() {
 			.then(async (value) => {
 				if (!active) return;
 				setSettings(value);
-				setSelectedId(value.global_main_agent_id ?? '');
+				setMainSelectedId(value.global_main_agent_id ?? '');
+				setInitializerSelectedId(value.project_initializer_agent_id ?? '');
 				await refetch();
 			})
 			.catch(() => undefined)
@@ -74,25 +85,59 @@ export function PlatformSettingsPage() {
 				),
 		[agents],
 	);
-	const selectedAgent = agents.find((agent) => agent.id === selectedId) ?? null;
+	const mainCandidates = candidates.filter(
+		(agent) => agent.id !== initializerSelectedId,
+	);
+	const initializerCandidates = candidates.filter(
+		(agent) => agent.id !== mainSelectedId,
+	);
+	const selectedAgent =
+		agents.find((agent) => agent.id === mainSelectedId) ?? null;
+	const selectedInitializer =
+		agents.find((agent) => agent.id === initializerSelectedId) ?? null;
 	const currentAgent =
 		agents.find((agent) => agent.id === settings?.global_main_agent_id) ?? null;
+	const currentInitializer =
+		agents.find(
+			(agent) => agent.id === settings?.project_initializer_agent_id,
+		) ?? null;
 	const selectedIsValid =
 		selectedAgent !== null && isMainCandidate(selectedAgent);
-	const unchanged = selectedId === (settings?.global_main_agent_id ?? '');
+	const initializerIsValid =
+		selectedInitializer !== null && isMainCandidate(selectedInitializer);
+	const mainUnchanged =
+		mainSelectedId === (settings?.global_main_agent_id ?? '');
+	const initializerUnchanged =
+		initializerSelectedId ===
+		(settings?.project_initializer_agent_id ?? '');
 
-	const save = async () => {
-		if (!selectedId || !selectedIsValid) return;
-		setSaving(true);
+	const saveMain = async () => {
+		if (!mainSelectedId || !selectedIsValid) return;
+		setSavingMain(true);
 		try {
 			const updated = await agentApi.updatePlatformSettings({
-				global_main_agent_id: selectedId,
+				global_main_agent_id: mainSelectedId,
 			});
 			setSettings(updated);
 			await refetch();
 			toast.success(t('platform-settings.saved'));
 		} finally {
-			setSaving(false);
+			setSavingMain(false);
+		}
+	};
+
+	const saveInitializer = async () => {
+		if (!initializerSelectedId || !initializerIsValid) return;
+		setSavingInitializer(true);
+		try {
+			const updated = await agentApi.updatePlatformSettings({
+				project_initializer_agent_id: initializerSelectedId,
+			});
+			setSettings(updated);
+			await refetch();
+			toast.success(t('platform-settings.initializer.saved'));
+		} finally {
+			setSavingInitializer(false);
 		}
 	};
 
@@ -139,14 +184,17 @@ export function PlatformSettingsPage() {
 									<label className="text-sm font-medium" htmlFor="global-main-agent">
 										{t('platform-settings.main.selector')}
 									</label>
-									<Select value={selectedId} onValueChange={setSelectedId}>
+									<Select
+										value={mainSelectedId}
+										onValueChange={setMainSelectedId}
+									>
 										<SelectTrigger id="global-main-agent" className="w-full">
 											<SelectValue
 												placeholder={t('platform-settings.main.placeholder')}
 											/>
 										</SelectTrigger>
 										<SelectContent>
-											{candidates.map((agent) => (
+											{mainCandidates.map((agent) => (
 												<SelectItem key={agent.id} value={agent.id}>
 													{agent.data.name}
 												</SelectItem>
@@ -208,7 +256,7 @@ export function PlatformSettingsPage() {
 											{t('platform-settings.main.unconfiguredTitle')}
 										</AlertTitle>
 										<AlertDescription>
-											{candidates.length === 0
+											{mainCandidates.length === 0
 												? t('platform-settings.main.noCandidates')
 												: t('platform-settings.main.unconfigured')}
 										</AlertDescription>
@@ -233,13 +281,158 @@ export function PlatformSettingsPage() {
 							{t('platform-settings.main.effect')}
 						</p>
 						<Button
-							onClick={save}
-							disabled={busy || saving || unchanged || !selectedIsValid}
+							onClick={saveMain}
+							disabled={
+								busy ||
+								savingMain ||
+								mainUnchanged ||
+								!selectedIsValid
+							}
 						>
-							{saving && <Loader2 className="animate-spin" />}
-							{saving
+							{savingMain && <Loader2 className="animate-spin" />}
+							{savingMain
 								? t('common.saving')
 								: t('platform-settings.main.save')}
+						</Button>
+					</CardFooter>
+				</Card>
+
+				<Card>
+					<CardHeader>
+						<CardTitle className="flex items-center gap-2">
+							<FileSearch className="size-5" />
+							{t('platform-settings.initializer.title')}
+						</CardTitle>
+						<CardDescription>
+							{t('platform-settings.initializer.description')}
+						</CardDescription>
+					</CardHeader>
+					<CardContent className="space-y-5">
+						{busy ? (
+							<div className="space-y-3">
+								<Skeleton className="h-10 w-full" />
+								<Skeleton className="h-24 w-full" />
+							</div>
+						) : (
+							<>
+								<div className="space-y-2">
+									<label
+										className="text-sm font-medium"
+										htmlFor="project-initializer-agent"
+									>
+										{t('platform-settings.initializer.selector')}
+									</label>
+									<Select
+										value={initializerSelectedId}
+										onValueChange={setInitializerSelectedId}
+									>
+										<SelectTrigger
+											id="project-initializer-agent"
+											className="w-full"
+										>
+											<SelectValue
+												placeholder={t(
+													'platform-settings.initializer.placeholder',
+												)}
+											/>
+										</SelectTrigger>
+										<SelectContent>
+											{initializerCandidates.map((agent) => (
+												<SelectItem key={agent.id} value={agent.id}>
+													{agent.data.name}
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
+									<p className="text-xs text-muted-foreground">
+										{t('platform-settings.initializer.requirement')}
+									</p>
+								</div>
+
+								{selectedInitializer ? (
+									<div className="rounded-xl border bg-card p-4">
+										<div className="flex flex-wrap items-start justify-between gap-3">
+											<div className="space-y-1">
+												<div className="flex items-center gap-2">
+													<span className="font-medium">
+														{selectedInitializer.data.name}
+													</span>
+													<Badge variant="secondary">
+														{t('platform-settings.initializer.internal')}
+													</Badge>
+												</div>
+												<p className="text-sm text-muted-foreground">
+													{selectedInitializer.data.platform_config.description ||
+														selectedInitializer.data.invite_config
+															.invite_description ||
+														t('platform-settings.main.noDescription')}
+												</p>
+											</div>
+											{initializerIsValid && (
+												<Badge className="gap-1">
+													<CheckCircle2 className="size-3" />
+													{t('platform-settings.main.ready')}
+												</Badge>
+											)}
+										</div>
+										<div className="mt-4 rounded-lg bg-muted/60 px-3 py-2 text-sm">
+											<div className="text-xs text-muted-foreground">
+												{t('platform-settings.main.model')}
+											</div>
+											<div className="mt-1 font-medium">
+												{selectedInitializer.data.model_policy.chat_model_config
+													?.model ??
+													t('platform-settings.main.notConfigured')}
+											</div>
+										</div>
+									</div>
+								) : (
+									<Alert>
+										<FileSearch />
+										<AlertTitle>
+											{t('platform-settings.initializer.unconfiguredTitle')}
+										</AlertTitle>
+										<AlertDescription>
+											{initializerCandidates.length === 0
+												? t('platform-settings.initializer.noCandidates')
+												: t('platform-settings.initializer.unconfigured')}
+										</AlertDescription>
+									</Alert>
+								)}
+
+								{currentInitializer &&
+									!isMainCandidate(currentInitializer) && (
+										<Alert variant="destructive">
+											<AlertTitle>
+												{t('platform-settings.initializer.invalidCurrentTitle')}
+											</AlertTitle>
+											<AlertDescription>
+												{t('platform-settings.initializer.invalidCurrent')}
+											</AlertDescription>
+										</Alert>
+									)}
+							</>
+						)}
+					</CardContent>
+					<CardFooter className="flex-col items-stretch justify-between gap-3 border-t bg-muted/20 sm:flex-row sm:items-center">
+						<p className="max-w-xl text-xs text-muted-foreground">
+							{t('platform-settings.initializer.effect')}
+						</p>
+						<Button
+							onClick={saveInitializer}
+							disabled={
+								busy ||
+								savingInitializer ||
+								initializerUnchanged ||
+								!initializerIsValid
+							}
+						>
+							{savingInitializer && (
+								<Loader2 className="animate-spin" />
+							)}
+							{savingInitializer
+								? t('common.saving')
+								: t('platform-settings.initializer.save')}
 						</Button>
 					</CardFooter>
 				</Card>

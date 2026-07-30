@@ -16,6 +16,14 @@ class PlatformSettingsData(BaseModel):
             "This is a platform-wide pointer, not a per-agent declaration."
         ),
     )
+    project_initializer_agent_id: str | None = Field(
+        default=None,
+        description=(
+            "The hidden built-in agent used by project-initialization "
+            "conversations. It may submit initialization drafts but cannot "
+            "write formal project data directly."
+        ),
+    )
 
 
 class PlatformSettingsRecord(_RecordBase):

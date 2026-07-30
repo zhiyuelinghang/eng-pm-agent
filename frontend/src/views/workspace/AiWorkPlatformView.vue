@@ -987,7 +987,10 @@ import {
 } from '@vicons/tabler'
 import { useAppStore, type AttachmentRecord } from '@/stores/app'
 import api, { type ApiEnvelope } from '@/api/client'
-import { streamAgentConversationMessage } from '@/api/agentStream'
+import {
+  streamAgentConversationConfirmation,
+  streamAgentConversationMessage,
+} from '@/api/agentStream'
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
 import {
   applyAgentRuntimeEvent,
@@ -1584,27 +1587,49 @@ async function confirmHomeToolCall(
   toolCall: AgentToolCallBlock,
   confirmed: boolean,
 ) {
-  if (!homeAgentConversation.value) return
+  const conversation = homeAgentConversation.value
+  if (!conversation || quickUploading.value) return
+  quickUploading.value = true
+  homeQuickStreamingTrace.value = createEmptyRuntimeTrace()
   try {
-    const response = await api.post<ApiEnvelope<{
-      message: ApiAgentMessage | null
-      runtime_status: string
-    }>>(
-      `/agent-conversations/${homeAgentConversation.value.id}/confirm`,
+    await streamAgentConversationConfirmation(
+      conversation.id,
       {
         reply_id: replyId,
         tool_call: toolCall,
         confirmed,
       },
-      { timeout: 170_000 },
+      {
+        onAccepted: payload => {
+          message.success(
+            payload.message
+            || (
+              confirmed
+                ? `已允许「${toolCall.name}」，智能体正在继续执行。`
+                : `已拒绝「${toolCall.name}」，智能体正在处理确认结果。`
+            ),
+          )
+        },
+        onEvent: async runtimeEvent => {
+          homeQuickStreamingTrace.value = applyAgentRuntimeEvent(
+            homeQuickStreamingTrace.value,
+            runtimeEvent,
+          )
+          await nextTick()
+          scrollHomeQuick()
+        },
+      },
     )
-    if (response.data.data.message) {
-      await loadHomeAgentConversation()
-    } else {
-      message.success(response.data.message)
-    }
+    await loadHomeAgentConversation()
   } catch (error: any) {
-    message.error(error?.response?.data?.detail || '提交人工确认失败。')
+    message.error(
+      error?.response?.data?.detail
+      || error?.message
+      || '提交人工确认失败。',
+    )
+  } finally {
+    homeQuickStreamingTrace.value = null
+    quickUploading.value = false
   }
 }
 
@@ -1876,10 +1901,12 @@ async function runCollaborationPrompt(content: string): Promise<ChatMessage | nu
     await streamAgentConversationMessage(Number(sessionId), content, {
       onAccepted: async payload => {
         accepted = true
+        const acceptedUserMessage = payload.user_message
+        if (!acceptedUserMessage) return
         sessionMessages.value = {
           ...sessionMessages.value,
           [sessionId]: (sessionMessages.value[sessionId] ?? []).map(item =>
-            item.id === optimisticId ? mapAgentMessage(payload.user_message) : item,
+            item.id === optimisticId ? mapAgentMessage(acceptedUserMessage) : item,
           ),
         }
       },
@@ -2012,27 +2039,57 @@ async function confirmCollaborationToolCall(
   confirmed: boolean,
 ) {
   const sessionId = activeSessionId.value
-  if (!sessionId) return
+  if (!sessionId || collaborationStreamingTraces.value[sessionId]) return
+  collaborationStreamingTraces.value = {
+    ...collaborationStreamingTraces.value,
+    [sessionId]: createEmptyRuntimeTrace(),
+  }
   try {
-    const response = await api.post<ApiEnvelope<{
-      message: ApiAgentMessage | null
-      runtime_status: string
-    }>>(
-      `/agent-conversations/${sessionId}/confirm`,
+    await streamAgentConversationConfirmation(
+      Number(sessionId),
       {
         reply_id: replyId,
         tool_call: toolCall,
         confirmed,
       },
-      { timeout: 170_000 },
+      {
+        onAccepted: payload => {
+          message.success(
+            payload.message
+            || (
+              confirmed
+                ? `已允许「${toolCall.name}」，智能体正在继续执行。`
+                : `已拒绝「${toolCall.name}」，智能体正在处理确认结果。`
+            ),
+          )
+        },
+        onEvent: async runtimeEvent => {
+          collaborationStreamingTraces.value = {
+            ...collaborationStreamingTraces.value,
+            [sessionId]: applyAgentRuntimeEvent(
+              collaborationStreamingTraces.value[sessionId] ?? null,
+              runtimeEvent,
+            ),
+          }
+          await nextTick()
+          if (activeSessionId.value === sessionId) {
+            scrollCollaborationMessages()
+          }
+        },
+      },
     )
-    if (response.data.data.message) {
-      await loadSessionMessages(sessionId)
-    } else {
-      message.success(response.data.message)
-    }
+    await loadSessionMessages(sessionId)
   } catch (error: any) {
-    message.error(error?.response?.data?.detail || '提交人工确认失败。')
+    message.error(
+      error?.response?.data?.detail
+      || error?.message
+      || '提交人工确认失败。',
+    )
+  } finally {
+    collaborationStreamingTraces.value = {
+      ...collaborationStreamingTraces.value,
+      [sessionId]: null,
+    }
   }
 }
 

@@ -36,6 +36,14 @@ class AgentScopeReply:
     projected: bool = False
 
 
+@dataclass(slots=True)
+class AgentScopeConfirmationSubmission:
+    """AgentScope acknowledgement for one submitted HITL decision."""
+
+    existing_ids: set[str]
+    routed_session_id: str
+
+
 class AgentScopeClient:
     """Minimal backend-only client for catalogue and chat operations."""
 
@@ -46,7 +54,11 @@ class AgentScopeClient:
             raise ValueError(
                 "AGENTSCOPE_SERVICE_TOKEN 未配置，平台后端不能连接 AgentScope。",
             )
-        self._timeout = settings.agentscope_request_timeout_seconds
+        # This timeout protects short control-plane HTTP requests only.
+        # Agent turns themselves deliberately have no wall-clock deadline:
+        # complex tool loops and multi-agent work may legitimately run for
+        # much longer than one request timeout.
+        self._request_timeout = settings.agentscope_request_timeout_seconds
         self._poll_interval = settings.agentscope_poll_interval_seconds
 
     @property
@@ -68,7 +80,7 @@ class AgentScopeClient:
                 headers=self.headers,
                 params=params,
                 json=json,
-                timeout=min(self._timeout, 30.0),
+                timeout=min(self._request_timeout, 30.0),
             )
         except httpx.HTTPError as exc:
             raise AgentScopeGatewayError(
@@ -103,10 +115,10 @@ class AgentScopeClient:
         relays only the authorized conversation to its caller.
         """
         timeout = httpx.Timeout(
-            connect=min(self._timeout, 30.0),
+            connect=min(self._request_timeout, 30.0),
             read=None,
-            write=min(self._timeout, 30.0),
-            pool=min(self._timeout, 30.0),
+            write=min(self._request_timeout, 30.0),
+            pool=min(self._request_timeout, 30.0),
         )
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -287,6 +299,26 @@ class AgentScopeClient:
         if not message:
             return ""
         blocks = message.get("content") or []
+        finished_reason = str(message.get("finished_reason") or "")
+        if finished_reason in {"interrupted", "error"}:
+            # Interrupted/error replies do not have a guaranteed final-answer
+            # segment. Preserve every user-visible text block produced before
+            # execution stopped.
+            parts = [
+                str(block["text"])
+                for block in blocks
+                if block.get("type") == "text" and block.get("text")
+            ]
+            error = message.get("error")
+            if error:
+                error_text = (
+                    str(error.get("message") or error)
+                    if isinstance(error, dict)
+                    else str(error)
+                )
+                if error_text and error_text not in parts:
+                    parts.append(error_text)
+            return "\n".join(parts).strip()
         last_non_text_index = max(
             (
                 index
@@ -313,6 +345,17 @@ class AgentScopeClient:
         if error and not parts:
             parts.append(str(error.get("message") or error))
         return "\n".join(parts).strip()
+
+    @staticmethod
+    def _terminal_reply_status(message: dict[str, Any]) -> str:
+        finished_reason = str(message.get("finished_reason") or "")
+        if message.get("error") or finished_reason == "error":
+            return "error"
+        if finished_reason == "interrupted":
+            return "interrupted"
+        if finished_reason == "exceed_max_iters":
+            return "exceed_max_iters"
+        return "completed"
 
     def chat(
         self,
@@ -346,14 +389,13 @@ class AgentScopeClient:
             },
         )
 
-        deadline = time.monotonic() + self._timeout
         observed_running = False
         last_assistant: dict[str, Any] | None = None
         new_assistants: list[dict[str, Any]] = []
         settled_message_id: str | None = None
         settled_since: float | None = None
         settle_seconds = max(0.6, self._poll_interval * 2)
-        while time.monotonic() < deadline:
+        while True:
             messages_payload = self.list_messages(session_id, agent_id)
             new_assistants = [
                 message
@@ -411,7 +453,9 @@ class AgentScopeClient:
                         >= settle_seconds
                     ):
                         return AgentScopeReply(
-                            status="completed",
+                            status=self._terminal_reply_status(
+                                last_assistant,
+                            ),
                             content=self._message_text(last_assistant)
                             or "智能体已完成处理，但未返回文本内容。",
                             message_id=last_assistant.get("id"),
@@ -422,11 +466,6 @@ class AgentScopeClient:
                 settled_message_id = None
                 settled_since = None
             time.sleep(max(0.1, self._poll_interval))
-
-        raise AgentScopeGatewayError(
-            f"等待智能体响应超过 {self._timeout:g} 秒，请稍后重试。",
-            status_code=504,
-        )
 
     def interrupt(self, *, agent_id: str, session_id: str) -> dict[str, Any]:
         """Request a safe interrupt of a running or parked AgentScope turn."""
@@ -447,7 +486,54 @@ class AgentScopeClient:
         rules: list[dict[str, Any]] | None = None,
     ) -> AgentScopeReply:
         """Resume a parked reply after a platform user's decision."""
+        submission = self.submit_tool_confirmation(
+            agent_id=agent_id,
+            session_id=session_id,
+            reply_id=reply_id,
+            tool_call=tool_call,
+            confirmed=confirmed,
+            rules=rules,
+        )
+        return self.wait_for_tool_confirmation(
+            agent_id=agent_id,
+            session_id=session_id,
+            reply_id=reply_id,
+            tool_call=tool_call,
+            submission=submission,
+        )
+
+    def submit_tool_confirmation(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        reply_id: str,
+        tool_call: dict[str, Any],
+        confirmed: bool,
+        rules: list[dict[str, Any]] | None = None,
+    ) -> AgentScopeConfirmationSubmission:
+        """Validate and enqueue one HITL decision without waiting for output."""
         before = self.list_messages(session_id, agent_id)
+        matching_reply = next(
+            (
+                message
+                for message in before.get("messages", [])
+                if str(message.get("id") or "") == reply_id
+            ),
+            None,
+        )
+        if matching_reply is not None:
+            pending_ids = {
+                str(block.get("id") or "")
+                for block in matching_reply.get("content", [])
+                if block.get("type") == "tool_call"
+                and block.get("state") == "asking"
+            }
+            if str(tool_call.get("id") or "") not in pending_ids:
+                raise AgentScopeGatewayError(
+                    "该工具确认已经处理或所属回复已经结束，请刷新后查看最新状态。",
+                    status_code=409,
+                )
         existing_ids = {
             str(message.get("id"))
             for message in before.get("messages", [])
@@ -474,7 +560,24 @@ class AgentScopeClient:
                 },
             },
         )
-        if str(trigger.get("session_id") or session_id) != session_id:
+        return AgentScopeConfirmationSubmission(
+            existing_ids=existing_ids,
+            routed_session_id=str(
+                trigger.get("session_id") or session_id,
+            ),
+        )
+
+    def wait_for_tool_confirmation(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        reply_id: str,
+        tool_call: dict[str, Any],
+        submission: AgentScopeConfirmationSubmission,
+    ) -> AgentScopeReply:
+        """Wait until a submitted HITL decision parks again or completes."""
+        if submission.routed_session_id != session_id:
             # The confirmation belongs to a team member and AgentScope has
             # routed it through the leader session to that worker. The
             # original platform SSE turn remains open and will receive the
@@ -487,12 +590,12 @@ class AgentScopeClient:
                 projected=True,
             )
 
-        deadline = time.monotonic() + self._timeout
+        existing_ids = submission.existing_ids
         last_assistant: dict[str, Any] | None = None
         relevant: list[dict[str, Any]] = []
         settled_since: float | None = None
         settle_seconds = max(0.6, self._poll_interval * 2)
-        while time.monotonic() < deadline:
+        while True:
             messages_payload = self.list_messages(session_id, agent_id)
             relevant = [
                 message
@@ -551,7 +654,7 @@ class AgentScopeClient:
                     settled_since = time.monotonic()
                 elif time.monotonic() - settled_since >= settle_seconds:
                     return AgentScopeReply(
-                        status="completed",
+                        status=self._terminal_reply_status(last_assistant),
                         content=self._message_text(last_assistant)
                         or "智能体已完成处理，但未返回文本内容。",
                         message_id=last_assistant.get("id"),
@@ -561,8 +664,3 @@ class AgentScopeClient:
             else:
                 settled_since = None
             time.sleep(max(0.1, self._poll_interval))
-
-        raise AgentScopeGatewayError(
-            f"等待智能体确认结果超过 {self._timeout:g} 秒，请稍后重试。",
-            status_code=504,
-        )

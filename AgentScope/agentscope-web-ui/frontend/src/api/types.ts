@@ -122,10 +122,12 @@ export interface AgentListResponse {
 
 export interface PlatformSettings {
 	global_main_agent_id: string | null;
+	project_initializer_agent_id: string | null;
 }
 
 export interface UpdatePlatformSettingsRequest {
-	global_main_agent_id: string;
+	global_main_agent_id?: string;
+	project_initializer_agent_id?: string | null;
 }
 
 /**

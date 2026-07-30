@@ -1,7 +1,25 @@
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    JSON,
+    Numeric,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -14,26 +32,57 @@ class TimestampMixin:
 
 class User(TimestampMixin, Base):
     __tablename__ = "users"
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('admin', 'user')",
+            name="ck_users_role",
+        ),
+        Index("ix_users_real_name", "real_name"),
+        Index("ix_users_role", "role"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(20), default="user", server_default="user")
     real_name: Mapped[str] = mapped_column(String(100))
-    phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    email: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    title: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    org_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    role: Mapped[str] = mapped_column(String(32), default="member")
-    status: Mapped[str] = mapped_column(String(32), default="active")
+    identity_card_no: Mapped[str] = mapped_column(
+        String(30),
+        unique=True,
+    )
 
 
 class Project(TimestampMixin, Base):
     __tablename__ = "projects"
+    __table_args__ = (
+        CheckConstraint(
+            "contract_duration_days IS NULL OR contract_duration_days > 0",
+            name="ck_projects_contract_duration_positive",
+        ),
+        CheckConstraint(
+            "contract_amount_wan_yuan IS NULL OR contract_amount_wan_yuan >= 0",
+            name="ck_projects_contract_amount_nonnegative",
+        ),
+        CheckConstraint(
+            "contract_end_date IS NULL OR contract_start_date IS NULL "
+            "OR contract_end_date >= contract_start_date",
+            name="ck_projects_contract_date_order",
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    project_name: Mapped[str] = mapped_column(String(200), index=True)
-    owner_unit: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="active")
-
+    name: Mapped[str] = mapped_column(String(200), index=True)
+    engineering_type_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    contract_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    contract_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    contract_duration_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    contract_amount_wan_yuan: Mapped[Decimal | None] = mapped_column(
+        Numeric(18, 2),
+        nullable=True,
+    )
+    construction_unit_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    general_contractor_unit_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    supervision_unit_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    design_unit_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    survey_unit_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
 
 class ProjectStatusSnapshot(TimestampMixin, Base):
     """项目状态页的管理口径快照；实际业务数据仍保存在工序、风险、任务等表中。"""
@@ -83,61 +132,192 @@ class ProjectSettings(TimestampMixin, Base):
 
 
 class ProjectMember(TimestampMixin, Base):
-    __tablename__ = "project_members"
-    __table_args__ = (UniqueConstraint("project_id", "user_id", name="uq_project_user"),)
+    __tablename__ = "project_personnel_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "serial_no",
+            name="uq_project_personnel_serial",
+        ),
+        Index("ix_project_personnel_project", "project_id"),
+        Index("ix_project_personnel_user", "user_id"),
+        Index("ix_project_personnel_position", "position_name"),
+        Index("ix_project_personnel_certificate", "certificate_no"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    member_role: Mapped[str] = mapped_column(String(32), default="member")
-    display_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    responsibilities: Mapped[list[str]] = mapped_column(JSON, default=list)
-    status: Mapped[str] = mapped_column(String(32), default="active")
-
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    serial_no: Mapped[int] = mapped_column(Integer)
+    position_name: Mapped[str] = mapped_column(String(100))
+    certificate_no: Mapped[str] = mapped_column(String(100))
+    responsibility_description: Mapped[str] = mapped_column(Text)
 
 class WbsItem(TimestampMixin, Base):
-    __tablename__ = "wbs_items"
+    __tablename__ = "project_wbs_items"
+    __table_args__ = (
+        UniqueConstraint("project_id", "wbs_code", name="uq_project_wbs_code"),
+        CheckConstraint("parent_id IS NULL OR parent_id <> id", name="ck_wbs_not_self_parent"),
+        CheckConstraint("sort_order >= 0", name="ck_wbs_sort_order_nonnegative"),
+        CheckConstraint("level > 0", name="ck_wbs_level_positive"),
+        CheckConstraint(
+            "planned_finish_at IS NULL OR planned_start_at IS NULL "
+            "OR planned_finish_at >= planned_start_at",
+            name="ck_wbs_plan_date_order",
+        ),
+        CheckConstraint(
+            "progress_percent IS NULL OR "
+            "(progress_percent >= 0 AND progress_percent <= 100)",
+            name="ck_wbs_progress_range",
+        ),
+        CheckConstraint(
+            "duration_hours IS NULL OR duration_hours >= 0",
+            name="ck_wbs_duration_nonnegative",
+        ),
+        CheckConstraint(
+            "estimated_hours IS NULL OR estimated_hours >= 0",
+            name="ck_wbs_estimated_nonnegative",
+        ),
+        CheckConstraint(
+            "time_log_minutes IS NULL OR time_log_minutes >= 0",
+            name="ck_wbs_time_log_nonnegative",
+        ),
+        CheckConstraint("budget IS NULL OR budget >= 0", name="ck_wbs_budget_nonnegative"),
+        CheckConstraint(
+            "actual_cost IS NULL OR actual_cost >= 0",
+            name="ck_wbs_actual_cost_nonnegative",
+        ),
+        Index("ix_project_wbs_tree", "project_id", "parent_id", "sort_order"),
+        Index("ix_project_wbs_level", "project_id", "level"),
+        Index("ix_project_wbs_msp_uid", "msp_uid"),
+        Index("ix_project_wbs_msp_id", "msp_id"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    parent_id: Mapped[int | None] = mapped_column(ForeignKey("wbs_items.id"), nullable=True)
-    code: Mapped[str] = mapped_column(String(100))
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+    )
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_wbs_items.id"),
+        nullable=True,
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    color_value: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    wbs_code: Mapped[str] = mapped_column(String(128))
     name: Mapped[str] = mapped_column(String(300))
-    level: Mapped[int] = mapped_column(Integer, default=1)
-    planned_start: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    planned_finish: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    progress: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[str] = mapped_column(String(32), default="not_started")
-    responsible_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    raw_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    assigned_to_text: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    planned_start_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    planned_finish_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    progress_percent: Mapped[Decimal | None] = mapped_column(
+        Numeric(5, 2),
+        nullable=True,
+        default=0,
+    )
+    duration_hours: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    estimated_hours: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    time_log_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status_text: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        default="not_started",
+    )
+    priority_text: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    budget: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    actual_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    msp_uid: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    msp_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    source_creator: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    item_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    source_project_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    level: Mapped[int] = mapped_column(SmallInteger, default=1)
+
+
+class WbsPredecessor(Base):
+    __tablename__ = "project_wbs_predecessors"
+    __table_args__ = (
+        UniqueConstraint(
+            "wbs_item_id",
+            "predecessor_wbs_item_id",
+            name="uq_project_wbs_predecessor",
+        ),
+        CheckConstraint(
+            "wbs_item_id <> predecessor_wbs_item_id",
+            name="ck_wbs_predecessor_not_self",
+        ),
+        Index("ix_wbs_predecessor_item", "wbs_item_id"),
+        Index("ix_wbs_predecessor_predecessor", "predecessor_wbs_item_id"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    wbs_item_id: Mapped[int] = mapped_column(
+        ForeignKey("project_wbs_items.id", ondelete="CASCADE"),
+    )
+    predecessor_wbs_item_id: Mapped[int] = mapped_column(
+        ForeignKey("project_wbs_items.id"),
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
 
 
 class RiskSource(TimestampMixin, Base):
-    __tablename__ = "risk_sources"
+    __tablename__ = "project_risks"
+    __table_args__ = (
+        UniqueConstraint("project_id", "serial_no", name="uq_project_risk_serial"),
+        CheckConstraint(
+            "risk_window_end_date IS NULL OR risk_window_start_date IS NULL "
+            "OR risk_window_end_date >= risk_window_start_date",
+            name="ck_project_risk_date_order",
+        ),
+        Index("ix_project_risk_project", "project_id"),
+        Index("ix_project_risk_wbs", "related_wbs_item_id"),
+        Index("ix_project_risk_level", "risk_level"),
+        Index("ix_project_risk_window", "risk_window_start_date", "risk_window_end_date"),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    name: Mapped[str] = mapped_column(String(300))
-    level: Mapped[str] = mapped_column(String(32), default="medium")
-    risk_type: Mapped[str] = mapped_column(String(100), default="综合风险")
-    planned_start: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    planned_finish: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    responsible_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    confirmer_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    material_requirements: Mapped[list[str]] = mapped_column(JSON, default=list)
-    control_requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="active")
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+    )
+    serial_no: Mapped[int] = mapped_column(Integer)
+    related_wbs_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_wbs_items.id"),
+        nullable=True,
+    )
+    related_process_name: Mapped[str] = mapped_column(String(300))
+    risk_part: Mapped[str] = mapped_column(String(300))
+    risk_level: Mapped[str] = mapped_column(String(50))
+    evaluation_condition: Mapped[str] = mapped_column(Text)
+    risk_window_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    risk_window_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
 
 
 class QualityMetric(TimestampMixin, Base):
-    __tablename__ = "quality_metrics"
+    __tablename__ = "project_wbs_quality_requirements"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "wbs_code"],
+            ["project_wbs_items.project_id", "project_wbs_items.wbs_code"],
+            onupdate="CASCADE",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "wbs_code",
+            name="uq_project_wbs_quality_requirement",
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    wbs_item_id: Mapped[int | None] = mapped_column(ForeignKey("wbs_items.id", ondelete="SET NULL"), nullable=True)
-    name: Mapped[str] = mapped_column(String(300))
-    requirement: Mapped[str] = mapped_column(Text)
-    inspection_frequency: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    required_materials: Mapped[list[str]] = mapped_column(JSON, default=list)
-    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="pending")
+    project_id: Mapped[int] = mapped_column(Integer)
+    wbs_code: Mapped[str] = mapped_column(String(128))
+    quality_acceptance_item: Mapped[str] = mapped_column(Text)
+    control_indicator: Mapped[str] = mapped_column(Text)
+    inspection_frequency: Mapped[str] = mapped_column(Text)
+    related_documents: Mapped[str] = mapped_column(Text)
 
 
 class PlatformFieldMapping(TimestampMixin, Base):
@@ -157,8 +337,12 @@ class WbsRiskLink(TimestampMixin, Base):
     __table_args__ = (UniqueConstraint("wbs_item_id", "risk_source_id", name="uq_wbs_risk"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    wbs_item_id: Mapped[int] = mapped_column(ForeignKey("wbs_items.id", ondelete="CASCADE"))
-    risk_source_id: Mapped[int] = mapped_column(ForeignKey("risk_sources.id", ondelete="CASCADE"))
+    wbs_item_id: Mapped[int] = mapped_column(
+        ForeignKey("project_wbs_items.id", ondelete="CASCADE"),
+    )
+    risk_source_id: Mapped[int] = mapped_column(
+        ForeignKey("project_risks.id", ondelete="CASCADE"),
+    )
     alert_days: Mapped[int] = mapped_column(Integer, default=7)
     notify_methods: Mapped[list[str]] = mapped_column(JSON, default=list)
     basis: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -175,8 +359,14 @@ class Task(TimestampMixin, Base):
     assignee_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     confirmer_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     due_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
-    wbs_item_id: Mapped[int | None] = mapped_column(ForeignKey("wbs_items.id"), nullable=True)
-    risk_source_id: Mapped[int | None] = mapped_column(ForeignKey("risk_sources.id"), nullable=True)
+    wbs_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_wbs_items.id"),
+        nullable=True,
+    )
+    risk_source_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_risks.id"),
+        nullable=True,
+    )
     trigger_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     required_materials: Mapped[list[str]] = mapped_column(JSON, default=list)
     workflow_steps: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
@@ -200,7 +390,10 @@ class DailyReport(TimestampMixin, Base):
     file_name: Mapped[str] = mapped_column(String(300))
     report_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
-    matched_wbs_id: Mapped[int | None] = mapped_column(ForeignKey("wbs_items.id"), nullable=True)
+    matched_wbs_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_wbs_items.id"),
+        nullable=True,
+    )
     confidence: Mapped[float] = mapped_column(default=0.0)
     parse_status: Mapped[str] = mapped_column(String(32), default="pending")
     status: Mapped[str] = mapped_column(String(32), default="pending_confirm")
@@ -210,7 +403,9 @@ class RiskDraft(TimestampMixin, Base):
     __tablename__ = "risk_drafts"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    risk_source_id: Mapped[int] = mapped_column(ForeignKey("risk_sources.id", ondelete="CASCADE"))
+    risk_source_id: Mapped[int] = mapped_column(
+        ForeignKey("project_risks.id", ondelete="CASCADE"),
+    )
     title: Mapped[str] = mapped_column(String(300))
     content: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default="draft")
@@ -255,6 +450,16 @@ class AgentConversation(TimestampMixin, Base):
     """Account-private mapping to one AgentScope conversation session."""
 
     __tablename__ = "agent_conversations"
+    __table_args__ = (
+        Index(
+            "uq_agent_conversations_project_user_initialization",
+            "project_id",
+            "user_id",
+            unique=True,
+            sqlite_where=text("conversation_type = 'initialization'"),
+            postgresql_where=text("conversation_type = 'initialization'"),
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"),
@@ -303,6 +508,79 @@ class AgentConversationMessage(Base):
         DateTime(timezone=True),
         server_default=func.now(),
     )
+
+
+class ProjectInitializationDraft(TimestampMixin, Base):
+    """Agent-produced project initialization data awaiting human review."""
+
+    __tablename__ = "project_initialization_drafts"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('invalid', 'ready', 'applied', 'rejected')",
+            name="ck_project_initialization_drafts_status",
+        ),
+        Index(
+            "ix_project_initialization_drafts_project_status",
+            "project_id",
+            "status",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+        index=True,
+    )
+    created_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(32), default="invalid", index=True)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    validation_issues: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON,
+        default=list,
+    )
+    source_files: Mapped[list[str]] = mapped_column(JSON, default=list)
+    applied_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
+class ProjectInitializationFile(TimestampMixin, Base):
+    """Raw file available only to one project-initialization conversation."""
+
+    __tablename__ = "project_initialization_files"
+    __table_args__ = (
+        Index(
+            "ix_project_initialization_files_conversation",
+            "conversation_id",
+            "created_at",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+        index=True,
+    )
+    uploaded_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        index=True,
+    )
+    file_name: Mapped[str] = mapped_column(String(300))
+    storage_path: Mapped[str] = mapped_column(String(1000))
+    content_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    file_size: Mapped[int] = mapped_column(Integer)
+    file_hash: Mapped[str] = mapped_column(String(64), index=True)
 
 
 class MeetingMinute(TimestampMixin, Base):
