@@ -46,15 +46,14 @@ class AttachmentUpdate(BaseModel):
 
 
 class MemberInput(BaseModel):
-    username: str | None = None
-    real_name: str
+    username: str | None = Field(default=None, max_length=64)
+    real_name: str = Field(min_length=1, max_length=100)
+    identity_card_no: str = Field(min_length=1, max_length=30)
     password: str | None = Field(default=None, min_length=8)
-    phone: str | None = None
-    email: str | None = None
-    title: str | None = None
     system_role: Literal["admin", "user"] = "user"
-    member_role: str = "member"
-    responsibilities: list[str] = Field(default_factory=list)
+    position_name: str = Field(min_length=1, max_length=100)
+    certificate_no: str = Field(default="", max_length=100)
+    responsibility_description: str = Field(default="", max_length=10000)
 
 
 class WbsInput(BaseModel):

@@ -18,6 +18,28 @@ export const mockProjects: Project[] = [
   },
 ]
 
+type LegacyMockMember = Pick<Member, 'id' | 'name' | 'title' | 'phone' | 'email' | 'role' | 'projectId'>
+
+function createMockMember(member: LegacyMockMember): Member {
+  return {
+    ...member,
+    projectMemberId: member.id,
+    username: `mock_${member.id}`,
+    identityCardNo: `MOCK-${member.id}`,
+    systemRole: 'user',
+    positions: [
+      {
+        id: `assignment-${member.id}`,
+        positionId: `position-${member.id}`,
+        name: member.title,
+        serialNo: 1,
+        certificateNo: '',
+        responsibilityDescription: member.role.join('、'),
+      },
+    ],
+  }
+}
+
 export const mockMembers: Member[] = [
   { id: 'm1', name: '张伟', title: '项目负责人', phone: '138-0001-0001', email: 'zhangwei@corp.com', role: ['项目负责人', '重大风险确认'], projectId: 'p1' },
   { id: 'm2', name: '李明', title: '项目执行人', phone: '138-0001-0002', email: 'liming@corp.com', role: ['项目执行人', '顶管施工', '现场巡查'], projectId: 'p1' },
@@ -30,7 +52,7 @@ export const mockMembers: Member[] = [
   { id: 'm31', name: '沈洁', title: '项目经理', phone: '138-0003-0001', email: 'shenj@corp.com', role: ['项目负责人', '方案审批', '外部协调'], projectId: 'p3' },
   { id: 'm32', name: '胡斌', title: '排查负责人', phone: '138-0003-0002', email: 'hubin@corp.com', role: ['管线排查', 'CCTV检测', '现场巡查'], projectId: 'p3' },
   { id: 'm33', name: '顾娜', title: '资料与填报负责人', phone: '138-0003-0003', email: 'guna@corp.com', role: ['资料员', '台账维护', '平台填报'], projectId: 'p3' },
-]
+].map(createMockMember)
 
 export const mockWbs: WbsItem[] = [
   { id: 'w1', code: '1', name: '合流污水复线工程', level: 1, parentId: null, planStart: '2026-05-01', planEnd: '2026-12-31', progress: 28, status: 'in_progress', responsibleId: 'm1', projectId: 'p1' },

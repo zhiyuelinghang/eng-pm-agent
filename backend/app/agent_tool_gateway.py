@@ -37,6 +37,8 @@ from .models import (
     ProjectInitializationDraft,
     ProjectInitializationFile,
     ProjectMember,
+    ProjectMemberPosition,
+    ProjectPosition,
     ProjectStatusSnapshot,
     QualityMetric,
     RiskSource,
@@ -377,6 +379,35 @@ def _overview(db: Session, context: ToolContext) -> dict[str, Any]:
         if snapshot
         else None
     )
+    project_assignments = []
+    if context.membership is not None:
+        rows = db.execute(
+            select(ProjectMemberPosition, ProjectPosition)
+            .join(
+                ProjectPosition,
+                ProjectPosition.id == ProjectMemberPosition.position_id,
+            )
+            .where(
+                ProjectMemberPosition.project_member_id == context.membership.id,
+            )
+            .order_by(ProjectMemberPosition.serial_no),
+        ).all()
+        project_assignments = [
+            {
+                **_public_row(
+                    assignment,
+                    (
+                        "id",
+                        "serial_no",
+                        "certificate_no",
+                        "responsibility_description",
+                    ),
+                ),
+                "position_id": position.id,
+                "position_name": position.position_name,
+            }
+            for assignment, position in rows
+        ]
     return {
         "project": _public_row(
             context.project,
@@ -401,19 +432,10 @@ def _overview(db: Session, context: ToolContext) -> dict[str, Any]:
                 context.user,
                 ("id", "username", "real_name", "role"),
             ),
-            "project_assignment": (
-                _public_row(
-                    context.membership,
-                    (
-                        "serial_no",
-                        "position_name",
-                        "certificate_no",
-                        "responsibility_description",
-                    ),
-                )
-                if context.membership
-                else None
+            "project_member_id": (
+                context.membership.id if context.membership else None
             ),
+            "project_assignments": project_assignments,
         },
         "dashboard": dashboard,
         "counts": {
@@ -544,36 +566,75 @@ def _list_items(
         return [_public_row(row, fields) for row in rows]
 
     if args.resource == "members":
-        stmt = (
-            select(ProjectMember, User)
-            .join(User, User.id == ProjectMember.user_id)
-            .where(ProjectMember.project_id == project_id)
-        )
+        stmt = select(ProjectMember, User).join(
+            User,
+            User.id == ProjectMember.user_id,
+        ).where(ProjectMember.project_id == project_id)
         if keyword:
+            matching_member_ids = (
+                select(ProjectMemberPosition.project_member_id)
+                .join(
+                    ProjectPosition,
+                    ProjectPosition.id == ProjectMemberPosition.position_id,
+                )
+                .where(
+                    ProjectMemberPosition.project_id == project_id,
+                    or_(
+                        ProjectPosition.position_name.contains(keyword),
+                        ProjectMemberPosition.certificate_no.contains(keyword),
+                        ProjectMemberPosition.responsibility_description.contains(
+                            keyword,
+                        ),
+                    ),
+                )
+            )
             stmt = stmt.where(
                 or_(
                     User.real_name.contains(keyword),
                     User.username.contains(keyword),
-                    ProjectMember.position_name.contains(keyword),
-                    ProjectMember.certificate_no.contains(keyword),
-                    ProjectMember.responsibility_description.contains(keyword),
+                    ProjectMember.id.in_(matching_member_ids),
                 ),
             )
-        rows = db.execute(
-            stmt.order_by(ProjectMember.serial_no).limit(args.limit),
-        ).all()
+        rows = db.execute(stmt.order_by(User.real_name).limit(args.limit)).all()
+        member_ids = [member.id for member, _ in rows]
+        assignments_by_member: dict[int, list[dict[str, Any]]] = {
+            member_id: [] for member_id in member_ids
+        }
+        if member_ids:
+            assignments = db.execute(
+                select(ProjectMemberPosition, ProjectPosition)
+                .join(
+                    ProjectPosition,
+                    ProjectPosition.id == ProjectMemberPosition.position_id,
+                )
+                .where(
+                    ProjectMemberPosition.project_member_id.in_(member_ids),
+                )
+                .order_by(ProjectMemberPosition.serial_no),
+            ).all()
+            for assignment, position in assignments:
+                assignments_by_member[assignment.project_member_id].append(
+                    {
+                        "assignment_id": assignment.id,
+                        "position_id": position.id,
+                        "position_name": position.position_name,
+                        "serial_no": assignment.serial_no,
+                        "certificate_no": assignment.certificate_no,
+                        "responsibility_description": (
+                            assignment.responsibility_description
+                        ),
+                    },
+                )
         return [
             {
-                "user_id": user.id,
-                "username": user.username,
-                "real_name": user.real_name,
-                "role": user.role,
-                "serial_no": member.serial_no,
-                "position_name": member.position_name,
-                "certificate_no": member.certificate_no,
-                "responsibility_description": member.responsibility_description,
+                "project_member_id": member.id,
+                "user_id": account.id,
+                "username": account.username,
+                "real_name": account.real_name,
+                "role": account.role,
+                "positions": assignments_by_member[member.id],
             }
-            for member, user in rows
+            for member, account in rows
         ]
 
     if args.resource == "information":

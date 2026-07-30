@@ -28,12 +28,26 @@ export interface Project {
 
 export interface Member {
   id: string
+  projectMemberId: string
+  username: string
+  identityCardNo: string
+  systemRole: 'admin' | 'user'
   name: string
   title: string
   phone: string
   email: string
   role: string[]
+  positions: MemberPosition[]
   projectId: string
+}
+
+export interface MemberPosition {
+  id: string
+  positionId: string
+  name: string
+  serialNo: number
+  certificateNo: string
+  responsibilityDescription: string
 }
 
 export interface WbsItem {

@@ -23,13 +23,16 @@ from .agentscope_client import (
 )
 from .config import get_settings
 from .db import SessionLocal, get_db
-from .models import (AgentConversation, AgentConversationMessage, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectInitializationDraft, ProjectInitializationFile, ProjectMember, ProjectSettings, ProjectStatusSnapshot,
+from .models import (AgentConversation, AgentConversationMessage, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectInitializationDraft, ProjectInitializationFile, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectSettings, ProjectStatusSnapshot,
                       QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsRiskLink)
 from .project_initialization import (
     ApplyInitializationDraftInput,
     InitializationApplyError,
+    ProjectInitializationPayload,
     apply_initialization_draft,
     build_initialization_state,
+    suggest_unique_username,
+    validate_initialization_payload,
 )
 from .schemas import (AttachmentUpdate, DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
                       LoginRequest, MemberInput, PasswordChangeInput, ProfileUpdate, ProjectInput, RiskInput, TaskFlowGenerateInput, TaskInput, TaskTransitionInput,
@@ -466,14 +469,19 @@ def _initialization_agent_instruction(
         "条带 WBS 编码的记录都必须提交，不得因为名称像占位符而静默丢弃。"
         "发现时间线、前置日期、父子关系或占位内容异常时必须保留原值并交给"
         "用户核对，不得自行解释、补造依赖或改写原始计划。\n"
-        "9. 提交和增量更新工具都只保存待确认草稿，不会写入正式业务表；"
+        "9. 人员以身份证号识别同一自然人。同一身份证号在名单中承担多个"
+        "岗位时，必须保留为多条人员任职记录，分别保留岗位、证书和职责；"
+        "不得误判为重复人员，也不得合并或丢弃其中任一岗位。平台确认入库时"
+        "会让这些岗位共用同一个账号。\n"
+        "10. 提交和增量更新工具都只保存待确认草稿，不会写入正式业务表；"
         "不得声称已经入库。\n"
-        "10. 必须检查草稿工具返回的校验结果。只要存在错误或警告，就要在回复"
+        "11. 必须检查草稿工具返回的校验结果。只要存在错误或警告，就要在回复"
         "中简要说明发现了哪些问题，并明确提示用户点击 Dobby 平台中的“核对"
         "草稿”查看、修正或确认；不得只说整理完成，也不得把问题隐藏在工具"
         "结果中。\n"
-        "11. 用户必须在 Dobby 平台核对并确认草稿后，平台才会执行正式写入；"
-        "你不能绕过这一确认步骤，也不能创建登录账号或设置初始密码。\n"
+        "12. 用户必须在 Dobby 平台核对并确认草稿后，平台才会执行正式写入；"
+        "你不能绕过这一确认步骤。人员登录账号和初始密码由平台在核对阶段"
+        "自动生成或复用已有账号，不得在草稿中编造凭证。\n"
         "</project-initialization-role>"
     )
 
@@ -1981,6 +1989,16 @@ def _initialization_draft_review(
 ) -> dict[str, Any]:
     data = serialize(draft)
     payload = draft.payload if isinstance(draft.payload, dict) else {}
+    current_issues = validate_initialization_payload(
+        ProjectInitializationPayload.model_validate(payload),
+    )
+    data["validation_issues"] = current_issues
+    if draft.status not in {"applied", "rejected"}:
+        data["status"] = (
+            "invalid"
+            if any(issue["level"] == "error" for issue in current_issues)
+            else "ready"
+        )
     personnel = (
         payload.get("personnel", [])
         if isinstance(payload.get("personnel", []), list)
@@ -1991,25 +2009,49 @@ def _initialization_draft_review(
         for item in personnel
         if isinstance(item, dict) and item.get("identity_card_no")
     ]
-    existing_cards = set(
-        db.scalars(
-            select(User.identity_card_no).where(
-                User.identity_card_no.in_(identity_cards),
-            ),
-        ).all(),
-    ) if identity_cards else set()
-    data["required_personnel_credentials"] = [
-        {
-            "identity_card_no": str(item["identity_card_no"]),
-            "real_name": str(item.get("real_name") or ""),
-            "position_name": str(item.get("position_name") or ""),
-        }
-        for item in personnel
-        if (
-            isinstance(item, dict)
-            and item.get("identity_card_no")
-            and str(item["identity_card_no"]) not in existing_cards
+    existing_users = {
+        user.identity_card_no: user
+        for user in (
+            db.scalars(
+                select(User).where(User.identity_card_no.in_(identity_cards)),
+            ).all()
+            if identity_cards
+            else []
         )
+    }
+    unavailable_usernames = set(db.scalars(select(User.username)).all())
+    required_credentials: list[dict[str, str]] = []
+    seen_new_cards: set[str] = set()
+    for item in personnel:
+        if not isinstance(item, dict) or not item.get("identity_card_no"):
+            continue
+        identity_card_no = str(item["identity_card_no"])
+        if identity_card_no in existing_users or identity_card_no in seen_new_cards:
+            continue
+        suggested_username = suggest_unique_username(
+            str(item.get("real_name") or ""),
+            identity_card_no,
+            unavailable_usernames,
+        )
+        unavailable_usernames.add(suggested_username)
+        seen_new_cards.add(identity_card_no)
+        required_credentials.append(
+            {
+                "identity_card_no": identity_card_no,
+                "real_name": str(item.get("real_name") or ""),
+                "position_name": str(item.get("position_name") or ""),
+                "suggested_username": suggested_username,
+            },
+        )
+    data["required_personnel_credentials"] = required_credentials
+    data["existing_personnel_accounts"] = [
+        {
+            "identity_card_no": identity_card_no,
+            "user_id": user.id,
+            "username": user.username,
+            "real_name": user.real_name,
+        }
+        for identity_card_no, user in existing_users.items()
     ]
     data["summary"] = {
         "project_fields": sum(
@@ -2020,7 +2062,8 @@ def _initialization_draft_review(
                 else []
             )
         ),
-        "personnel": len(personnel),
+        "personnel": len(set(identity_cards)),
+        "position_assignments": len(personnel),
         "wbs": len(payload.get("wbs", []))
         if isinstance(payload.get("wbs"), list)
         else 0,
@@ -2204,44 +2247,191 @@ def read_notification(notification_id: int, db: Session = Depends(get_db), _: Us
 @router.get("/projects/{project_id}/members")
 def list_members(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
     project_or_404(db, project_id)
-    members = db.scalars(select(ProjectMember).where(ProjectMember.project_id == project_id)).all()
-    data = []
-    for member in members:
-        item = serialize(member); item["user"] = serialize(entity_or_404(db, User, member.user_id, "用户不存在")); data.append(item)
-    return ok(data)
+    members = db.scalars(
+        select(ProjectMember)
+        .where(ProjectMember.project_id == project_id)
+        .order_by(ProjectMember.id),
+    ).all()
+    return ok([serialize_project_member(db, member) for member in members])
+
+
+def serialize_project_member(db: Session, member: ProjectMember) -> dict[str, Any]:
+    user = entity_or_404(db, User, member.user_id, "用户不存在")
+    assignments = db.execute(
+        select(ProjectMemberPosition, ProjectPosition)
+        .join(
+            ProjectPosition,
+            ProjectPosition.id == ProjectMemberPosition.position_id,
+        )
+        .where(ProjectMemberPosition.project_member_id == member.id)
+        .order_by(ProjectMemberPosition.serial_no),
+    ).all()
+    return {
+        **serialize(member),
+        "user": serialize(user),
+        "positions": [
+            {
+                **serialize(assignment),
+                "position_name": position.position_name,
+            }
+            for assignment, position in assignments
+        ],
+    }
 
 
 @router.post("/projects/{project_id}/members")
 def add_member(project_id: int, payload: MemberInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
     project_or_404(db, project_id)
-    account = db.scalar(select(User).where(User.username == payload.username)) if payload.username else None
-    if not account:
-        username = payload.username or f"user_{int(datetime.now(UTC).timestamp())}"
-        account = User(username=username, password_hash=hash_password(payload.password or "ChangeMe123!"), real_name=payload.real_name, phone=payload.phone, email=payload.email, title=payload.title, role=payload.system_role)
-        db.add(account); db.flush()
-    member = ProjectMember(project_id=project_id, user_id=account.id, member_role=payload.member_role, display_name=payload.real_name, phone=payload.phone, responsibilities=payload.responsibilities)
-    db.add(member); db.flush(); audit(db, user, "添加项目成员", f"添加成员「{payload.real_name}」", project_id, "project_member", member.id)
-    db.commit(); db.refresh(member)
-    return ok(serialize(member), "成员已添加")
+    account = db.scalar(
+        select(User).where(User.identity_card_no == payload.identity_card_no),
+    )
+    if account is None:
+        username = payload.username or suggest_unique_username(
+            payload.real_name,
+            payload.identity_card_no,
+            set(db.scalars(select(User.username)).all()),
+        )
+        owner = db.scalar(select(User).where(User.username == username))
+        if owner is not None:
+            raise HTTPException(status_code=409, detail="登录账号已被其他人员使用")
+        if not payload.password:
+            raise HTTPException(status_code=422, detail="新人员必须设置初始密码")
+        account = User(
+            username=username,
+            password_hash=hash_password(payload.password),
+            real_name=payload.real_name,
+            identity_card_no=payload.identity_card_no,
+            role=payload.system_role,
+        )
+        db.add(account)
+        db.flush()
+
+    member = db.scalar(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == account.id,
+        ),
+    )
+    if member is None:
+        member = ProjectMember(project_id=project_id, user_id=account.id)
+        db.add(member)
+        db.flush()
+
+    position = db.scalar(
+        select(ProjectPosition).where(
+            ProjectPosition.project_id == project_id,
+            ProjectPosition.position_name == payload.position_name,
+        ),
+    )
+    if position is None:
+        position = ProjectPosition(
+            project_id=project_id,
+            position_name=payload.position_name,
+        )
+        db.add(position)
+        db.flush()
+    if db.scalar(
+        select(ProjectMemberPosition.id).where(
+            ProjectMemberPosition.project_member_id == member.id,
+            ProjectMemberPosition.position_id == position.id,
+        ),
+    ) is not None:
+        raise HTTPException(status_code=409, detail="该人员已经承担此岗位")
+    next_serial = (
+        db.scalar(
+            select(func.max(ProjectMemberPosition.serial_no)).where(
+                ProjectMemberPosition.project_id == project_id,
+            ),
+        )
+        or 0
+    ) + 1
+    assignment = ProjectMemberPosition(
+        project_id=project_id,
+        project_member_id=member.id,
+        position_id=position.id,
+        serial_no=next_serial,
+        certificate_no=payload.certificate_no,
+        responsibility_description=payload.responsibility_description,
+    )
+    db.add(assignment)
+    db.flush()
+    audit(
+        db,
+        user,
+        "添加项目成员岗位",
+        f"为「{payload.real_name}」添加岗位「{payload.position_name}」",
+        project_id,
+        "project_member_position",
+        assignment.id,
+    )
+    db.commit()
+    db.refresh(member)
+    return ok(serialize_project_member(db, member), "成员岗位已添加")
 
 
-@router.patch("/projects/{project_id}/members/{user_id}")
-def update_member(project_id: int, user_id: int, payload: MemberInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
+@router.patch("/projects/{project_id}/member-positions/{assignment_id}")
+def update_member_position(
+    project_id: int,
+    assignment_id: int,
+    payload: MemberInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+) -> dict[str, Any]:
     project_or_404(db, project_id)
-    member = db.scalar(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == user_id))
-    if not member: raise HTTPException(status_code=404, detail="项目成员不存在")
-    account = entity_or_404(db, User, user_id, "用户不存在")
-    account.real_name = payload.real_name
-    account.phone = payload.phone
-    account.email = payload.email
-    account.title = payload.title
-    member.display_name = payload.real_name
-    member.phone = payload.phone
-    member.member_role = payload.member_role
-    member.responsibilities = payload.responsibilities
-    audit(db, user, "更新项目成员", f"更新成员「{payload.real_name}」", project_id, "project_member", member.id)
-    db.commit(); db.refresh(member)
-    return ok(serialize(member), "成员已更新")
+    assignment = db.scalar(
+        select(ProjectMemberPosition).where(
+            ProjectMemberPosition.id == assignment_id,
+            ProjectMemberPosition.project_id == project_id,
+        ),
+    )
+    if assignment is None:
+        raise HTTPException(status_code=404, detail="项目岗位任职不存在")
+    member = entity_or_404(
+        db,
+        ProjectMember,
+        assignment.project_member_id,
+        "项目成员不存在",
+    )
+    account = entity_or_404(db, User, member.user_id, "用户不存在")
+    if payload.identity_card_no != account.identity_card_no:
+        raise HTTPException(status_code=409, detail="不能通过项目岗位修改人员身份证号")
+    position = db.scalar(
+        select(ProjectPosition).where(
+            ProjectPosition.project_id == project_id,
+            ProjectPosition.position_name == payload.position_name,
+        ),
+    )
+    if position is None:
+        position = ProjectPosition(
+            project_id=project_id,
+            position_name=payload.position_name,
+        )
+        db.add(position)
+        db.flush()
+    duplicate = db.scalar(
+        select(ProjectMemberPosition.id).where(
+            ProjectMemberPosition.project_member_id == member.id,
+            ProjectMemberPosition.position_id == position.id,
+            ProjectMemberPosition.id != assignment.id,
+        ),
+    )
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail="该人员已经承担此岗位")
+    assignment.position_id = position.id
+    assignment.certificate_no = payload.certificate_no
+    assignment.responsibility_description = payload.responsibility_description
+    audit(
+        db,
+        user,
+        "更新项目成员岗位",
+        f"更新「{payload.real_name}」的岗位「{payload.position_name}」",
+        project_id,
+        "project_member_position",
+        assignment.id,
+    )
+    db.commit()
+    db.refresh(member)
+    return ok(serialize_project_member(db, member), "成员岗位已更新")
 
 
 def list_for_project(model: type[ModelType], project_id: int, db: Session) -> list[dict[str, Any]]:
@@ -2377,9 +2567,15 @@ def list_tasks(project_id: int, status_filter: str | None = None, db: Session = 
 @router.post("/projects/{project_id}/tasks/generate-flow")
 def generate_task_flow(project_id: int, payload: TaskFlowGenerateInput, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
     project = project_or_404(db, project_id)
-    project_members = db.scalars(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.status == "active")).all()
-    users = {row.id: row for row in db.scalars(select(User).where(User.id.in_([member.user_id for member in project_members]))).all()} if project_members else {}
-    members = [{"id": member.user_id, "name": member.display_name or users.get(member.user_id).real_name if users.get(member.user_id) else member.display_name or f"成员{member.user_id}"} for member in project_members]
+    project_members = db.execute(
+        select(ProjectMember, User)
+        .join(User, User.id == ProjectMember.user_id)
+        .where(ProjectMember.project_id == project_id),
+    ).all()
+    members = [
+        {"id": member.user_id, "name": account.real_name}
+        for member, account in project_members
+    ]
     wbs_items = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id)).all()
     risks = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id, RiskSource.status == "active")).all()
     fallback = build_fallback_task_flow(payload.requirement, payload.template_type, [member["id"] for member in members])
@@ -2661,7 +2857,9 @@ def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str
 @router.post("/projects/{project_id}/material-assistant")
 def material_assistant_reply(project_id: int, payload: CollaborationMessageInput, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
     project = project_or_404(db, project_id)
-    members = db.scalars(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.status == "active")).all()
+    members = db.scalars(
+        select(ProjectMember).where(ProjectMember.project_id == project_id),
+    ).all()
     wbs_items = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id).order_by(WbsItem.code).limit(50)).all()
     risk_sources = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id).order_by(RiskSource.updated_at.desc()).limit(50)).all()
     quality_metrics = db.scalars(select(QualityMetric).where(QualityMetric.project_id == project_id).order_by(QualityMetric.updated_at.desc()).limit(50)).all()

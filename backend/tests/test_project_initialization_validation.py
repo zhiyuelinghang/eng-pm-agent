@@ -1,5 +1,6 @@
 from backend.app.project_initialization import (
     ProjectInitializationPayload,
+    suggest_unique_username,
     validate_initialization_payload,
 )
 
@@ -177,5 +178,85 @@ def test_placeholder_wbs_name_is_preserved_but_warned() -> None:
         item["level"] == "warning"
         and item["path"] == "wbs.1.1.name"
         and "疑似占位内容" in item["message"]
+        for item in issues
+    )
+
+
+def test_username_suggestion_uses_name_pinyin_and_avoids_collisions() -> None:
+    unavailable = {"zhanghuaide", "zhanghuaide2"}
+
+    username = suggest_unique_username(
+        "张怀德",
+        "310108198611171091",
+        unavailable,
+    )
+
+    assert username == "zhanghuaide3"
+
+
+def test_same_person_with_multiple_positions_reuses_one_account() -> None:
+    payload = ProjectInitializationPayload.model_validate(
+        {
+            "personnel": [
+                {
+                    "serial_no": 1,
+                    "real_name": "马泽坤",
+                    "identity_card_no": "320922199610153614",
+                    "position_name": "项目商务副经理",
+                    "certificate_no": "CERT-1",
+                    "responsibility_description": "负责商务管理",
+                },
+                {
+                    "serial_no": 2,
+                    "real_name": "马泽坤",
+                    "identity_card_no": "320922199610153614",
+                    "position_name": "劳务员",
+                    "certificate_no": "CERT-2",
+                    "responsibility_description": "负责劳务管理",
+                },
+            ],
+        },
+    )
+
+    issues = validate_initialization_payload(payload)
+    personnel_issues = [item for item in issues if item["path"] == "personnel"]
+
+    assert any(
+        item["level"] == "warning"
+        and "共用同一个平台账号" in item["message"]
+        for item in personnel_issues
+    )
+    assert not any(item["level"] == "error" for item in personnel_issues)
+
+
+def test_same_person_cannot_repeat_the_same_position() -> None:
+    payload = ProjectInitializationPayload.model_validate(
+        {
+            "personnel": [
+                {
+                    "serial_no": 1,
+                    "real_name": "马泽坤",
+                    "identity_card_no": "320922199610153614",
+                    "position_name": "项目商务副经理",
+                    "certificate_no": "CERT-1",
+                    "responsibility_description": "负责商务管理",
+                },
+                {
+                    "serial_no": 2,
+                    "real_name": "马泽坤",
+                    "identity_card_no": "320922199610153614",
+                    "position_name": "项目商务副经理",
+                    "certificate_no": "CERT-2",
+                    "responsibility_description": "负责成本管理",
+                },
+            ],
+        },
+    )
+
+    issues = validate_initialization_payload(payload)
+
+    assert any(
+        item["level"] == "error"
+        and "岗位「项目商务副经理」重复" in item["message"]
         for item in issues
     )

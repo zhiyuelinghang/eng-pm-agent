@@ -132,25 +132,86 @@ class ProjectSettings(TimestampMixin, Base):
 
 
 class ProjectMember(TimestampMixin, Base):
-    __tablename__ = "project_personnel_assignments"
+    __tablename__ = "project_members"
     __table_args__ = (
         UniqueConstraint(
             "project_id",
-            "serial_no",
-            name="uq_project_personnel_serial",
+            "user_id",
+            name="uq_project_member_user",
         ),
-        Index("ix_project_personnel_project", "project_id"),
-        Index("ix_project_personnel_user", "user_id"),
-        Index("ix_project_personnel_position", "position_name"),
-        Index("ix_project_personnel_certificate", "certificate_no"),
+        UniqueConstraint(
+            "project_id",
+            "id",
+            name="uq_project_member_project_id",
+        ),
+        Index("ix_project_members_project", "project_id"),
+        Index("ix_project_members_user", "user_id"),
     )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     project_id: Mapped[int] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"),
     )
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-    serial_no: Mapped[int] = mapped_column(Integer)
+
+
+class ProjectPosition(TimestampMixin, Base):
+    __tablename__ = "project_positions"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "position_name",
+            name="uq_project_position_name",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "id",
+            name="uq_project_position_project_id",
+        ),
+        Index("ix_project_positions_project", "project_id"),
+        Index("ix_project_positions_name", "position_name"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+    )
     position_name: Mapped[str] = mapped_column(String(100))
+
+
+class ProjectMemberPosition(TimestampMixin, Base):
+    __tablename__ = "project_personnel_assignments"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "project_member_id"],
+            ["project_members.project_id", "project_members.id"],
+            ondelete="CASCADE",
+            name="fk_personnel_assignment_member_project",
+        ),
+        ForeignKeyConstraint(
+            ["project_id", "position_id"],
+            ["project_positions.project_id", "project_positions.id"],
+            ondelete="CASCADE",
+            name="fk_personnel_assignment_position_project",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "serial_no",
+            name="uq_project_personnel_serial",
+        ),
+        UniqueConstraint(
+            "project_member_id",
+            "position_id",
+            name="uq_project_member_position",
+        ),
+        Index("ix_project_personnel_project", "project_id"),
+        Index("ix_project_personnel_member", "project_member_id"),
+        Index("ix_project_personnel_position", "position_id"),
+        Index("ix_project_personnel_certificate", "certificate_no"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(Integer)
+    project_member_id: Mapped[int] = mapped_column(Integer)
+    position_id: Mapped[int] = mapped_column(Integer)
+    serial_no: Mapped[int] = mapped_column(Integer)
     certificate_no: Mapped[str] = mapped_column(String(100))
     responsibility_description: Mapped[str] = mapped_column(Text)
 

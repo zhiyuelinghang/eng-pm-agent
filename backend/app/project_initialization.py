@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 from decimal import Decimal
+import re
 from typing import Any, Literal
 
+from pypinyin import lazy_pinyin
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
@@ -14,6 +16,8 @@ from .models import (
     Project,
     ProjectInitializationDraft,
     ProjectMember,
+    ProjectMemberPosition,
+    ProjectPosition,
     QualityMetric,
     RiskSource,
     Task,
@@ -175,6 +179,28 @@ class ApplyInitializationDraftInput(BaseModel):
 ValidationLevel = Literal["error", "warning"]
 
 
+def suggest_unique_username(
+    real_name: str,
+    identity_card_no: str,
+    unavailable_usernames: set[str],
+) -> str:
+    """Create a readable lowercase username and avoid current account collisions."""
+    pinyin_name = "".join(lazy_pinyin(real_name)).lower()
+    base = re.sub(r"[^a-z0-9]+", "", pinyin_name)
+    if not base:
+        identity_suffix = re.sub(r"[^a-zA-Z0-9]+", "", identity_card_no)[-6:].lower()
+        base = f"user{identity_suffix or 'new'}"
+    base = base[:56]
+    unavailable_lower = {item.lower() for item in unavailable_usernames}
+    candidate = base
+    sequence = 2
+    while candidate.lower() in unavailable_lower:
+        suffix = str(sequence)
+        candidate = f"{base[:64 - len(suffix)]}{suffix}"
+        sequence += 1
+    return candidate
+
+
 def _issue(
     level: ValidationLevel,
     path: str,
@@ -256,14 +282,33 @@ def validate_initialization_payload(
                 f"人员序号 {serial_no} 重复",
             ),
         )
-    for card_no in sorted(
-        _duplicates([item.identity_card_no for item in payload.personnel]),
-    ):
+    personnel_by_card: dict[str, list[PersonnelDraft]] = {}
+    for person in payload.personnel:
+        personnel_by_card.setdefault(person.identity_card_no, []).append(person)
+    for card_no, assignments in sorted(personnel_by_card.items()):
+        if len(assignments) < 2:
+            continue
+        position_names = [item.position_name for item in assignments]
+        for position_name in sorted(_duplicates(position_names)):
+            issues.append(
+                _issue(
+                    "error",
+                    "personnel",
+                    f"身份证号 {card_no} 的岗位「{position_name}」重复",
+                ),
+            )
+        unique_positions = list(dict.fromkeys(position_names))
+        if len(unique_positions) < 2:
+            continue
+        positions = "、".join(unique_positions)
         issues.append(
             _issue(
-                "error",
+                "warning",
                 "personnel",
-                f"身份证号 {card_no} 在人员名单中重复",
+                (
+                    f"身份证号 {card_no} 对应多个岗位（{positions}）；"
+                    "这些岗位将共用同一个平台账号，请核对是否为本人兼任"
+                ),
             ),
         )
 
@@ -556,10 +601,18 @@ def build_initialization_state(
 ) -> dict[str, Any]:
     """Return the canonical initialization sections for one project."""
     member_rows = db.execute(
-        select(ProjectMember, User)
+        select(ProjectMemberPosition, ProjectMember, ProjectPosition, User)
+        .join(
+            ProjectMember,
+            ProjectMember.id == ProjectMemberPosition.project_member_id,
+        )
+        .join(
+            ProjectPosition,
+            ProjectPosition.id == ProjectMemberPosition.position_id,
+        )
         .join(User, User.id == ProjectMember.user_id)
-        .where(ProjectMember.project_id == project.id)
-        .order_by(ProjectMember.serial_no),
+        .where(ProjectMemberPosition.project_id == project.id)
+        .order_by(ProjectMemberPosition.serial_no),
     ).all()
     wbs_rows = db.scalars(
         select(WbsItem)
@@ -618,22 +671,24 @@ def build_initialization_state(
         "personnel": [
             {
                 **_row(
-                    member,
+                    assignment,
                     (
                         "id",
+                        "project_member_id",
+                        "position_id",
                         "serial_no",
-                        "position_name",
                         "certificate_no",
                         "responsibility_description",
                     ),
                 ),
+                "position_name": position.position_name,
                 "user_id": user.id,
                 "username": user.username,
                 "real_name": user.real_name,
                 "identity_card_no": user.identity_card_no,
                 "role": user.role,
             }
-            for member, user in member_rows
+            for assignment, member, position, user in member_rows
         ],
         "wbs": [
             {
@@ -816,9 +871,14 @@ def apply_initialization_draft(
             ),
         )
     db.execute(delete(WbsItem).where(WbsItem.project_id == project.id))
-    # Delete memberships as ORM objects so a SQLite development database
-    # cannot leave a deleted identity in the session when it immediately
-    # reuses the same integer primary key below.
+    db.execute(
+        delete(ProjectMemberPosition).where(
+            ProjectMemberPosition.project_id == project.id,
+        ),
+    )
+    db.execute(
+        delete(ProjectPosition).where(ProjectPosition.project_id == project.id),
+    )
     for membership in db.scalars(
         select(ProjectMember).where(ProjectMember.project_id == project.id),
     ).all():
@@ -826,6 +886,8 @@ def apply_initialization_draft(
     db.flush()
 
     new_usernames: list[str] = []
+    members_by_user_id: dict[int, ProjectMember] = {}
+    positions_by_name: dict[str, ProjectPosition] = {}
     for person in payload.personnel:
         user = existing_users.get(person.identity_card_no)
         if user is None:
@@ -841,14 +903,30 @@ def apply_initialization_draft(
             db.flush()
             existing_users[person.identity_card_no] = user
             new_usernames.append(user.username)
-        else:
-            user.real_name = person.real_name
-        db.add(
-            ProjectMember(
+        membership = members_by_user_id.get(user.id)
+        if membership is None:
+            membership = ProjectMember(
                 project_id=project.id,
                 user_id=user.id,
-                serial_no=person.serial_no,
+            )
+            db.add(membership)
+            db.flush()
+            members_by_user_id[user.id] = membership
+        position = positions_by_name.get(person.position_name)
+        if position is None:
+            position = ProjectPosition(
+                project_id=project.id,
                 position_name=person.position_name,
+            )
+            db.add(position)
+            db.flush()
+            positions_by_name[person.position_name] = position
+        db.add(
+            ProjectMemberPosition(
+                project_id=project.id,
+                project_member_id=membership.id,
+                position_id=position.id,
+                serial_no=person.serial_no,
                 certificate_no=person.certificate_no,
                 responsibility_description=person.responsibility_description,
             ),
@@ -940,7 +1018,9 @@ def apply_initialization_draft(
         "status": draft.status,
         "created_usernames": new_usernames,
         "counts": {
-            "personnel": len(payload.personnel),
+            "personnel": len({item.identity_card_no for item in payload.personnel}),
+            "positions": len({item.position_name for item in payload.personnel}),
+            "position_assignments": len(payload.personnel),
             "wbs": len(payload.wbs),
             "risks": len(payload.risks),
             "quality_requirements": len(payload.quality_requirements),

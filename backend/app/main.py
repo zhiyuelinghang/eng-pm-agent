@@ -10,7 +10,7 @@ from .agent_tool_gateway import router as agent_tool_router
 from .config import get_settings
 from .db import Base, SessionLocal, engine
 from .models import (Attachment, DailyReport, DocumentFolder, DocumentFolderItem, Project, ProjectChange,
-                     ProjectInformationRecord, ProjectMember, ProjectStatusSnapshot, QualityMetric, RiskSource,
+                     ProjectInformationRecord, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectStatusSnapshot, QualityMetric, RiskSource,
                      Task, User, WbsItem, WbsRiskLink)
 from .security import hash_password
 
@@ -75,15 +75,31 @@ def ensure_prototype_status_data(db, project: Project) -> None:
         ("prototype_sun_monitor", "孙监测", "监测单位", "monitoring_unit"),
     ]
     users: dict[str, User] = {}
-    for username, real_name, title, member_role in member_specs:
+    for serial_no, (username, real_name, title, _) in enumerate(member_specs, start=1):
         account = db.scalar(select(User).where(User.username == username))
         if not account:
-            account = User(username=username, real_name=real_name, title=title, password_hash=hash_password("ChangeMe123!"), role="user")
+            account = User(
+                username=username,
+                real_name=real_name,
+                identity_card_no=f"PROTOTYPE_{username}",
+                password_hash=hash_password("ChangeMe123!"),
+                role="user",
+            )
             db.add(account)
             db.flush()
         users[real_name] = account
-        if not db.scalar(select(ProjectMember).where(ProjectMember.project_id == project.id, ProjectMember.user_id == account.id)):
-            db.add(ProjectMember(project_id=project.id, user_id=account.id, member_role=member_role, display_name=real_name, responsibilities=[title]))
+        member = db.scalar(select(ProjectMember).where(ProjectMember.project_id == project.id, ProjectMember.user_id == account.id))
+        if not member:
+            member = ProjectMember(project_id=project.id, user_id=account.id)
+            db.add(member)
+            db.flush()
+        position = db.scalar(select(ProjectPosition).where(ProjectPosition.project_id == project.id, ProjectPosition.position_name == title))
+        if not position:
+            position = ProjectPosition(project_id=project.id, position_name=title)
+            db.add(position)
+            db.flush()
+        if not db.scalar(select(ProjectMemberPosition).where(ProjectMemberPosition.project_member_id == member.id, ProjectMemberPosition.position_id == position.id)):
+            db.add(ProjectMemberPosition(project_id=project.id, project_member_id=member.id, position_id=position.id, serial_no=serial_no, certificate_no="", responsibility_description=title))
 
     supervision_specs = [
         {"code": "WBS-02", "name": "支撑安装", "progress": 90, "status": "delayed", "owner": "陈施工", "yesterday": "完成北侧第一道支撑", "today": "验收资料复核", "quality": "支撑验收记录缺失，轴力资料待核查", "risk": "未完成验收前不得进入下一层开挖", "focus": "支撑验收资料、监测频次确认", "key": True},

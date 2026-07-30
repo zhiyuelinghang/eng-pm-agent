@@ -19,7 +19,36 @@ type ApiProject = {
   created_at: string
   updated_at?: string
 }
-type ApiMember = { id: number; project_id: number; user_id: number; member_role: string; display_name?: string; phone?: string; responsibilities: string[]; user: { real_name: string; title?: string; email?: string; phone?: string } }
+type ApiMember = {
+  id: number
+  project_id: number
+  user_id: number
+  user: {
+    id: number
+    username: string
+    real_name: string
+    identity_card_no: string
+    role: 'admin' | 'user'
+  }
+  positions: Array<{
+    id: number
+    position_id: number
+    serial_no: number
+    position_name: string
+    certificate_no: string
+    responsibility_description: string
+  }>
+}
+type MemberWriteInput = {
+  name: string
+  identityCardNo: string
+  positionName: string
+  certificateNo?: string
+  responsibilityDescription?: string
+  username?: string
+  password?: string
+  systemRole?: 'admin' | 'user'
+}
 type ApiWbs = { id: number; project_id: number; parent_id?: number; code: string; name: string; level: number; planned_start?: string; planned_finish?: string; progress: number; status: WbsItem['status']; responsible_user_id?: number; raw_data?: { supervision?: WbsItem['supervision'] } }
 type ApiRisk = { id: number; project_id: number; name: string; level: RiskSource['level']; risk_type: string; planned_start?: string; planned_finish?: string; responsible_user_id?: number; confirmer_user_id?: number; material_requirements: string[]; control_requirements?: string }
 type ApiQualityMetric = { id: number; project_id: number; wbs_item_id?: number; name: string; requirement: string; inspection_frequency?: string; required_materials: string[]; owner_user_id?: number; status: QualityMetric['status'] }
@@ -117,7 +146,32 @@ export const useAppStore = defineStore('app', () => {
       updatedAt: row.updated_at,
     }
   }
-  function mapMember(row: ApiMember): Member { return { id: id(row.user_id), name: row.display_name || row.user.real_name, title: row.user.title || row.member_role, phone: row.phone || row.user.phone || '', email: row.user.email || '', role: row.responsibilities || [], projectId: id(row.project_id) } }
+  function mapMember(row: ApiMember): Member {
+    const positions = (row.positions || []).map(position => ({
+      id: id(position.id),
+      positionId: id(position.position_id),
+      name: position.position_name,
+      serialNo: position.serial_no,
+      certificateNo: position.certificate_no || '',
+      responsibilityDescription: position.responsibility_description || '',
+    }))
+    return {
+      id: id(row.user_id),
+      projectMemberId: id(row.id),
+      username: row.user.username,
+      identityCardNo: row.user.identity_card_no,
+      systemRole: row.user.role,
+      name: row.user.real_name,
+      title: positions.map(position => position.name).join('、'),
+      phone: '',
+      email: '',
+      role: positions
+        .map(position => position.responsibilityDescription)
+        .filter(Boolean),
+      positions,
+      projectId: id(row.project_id),
+    }
+  }
   function mapWbs(row: ApiWbs): WbsItem { return { id: id(row.id), projectId: id(row.project_id), parentId: row.parent_id ? id(row.parent_id) : null, code: row.code, name: row.name, level: row.level, planStart: row.planned_start || '', planEnd: row.planned_finish || '', progress: row.progress, status: row.status, responsibleId: id(row.responsible_user_id), supervision: row.raw_data?.supervision } }
   function mapRisk(row: ApiRisk): RiskSource { return { id: id(row.id), projectId: id(row.project_id), name: row.name, level: row.level, type: row.risk_type, controlStart: row.planned_start || '', controlEnd: row.planned_finish || '', responsibleId: id(row.responsible_user_id), confirmatorId: id(row.confirmer_user_id), materials: row.material_requirements || [], controlMeasures: row.control_requirements } }
   function mapQualityMetric(row: ApiQualityMetric): QualityMetric { return { id: id(row.id), projectId: id(row.project_id), wbsId: id(row.wbs_item_id) || undefined, name: row.name, requirement: row.requirement, inspectionFrequency: row.inspection_frequency || '', requiredMaterials: row.required_materials || [], ownerId: id(row.owner_user_id) || undefined, status: row.status } }
@@ -250,8 +304,29 @@ export const useAppStore = defineStore('app', () => {
   async function reassignTask(taskId: string, assigneeUserId: string, note?: string) { await api.post(`/tasks/${taskId}/reassign`, { assignee_user_id: Number(assigneeUserId), note }); await loadProjectData() }
   async function addTaskNote(taskId: string, note: string) { await api.post(`/tasks/${taskId}/notes`, { note }) }
   async function getTaskHistory(taskId: string) { const response = await api.get<ApiEnvelope<{ history: Array<{ id: number; from_status?: string; to_status: string; note?: string; created_at: string }> }>>(`/tasks/${taskId}`); return response.data.data.history }
-  async function saveMember(member: Partial<Member> & { username?: string }, projectId = currentProjectId.value) { await api.post(`/projects/${projectId}/members`, { username: member.username || undefined, real_name: member.name || '未命名成员', phone: member.phone, email: member.email, title: member.title, responsibilities: member.role || [] }); if (projectId === currentProjectId.value) await loadProjectData(projectId) }
-  async function updateMember(userId: string, member: Partial<Member> & { username?: string }, projectId = currentProjectId.value) { await api.patch(`/projects/${projectId}/members/${userId}`, { username: member.username || undefined, real_name: member.name || '未命名成员', phone: member.phone, email: member.email, title: member.title, responsibilities: member.role || [] }); if (projectId === currentProjectId.value) await loadProjectData(projectId) }
+  function memberWritePayload(member: MemberWriteInput) {
+    return {
+      username: member.username || undefined,
+      real_name: member.name,
+      identity_card_no: member.identityCardNo,
+      password: member.password || undefined,
+      system_role: member.systemRole || 'user',
+      position_name: member.positionName,
+      certificate_no: member.certificateNo || '',
+      responsibility_description: member.responsibilityDescription || '',
+    }
+  }
+  async function saveMember(member: MemberWriteInput, projectId = currentProjectId.value) {
+    await api.post(`/projects/${projectId}/members`, memberWritePayload(member))
+    if (projectId === currentProjectId.value) await loadProjectData(projectId)
+  }
+  async function updateMemberPosition(assignmentId: string, member: MemberWriteInput, projectId = currentProjectId.value) {
+    await api.patch(
+      `/projects/${projectId}/member-positions/${assignmentId}`,
+      memberWritePayload(member),
+    )
+    if (projectId === currentProjectId.value) await loadProjectData(projectId)
+  }
   async function saveRiskSource(risk: Partial<RiskSource>) { await api.post(`/projects/${currentProjectId.value}/risks`, { name: risk.name || '未命名风险源', level: risk.level || 'medium', risk_type: risk.type || '综合风险', material_requirements: risk.materials || [], control_requirements: risk.controlMeasures }); await loadProjectData() }
   async function addWbsRiskLink(link: Omit<WbsRiskLink, 'id'>) { await api.post(`/projects/${currentProjectId.value}/wbs-risk-links`, { wbs_item_id: Number(link.wbsId), risk_source_id: Number(link.riskId), alert_days: link.alertDays, notify_methods: link.notifyMethods, basis: link.basis }); await loadProjectData() }
   async function confirmDailyReport(reportId: string) { await api.post(`/daily-reports/${reportId}/confirm`); await loadProjectData() }
@@ -264,5 +339,5 @@ export const useAppStore = defineStore('app', () => {
   async function removeWbsRiskLink(linkId: string) { await api.delete(`/wbs-risk-links/${linkId}`); await loadProjectData() }
   function addLog(log: OperationLog) { if (!currentProjectId.value) return; void api.post(`/projects/${currentProjectId.value}/operation-logs`, { action: log.action, detail: log.detail }).then(() => loadProjectData()) }
 
-  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, uploadAttachment, updateAttachmentCategory, createDocumentFolder, searchDocuments, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, fetchProjectConfigScope, saveMember, updateMember, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
+  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, uploadAttachment, updateAttachmentCategory, createDocumentFolder, searchDocuments, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
 })

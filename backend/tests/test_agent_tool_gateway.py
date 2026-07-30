@@ -19,6 +19,8 @@ from backend.app.models import (
     ProjectInitializationDraft,
     ProjectInitializationFile,
     ProjectMember,
+    ProjectMemberPosition,
+    ProjectPosition,
     Task,
     User,
     WbsItem,
@@ -62,12 +64,19 @@ def _seed_context(
     project = Project(name=f"项目-{session_id}")
     db.add_all([user, project])
     db.flush()
+    member = ProjectMember(project_id=project.id, user_id=user.id)
+    position = ProjectPosition(
+        project_id=project.id,
+        position_name="项目经理",
+    )
+    db.add_all([member, position])
+    db.flush()
     db.add(
-        ProjectMember(
+        ProjectMemberPosition(
             project_id=project.id,
-            user_id=user.id,
+            project_member_id=member.id,
+            position_id=position.id,
             serial_no=1,
-            position_name="项目经理",
             certificate_no=f"CERT-{session_id}",
             responsibility_description="负责项目管理",
         ),
@@ -490,6 +499,8 @@ def test_confirmed_draft_is_applied_in_one_transaction(db: Session) -> None:
 
     assert applied["counts"] == {
         "personnel": 1,
+        "positions": 1,
+        "position_assignments": 1,
         "wbs": 2,
         "risks": 1,
         "quality_requirements": 1,
@@ -500,3 +511,118 @@ def test_confirmed_draft_is_applied_in_one_transaction(db: Session) -> None:
     assert db.scalar(
         select(User).where(User.username == "zhangxiangmu"),
     ) is not None
+
+
+def test_existing_platform_account_is_added_to_project_without_recreation(
+    db: Session,
+) -> None:
+    _, project, conversation = _seed_context(
+        db,
+        role="admin",
+        conversation_type="initialization",
+        session_id="reuse-account",
+    )
+    existing_user = User(
+        username="existing-zhang",
+        password_hash="keep-this-password",
+        real_name="平台已有姓名",
+        identity_card_no="310000000000000001",
+        role="user",
+    )
+    db.add(existing_user)
+    db.commit()
+    context = resolve_tool_context(db, conversation.agentscope_session_id)
+    result, _ = execute_tool_operation(
+        db,
+        context,
+        "submit_project_initialization_draft",
+        {"payload": _initialization_payload()},
+    )
+    draft = db.get(ProjectInitializationDraft, result["id"])
+    assert draft is not None
+
+    applied = apply_initialization_draft(
+        db,
+        draft,
+        ApplyInitializationDraftInput(
+            allow_partial=True,
+            personnel_credentials=[],
+        ),
+    )
+    db.commit()
+
+    db.refresh(existing_user)
+    memberships = db.scalars(
+        select(ProjectMember).where(ProjectMember.project_id == project.id),
+    ).all()
+    assert applied["created_usernames"] == []
+    assert existing_user.password_hash == "keep-this-password"
+    assert existing_user.real_name == "平台已有姓名"
+    assert len(memberships) == 1
+    assert memberships[0].user_id == existing_user.id
+
+
+def test_one_project_member_can_hold_multiple_positions(
+    db: Session,
+) -> None:
+    _, project, conversation = _seed_context(
+        db,
+        role="admin",
+        conversation_type="initialization",
+        session_id="multiple-positions",
+    )
+    payload = _initialization_payload()
+    payload["personnel"].append(
+        {
+            "serial_no": 2,
+            "real_name": "张项目",
+            "identity_card_no": "310000000000000001",
+            "position_name": "劳务员",
+            "certificate_no": "CERT-002",
+            "responsibility_description": "负责劳务管理",
+        },
+    )
+    context = resolve_tool_context(db, conversation.agentscope_session_id)
+    result, _ = execute_tool_operation(
+        db,
+        context,
+        "submit_project_initialization_draft",
+        {"payload": payload},
+    )
+    draft = db.get(ProjectInitializationDraft, result["id"])
+    assert draft is not None
+
+    applied = apply_initialization_draft(
+        db,
+        draft,
+        ApplyInitializationDraftInput(
+            allow_partial=True,
+            personnel_credentials=[
+                PersonnelCredentialInput(
+                    identity_card_no="310000000000000001",
+                    username="zhangxiangmu",
+                    initial_password="TempPass123!",
+                ),
+            ],
+        ),
+    )
+    db.commit()
+
+    members = db.scalars(
+        select(ProjectMember).where(ProjectMember.project_id == project.id),
+    ).all()
+    positions = db.scalars(
+        select(ProjectPosition).where(ProjectPosition.project_id == project.id),
+    ).all()
+    assignments = db.scalars(
+        select(ProjectMemberPosition).where(
+            ProjectMemberPosition.project_id == project.id,
+        ),
+    ).all()
+    assert applied["counts"]["personnel"] == 1
+    assert applied["counts"]["positions"] == 2
+    assert applied["counts"]["position_assignments"] == 2
+    assert len(members) == 1
+    assert len(positions) == 2
+    assert len(assignments) == 2
+    assert {item.project_member_id for item in assignments} == {members[0].id}

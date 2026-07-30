@@ -125,7 +125,10 @@
               </header>
               <div class="initialization-draft-summary">
                 <span><strong>{{ materialAgentDraft.summary.project_fields }}</strong>项工程信息</span>
-                <span><strong>{{ materialAgentDraft.summary.personnel }}</strong>名人员</span>
+                <span>
+                  <strong>{{ materialAgentDraft.summary.personnel }}</strong>名人员
+                  · {{ materialAgentDraft.summary.position_assignments }}条任职
+                </span>
                 <span><strong>{{ materialAgentDraft.summary.wbs }}</strong>项 WBS</span>
                 <span><strong>{{ materialAgentDraft.summary.risks }}</strong>项风险</span>
                 <span><strong>{{ materialAgentDraft.summary.quality_requirements }}</strong>项质量指标</span>
@@ -187,7 +190,7 @@
           <form class="compact-form" @submit.prevent="submitMember">
             <input v-model.trim="memberForm.name" required placeholder="姓名">
             <input v-model.trim="memberForm.username" placeholder="登录账号（可选）">
-            <input v-model.trim="memberForm.title" placeholder="岗位，例如安全员">
+            <input v-model.trim="memberForm.positionName" placeholder="岗位，例如安全员">
             <button type="button" class="primary" :disabled="submitting" @click="submitMember">添加</button>
           </form>
           <div class="item-list">
@@ -302,7 +305,27 @@
           <section class="manual-config-list">
             <header class="manual-list-head"><div><span>人工配置</span><h2>{{ activeManualSection.label }}</h2><p>{{ activeManualSection.description }}</p></div><div class="manual-list-actions"><label class="manual-search"><n-icon :size="16"><Search /></n-icon><input v-model.trim="manualSearch" :placeholder="`搜索${activeManualSection.label}`"></label><button v-if="manualSection !== 'monitor'" type="button" class="primary" :disabled="submitting" @click="openManualEditor(manualSection)"><n-icon :size="16"><Plus /></n-icon>新建</button><button v-else type="button" class="primary" :disabled="submitting" @click="openManualEditor('monitor')"><n-icon :size="16"><Pencil /></n-icon>维护配置</button></div></header>
             <div class="manual-table-wrap">
-              <table v-if="manualSection === 'members' && filteredMembers.length" class="manual-table"><thead><tr><th>姓名</th><th>岗位</th><th>联系电话</th><th>邮箱</th><th>责任标签</th><th>操作</th></tr></thead><tbody><tr v-for="item in filteredMembers" :key="item.id"><td><strong>{{ item.name }}</strong></td><td>{{ item.title || '未设置' }}</td><td>{{ item.phone || '—' }}</td><td>{{ item.email || '—' }}</td><td>{{ item.role.join('、') || '未设置' }}</td><td><button type="button" class="row-action" @click="openManualEditor('members', item)">查看 / 修改</button></td></tr></tbody></table>
+              <table v-if="manualSection === 'members' && filteredMembers.length" class="manual-table manual-member-table">
+                <thead><tr><th>成员账号</th><th>身份证号</th><th>项目岗位</th><th>岗位职责</th><th>操作</th></tr></thead>
+                <tbody>
+                  <tr v-for="item in filteredMembers" :key="item.id">
+                    <td><strong>{{ item.name }}</strong><small>{{ item.username }}</small></td>
+                    <td>{{ item.identityCardNo }}</td>
+                    <td class="manual-position-cell">
+                      <div v-for="position in item.positions" :key="position.id" class="manual-position-item">
+                        <span><strong>{{ position.name }}</strong><small>{{ position.certificateNo ? `证书 ${position.certificateNo}` : '未登记证书' }}</small></span>
+                        <button type="button" class="row-action" @click="openMemberPositionEditor(item, position)">编辑</button>
+                      </div>
+                    </td>
+                    <td>
+                      <span v-for="position in item.positions" :key="`responsibility-${position.id}`" class="manual-responsibility">
+                        <strong>{{ position.name }}</strong>{{ position.responsibilityDescription || '未填写岗位职责' }}
+                      </span>
+                    </td>
+                    <td><button type="button" class="row-action" @click="openMemberPositionEditor(item)">添加岗位</button></td>
+                  </tr>
+                </tbody>
+              </table>
               <table v-else-if="manualSection === 'wbs' && filteredWbsItems.length" class="manual-table"><thead><tr><th>编码</th><th>工序名称</th><th>计划时间</th><th>进度</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="item in filteredWbsItems" :key="item.id"><td><strong>{{ item.code }}</strong></td><td>{{ item.name }}</td><td>{{ item.planStart || '未排期' }}{{ item.planEnd ? ` 至 ${item.planEnd}` : '' }}</td><td>{{ item.progress }}%</td><td><span class="status-dot" :class="item.status"></span>{{ wbsStatusLabel(item.status) }}</td><td><button type="button" class="row-action" @click="openManualEditor('wbs', item)">查看 / 修改</button></td></tr></tbody></table>
               <table v-else-if="manualSection === 'quality' && filteredQualityMetrics.length" class="manual-table"><thead><tr><th>质量指标</th><th>关联工序</th><th>检查频次</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="item in filteredQualityMetrics" :key="item.id"><td><strong>{{ item.name }}</strong><small>{{ item.requirement }}</small></td><td>{{ item.wbsId ? configWbsName(item.wbsId) : '未关联' }}</td><td>{{ item.inspectionFrequency || '未设置' }}</td><td>{{ qualityStatusLabel(item.status) }}</td><td><button type="button" class="row-action" @click="openManualEditor('quality', item)">查看 / 修改</button></td></tr></tbody></table>
               <table v-else-if="manualSection === 'risks' && filteredRisks.length" class="manual-table"><thead><tr><th>风险源</th><th>风险等级</th><th>类型</th><th>资料要求</th><th>操作</th></tr></thead><tbody><tr v-for="item in filteredRisks" :key="item.id"><td><strong>{{ item.name }}</strong></td><td><span class="risk-level" :class="item.level">{{ riskLabel(item.level) }}</span></td><td>{{ item.type }}</td><td>{{ item.materials.join('、') || '未设置' }}</td><td><button type="button" class="row-action" @click="openManualEditor('risks', item)">查看 / 修改</button></td></tr></tbody></table>
@@ -315,9 +338,18 @@
 
         <div v-if="manualEditor.open" class="setup-modal-backdrop manual-editor-backdrop" @click.self="closeManualEditor">
           <section class="setup-modal manual-editor-modal" role="dialog" aria-modal="true" aria-labelledby="manual-editor-title">
-            <header class="setup-modal-head"><div><h2 id="manual-editor-title">{{ manualEditor.mode === 'create' ? `新建${activeManualSection.label}` : `查看 / 修改${activeManualSection.label}` }}</h2></div><button type="button" class="modal-close" :disabled="submitting" aria-label="关闭编辑窗口" @click="closeManualEditor"><n-icon :size="17"><X /></n-icon></button></header>
+            <header class="setup-modal-head"><div><h2 id="manual-editor-title">{{ manualEditorTitle }}</h2></div><button type="button" class="modal-close" :disabled="submitting" aria-label="关闭编辑窗口" @click="closeManualEditor"><n-icon :size="17"><X /></n-icon></button></header>
             <form class="manual-editor-form" @submit.prevent="submitManualEditor">
-              <template v-if="manualEditor.section === 'members'"><label>姓名<input v-model.trim="editorMemberForm.name" required placeholder="成员姓名"></label><label>登录账号<input v-model.trim="editorMemberForm.username" :disabled="manualEditor.mode === 'edit'" placeholder="新建时可填写"></label><label>岗位<input v-model.trim="editorMemberForm.title" placeholder="例如：安全员"></label><label>联系电话<input v-model.trim="editorMemberForm.phone" placeholder="联系电话"></label><label class="full-span">邮箱<input v-model.trim="editorMemberForm.email" type="email" placeholder="邮箱地址"></label></template>
+              <template v-if="manualEditor.section === 'members'">
+                <label>姓名<input v-model.trim="editorMemberForm.name" required :disabled="Boolean(manualEditor.itemId)" placeholder="成员姓名"></label>
+                <label>身份证号<input v-model.trim="editorMemberForm.identityCardNo" required :disabled="Boolean(manualEditor.itemId)" placeholder="用于识别同一平台账号"></label>
+                <label>登录账号<input v-model.trim="editorMemberForm.username" :disabled="Boolean(manualEditor.itemId) || manualEditor.mode === 'edit'" placeholder="留空时按姓名生成拼音"></label>
+                <label v-if="manualEditor.mode === 'create' && !manualEditor.itemId">初始密码<span class="manual-password-field"><input v-model="editorMemberForm.password" required minlength="8" maxlength="12" type="text" autocomplete="new-password" placeholder="自动生成 8–12 位密码"><button type="button" @click="editorMemberForm.password = generateInitializationPassword()">换一个</button></span></label>
+                <label>岗位<input v-model.trim="editorMemberForm.positionName" required placeholder="例如：安全员"></label>
+                <label>证书编号<input v-model.trim="editorMemberForm.certificateNo" placeholder="没有可留空"></label>
+                <label class="full-span">岗位职责<textarea v-model.trim="editorMemberForm.responsibilityDescription" rows="4" placeholder="说明此人在该岗位承担的职责"></textarea></label>
+                <p class="manual-member-account-note full-span">身份证号用于识别人员：系统已有账号时只加入当前项目；同一成员可继续添加多个岗位，不会重复创建账号。</p>
+              </template>
               <template v-else-if="manualEditor.section === 'wbs'"><label>工序编码<input v-model.trim="editorWbsForm.code" required placeholder="例如 1.1"></label><label>工序名称<input v-model.trim="editorWbsForm.name" required placeholder="工序名称"></label><label>计划开始<input v-model="editorWbsForm.plannedStart" type="date"></label><label>计划完成<input v-model="editorWbsForm.plannedFinish" type="date"></label><label>进度<input v-model.number="editorWbsForm.progress" type="number" min="0" max="100"></label><label>状态<select v-model="editorWbsForm.status"><option value="not_started">未开始</option><option value="in_progress">进行中</option><option value="done">已完成</option><option value="delayed">已延期</option></select></label></template>
               <template v-else-if="manualEditor.section === 'quality'"><label>关联工序<select v-model="editorQualityForm.wbsId"><option value="">不关联工序</option><option v-for="item in configScope.wbsItems" :key="item.id" :value="item.id">{{ item.code }} · {{ item.name }}</option></select></label><label>检查频次<input v-model.trim="editorQualityForm.frequency" placeholder="例如：每周一次"></label><label class="full-span">质量指标<input v-model.trim="editorQualityForm.name" required placeholder="质量验收项"></label><label class="full-span">控制要求<textarea v-model.trim="editorQualityForm.requirement" required rows="4" placeholder="控制指标或验收要求"></textarea></label><label>状态<select v-model="editorQualityForm.status"><option value="pending">待配置</option><option value="processing">进行中</option><option value="passed">已通过</option><option value="failed">未通过</option></select></label></template>
               <template v-else-if="manualEditor.section === 'risks'"><label>风险源名称<input v-model.trim="editorRiskForm.name" required placeholder="风险源名称"></label><label>风险等级<select v-model="editorRiskForm.level"><option value="critical">重大</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option></select></label><label class="full-span">风险类型<input v-model.trim="editorRiskForm.type" placeholder="例如：高处作业"></label><label class="full-span">资料要求<textarea v-model.trim="editorRiskForm.materials" rows="3" placeholder="使用顿号或逗号分隔"></textarea></label><label class="full-span">控制要求<textarea v-model.trim="editorRiskForm.controlMeasures" rows="3" placeholder="控制措施或验收要求"></textarea></label></template>
@@ -408,10 +440,73 @@
             <section v-if="materialAgentDraft.payload.personnel.length" class="initialization-review-data-section">
               <button type="button" class="initialization-review-data-toggle" :class="{ expanded: initializationReviewExpanded.personnel }" :aria-expanded="initializationReviewExpanded.personnel" @click="initializationReviewExpanded.personnel = !initializationReviewExpanded.personnel">
                 <n-icon :size="16" aria-hidden="true"><ChevronDown /></n-icon>
-                <span><strong>人员</strong><small>身份、岗位与证书信息</small></span>
-                <em>{{ materialAgentDraft.payload.personnel.length }} 人</em>
+                <span><strong>人员</strong><small>身份、岗位、证书与登录账号</small></span>
+                <em>{{ materialAgentDraft.summary.personnel }} 人 · {{ materialAgentDraft.summary.position_assignments }} 条任职</em>
               </button>
-              <ul v-show="initializationReviewExpanded.personnel"><li v-for="item in materialAgentDraft.payload.personnel" :key="item.identity_card_no"><strong>{{ item.real_name }}</strong><span>{{ item.position_name }} · 证书 {{ item.certificate_no }}</span></li></ul>
+              <div v-show="initializationReviewExpanded.personnel" class="initialization-personnel-list">
+                <article
+                  v-for="item in initializationPersonnelReviewRows"
+                  :key="`${item.identity_card_no}-${item.serial_no}`"
+                  class="initialization-personnel-card"
+                >
+                  <header class="initialization-personnel-profile">
+                    <span>{{ String(item.serial_no).padStart(2, '0') }}</span>
+                    <div>
+                      <h4>{{ item.real_name }}</h4>
+                      <p>{{ item.position_name }}</p>
+                    </div>
+                    <em v-if="item.credential">将新建账号</em>
+                    <em v-else-if="item.existingAccount" class="existing">已匹配账号</em>
+                    <em v-else-if="item.sharedCredential" class="shared">共用账号</em>
+                  </header>
+                  <dl class="initialization-personnel-facts">
+                    <div>
+                      <dt>身份证号</dt>
+                      <dd>{{ item.identity_card_no }}</dd>
+                    </div>
+                    <div>
+                      <dt>证书编号</dt>
+                      <dd>{{ item.certificate_no || '' }}</dd>
+                    </div>
+                    <div class="responsibility">
+                      <dt>岗位职责</dt>
+                      <dd>{{ item.responsibility_description || '' }}</dd>
+                    </div>
+                  </dl>
+                  <div v-if="item.credential" class="initialization-personnel-credential">
+                    <div>
+                      <strong>将新建平台账号</strong>
+                      <span>已按姓名自动生成，可修改</span>
+                    </div>
+                    <label>
+                      登录账号
+                      <input v-model.trim="item.credential.username" autocomplete="off" maxlength="64" spellcheck="false" placeholder="自动生成拼音账号">
+                    </label>
+                    <label>
+                      初始密码
+                      <span class="initialization-generated-password">
+                        <input v-model="item.credential.initial_password" type="text" autocomplete="new-password" maxlength="12" spellcheck="false" placeholder="自动生成 8–12 位密码">
+                        <button type="button" @click="item.credential.initial_password = generateInitializationPassword()">换一个</button>
+                      </span>
+                    </label>
+                    <p>确认入库时创建账号。请将初始密码安全交给本人，并提醒首次登录后修改。</p>
+                  </div>
+                  <div v-else-if="item.existingAccount" class="initialization-personnel-account-ready existing">
+                    <small>已关联现有平台账号</small>
+                    <strong>{{ item.existingAccount.username }}</strong>
+                    <span>身份证号匹配成功。确认后只把该账号加入当前项目，不会重建账号或修改密码。</span>
+                  </div>
+                  <div v-else-if="item.sharedCredential" class="initialization-personnel-account-ready shared">
+                    <small>同一人员兼任岗位</small>
+                    <strong>{{ item.sharedCredential.username }}</strong>
+                    <span>该岗位将与同一身份证号的其他岗位共用上方新账号，不会重复创建用户。</span>
+                  </div>
+                  <div v-else class="initialization-personnel-account-ready">
+                    <strong>账号状态待确认</strong>
+                    <span>请重新打开草稿获取最新账号匹配结果。</span>
+                  </div>
+                </article>
+              </div>
             </section>
 
             <section v-if="materialAgentDraft.payload.wbs.length" class="initialization-review-data-section">
@@ -560,25 +655,87 @@
                 <span><strong>质量指标</strong><small>按 WBS 编码关联质量要求</small></span>
                 <em>{{ materialAgentDraft.payload.quality_requirements.length }} 项</em>
               </button>
-              <ul v-show="initializationReviewExpanded.quality"><li v-for="(item, index) in materialAgentDraft.payload.quality_requirements" :key="`${item.wbs_code}-${index}`"><strong>{{ item.quality_acceptance_item }}</strong><span>WBS {{ item.wbs_code }} · {{ item.inspection_frequency }}</span></li></ul>
+              <div v-show="initializationReviewExpanded.quality" class="initialization-quality-table-wrap">
+                <table class="initialization-quality-table">
+                  <thead>
+                    <tr>
+                      <th>WBS 编码</th>
+                      <th>质量验收项目</th>
+                      <th>控制指标</th>
+                      <th>检查频次</th>
+                      <th>相关资料</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="(item, index) in materialAgentDraft.payload.quality_requirements"
+                      :key="`${item.wbs_code}-${index}`"
+                    >
+                      <td><code>{{ item.wbs_code }}</code></td>
+                      <td><strong>{{ item.quality_acceptance_item }}</strong></td>
+                      <td>{{ item.control_indicator || '' }}</td>
+                      <td>{{ item.inspection_frequency || '' }}</td>
+                      <td>{{ item.related_documents || '' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </section>
 
             <section v-if="materialAgentDraft.validation_issues.length" class="initialization-review-section draft-issues">
-              <header><h3>校验结果</h3><span>{{ materialAgentDraft.validation_issues.length }} 项</span></header>
-              <ul><li v-for="(issue, index) in materialAgentDraft.validation_issues" :key="`${issue.path}-${index}`" :class="issue.level"><strong>{{ issue.level === 'error' ? '错误' : '待补充' }}</strong><span>{{ issue.path }} · {{ issue.message }}</span></li></ul>
+              <header class="draft-issues-heading">
+                <div>
+                  <h3>需要你确认的内容</h3>
+                  <p>已按业务内容整理。必须修正的问题会阻止入库，其余提醒可核对后继续。</p>
+                </div>
+                <span>{{ materialAgentDraft.validation_issues.length }} 项</span>
+              </header>
+              <div class="draft-issues-summary" aria-label="校验问题统计">
+                <span v-if="initializationDraftErrorCount" class="error"><strong>{{ initializationDraftErrorCount }}</strong> 项必须修正</span>
+                <span v-if="initializationDraftWarningCount" class="warning"><strong>{{ initializationDraftWarningCount }}</strong> 项需要核对</span>
+              </div>
+              <div class="draft-issue-groups">
+                <article
+                  v-for="group in initializationDraftIssueGroups"
+                  :key="group.key"
+                  class="draft-issue-group"
+                  :class="group.level"
+                >
+                  <button
+                    type="button"
+                    class="draft-issue-group-toggle"
+                    :aria-expanded="Boolean(initializationIssueGroupsExpanded[group.key])"
+                    @click="initializationIssueGroupsExpanded[group.key] = !initializationIssueGroupsExpanded[group.key]"
+                  >
+                    <span class="draft-issue-group-icon" aria-hidden="true"><n-icon :size="17"><AlertTriangle /></n-icon></span>
+                    <span class="draft-issue-group-copy">
+                      <strong>{{ group.label }}</strong>
+                      <small>{{ group.description }}</small>
+                    </span>
+                    <span class="draft-issue-group-count">{{ group.items.length }} 项</span>
+                    <n-icon class="draft-issue-group-chevron" :size="16" aria-hidden="true"><ChevronDown /></n-icon>
+                  </button>
+                  <ul v-show="initializationIssueGroupsExpanded[group.key]">
+                    <li v-for="(issue, index) in group.items" :key="`${issue.path}-${index}`" :class="issue.level">
+                      <header>
+                        <div>
+                          <strong>{{ issue.title }}</strong>
+                          <span v-if="issue.reference">{{ issue.reference }}</span>
+                        </div>
+                        <em>{{ issue.level === 'error' ? '必须修正' : '需要核对' }}</em>
+                      </header>
+                      <p>{{ issue.description }}</p>
+                      <div class="draft-issue-guidance">
+                        <strong>怎么处理</strong>
+                        <span>{{ issue.guidance }}</span>
+                      </div>
+                    </li>
+                  </ul>
+                </article>
+              </div>
               <label v-if="draftHasWarnings && !draftHasErrors" class="initialization-partial-confirm"><input v-model="initializationDraftAllowPartial" type="checkbox">我已核对待补充项，确认先按当前草稿完成部分初始化</label>
             </section>
 
-            <section v-if="initializationCredentialForms.length" class="initialization-review-section">
-              <header><h3>新人员登录账号</h3><span>由管理员设置，不交给智能体生成</span></header>
-              <div class="initialization-credential-list">
-                <div v-for="credential in initializationCredentialForms" :key="credential.identity_card_no">
-                  <p><strong>{{ credential.real_name }}</strong><span>{{ credential.position_name }} · {{ credential.identity_card_no }}</span></p>
-                  <label>登录账号<input v-model.trim="credential.username" autocomplete="off" maxlength="64" placeholder="设置唯一登录账号"></label>
-                  <label>初始密码<input v-model="credential.initial_password" type="password" autocomplete="new-password" maxlength="128" placeholder="至少 8 位"></label>
-                </div>
-              </div>
-            </section>
           </div>
 
           <footer class="initialization-review-actions">
@@ -606,7 +763,7 @@ import {
 } from '@/api/agentStream'
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
 import { useAppStore, type ProjectConfigScope } from '@/stores/app'
-import type { DirConfig, Member, PlatformFieldMapping, QualityMetric, RemindRule, RiskLevel, RiskSource, WbsItem } from '@/types'
+import type { DirConfig, Member, MemberPosition, PlatformFieldMapping, QualityMetric, RemindRule, RiskLevel, RiskSource, WbsItem } from '@/types'
 import {
   applyAgentRuntimeEvent,
   createEmptyRuntimeTrace,
@@ -648,6 +805,21 @@ type InitializationDraftIssue = {
   level: 'error' | 'warning'
   path: string
   message: string
+}
+type InitializationDraftIssueGroupKey = 'project' | 'personnel' | 'wbs_content' | 'wbs_timeline' | 'wbs_structure' | 'risks' | 'quality' | 'other'
+type InitializationDraftIssuePresentation = InitializationDraftIssue & {
+  category: InitializationDraftIssueGroupKey
+  title: string
+  description: string
+  guidance: string
+  reference?: string
+}
+type InitializationDraftIssueGroup = {
+  key: InitializationDraftIssueGroupKey
+  label: string
+  description: string
+  level: 'error' | 'warning'
+  items: InitializationDraftIssuePresentation[]
 }
 type InitializationDraftPersonnel = {
   serial_no: number
@@ -693,7 +865,9 @@ type InitializationDraftRisk = {
 type InitializationDraftQuality = {
   wbs_code: string
   quality_acceptance_item: string
+  control_indicator: string
   inspection_frequency: string
+  related_documents: string
 }
 type ApiInitializationDraft = {
   id: number
@@ -714,10 +888,18 @@ type ApiInitializationDraft = {
     identity_card_no: string
     real_name: string
     position_name: string
+    suggested_username: string
+  }>
+  existing_personnel_accounts: Array<{
+    identity_card_no: string
+    user_id: number
+    username: string
+    real_name: string
   }>
   summary: {
     project_fields: number
     personnel: number
+    position_assignments: number
     wbs: number
     risks: number
     quality_requirements: number
@@ -727,6 +909,7 @@ type InitializationCredentialForm = {
   identity_card_no: string
   real_name: string
   position_name: string
+  suggested_username: string
   username: string
   initial_password: string
 }
@@ -762,7 +945,13 @@ const workspaceTabs: Array<{ key: WorkspaceTab; label: string; hint: string }> =
 ]
 const projectCreateOpen = ref(false)
 const projectForm = reactive({ name: '' })
-const memberForm = reactive({ name: '', username: '', title: '' })
+const memberForm = reactive({
+  name: '',
+  username: '',
+  identityCardNo: '',
+  password: '',
+  positionName: '',
+})
 const wbsForm = reactive({ code: '', name: '', planned_start: '', planned_finish: '' })
 const riskForm = reactive<{ name: string; level: RiskLevel; risk_type: string; materials: string }>({ name: '', level: 'medium', risk_type: '', materials: '' })
 const qualityForm = reactive({ wbs_item_id: '', name: '', requirement: '', inspection_frequency: '' })
@@ -772,8 +961,22 @@ const monitorRules = ref<RemindRule[]>([])
 const reminderForm = reactive<{ level: RiskLevel; days: number }>({ level: 'medium', days: 7 })
 const manualSection = ref<ManualSection>('members')
 const manualSearch = ref('')
-const manualEditor = reactive<{ open: boolean; mode: 'create' | 'edit'; section: ManualSection; itemId: string }>({ open: false, mode: 'create', section: 'wbs', itemId: '' })
-const editorMemberForm = reactive({ name: '', username: '', title: '', phone: '', email: '' })
+const manualEditor = reactive<{
+  open: boolean
+  mode: 'create' | 'edit'
+  section: ManualSection
+  itemId: string
+  assignmentId: string
+}>({ open: false, mode: 'create', section: 'wbs', itemId: '', assignmentId: '' })
+const editorMemberForm = reactive({
+  name: '',
+  username: '',
+  identityCardNo: '',
+  password: '',
+  positionName: '',
+  certificateNo: '',
+  responsibilityDescription: '',
+})
 const editorWbsForm = reactive<{ code: string; name: string; plannedStart: string; plannedFinish: string; progress: number; status: WbsItem['status'] }>({ code: '', name: '', plannedStart: '', plannedFinish: '', progress: 0, status: 'not_started' })
 const editorQualityForm = reactive<{ wbsId: string; name: string; requirement: string; frequency: string; status: QualityMetric['status'] }>({ wbsId: '', name: '', requirement: '', frequency: '', status: 'pending' })
 const editorRiskForm = reactive<{ name: string; level: RiskLevel; type: string; materials: string; controlMeasures: string }>({ name: '', level: 'medium', type: '', materials: '', controlMeasures: '' })
@@ -815,6 +1018,16 @@ const initializationReviewExpanded = reactive({
   risks: true,
   quality: true,
 })
+const initializationIssueGroupsExpanded = reactive<Record<InitializationDraftIssueGroupKey, boolean>>({
+  project: true,
+  personnel: true,
+  wbs_content: true,
+  wbs_timeline: false,
+  wbs_structure: true,
+  risks: true,
+  quality: true,
+  other: true,
+})
 const initializationDraftApplying = ref(false)
 const initializationDraftAllowPartial = ref(false)
 const initializationCredentialForms = ref<InitializationCredentialForm[]>([])
@@ -837,7 +1050,23 @@ const manualSections = computed(() => [
 ])
 const activeManualSection = computed(() => manualSections.value.find(item => item.key === manualSection.value) || manualSections.value[0])
 function matchesManualSearch(...values: Array<string | undefined>) { const keyword = manualSearch.value.trim().toLowerCase(); return !keyword || values.some(value => value?.toLowerCase().includes(keyword)) }
-const filteredMembers = computed(() => configScope.members.filter(item => matchesManualSearch(item.name, item.title, item.phone, item.email, item.role.join(' '))))
+const filteredMembers = computed(() => configScope.members.filter(item => matchesManualSearch(
+  item.name,
+  item.username,
+  item.identityCardNo,
+  item.title,
+  item.role.join(' '),
+  ...item.positions.map(position => position.certificateNo),
+)))
+const manualEditorTitle = computed(() => {
+  if (manualEditor.section !== 'members') {
+    return manualEditor.mode === 'create'
+      ? `新建${activeManualSection.value.label}`
+      : `查看 / 修改${activeManualSection.value.label}`
+  }
+  if (manualEditor.mode === 'edit') return '修改成员岗位'
+  return manualEditor.itemId ? '为成员添加岗位' : '新建项目成员'
+})
 const filteredWbsItems = computed(() => configScope.wbsItems.filter(item => matchesManualSearch(item.code, item.name, item.planStart, item.planEnd)))
 const filteredQualityMetrics = computed(() => configScope.qualityMetrics.filter(item => matchesManualSearch(item.name, item.requirement, item.inspectionFrequency, configWbsName(item.wbsId || ''))))
 const filteredRisks = computed(() => configScope.riskSources.filter(item => matchesManualSearch(item.name, item.type, item.materials.join(' '), item.controlMeasures)))
@@ -845,15 +1074,246 @@ const filteredMappings = computed(() => configScope.platformMappings.filter(item
 const isPlatformAdmin = computed(() => sessionStorage.getItem('user_role') === 'admin')
 const draftHasErrors = computed(() => materialAgentDraft.value?.validation_issues.some(item => item.level === 'error') ?? false)
 const draftHasWarnings = computed(() => materialAgentDraft.value?.validation_issues.some(item => item.level === 'warning') ?? false)
+const initializationDraftErrorCount = computed(() => (
+  materialAgentDraft.value?.validation_issues.filter(item => item.level === 'error').length || 0
+))
+const initializationDraftWarningCount = computed(() => (
+  (materialAgentDraft.value?.validation_issues.length || 0) - initializationDraftErrorCount.value
+))
 const initializationDraftIssueSummary = computed(() => {
-  const issues = materialAgentDraft.value?.validation_issues || []
-  const errors = issues.filter(item => item.level === 'error').length
-  const warnings = issues.length - errors
   return [
-    errors ? `${errors} 项结构错误` : '',
-    warnings ? `${warnings} 项待补充内容` : '',
+    initializationDraftErrorCount.value ? `${initializationDraftErrorCount.value} 项必须修正` : '',
+    initializationDraftWarningCount.value ? `${initializationDraftWarningCount.value} 项需要核对` : '',
   ].filter(Boolean).join('，')
 })
+const initializationDraftIssueGroups = computed<InitializationDraftIssueGroup[]>(() => {
+  const groupMetadata: Record<InitializationDraftIssueGroupKey, Pick<InitializationDraftIssueGroup, 'label' | 'description'>> = {
+    project: { label: '工程基本信息', description: '工程日期或基础资料需要补充、修正' },
+    personnel: { label: '人员信息', description: '人员名单中存在重复或缺失内容' },
+    wbs_content: { label: 'WBS 工序内容', description: '工序名称或基础内容需要核对' },
+    wbs_timeline: { label: 'WBS 时间线', description: '工序日期、编码顺序或前置时间需要核对' },
+    wbs_structure: { label: 'WBS 层级与关联', description: '工序的上级、层级或前置关系需要修正' },
+    risks: { label: '风险源', description: '风险清单及其关联工序需要核对' },
+    quality: { label: '质量指标', description: '质量指标及其关联工序需要核对' },
+    other: { label: '其他内容', description: '还有未归类的内容需要核对' },
+  }
+  const order: InitializationDraftIssueGroupKey[] = [
+    'project',
+    'personnel',
+    'wbs_content',
+    'wbs_timeline',
+    'wbs_structure',
+    'risks',
+    'quality',
+    'other',
+  ]
+  const grouped = new Map<InitializationDraftIssueGroupKey, InitializationDraftIssuePresentation[]>()
+  for (const issue of materialAgentDraft.value?.validation_issues || []) {
+    const presentation = presentInitializationDraftIssue(issue)
+    grouped.set(presentation.category, [...(grouped.get(presentation.category) || []), presentation])
+  }
+  return order
+    .filter(key => grouped.has(key))
+    .map(key => {
+      const items = grouped.get(key) || []
+      return {
+        key,
+        ...groupMetadata[key],
+        level: (items.some(item => item.level === 'error') ? 'error' : 'warning') as 'error' | 'warning',
+        items,
+      }
+    })
+    .sort((left, right) => {
+      if (left.level === right.level) return order.indexOf(left.key) - order.indexOf(right.key)
+      return left.level === 'error' ? -1 : 1
+    })
+})
+
+function initializationIssueWbsCode(path: string) {
+  if (!path.startsWith('wbs.')) return ''
+  const detailedPath = path.match(/^wbs\.(.+)\.(name|planned_start_at|planned_finish_at|parent_wbs_code|level|predecessor_wbs_codes)$/)
+  return detailedPath?.[1] || path.slice(4)
+}
+
+function presentInitializationDraftIssue(issue: InitializationDraftIssue): InitializationDraftIssuePresentation {
+  const { path, message, level } = issue
+  const wbsCode = initializationIssueWbsCode(path)
+  const reference = wbsCode ? `WBS ${wbsCode}` : undefined
+  const common = { ...issue, description: message, reference }
+
+  if (path.startsWith('project')) {
+    if (message.includes('竣工日期')) {
+      return {
+        ...common,
+        category: 'project',
+        title: '合同日期先后顺序有误',
+        description: '合同竣工日期早于合同开工日期，这组日期无法作为有效工期。',
+        guidance: '请回到工程基本信息，按照合同原件重新核对开工日期和竣工日期。',
+      }
+    }
+    return {
+      ...common,
+      category: 'project',
+      title: '工程基本信息尚未补充完整',
+      guidance: '请在上方工程基本信息中核对已识别内容；缺少的内容可继续通过对话或附件补充。',
+    }
+  }
+
+  if (path === 'personnel') {
+    const identityCard = message.match(/身份证号\s+(\S+)/)?.[1]
+    const serialNo = message.match(/人员序号\s+(\S+)/)?.[1]
+    if (identityCard) {
+      if (message.includes('对应多个岗位')) {
+        return {
+          ...common,
+          category: 'personnel',
+          title: '同一人员在项目中承担多个岗位',
+          description: message,
+          guidance: '请核对这些岗位是否确由同一人兼任。确认无误后，所有岗位会关联同一个平台账号，不会重复创建用户。',
+        }
+      }
+      return {
+        ...common,
+        category: 'personnel',
+        title: '人员名单中存在重复身份证号',
+        description: `身份证号 ${identityCard} 在人员名单中出现了多次。系统无法判断是重复录入，还是同一人员兼任多个岗位。`,
+        guidance: '请在上方人员板块找到对应人员；重复录入请删除多余记录，兼任岗位请合并为一名人员后补充岗位说明。',
+      }
+    }
+    if (serialNo) {
+      return {
+        ...common,
+        category: 'personnel',
+        title: `人员序号 ${serialNo} 重复`,
+        description: `人员名单中有多条记录使用了序号 ${serialNo}，入库后将无法稳定区分这些人员。`,
+        guidance: '请对照原始人员表，为每条人员记录设置不同的序号。',
+      }
+    }
+    return {
+      ...common,
+      category: 'personnel',
+      title: message.includes('未识别') ? '尚未识别到项目人员' : '人员信息需要修正',
+      guidance: '请展开上方人员板块核对名单；如资料中缺少人员信息，请继续上传人员表或手动补充。',
+    }
+  }
+
+  if (path === 'wbs' || path.startsWith('wbs.')) {
+    if (path.endsWith('.name') || path === 'wbs') {
+      const placeholder = message.match(/名称[“"](.+?)[”"]/)?.[1]
+      return {
+        ...common,
+        category: 'wbs_content',
+        title: placeholder && reference ? `${reference} 的工序名称需要确认` : (message.includes('未识别') ? '尚未识别到 WBS 工序' : 'WBS 工序内容需要修正'),
+        description: placeholder ? `当前工序名称为“${placeholder}”，看起来是表格中的占位文字，不是实际工序名称。` : message,
+        guidance: reference ? `请在上方 WBS 板块找到 ${reference}，对照原始进度计划填写真实工序名称。` : '请继续上传进度计划，或在 WBS 板块补充工序。',
+      }
+    }
+
+    if (path.endsWith('.planned_start_at') || path.endsWith('.planned_finish_at')) {
+      if (message.includes('编码顺序与开始时间顺序冲突')) {
+        const relatedCodes = [...message.matchAll(/WBS\s+([0-9.]+)/g)].map(match => match[1])
+        const comparedCode = relatedCodes[1]
+        return {
+          ...common,
+          category: 'wbs_timeline',
+          title: `${reference || '该工序'} 的开始时间顺序异常`,
+          description: comparedCode
+            ? `按照同级 WBS 编码顺序，${comparedCode} 应先于 ${wbsCode} 开始，但草稿中的计划开始日期正好相反。`
+            : '该工序的 WBS 编码顺序与计划开始日期顺序不一致。',
+          guidance: `请在上方 WBS 板块对照原始进度计划，核对 ${reference || '该工序'} 的计划开始日期；系统不会自行猜测或调整日期。`,
+        }
+      }
+      if (message.includes('早于前任')) {
+        const predecessorCode = message.match(/前任\s+([0-9.]+)/)?.[1]
+        return {
+          ...common,
+          category: 'wbs_timeline',
+          title: `${reference || '该工序'} 与前置工序的时间有重叠`,
+          description: predecessorCode
+            ? `该工序在前置 WBS ${predecessorCode} 计划完成之前已经开始。可能是交叉施工，也可能是日期填写错误。`
+            : '该工序在前置工序计划完成之前已经开始。',
+          guidance: '请对照原始进度计划确认是否属于搭接施工；若不是，请修正工序日期或前置关系。',
+        }
+      }
+      if (message.includes('早于父级')) {
+        return {
+          ...common,
+          category: 'wbs_timeline',
+          title: `${reference || '子工序'} 早于上级工序开始`,
+          description: '子工序的计划开始日期早于上级工序的汇总开始日期，父子工序的时间范围不一致。',
+          guidance: '请对照原始进度计划，核对该子工序或上级工序的计划开始日期。',
+        }
+      }
+      if (message.includes('晚于父级')) {
+        return {
+          ...common,
+          category: 'wbs_timeline',
+          title: `${reference || '子工序'} 晚于上级工序完成`,
+          description: '子工序的计划完成日期晚于上级工序的汇总完成日期，父子工序的时间范围不一致。',
+          guidance: '请对照原始进度计划，核对该子工序或上级工序的计划完成日期。',
+        }
+      }
+      if (message.includes('结束时间不能早于')) {
+        return {
+          ...common,
+          category: 'wbs_timeline',
+          title: `${reference || '该工序'} 的开始和完成日期有误`,
+          description: '该工序的计划完成日期早于计划开始日期，无法形成有效工期。',
+          guidance: '请对照原始进度计划，重新核对该工序的计划开始日期和计划完成日期。',
+        }
+      }
+      return {
+        ...common,
+        category: 'wbs_timeline',
+        title: `${reference || '该工序'} 的计划日期需要核对`,
+        guidance: '请在上方 WBS 板块对照原始进度计划核对日期，系统不会自动改动。',
+      }
+    }
+
+    let title = `${reference || 'WBS 工序'} 的层级或关联关系有误`
+    let guidance = `请在上方 WBS 板块找到 ${reference || '对应工序'}，核对其编码、上级和前置工序。`
+    if (message.includes('编码') && message.includes('重复')) title = `${reference || 'WBS 编码'} 重复`
+    else if (message.includes('父级') || message.includes('上级')) title = `${reference || '该工序'} 的上级关系有误`
+    else if (message.includes('层级')) title = `${reference || '该工序'} 的层级有误`
+    else if (message.includes('前任') || message.includes('前置')) title = `${reference || '该工序'} 的前置关系有误`
+    else if (message.includes('循环')) {
+      title = `${reference || 'WBS 工序'} 形成了循环关系`
+      guidance = '请检查该工序的上级或前置工序，移除相互指向的循环关系。'
+    }
+    return { ...common, category: 'wbs_structure', title, guidance }
+  }
+
+  if (path === 'risks' || path.startsWith('risks.')) {
+    const serialNo = path.match(/^risks\.([^.]+)/)?.[1]
+    const riskReference = serialNo ? `风险源第 ${serialNo} 项` : undefined
+    return {
+      ...common,
+      category: 'risks',
+      reference: riskReference,
+      title: message.includes('未识别') ? '尚未识别到风险清单' : `${riskReference || '风险源信息'}需要修正`,
+      guidance: '请在上方风险源板块找到对应记录，对照原始风险清单核对风险日期和关联 WBS。',
+    }
+  }
+
+  if (path === 'quality_requirements' || path.startsWith('quality_requirements.')) {
+    const qualityWbsCode = path.startsWith('quality_requirements.') ? path.slice('quality_requirements.'.length) : ''
+    return {
+      ...common,
+      category: 'quality',
+      reference: qualityWbsCode ? `WBS ${qualityWbsCode}` : undefined,
+      title: message.includes('未识别') ? '尚未识别到工序质量指标' : '质量指标的关联工序需要修正',
+      guidance: '请在上方质量指标板块找到对应记录，核对其 WBS 编码；同一工序存在重复指标时，请合并或删除多余记录。',
+    }
+  }
+
+  return {
+    ...common,
+    category: 'other',
+    title: level === 'error' ? '这项内容必须修正' : '这项内容需要核对',
+    guidance: '请对照原始附件核对该内容；如无法确认，可继续询问初始化助手。',
+  }
+}
+
 const initializationWbsTree = computed(() => {
   const items = materialAgentDraft.value?.payload.wbs || []
   const itemByCode = new Map(items.map(item => [item.wbs_code, item]))
@@ -1017,6 +1477,27 @@ const draftProjectUnitFields = computed(() => {
   ])
   return draftProjectFields.value.filter(item => keys.has(item.key))
 })
+const initializationPersonnelReviewRows = computed(() => {
+  const credentialByIdentityCard = new Map(
+    initializationCredentialForms.value.map(item => [item.identity_card_no, item]),
+  )
+  const existingAccountByIdentityCard = new Map(
+    (materialAgentDraft.value?.existing_personnel_accounts || []).map(item => [item.identity_card_no, item]),
+  )
+  const seenNewIdentityCards = new Set<string>()
+  return (materialAgentDraft.value?.payload.personnel || []).map(item => {
+    const account = existingAccountByIdentityCard.get(item.identity_card_no) || null
+    const generatedCredential = credentialByIdentityCard.get(item.identity_card_no) || null
+    const isRepeatedNewPerson = !account && Boolean(generatedCredential) && seenNewIdentityCards.has(item.identity_card_no)
+    if (generatedCredential) seenNewIdentityCards.add(item.identity_card_no)
+    return {
+      ...item,
+      existingAccount: account,
+      credential: isRepeatedNewPerson ? null : generatedCredential,
+      sharedCredential: isRepeatedNewPerson ? generatedCredential : null,
+    }
+  })
+})
 const canApplyInitializationDraft = computed(() => {
   const draft = materialAgentDraft.value
   if (
@@ -1040,7 +1521,15 @@ function selectManualSection(section: ManualSection) {
 }
 
 function resetManualEditorForms() {
-  Object.assign(editorMemberForm, { name: '', username: '', title: '', phone: '', email: '' })
+  Object.assign(editorMemberForm, {
+    name: '',
+    username: '',
+    identityCardNo: '',
+    password: '',
+    positionName: '',
+    certificateNo: '',
+    responsibilityDescription: '',
+  })
   Object.assign(editorWbsForm, { code: '', name: '', plannedStart: '', plannedFinish: '', progress: 0, status: 'not_started' })
   Object.assign(editorQualityForm, { wbsId: '', name: '', requirement: '', frequency: '', status: 'pending' })
   Object.assign(editorRiskForm, { name: '', level: 'medium', type: '', materials: '', controlMeasures: '' })
@@ -1048,18 +1537,20 @@ function resetManualEditorForms() {
 }
 
 function openManualEditor(section: ManualSection, item?: Member | WbsItem | QualityMetric | RiskSource | PlatformFieldMapping) {
+  if (section === 'members') {
+    openMemberPositionEditor(item as Member | undefined)
+    return
+  }
   manualSection.value = section
   resetManualEditorForms()
   manualEditor.open = true
   manualEditor.mode = item ? 'edit' : 'create'
   manualEditor.section = section
   manualEditor.itemId = item?.id || ''
+  manualEditor.assignmentId = ''
 
   if (!item) return
-  if (section === 'members') {
-    const member = item as Member
-    Object.assign(editorMemberForm, { name: member.name, title: member.title || '', phone: member.phone || '', email: member.email || '' })
-  } else if (section === 'wbs') {
+  if (section === 'wbs') {
     const wbs = item as WbsItem
     Object.assign(editorWbsForm, { code: wbs.code, name: wbs.name, plannedStart: wbs.planStart || '', plannedFinish: wbs.planEnd || '', progress: wbs.progress, status: wbs.status })
   } else if (section === 'quality') {
@@ -1072,6 +1563,25 @@ function openManualEditor(section: ManualSection, item?: Member | WbsItem | Qual
     const mapping = item as PlatformFieldMapping
     Object.assign(editorMappingForm, { platformName: mapping.platformName, sourceField: mapping.sourceField, targetField: mapping.targetField, transformRule: mapping.transformRule || '', required: mapping.required, enabled: mapping.enabled })
   }
+}
+
+function openMemberPositionEditor(member?: Member, position?: MemberPosition) {
+  manualSection.value = 'members'
+  resetManualEditorForms()
+  manualEditor.open = true
+  manualEditor.mode = position ? 'edit' : 'create'
+  manualEditor.section = 'members'
+  manualEditor.itemId = member?.id || ''
+  manualEditor.assignmentId = position?.id || ''
+  Object.assign(editorMemberForm, {
+    name: member?.name || '',
+    username: member?.username || '',
+    identityCardNo: member?.identityCardNo || '',
+    password: member ? '' : generateInitializationPassword(),
+    positionName: position?.name || '',
+    certificateNo: position?.certificateNo || '',
+    responsibilityDescription: position?.responsibilityDescription || '',
+  })
 }
 
 function closeManualEditor() {
@@ -1095,8 +1605,22 @@ function submitManualEditor() {
   const success = isEditing ? '项目配置已更新' : '项目配置已创建'
   void run(async () => {
     if (manualEditor.section === 'members') {
-      const payload = { name: editorMemberForm.name, username: editorMemberForm.username || undefined, title: editorMemberForm.title, phone: editorMemberForm.phone, email: editorMemberForm.email, role: [] as string[] }
-      if (isEditing) await store.updateMember(manualEditor.itemId, payload, configProjectId.value)
+      const payload = {
+        name: editorMemberForm.name,
+        username: editorMemberForm.username || undefined,
+        identityCardNo: editorMemberForm.identityCardNo,
+        password: editorMemberForm.password || undefined,
+        positionName: editorMemberForm.positionName,
+        certificateNo: editorMemberForm.certificateNo,
+        responsibilityDescription: editorMemberForm.responsibilityDescription,
+      }
+      if (isEditing) {
+        await store.updateMemberPosition(
+          manualEditor.assignmentId,
+          payload,
+          configProjectId.value,
+        )
+      }
       else await store.saveMember(payload, configProjectId.value)
     } else if (manualEditor.section === 'wbs') {
       const payload = { code: editorWbsForm.code, name: editorWbsForm.name, planned_start: editorWbsForm.plannedStart, planned_finish: editorWbsForm.plannedFinish, progress: Number(editorWbsForm.progress) || 0, status: editorWbsForm.status }
@@ -1387,6 +1911,33 @@ function collapseAllInitializationWbs() {
   collapsedInitializationWbsCodes.value = new Set(initializationWbsTree.value.groupCodes)
 }
 
+function generateInitializationPassword(length = 12) {
+  const targetLength = Math.min(12, Math.max(8, length))
+  const characterGroups = [
+    'ABCDEFGHJKLMNPQRSTUVWXYZ',
+    'abcdefghijkmnopqrstuvwxyz',
+    '23456789',
+    '!@#$%&*',
+  ]
+  const randomIndex = (size: number) => {
+    const value = new Uint32Array(1)
+    window.crypto.getRandomValues(value)
+    return value[0] % size
+  }
+  const password = characterGroups.map(group => group[randomIndex(group.length)])
+  const allCharacters = characterGroups.join('')
+  while (password.length < targetLength) {
+    password.push(allCharacters[randomIndex(allCharacters.length)])
+  }
+  for (let index = password.length - 1; index > 0; index -= 1) {
+    const swapIndex = randomIndex(index + 1)
+    const currentCharacter = password[index]
+    password[index] = password[swapIndex]
+    password[swapIndex] = currentCharacter
+  }
+  return password.join('')
+}
+
 function openInitializationDraftReview() {
   const draft = materialAgentDraft.value
   if (!draft) return
@@ -1396,12 +1947,18 @@ function openInitializationDraftReview() {
     risks: true,
     quality: true,
   })
+  for (const group of initializationDraftIssueGroups.value) {
+    initializationIssueGroupsExpanded[group.key] = group.level === 'error' || group.items.length <= 3
+  }
   collapsedInitializationWbsCodes.value = new Set()
   initializationDraftAllowPartial.value = false
+  const currentCredentialByIdentityCard = new Map(
+    initializationCredentialForms.value.map(item => [item.identity_card_no, item]),
+  )
   initializationCredentialForms.value = draft.required_personnel_credentials.map(item => ({
     ...item,
-    username: '',
-    initial_password: '',
+    username: currentCredentialByIdentityCard.get(item.identity_card_no)?.username || item.suggested_username,
+    initial_password: currentCredentialByIdentityCard.get(item.identity_card_no)?.initial_password || generateInitializationPassword(),
   }))
   initializationDraftReviewOpen.value = true
 }
@@ -1952,7 +2509,24 @@ function submitProject() {
     if (projectRequiredNotice.value) await router.replace({ path: '/settings' })
   }, '项目已创建')
 }
-function submitMember() { void run(async () => { await store.saveMember({ name: memberForm.name, username: memberForm.username, title: memberForm.title }, configProjectId.value); Object.assign(memberForm, { name: '', username: '', title: '' }) }, '成员已添加') }
+function submitMember() {
+  void run(async () => {
+    await store.saveMember({
+      name: memberForm.name,
+      username: memberForm.username || undefined,
+      identityCardNo: memberForm.identityCardNo,
+      password: memberForm.password,
+      positionName: memberForm.positionName,
+    }, configProjectId.value)
+    Object.assign(memberForm, {
+      name: '',
+      username: '',
+      identityCardNo: '',
+      password: '',
+      positionName: '',
+    })
+  }, '成员已添加')
+}
 function submitWbs() { void run(async () => { await store.createWbs(wbsForm, configProjectId.value); Object.assign(wbsForm, { code: '', name: '', planned_start: '', planned_finish: '' }) }, 'WBS 工序已添加') }
 function submitRisk() { void run(async () => { const materials = riskForm.materials.split(/[、,，]/).map(item => item.trim()).filter(Boolean); await store.createRisk({ name: riskForm.name, level: riskForm.level, risk_type: riskForm.risk_type || '综合风险', material_requirements: materials }, configProjectId.value); Object.assign(riskForm, { name: '', level: 'medium', risk_type: '', materials: '' }) }, '风险源已添加') }
 function submitQualityMetric() { void run(async () => { await store.createQualityMetric(qualityForm, configProjectId.value); Object.assign(qualityForm, { wbs_item_id: '', name: '', requirement: '', inspection_frequency: '' }) }, '质量指标已添加') }
@@ -2130,7 +2704,42 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .initialization-review-data-toggle strong { flex:0 0 auto; color:#28564f; font-size:13px; }
 .initialization-review-data-toggle small { overflow:hidden; color:#80928e; font-size:12px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
 .initialization-review-data-toggle em { flex:0 0 auto; color:#6b827d; font-size:12px; font-style:normal; font-variant-numeric:tabular-nums; font-weight:750; }
-.initialization-review-data-section > ul { display:grid; gap:5px; margin:0; padding:9px 11px 11px; border-top:1px solid #e5eeec; list-style:none; }
+.initialization-personnel-list { display:grid; gap:10px; border-top:1px solid #e5eeec; padding:12px; background:#f6faf8; }
+.initialization-personnel-card { display:grid; min-width:0; grid-template-columns:minmax(190px,.62fr) minmax(300px,1.25fr) minmax(330px,1.05fr); gap:0; overflow:hidden; border:1px solid #dce8e5; border-radius:7px; background:#fff; transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease; }
+.initialization-personnel-card:hover { border-color:#c6dbd6; box-shadow:0 5px 16px rgba(31,83,73,.07); transform:translateY(-1px); }
+.initialization-personnel-profile { display:grid; min-width:0; grid-template-columns:36px minmax(0,1fr); grid-template-rows:auto auto; align-content:center; align-items:center; gap:2px 10px; padding:14px; border-right:1px solid #e5eeec; background:#fbfdfc; }
+.initialization-personnel-profile > span { display:grid; grid-row:1 / 3; width:36px; height:36px; place-items:center; border-radius:9px; color:#fff; background:#377f74; box-shadow:0 4px 10px rgba(55,127,116,.16); font-size:12px; font-variant-numeric:tabular-nums; font-weight:850; letter-spacing:.04em; }
+.initialization-personnel-profile > div { min-width:0; }
+.initialization-personnel-profile h4 { margin:0; color:#244c45; font-size:14px; line-height:1.35; overflow-wrap:anywhere; }
+.initialization-personnel-profile p { margin:3px 0 0; color:#6d837e; font-size:12px; line-height:1.45; overflow-wrap:anywhere; }
+.initialization-personnel-profile > em { grid-column:2; width:max-content; margin-top:5px; border-radius:4px; padding:2px 6px; color:#8a5a27; background:#fff1d9; font-size:12px; font-style:normal; font-weight:750; }
+.initialization-personnel-profile > em.existing { color:#2f6f64; background:#e4f2ee; }
+.initialization-personnel-profile > em.shared { color:#566f89; background:#eaf1f8; }
+.initialization-personnel-facts { display:grid; min-width:0; grid-template-columns:repeat(2,minmax(0,1fr)); align-content:center; gap:10px 16px; margin:0; padding:13px 15px; }
+.initialization-personnel-facts > div { min-width:0; }
+.initialization-personnel-facts > div.responsibility { grid-column:1 / -1; padding-top:9px; border-top:1px solid #edf2f0; }
+.initialization-personnel-facts dt,.initialization-personnel-facts dd { margin:0; font-size:12px; line-height:1.55; }
+.initialization-personnel-facts dt { margin-bottom:3px; color:#7a8d89; font-weight:700; }
+.initialization-personnel-facts dd { color:#31534d; font-variant-numeric:tabular-nums; font-weight:650; overflow-wrap:anywhere; text-wrap:pretty; }
+.initialization-personnel-credential { display:grid; min-width:0; grid-template-columns:repeat(2,minmax(0,1fr)); align-content:center; gap:9px 10px; padding:12px 14px; border-left:1px solid #e5eeec; background:#f5faf8; }
+.initialization-personnel-credential > div { display:flex; grid-column:1 / -1; align-items:baseline; justify-content:space-between; gap:12px; }
+.initialization-personnel-credential > div strong { color:#31564f; font-size:12px; font-weight:850; }
+.initialization-personnel-credential > div span { color:#81928e; font-size:12px; }
+.initialization-personnel-credential label { display:grid; min-width:0; gap:5px; color:#607873; font-size:12px; font-weight:750; }
+.initialization-personnel-credential input { min-width:0; width:100%; box-sizing:border-box; border:1px solid #cbded9; border-radius:5px; padding:8px 9px; color:#233f3b; background:#fff; font:inherit; font-size:12px; transition:border-color .16s ease,box-shadow .16s ease; }
+.initialization-personnel-credential input:focus { border-color:#5f9f94; outline:0; box-shadow:0 0 0 3px rgba(36,128,113,.1); }
+.initialization-generated-password { display:flex; min-width:0; gap:6px; }
+.initialization-generated-password input { min-width:0; flex:1 1 auto; font-family:ui-monospace,SFMono-Regular,Consolas,monospace; letter-spacing:.04em; }
+.initialization-generated-password button { flex:0 0 auto; border:1px solid #cbded9; border-radius:5px; padding:0 9px; color:#38675f; background:#fff; font:inherit; font-size:12px; font-weight:750; cursor:pointer; white-space:nowrap; }
+.initialization-generated-password button:hover { border-color:#8fb8b0; color:#1f5c52; background:#eff7f5; }
+.initialization-generated-password button:focus-visible { outline:2px solid rgba(15,118,110,.22); outline-offset:1px; }
+.initialization-personnel-credential > p { grid-column:1 / -1; margin:1px 0 0; color:#718681; font-size:12px; line-height:1.5; }
+.initialization-personnel-account-ready { display:grid; align-content:center; gap:4px; padding:14px; border-left:1px solid #e5eeec; background:#f7faf9; }
+.initialization-personnel-account-ready small { color:#718681; font-size:12px; font-weight:750; }
+.initialization-personnel-account-ready strong { color:#2e5f56; font:800 15px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; overflow-wrap:anywhere; }
+.initialization-personnel-account-ready span { color:#83938f; font-size:12px; line-height:1.5; }
+.initialization-personnel-account-ready.existing { border-left-color:#cfe2de; background:#f2f8f6; }
+.initialization-personnel-account-ready.shared { border-left-color:#d5e1ec; background:#f5f8fb; }
 .initialization-wbs-content { border-top:1px solid #e5eeec; background:#fff; }
 .initialization-wbs-toolbar { display:flex; min-height:44px; align-items:center; justify-content:space-between; gap:12px; padding:8px 12px; border-bottom:1px solid #e5eeec; background:#fbfdfc; }
 .initialization-wbs-toolbar > div { display:flex; min-width:0; align-items:center; gap:10px; }
@@ -2203,14 +2812,61 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .initialization-risk-details section + section { border-left:1px solid #e4ecea; padding-left:12px; }
 .initialization-risk-details h5 { margin:0 0 5px; color:#667d78; font-size:12px; font-weight:800; }
 .initialization-risk-details p { margin:0; color:#355650; font-size:12px; line-height:1.7; overflow-wrap:anywhere; text-wrap:pretty; }
-.draft-issues ul { display:grid; gap:5px; margin:8px 0 0; padding:0; list-style:none; }
-.initialization-review-data-section li,.draft-issues li { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; padding:8px 10px; border-radius:5px; background:#f7faf9; font-size:12px; line-height:1.5; }
-.initialization-review-data-section li strong { color:#365b55; }.initialization-review-data-section li span { color:#748682; text-align:right; }
-.draft-issues li { justify-content:flex-start; }.draft-issues li strong { flex:0 0 auto; color:#9a5b28; }.draft-issues li.error strong { color:#b7432d; }.draft-issues li span { color:#5e736f; }
-.initialization-partial-confirm { display:flex; align-items:flex-start; gap:7px; color:#6f5d4d; font-size:12px; line-height:1.5; }.initialization-partial-confirm input { margin-top:2px; }
-.initialization-credential-list { display:grid; gap:9px; }.initialization-credential-list > div { display:grid; grid-template-columns:minmax(180px,1fr) minmax(150px,.7fr) minmax(150px,.7fr); align-items:end; gap:10px; border-top:1px solid #edf2f0; padding-top:10px; }
-.initialization-credential-list p { display:grid; gap:3px; margin:0; }.initialization-credential-list p strong { color:#315650; font-size:12px; }.initialization-credential-list p span { color:#7d8f8b; font-size:12px; }
-.initialization-credential-list label { display:grid; gap:5px; color:#607873; font-size:12px; font-weight:750; }.initialization-credential-list input { min-width:0; border:1px solid var(--border-emphasis); border-radius:6px; padding:8px 9px; color:#233f3b; font:inherit; font-size:12px; }
+.initialization-quality-table-wrap { overflow-x:auto; border-top:1px solid #e5eeec; background:#fff; }
+.initialization-quality-table { width:100%; min-width:1160px; border-spacing:0; border-collapse:separate; table-layout:fixed; color:#45615b; font-size:12px; }
+.initialization-quality-table th { padding:10px 12px; border-right:1px solid #e1ebe8; border-bottom:1px solid #d9e6e3; color:#58736d; background:#f1f7f5; font-size:12px; font-weight:800; line-height:1.45; text-align:left; }
+.initialization-quality-table th:last-child,.initialization-quality-table td:last-child { border-right:0; }
+.initialization-quality-table td { padding:11px 12px; border-right:1px solid #edf2f0; border-bottom:1px solid #edf2f0; font-size:12px; line-height:1.6; vertical-align:top; overflow-wrap:anywhere; text-wrap:pretty; }
+.initialization-quality-table tbody tr:last-child td { border-bottom:0; }
+.initialization-quality-table tbody tr { transition:background .16s ease; }
+.initialization-quality-table tbody tr:hover { background:#f5faf8; }
+.initialization-quality-table th:nth-child(1),.initialization-quality-table td:nth-child(1) { width:96px; }
+.initialization-quality-table th:nth-child(2),.initialization-quality-table td:nth-child(2) { width:280px; }
+.initialization-quality-table th:nth-child(3),.initialization-quality-table td:nth-child(3) { width:300px; }
+.initialization-quality-table th:nth-child(4),.initialization-quality-table td:nth-child(4) { width:190px; }
+.initialization-quality-table th:nth-child(5),.initialization-quality-table td:nth-child(5) { width:294px; }
+.initialization-quality-table code { display:inline-flex; border-radius:4px; padding:3px 6px; color:#2f675e; background:#e6f1ee; font:750 12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.initialization-quality-table strong { color:#294f48; font-size:12px; font-weight:750; }
+.draft-issues { gap:14px; padding:16px; background:#fbfcfc; }
+.draft-issues > .draft-issues-heading { align-items:flex-start; }
+.draft-issues-heading > div { min-width:0; }
+.draft-issues-heading h3 { font-size:15px; line-height:1.4; }
+.draft-issues-heading p { margin:4px 0 0; color:#6d817d; font-size:12px; line-height:1.55; }
+.draft-issues-heading > span { flex:0 0 auto; border-radius:999px; padding:4px 9px; color:#5f7873 !important; background:#edf4f2; font-size:12px !important; font-weight:750; font-variant-numeric:tabular-nums; }
+.draft-issues-summary { display:flex; flex-wrap:wrap; gap:8px; }
+.draft-issues-summary span { display:inline-flex; align-items:baseline; gap:4px; border:1px solid transparent; border-radius:6px; padding:7px 10px; font-size:12px; font-weight:700; line-height:1.35; }
+.draft-issues-summary span strong { font-size:15px; font-variant-numeric:tabular-nums; }
+.draft-issues-summary .error { border-color:#efd7d0; color:#98442f; background:#fff5f2; }
+.draft-issues-summary .warning { border-color:#eadfc8; color:#8b641f; background:#fffaf0; }
+.draft-issue-groups { display:grid; gap:9px; }
+.draft-issue-group { overflow:hidden; border:1px solid #dfe8e6; border-radius:8px; background:#fff; }
+.draft-issue-group.error { border-left:3px solid #c96952; }
+.draft-issue-group.warning { border-left:3px solid #d2a24b; }
+.draft-issue-group-toggle { display:grid; width:100%; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:10px; border:0; padding:11px 12px; color:#294d47; background:#fff; font:inherit; text-align:left; cursor:pointer; transition:background .16s ease; }
+.draft-issue-group-toggle:hover { background:#f7faf9; }
+.draft-issue-group-toggle:focus-visible { outline:2px solid rgba(15,118,110,.22); outline-offset:-2px; }
+.draft-issue-group-icon { display:grid; width:30px; height:30px; place-items:center; border-radius:7px; color:#9a6c22; background:#fff5df; }
+.draft-issue-group.error .draft-issue-group-icon { color:#a94e39; background:#fcece7; }
+.draft-issue-group-copy { display:grid; min-width:0; gap:2px; }
+.draft-issue-group-copy strong { color:#294d47; font-size:13px; font-weight:800; line-height:1.4; }
+.draft-issue-group-copy small { color:#70837f; font-size:12px; line-height:1.45; }
+.draft-issue-group-count { min-width:44px; color:#69807b !important; font-size:12px !important; font-weight:750; text-align:right; white-space:nowrap; }
+.draft-issue-group-chevron { color:#738984; transition:transform .16s ease; }
+.draft-issue-group-toggle[aria-expanded="true"] .draft-issue-group-chevron { transform:rotate(180deg); }
+.draft-issue-group ul { display:grid; gap:0; margin:0; padding:0 12px 12px 52px; list-style:none; }
+.draft-issue-group li { display:grid; gap:7px; border-top:1px solid #e8efed; padding:12px 0; font-size:12px; line-height:1.55; }
+.draft-issue-group li:first-child { border-top-color:#dfe9e6; }
+.draft-issue-group li > header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.draft-issue-group li > header > div { display:flex; min-width:0; flex-wrap:wrap; align-items:center; gap:7px; }
+.draft-issue-group li > header strong { color:#31534d; font-size:13px; font-weight:800; line-height:1.45; }
+.draft-issue-group li > header span { display:inline-flex; border-radius:4px; padding:2px 6px; color:#446b64; background:#eaf3f1; font:750 12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:nowrap; }
+.draft-issue-group li > header em { flex:0 0 auto; border-radius:999px; padding:3px 7px; color:#93691f; background:#fff4dd; font-size:12px; font-style:normal; font-weight:750; line-height:1.35; white-space:nowrap; }
+.draft-issue-group li.error > header em { color:#a24732; background:#fcebe6; }
+.draft-issue-group li > p { margin:0; color:#516a65; font-size:12px; line-height:1.65; text-wrap:pretty; }
+.draft-issue-guidance { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:start; gap:8px; border-radius:6px; padding:8px 10px; color:#58716c; background:#f4f8f7; font-size:12px; line-height:1.55; }
+.draft-issue-guidance strong { color:#2f6259; font-size:12px; font-weight:800; white-space:nowrap; }
+.draft-issue-guidance span { color:#58716c; font-size:12px; }
+.initialization-partial-confirm { display:flex; align-items:flex-start; gap:7px; border-top:1px solid #e7eeec; padding-top:12px; color:#6f5d4d; font-size:12px; line-height:1.5; }.initialization-partial-confirm input { margin-top:2px; }
 .initialization-review-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:13px 20px; border-top:1px solid var(--border-default); background:#fff; }.initialization-review-actions > span { flex:1 1 auto; color:#738682; font-size:12px; line-height:1.5; }.initialization-review-actions .primary:disabled { opacity:.5; cursor:not-allowed; }
 .project-navigator { display:grid; grid-template-rows:auto minmax(0,1fr); }.project-navigator-list { min-height:0; overflow-y:auto; }
 .manual-config-workspace { display:grid; min-height:0; grid-template-columns:176px minmax(0,1fr); margin-top:8px; border:1px solid var(--border-default); border-radius:10px; overflow:hidden; background:#fff; }
@@ -2221,6 +2877,11 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .manual-config-tree button { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px; width:100%; border:0; border-radius:6px; padding:9px 8px; color:#4d6864; background:transparent; font:inherit; text-align:left; cursor:pointer; transition:background .16s ease,color .16s ease; }
 .manual-config-tree button:hover { background:#f0f7f5; color:#22594f; }.manual-config-tree button.active { color:#17564d; background:#e3f2ee; }.manual-config-tree button strong { overflow:hidden; font-size:12px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }.manual-config-tree button em { min-width:18px; color:#78908b; font-size: 12px; font-style:normal; font-variant-numeric:tabular-nums; text-align:right; }.manual-config-tree button.active em { color:#2c7d70; }
 .manual-config-list { display:grid; min-width:0; min-height:0; grid-template-rows:auto minmax(0,1fr); }.manual-list-head { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:17px 19px 15px; border-bottom:1px solid var(--border-default); }.manual-list-head>div:first-child { min-width:0; }.manual-list-head span { display:block; margin-bottom:4px; color:#0f766e; font-size: 12px; font-weight:850; letter-spacing:.05em; }.manual-list-head h2 { margin:0; color:#1a3935; font-size:17px; line-height:1.35; }.manual-list-head p { max-width:62ch; margin:4px 0 0; color:var(--text-muted); font-size:12px; line-height:1.55; }.manual-list-actions { display:flex; flex:0 0 auto; align-items:center; gap:8px; }.manual-search { display:flex; align-items:center; width:228px; gap:7px; border:1px solid var(--border-emphasis); border-radius:6px; padding:0 9px; color:#718782; background:#fff; }.manual-search input { min-width:0; width:100%; border:0; outline:0; padding:8px 0; color:var(--text-primary); background:transparent; font:inherit; font-size:12px; }.manual-list-actions .primary { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }.manual-table-wrap { min-height:0; overflow:auto; background:#fff; }.manual-table { width:100%; min-width:720px; border-collapse:collapse; color:#3f5d58; font-size:12px; }.manual-table th { position:sticky; top:0; z-index:1; padding:11px 15px; border-bottom:1px solid var(--border-default); color:#647d78; background:#f7faf9; font-size: 12px; font-weight:800; text-align:left; white-space:nowrap; }.manual-table td { padding:13px 15px; border-bottom:1px solid var(--border-subtle); vertical-align:middle; line-height:1.45; }.manual-table tbody tr { transition:background .14s ease; }.manual-table tbody tr:hover { background:#f8fbfa; }.manual-table strong { color:#294842; font-weight:750; }.manual-table small { display:block; max-width:42ch; margin-top:3px; overflow:hidden; color:var(--text-muted); font-size: 12px; text-overflow:ellipsis; white-space:nowrap; }.row-action { border:0; padding:4px 0; color:#197163; background:transparent; font:inherit; font-size:12px; font-weight:750; cursor:pointer; white-space:nowrap; }.row-action:hover { color:#0e5b50; text-decoration:underline; }.status-dot { display:inline-block; width:7px; height:7px; margin-right:6px; border-radius:50%; background:#abb9b6; }.status-dot.in_progress { background:#129f88; }.status-dot.done { background:#2278a5; }.status-dot.delayed { background:#d76835; }.risk-level { display:inline-flex; align-items:center; border-radius:4px; padding:2px 6px; font-size: 12px; white-space:nowrap; }.risk-level.critical { color:#9c351d; background:#fcebe5; }.risk-level.high { color:#a85d1c; background:#fff1dc; }.risk-level.medium { color:#3e716b; background:#e8f4f0; }.risk-level.low { color:#617f79; background:#eff5f3; }.manual-empty { display:grid; min-height:260px; place-content:center; justify-items:center; gap:8px; padding:24px; color:#78908b; text-align:center; }.manual-empty strong { color:#3a5a55; font-size:14px; }.manual-empty p { margin:0; color:var(--text-muted); font-size:12px; }.manual-editor-modal { width:min(100%,680px); }.manual-editor-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px 16px; }.manual-editor-form label { display:grid; gap:6px; color:#4e6964; font-size:12px; font-weight:750; }.manual-editor-form input,.manual-editor-form select,.manual-editor-form textarea { min-width:0; border:1px solid var(--border-emphasis); border-radius:6px; padding:9px 10px; color:var(--text-primary); background:#fff; font:inherit; font-size:13px; }.manual-editor-form textarea { resize:vertical; }.manual-editor-form .full-span { grid-column:1 / -1; }.manual-editor-form .check-label { align-self:end; padding-bottom:0; font-weight:650; }.manual-rule-editor { display:grid; gap:10px; padding:12px; border:1px solid #e0ebe8; border-radius:8px; background:#f8fbfa; }.manual-rule-editor>div { display:flex; align-items:center; justify-content:space-between; gap:10px; }.manual-rule-editor strong,.manual-rule-editor small { display:block; }.manual-rule-editor strong { color:#31544f; font-size:12px; }.manual-rule-editor small { margin-top:3px; color:var(--text-muted); font-size: 12px; }.manual-rule-editor>div+div { justify-content:flex-start; }.manual-rule-editor select,.manual-rule-editor input { min-width:0; flex:1 1 0; padding:7px 8px; font-size:12px; }.manual-rule-editor .secondary-action { padding:7px 9px; }.manual-rule-editor ul { display:flex; flex-wrap:wrap; gap:7px; margin:0; padding:0; list-style:none; }.manual-rule-editor li { padding:4px 7px; border-radius:4px; color:#57746e; background:#eaf3f0; font-size: 12px; }.manual-editor-actions { display:flex; grid-column:1 / -1; justify-content:flex-end; gap:8px; padding-top:4px; }.manual-config-workspace button:focus-visible,.manual-table button:focus-visible,.manual-editor-form input:focus,.manual-editor-form select:focus,.manual-editor-form textarea:focus,.manual-search:focus-within { outline:2px solid rgba(15,118,110,.22); outline-offset:1px; }
+.manual-member-table { min-width:980px; }.manual-member-table th:nth-child(1) { width:170px; }.manual-member-table th:nth-child(2) { width:190px; }.manual-member-table th:nth-child(3) { width:260px; }.manual-member-table th:last-child { width:78px; }.manual-position-cell { display:grid; gap:7px; }.manual-position-item { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 10px; border:1px solid #e2ece9; border-radius:7px; background:#f7faf9; }.manual-position-item span { min-width:0; }.manual-position-item strong,.manual-position-item small { display:block; }.manual-responsibility { display:block; max-width:42ch; margin-bottom:7px; color:#58716c; font-size:12px; }.manual-responsibility:last-child { margin-bottom:0; }.manual-responsibility strong { margin-right:5px; }.manual-password-field { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px; }.manual-password-field button { border:1px solid var(--border-emphasis); border-radius:6px; padding:0 10px; color:#176f62; background:#f4faf8; font:inherit; font-size:12px; font-weight:750; cursor:pointer; }.manual-member-account-note { margin:0; border-left:3px solid #73b5aa; padding:9px 11px; color:#58736e; background:#f1f8f6; font-size:12px; line-height:1.65; }
+@media (max-width:1100px) {
+  .initialization-personnel-card { grid-template-columns:minmax(190px,.65fr) minmax(0,1.35fr); }
+  .initialization-personnel-credential,.initialization-personnel-account-ready { grid-column:1 / -1; border-top:1px solid #e5eeec; border-left:0; }
+}
 @media (max-width:1380px) and (min-width:1001px) { .project-config-scroll > .setup-grid { grid-template-columns:1fr; } }
 @media (max-width:1000px) { .setup-page { display:block; height:auto; min-height:100%; overflow:visible; }.setup-workspace { display:block; min-height:0; }.project-navigator { min-height:0; margin-bottom:18px; }.project-config-panel { display:block; min-width:0; overflow:visible; }.project-config-scroll { overflow:visible; padding-right:0; }.project-workspace-tabs { position:static; overflow-x:auto; }.project-workspace-tabs button { flex:0 0 155px; }.project-config-scroll > .material-agent-workspace,.project-connection-workspace { min-height:520px; }.project-connection-grid { grid-template-columns:210px minmax(0,1fr); }.manual-config-workspace { min-height:520px; grid-template-columns:1fr; }.manual-config-tree { grid-template-columns:repeat(3,minmax(150px,1fr)); grid-auto-rows:min-content; border-right:0; border-bottom:1px solid var(--border-default); overflow:auto; }.manual-config-tree-head { grid-column:1 / -1; }.setup-grid { grid-template-columns:1fr; }.config-summary { grid-template-columns:repeat(2,1fr); }.compact-form,.wbs-form,.risk-form { grid-template-columns:1fr 1fr; }.compact-form button { grid-column:span 2; } } @media (max-width:600px) { .setup-page { padding:18px; }.project-context { padding:16px; }.project-context-title h1 { font-size:16px; }.project-context-meta { grid-template-columns:1fr; gap:9px; margin-top:15px; }.project-context-meta div { grid-template-columns:60px minmax(0,1fr); }.project-nav-item { padding:13px 14px; }.material-agent-workspace,.project-connection-workspace { min-height:0; padding:15px; }.material-workspace-head,.project-connection-head { display:grid; gap:12px; }.material-workspace-actions { justify-content:space-between; }.agent-context-summary { grid-template-columns:1fr; }.project-config-scroll > .material-agent-workspace { min-height:500px; padding:14px; }.agent-context-summary article { border-right:0; border-bottom:1px solid #e0ebe8; }.agent-context-summary article:last-child { border-bottom:0; }.material-agent-chat { min-height:340px; }.material-agent-composer { grid-template-columns:1fr; }.project-connection-grid { grid-template-columns:1fr; overflow:visible; }.project-connector-list { grid-template-columns:repeat(3,minmax(0,1fr)); overflow:visible; border-right:0; border-bottom:1px solid var(--border-default); }.project-connector-list button { grid-template-columns:auto minmax(0,1fr); }.project-connector-list button > i { display:none; }.project-connector-editor { overflow:visible; padding:16px; }.project-connector-actions { align-items:stretch; flex-direction:column; }.project-connector-actions .primary { width:100%; }.manual-config-workspace { min-height:500px; }.manual-config-tree { display:flex; gap:3px; padding:7px; overflow-x:auto; }.manual-config-tree-head { display:none; }.manual-config-tree button { flex:0 0 auto; grid-template-columns:auto minmax(0,1fr); width:auto; }.manual-config-tree button em { display:none; }.manual-list-head { display:grid; padding:15px; }.manual-list-actions { width:100%; }.manual-search { width:auto; flex:1 1 auto; }.manual-editor-form { grid-template-columns:1fr; }.manual-editor-form .full-span,.manual-editor-actions { grid-column:auto; }.manual-rule-editor>div { display:grid; }.manual-editor-actions { justify-content:stretch; }.manual-editor-actions button { flex:1 1 auto; }.config-summary { grid-template-columns:1fr 1fr; }.item-list>div { grid-template-columns:1fr; gap:3px; }.panel-head { gap:10px; }.setup-modal-backdrop { padding:12px; }.setup-modal { max-height:calc(100dvh - 24px); padding:16px; border-radius:10px; }.setup-modal-head { gap:12px; }.setup-modal-actions { justify-content:stretch; }.setup-modal-actions button { flex:1 1 auto; } }
 @media (max-width:600px) { .setup-modal-head span,.setup-modal-head p { display:none; } }
@@ -2242,10 +2903,15 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
   .initialization-draft-summary span { border-right:0; border-bottom:1px solid #e4efec; }
   .initialization-project-contract-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .initialization-project-units dl { grid-template-columns:1fr; }
+  .initialization-personnel-card { grid-template-columns:1fr; }
+  .initialization-personnel-profile { border-right:0; border-bottom:1px solid #e5eeec; }
+  .initialization-personnel-facts { grid-template-columns:1fr; }
+  .initialization-personnel-facts > div.responsibility { grid-column:auto; }
+  .initialization-personnel-credential { grid-template-columns:1fr; }
+  .initialization-personnel-credential > div { grid-column:auto; }
   .initialization-risk-facts,.initialization-risk-details { grid-template-columns:1fr; }
   .initialization-risk-details section + section { border-top:1px solid #e4ecea; border-left:0; padding-top:12px; padding-left:0; }
   .initialization-project-units dl > div.primary { grid-column:auto; }
-  .initialization-credential-list > div { grid-template-columns:1fr; }
   .initialization-review-actions { align-items:stretch; flex-wrap:wrap; }
   .initialization-review-actions > span { flex-basis:100%; }
 }
