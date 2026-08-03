@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 from agentscope.agent import Agent
 from agentscope.credential import CredentialBase
-from agentscope.event import ToolResultEndEvent
+from agentscope.event import ToolResultEndEvent, ToolResultStartEvent
 from agentscope.message import (
     AssistantMsg,
     Base64Source,
@@ -16,6 +16,7 @@ from agentscope.message import (
     TextBlock,
     ThinkingBlock,
     ToolCallBlock,
+    ToolCallState,
     UserMsg,
 )
 from agentscope.middleware import MiddlewareBase
@@ -279,3 +280,46 @@ class PermissionMiddlewareIsolationTest(IsolatedAsyncioTestCase):
         self.assertTrue(
             any(isinstance(event, ToolResultEndEvent) for event in events),
         )
+
+
+class ExternalToolInterruptBackportTest(IsolatedAsyncioTestCase):
+    """Keep an external tool's event lifecycle balanced on interruption."""
+
+    async def test_submitted_call_does_not_emit_duplicate_start(self) -> None:
+        tool_call = ToolCallBlock(
+            id="external-tool-call",
+            name="ExternalTool",
+            input="{}",
+            state=ToolCallState.SUBMITTED,
+        )
+        agent = Agent(
+            name="worker",
+            system_prompt="test",
+            model=SimpleNamespace(
+                count_tokens=AsyncMock(return_value=1),
+            ),
+            toolkit=Toolkit(tools=[]),
+            state=AgentState(
+                context=[
+                    AssistantMsg(name="worker", content=[tool_call]),
+                ],
+            ),
+        )
+
+        events = [
+            event async for event in agent._close_unfinished_tool_calls()
+        ]
+
+        self.assertFalse(
+            any(isinstance(event, ToolResultStartEvent) for event in events),
+        )
+        self.assertEqual(
+            sum(isinstance(event, ToolResultEndEvent) for event in events),
+            1,
+        )
+        self.assertEqual(tool_call.state, ToolCallState.FINISHED)
+        tool_results = agent.state.context[-1].get_content_blocks(
+            "tool_result",
+        )
+        self.assertEqual(len(tool_results), 1)
+        self.assertEqual(tool_results[0].id, tool_call.id)
