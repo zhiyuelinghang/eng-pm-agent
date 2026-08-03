@@ -113,7 +113,10 @@ class WorkerAutoReportTest(IsolatedAsyncioTestCase):
         with patch(
             "agentscope.app._service._chat.deliver_team_message",
             new_callable=AsyncMock,
-        ) as deliver:
+        ) as deliver, patch(
+            "agentscope.app._service._chat.settle_team_member",
+            new_callable=AsyncMock,
+        ) as settle:
             await service._auto_report_worker_reply(
                 user_id="default",
                 session_id="worker-session",
@@ -130,6 +133,7 @@ class WorkerAutoReportTest(IsolatedAsyncioTestCase):
             sender_name="核验智能体",
             content="最终核验结论",
         )
+        settle.assert_awaited_once()
 
     async def test_max_iteration_worker_reply_is_still_forwarded(self) -> None:
         service, worker_agent = self._service()
@@ -143,7 +147,10 @@ class WorkerAutoReportTest(IsolatedAsyncioTestCase):
         with patch(
             "agentscope.app._service._chat.deliver_team_message",
             new_callable=AsyncMock,
-        ) as deliver:
+        ) as deliver, patch(
+            "agentscope.app._service._chat.settle_team_member",
+            new_callable=AsyncMock,
+        ) as settle:
             await service._auto_report_worker_reply(
                 user_id="default",
                 session_id="worker-session",
@@ -156,3 +163,33 @@ class WorkerAutoReportTest(IsolatedAsyncioTestCase):
             deliver.await_args.kwargs["content"],
             "已取得部分但可用的核验结果",
         )
+        self.assertEqual(settle.await_args.kwargs["status"], "completed")
+
+    async def test_interrupted_worker_is_reported_and_settled(self) -> None:
+        service, worker_agent = self._service()
+        reply = AssistantMsg(
+            id="reply-interrupted",
+            name="核验智能体",
+            content=[TextBlock(text="已完成一部分")],
+            finished_reason=ReplyFinishedReason.INTERRUPTED,
+        )
+
+        with patch(
+            "agentscope.app._service._chat.deliver_team_message",
+            new_callable=AsyncMock,
+        ) as deliver, patch(
+            "agentscope.app._service._chat.settle_team_member",
+            new_callable=AsyncMock,
+        ) as settle:
+            await service._auto_report_worker_reply(
+                user_id="default",
+                session_id="worker-session",
+                agent_id="worker-agent",
+                agent_record=worker_agent,
+                reply_msg=reply,
+                work_revision=3,
+            )
+
+        self.assertIn("已中断", deliver.await_args.kwargs["content"])
+        self.assertEqual(settle.await_args.kwargs["status"], "interrupted")
+        self.assertEqual(settle.await_args.kwargs["revision"], 3)

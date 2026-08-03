@@ -1031,6 +1031,8 @@ class AsyncSQLAlchemyStorage(StorageBase):
             if existing is not None:
                 record = _to_record(existing, SessionRecord)
                 record.config = config
+                record.source = source
+                record.source_schedule_id = source_schedule_id
                 if state is not None:
                     record.state = state
                 await self._write_row(SessionRow, record)
@@ -1133,6 +1135,30 @@ class AsyncSQLAlchemyStorage(StorageBase):
         if row is None or row.user_id != user_id:
             return None
         return _to_record(row, SessionRecord)
+
+    async def list_all_sessions(
+        self,
+        user_id: str,
+    ) -> list[SessionRecord]:
+        """Every session in a user namespace, newest first."""
+        from sqlalchemy import select
+
+        async with self._session() as sess:
+            rows = (
+                (
+                    await sess.execute(
+                        select(SessionRow)
+                        .where(SessionRow.user_id == user_id)
+                        .order_by(
+                            SessionRow.updated_at.desc(),
+                            SessionRow.created_at.desc(),
+                        ),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return [_to_record(row, SessionRecord) for row in rows]
 
     async def delete_session(
         self,

@@ -13,6 +13,7 @@ import { useTranslation } from '@/i18n/useI18n';
 import { ChatPage } from '@/pages/chat';
 import { CredentialPage } from '@/pages/credential';
 import { KnowledgePage } from '@/pages/knowledge';
+import { PlatformAuditPage } from '@/pages/platform-audit';
 import { PlatformSettingsPage } from '@/pages/platform-settings';
 import { SchedulePage } from '@/pages/schedule';
 import { SetupPage } from '@/pages/setup';
@@ -49,6 +50,7 @@ const router = createBrowserRouter([
 					{ path: '/schedule', element: <SchedulePage /> },
 					{ path: '/credential', element: <CredentialPage /> },
 					{ path: '/platform-settings', element: <PlatformSettingsPage /> },
+					{ path: '/platform-audit', element: <PlatformAuditPage /> },
 					{ path: '/knowledge', element: <KnowledgePage /> },
 					{ path: '/knowledge/:kbId', element: <KnowledgePage /> },
 				],

@@ -7,3 +7,13 @@ aiosqlite==0.22.1
 
 # 仅供显式切回 AGENTSCOPE_STORAGE=memory 时使用；默认持久化使用 SQLite
 fakeredis==2.37.0
+
+# Dobby 项目初始化附件的结构化读取与本地 OCR。
+openpyxl>=3.1,<4.0
+xlrd>=2.0,<3.0
+python-docx>=1.1,<2.0
+python-pptx>=1.0,<2.0
+pdfplumber>=0.11,<1.0
+pypdfium2>=4.30,<6.0
+Pillow>=10.0,<13.0
+rapidocr-onnxruntime>=1.2,<2.0

@@ -58,6 +58,7 @@ export interface PlatformAgentConfig {
 	role: PlatformAgentRole;
 	enabled: boolean;
 	published: boolean;
+	allow_global_main_call: boolean;
 	description: string | null;
 	category: string;
 	sort_order: number;
@@ -157,7 +158,21 @@ export interface AgentSchemaV2Response {
 
 // ─── Session ──────────────────────────────────────────────────────────────────
 
-export type SessionSource = 'user' | 'schedule';
+export type SessionSource = 'user' | 'schedule' | 'platform';
+
+export interface PlatformSessionContext {
+	user_id: string;
+	username: string;
+	display_name: string;
+	project_id: string;
+	project_name: string;
+	conversation_id: string;
+	conversation_title: string;
+	conversation_type: string;
+	agent_name: string;
+	session_role: 'primary' | 'worker';
+	root_session_id: string | null;
+}
 
 export interface SessionConfig {
 	name: string;
@@ -168,6 +183,8 @@ export interface SessionConfig {
 	tts_model_config: TTSModelConfig | null;
 	/** Knowledge bases attached to this session + KB middleware parameters. */
 	knowledge_config: SessionKnowledgeConfig | null;
+	/** Platform grouping snapshot. null for management/testing sessions. */
+	platform_context: PlatformSessionContext | null;
 	workspace_id: string;
 }
 
@@ -253,6 +270,44 @@ export interface ScheduleSessionsResponse {
 	total: number;
 }
 
+// ─── Platform interaction audit ──────────────────────────────────────────────
+
+export interface PlatformAuditConversation {
+	session_id: string;
+	conversation_id: string;
+	title: string;
+	conversation_type: string;
+	agent_id: string;
+	agent_name: string;
+	is_running: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface PlatformAuditProject {
+	project_id: string;
+	project_name: string;
+	conversations: PlatformAuditConversation[];
+}
+
+export interface PlatformAuditUser {
+	user_id: string;
+	username: string;
+	display_name: string;
+	projects: PlatformAuditProject[];
+}
+
+export interface PlatformAuditTreeResponse {
+	users: PlatformAuditUser[];
+	total_conversations: number;
+}
+
+export interface PlatformAuditMessagesResponse {
+	session_id: string;
+	messages: Msg[];
+	is_running: boolean;
+}
+
 // ─── Team ─────────────────────────────────────────────────────────────────────
 
 export interface TeamData {
@@ -260,6 +315,9 @@ export interface TeamData {
 	description: string;
 	/** Worker agent ids belonging to the team. */
 	member_ids: string[];
+	work_revision: number;
+	leader_completed_revision: number;
+	settlement_revision: number;
 }
 
 export interface TeamRecord extends RecordBase {
@@ -278,6 +336,22 @@ export interface TeamMemberInfo {
 	agent: AgentView;
 	/** `null` if the agent is in an inconsistent state (no session). */
 	session_id: string | null;
+	work_revision: number;
+	settled_revision: number;
+	active_revision: number;
+	work_status:
+		| 'idle'
+		| 'queued'
+		| 'running'
+		| 'reported'
+		| 'completed'
+		| 'failed'
+		| 'interrupted';
+	assigned_at: string | null;
+	started_at: string | null;
+	settled_at: string | null;
+	last_reply_id: string | null;
+	last_error: string | null;
 }
 
 /**

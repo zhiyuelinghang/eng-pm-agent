@@ -60,6 +60,9 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(old_data.call_config.scope, "all")
+        self.assertFalse(
+            old_data.platform_config.allow_global_main_call,
+        )
 
     def test_selected_ids_are_normalised(self) -> None:
         config = AgentCallConfig(
@@ -124,7 +127,9 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
         self.assertIn("no longer allowed", result.content[0].text)
         self.assertEqual(storage.get_agent.await_count, 1)
 
-    async def test_global_main_sees_all_enabled_non_main_agents(self) -> None:
+    async def test_global_main_only_sees_explicitly_enabled_targets(
+        self,
+    ) -> None:
         caller = _agent(
             CALLER_ID,
             "Caller",
@@ -132,12 +137,22 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
         )
         visible_agents = [
             caller,
-            _agent(TARGET_A_ID, "Published", invitable=True),
+            _agent(
+                TARGET_A_ID,
+                "Published",
+                invitable=True,
+                platform_config=PlatformAgentConfig(
+                    allow_global_main_call=True,
+                ),
+            ),
             _agent(
                 TARGET_B_ID,
                 "Unpublished",
                 invitable=True,
-                platform_config=PlatformAgentConfig(published=False),
+                platform_config=PlatformAgentConfig(
+                    published=False,
+                    allow_global_main_call=True,
+                ),
             ),
             _agent(
                 "internal",
@@ -152,24 +167,155 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
                 "disabled",
                 "Disabled",
                 invitable=True,
-                platform_config=PlatformAgentConfig(enabled=False),
+                platform_config=PlatformAgentConfig(
+                    enabled=False,
+                    allow_global_main_call=True,
+                ),
             ),
         ]
         targets = await self._invite_targets_for(caller, visible_agents)
 
-        self.assertEqual(len(targets or []), 3)
+        self.assertEqual(len(targets or []), 2)
         self.assertTrue(
             any(target.startswith("Published@") for target in targets or []),
         )
         self.assertTrue(
             any(target.startswith("Unpublished@") for target in targets or []),
         )
-        self.assertTrue(
+        self.assertFalse(
             any(target.startswith("Internal@") for target in targets or []),
         )
         self.assertFalse(
             any(target.startswith("Disabled@") for target in targets or []),
         )
+
+    async def test_global_main_rechecks_target_permission(self) -> None:
+        caller = _agent(
+            CALLER_ID,
+            "Caller",
+            platform_config=PlatformAgentConfig(role="global_main"),
+        )
+        target = _agent(
+            TARGET_A_ID,
+            "Target A",
+            invitable=True,
+            platform_config=PlatformAgentConfig(
+                allow_global_main_call=True,
+            ),
+        )
+        target_after_change = target.model_copy(
+            update={
+                "data": target.data.model_copy(
+                    update={
+                        "platform_config": (
+                            target.data.platform_config.model_copy(
+                                update={"allow_global_main_call": False},
+                            )
+                        ),
+                    },
+                ),
+            },
+        )
+        storage = SimpleNamespace(
+            get_session=AsyncMock(
+                return_value=SimpleNamespace(team_id="team"),
+            ),
+            get_team=AsyncMock(
+                return_value=SimpleNamespace(id="team", session_id="session"),
+            ),
+            get_agent=AsyncMock(
+                side_effect=[caller, target_after_change],
+            ),
+        )
+        tool = AgentInvite(
+            storage=storage,
+            message_bus=object(),
+            workspace_manager=object(),
+            user_id=USER_ID,
+            session_id="session",
+            agent_id=CALLER_ID,
+            invitable_pool=[target],
+            caller_owner_id=USER_ID,
+        )
+
+        selected = tool.input_schema["properties"]["target"]["enum"][0]
+        result = await tool(target=selected, prompt="work")
+
+        self.assertIn("no longer invitable", result.content[0].text)
+        self.assertEqual(storage.get_agent.await_count, 2)
+
+    async def test_initializer_invites_persistent_selected_agents_only(
+        self,
+    ) -> None:
+        caller = _agent(
+            CALLER_ID,
+            "Initializer",
+            call_config=AgentCallConfig(
+                scope="selected",
+                allowed_agent_ids=[TARGET_A_ID],
+            ),
+            platform_config=PlatformAgentConfig(
+                role="system_internal",
+                published=False,
+            ),
+        )
+        target = _agent(
+            TARGET_A_ID,
+            "WBS与进度专家",
+            invitable=True,
+            call_config=AgentCallConfig(scope="none"),
+            platform_config=PlatformAgentConfig(
+                role="system_internal",
+                published=False,
+                allow_global_main_call=False,
+            ),
+        )
+        settings = SimpleNamespace(
+            data=SimpleNamespace(
+                global_main_agent_id="platform-main",
+                project_initializer_agent_id=CALLER_ID,
+            ),
+        )
+        storage = SimpleNamespace(
+            get_team=AsyncMock(return_value=None),
+            get_platform_settings=AsyncMock(return_value=settings),
+        )
+        workspace = SimpleNamespace(
+            list_tools=AsyncMock(return_value=[]),
+            list_skills=AsyncMock(return_value=[]),
+            list_mcps=AsyncMock(return_value=[]),
+        )
+
+        toolkit = await get_toolkit(
+            storage=storage,
+            workspace=workspace,
+            workspace_manager=object(),
+            scheduler_manager=object(),
+            background_task_manager=SimpleNamespace(
+                list_tools=AsyncMock(return_value=[]),
+            ),
+            message_bus=object(),
+            middlewares=[],
+            user_id=USER_ID,
+            agent_record=caller,
+            session_record=SimpleNamespace(
+                id="session",
+                team_id=None,
+                config=SimpleNamespace(chat_model_config=None),
+            ),
+            resource_access_service=SimpleNamespace(
+                list_resource=AsyncMock(return_value=[caller, target]),
+            ),
+        )
+        tool_names = {
+            tool.name
+            for group in toolkit.tool_groups
+            for tool in group.tools
+        }
+
+        self.assertIn("TeamCreate", tool_names)
+        self.assertIn("AgentInvite", tool_names)
+        self.assertNotIn("AgentCreate", tool_names)
 
     async def _invite_targets(
         self,

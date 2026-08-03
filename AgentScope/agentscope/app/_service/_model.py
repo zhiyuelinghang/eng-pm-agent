@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Model service: builds a ChatModelBase from stored credential + config."""
 from ._access import ResourceAccessService
+from ._credential_models import build_credential_model_catalog
 from ..storage import AgentData, ChatModelConfig, SessionConfig
 from ...credential import CredentialFactory
 from ...model import CUSTOM_REQUEST_BODY_KEY, ChatModelBase
@@ -99,10 +100,24 @@ async def get_model(
         if effective_parameters
         else None
     )
+    model_definition = next(
+        (
+            item
+            for item in build_credential_model_catalog(credential)
+            if item.name == config.model
+        ),
+        None,
+    )
+    runtime_kwargs = (
+        {"context_size": model_definition.context_size}
+        if model_definition is not None
+        else {}
+    )
     model = model_cls(
         credential=credential,
         model=config.model,
         parameters=parameters,
+        **runtime_kwargs,
     )
     model.set_request_body_overrides(request_body_overrides)
     return model

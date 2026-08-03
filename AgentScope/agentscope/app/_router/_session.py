@@ -11,6 +11,7 @@ from ..._utils._common import _generate_id
 from ..access import ResourceKind
 from ..deps import (
     get_chat_service,
+    get_current_principal,
     get_current_user_id,
     get_message_bus,
     get_permission_review_service,
@@ -18,6 +19,11 @@ from ..deps import (
     get_session_service,
     get_storage,
     get_workspace_manager,
+)
+from .._auth import AgentScopePrincipal
+from .._session_access import (
+    require_runtime_session_access,
+    runtime_session_visible,
 )
 from ._schema import (
     CreateSessionRequest,
@@ -29,6 +35,7 @@ from ._schema import (
     SessionView,
     TeamDetailResponse,
     TeamMemberView,
+    UpdateMessageMetadataRequest,
     UpdateSessionRequest,
 )
 from ..message_bus import MessageBus, MessageBusKeys
@@ -47,6 +54,7 @@ from ..storage import (
     TTSModelConfig,
     SessionConfig,
     SessionRecord,
+    SessionSource,
     StorageBase,
     TeamRecord,
 )
@@ -112,6 +120,15 @@ async def _build_team_detail(
                     },
                 ),
                 session_id=member.session_id,
+                work_revision=member.work_revision,
+                settled_revision=member.settled_revision,
+                active_revision=member.active_revision,
+                work_status=member.work_status,
+                assigned_at=member.assigned_at,
+                started_at=member.started_at,
+                settled_at=member.settled_at,
+                last_reply_id=member.last_reply_id,
+                last_error=member.last_error,
             ),
         )
 
@@ -195,6 +212,7 @@ async def _ensure_knowledge_bases_exist(
 async def list_sessions(
     agent_id: str = Query(description="Filter sessions by agent ID."),
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     access: ResourceAccessService = Depends(get_resource_access_service),
     message_bus: MessageBus = Depends(get_message_bus),
@@ -235,7 +253,11 @@ async def list_sessions(
     # only ever sees their own runs of a shared agent.
     await access.resolve_agent(user_id, agent_id)
 
-    sessions = await storage.list_sessions(user_id, agent_id)
+    sessions = [
+        session
+        for session in await storage.list_sessions(user_id, agent_id)
+        if runtime_session_visible(principal, session)
+    ]
     views: list[SessionView] = []
     for session in sessions:
         team_detail = None
@@ -268,6 +290,7 @@ async def list_sessions(
 async def create_session(
     body: CreateSessionRequest,
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     workspace_manager: WorkspaceManagerBase = Depends(get_workspace_manager),
     access: ResourceAccessService = Depends(get_resource_access_service),
@@ -295,6 +318,17 @@ async def create_session(
         `HTTPException`: 404 if the agent / credential / knowledge base
             is not visible to the caller.
     """
+    if principal.kind == "service" and body.platform_context is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="平台服务创建会话时必须提供平台归属信息。",
+        )
+    if principal.kind != "service" and body.platform_context is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="管理账号不能创建或伪造平台用户会话。",
+        )
+
     # Agent must be visible to the caller (own or shared).  A fixed model
     # policy is enforced server-side so API clients cannot accidentally
     # create a model-less session (or override the model selected by the
@@ -338,7 +372,13 @@ async def create_session(
             fallback_chat_model_config=body.fallback_chat_model_config,
             tts_model_config=body.tts_model_config,
             knowledge_config=body.knowledge_config,
+            platform_context=body.platform_context,
             **({"name": body.name} if body.name is not None else {}),
+        ),
+        source=(
+            SessionSource.PLATFORM
+            if principal.kind == "service"
+            else SessionSource.USER
         ),
     )
     return CreateSessionResponse(session_id=session_record.id)
@@ -353,6 +393,8 @@ async def delete_session(
     session_id: str,
     agent_id: str = Query(description="Agent the session belongs to."),
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
+    storage: StorageBase = Depends(get_storage),
     session_service: SessionService = Depends(get_session_service),
 ) -> None:
     """Permanently delete a session and all its associated state.
@@ -373,6 +415,14 @@ async def delete_session(
         `HTTPException`: 404 if the session does not exist or does not belong
             to the authenticated user.
     """
+    existing = await storage.get_session(user_id, agent_id, session_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session '{session_id}' not found.",
+        )
+    require_runtime_session_access(principal, existing)
+
     deleted = await session_service.delete_session(
         user_id,
         agent_id,
@@ -397,6 +447,8 @@ async def interrupt_session(
     session_id: str,
     agent_id: str = Query(description="Agent the session belongs to."),
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
+    storage: StorageBase = Depends(get_storage),
     chat_service: ChatService = Depends(get_chat_service),
 ) -> InterruptSessionResponse:
     """Request interruption of an in-progress reply for a session.
@@ -418,6 +470,14 @@ async def interrupt_session(
     Raises:
         HTTPException: 404 if the session does not exist.
     """
+    existing = await storage.get_session(user_id, agent_id, session_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session '{session_id}' not found.",
+        )
+    require_runtime_session_access(principal, existing)
+
     try:
         await chat_service.interrupt(user_id, session_id, agent_id)
     except LookupError as e:
@@ -438,6 +498,7 @@ async def update_session(
     body: UpdateSessionRequest,
     agent_id: str = Query(description="Agent the session belongs to."),
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     access: ResourceAccessService = Depends(get_resource_access_service),
     permission_review_service: PermissionReviewService = Depends(
@@ -465,6 +526,17 @@ async def update_session(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session '{session_id}' not found.",
+        )
+
+    if not (
+        principal.kind == "service"
+        and body.platform_context is not None
+    ):
+        require_runtime_session_access(principal, existing)
+    if principal.kind != "service" and "platform_context" in body.model_fields_set:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="管理账号不能设置平台会话归属信息。",
         )
 
     agent = await access.resolve_agent(user_id, agent_id)
@@ -532,6 +604,12 @@ async def update_session(
         ),
         state=updated_state,
         session_id=session_id,
+        source=(
+            SessionSource.PLATFORM
+            if principal.kind == "service"
+            else existing.source
+        ),
+        source_schedule_id=existing.source_schedule_id,
     )
 
 
@@ -568,6 +646,7 @@ async def list_messages(
     ),
     limit: int = Query(50, ge=1, le=200, description="Max messages."),
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     message_bus: MessageBus = Depends(get_message_bus),
 ) -> ListMessagesResponse:
@@ -597,6 +676,8 @@ async def list_messages(
             detail=f"Session '{session_id}' not found.",
         )
 
+    require_runtime_session_access(principal, existing)
+
     # Forward deprecated offset via kwargs so storage can warn.
     extra: dict = {}
     if offset is not None:
@@ -618,6 +699,45 @@ async def list_messages(
     )
 
 
+@session_router.patch(
+    "/{session_id}/messages/{message_id}/metadata",
+    summary="Merge metadata into a persisted session message",
+)
+async def update_message_metadata(
+    session_id: str,
+    message_id: str,
+    body: UpdateMessageMetadataRequest,
+    agent_id: str = Query(description="Agent the session belongs to."),
+    user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
+    storage: StorageBase = Depends(get_storage),
+) -> dict:
+    """Update platform presentation metadata without copying the message."""
+    existing = await storage.get_session(user_id, agent_id, session_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session '{session_id}' not found.",
+        )
+    require_runtime_session_access(principal, existing)
+    message = await storage.get_message(user_id, session_id, message_id)
+    if message is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Message '{message_id}' not found.",
+        )
+    updated = message.model_copy(
+        update={
+            "metadata": {
+                **(message.metadata or {}),
+                **body.metadata,
+            },
+        },
+    )
+    await storage.upsert_message(user_id, session_id, updated)
+    return updated.model_dump(mode="json")
+
+
 # ----------------------------------------------------------------------
 # Status probe: unified session status (cluster liveness + parking state)
 # ----------------------------------------------------------------------
@@ -632,6 +752,8 @@ async def get_session_status(
     session_id: str,
     agent_id: str = Query(description="Agent the session belongs to."),
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
+    storage: StorageBase = Depends(get_storage),
     session_service: SessionService = Depends(get_session_service),
 ) -> SessionStatusResponse:
     """Return the unified :class:`SessionStatus` for a session.
@@ -663,6 +785,14 @@ async def get_session_status(
         `HTTPException`: 404 if the session does not exist or does not
             belong to the authenticated user.
     """
+    existing = await storage.get_session(user_id, agent_id, session_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session '{session_id}' not found.",
+        )
+    require_runtime_session_access(principal, existing)
+
     session_status = await session_service.get_session_status(
         user_id,
         agent_id,
@@ -751,6 +881,7 @@ async def stream_session_events(
     session_id: str,
     agent_id: str = Query(description="Agent the session belongs to."),
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     message_bus: MessageBus = Depends(get_message_bus),
 ) -> StreamingResponse:
@@ -789,6 +920,8 @@ async def stream_session_events(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session '{session_id}' not found.",
         )
+
+    require_runtime_session_access(principal, existing)
 
     async def _sse_generator() -> AsyncGenerator[str, None]:
         # 1. Replay buffered events from the current run (if any).

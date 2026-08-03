@@ -82,6 +82,7 @@ class RedisStorage(StorageBase):
         session_index: str = (
             "agentscope:user:{user_id}:agent:{agent_id}:sessions"
         )
+        session_global_index: str = "agentscope:user:{user_id}:sessions"
 
         # Lookup key: maps (user_id, agent_id) → session_id
         session_lookup: str = (
@@ -724,10 +725,19 @@ class RedisStorage(StorageBase):
             if raw:
                 record = SessionRecord.model_validate_json(raw)
                 record.config = config
+                record.source = source
+                record.source_schedule_id = source_schedule_id
                 if state is not None:
                     record.state = state
                 record.updated_at = datetime.now()
                 await self._set_with_ttl(key, record.model_dump_json())
+                await self._client.sadd(
+                    self._key(
+                        self.key_config.session_global_index,
+                        user_id=user_id,
+                    ),
+                    record.id,
+                )
                 return record
 
         # Use the caller-provided ``session_id`` when given so a
@@ -755,6 +765,13 @@ class RedisStorage(StorageBase):
         )
         await self._set_with_ttl(key, record.model_dump_json())
         await self._client.sadd(index_key, record.id)
+        await self._client.sadd(
+            self._key(
+                self.key_config.session_global_index,
+                user_id=user_id,
+            ),
+            record.id,
+        )
 
         if source_schedule_id:
             schedule_session_key = self._key(
@@ -847,6 +864,38 @@ class RedisStorage(StorageBase):
             return None
         return SessionRecord.model_validate_json(raw)
 
+    async def list_all_sessions(
+        self,
+        user_id: str,
+    ) -> list[SessionRecord]:
+        """Every indexed session in a user namespace, newest first."""
+        index_key = self._key(
+            self.key_config.session_global_index,
+            user_id=user_id,
+        )
+        ids = await self._client.smembers(index_key)
+        records: list[SessionRecord] = []
+        missing: list[str] = []
+        for session_id in ids:
+            raw = await self._client.get(
+                self._key(
+                    self.key_config.session,
+                    user_id=user_id,
+                    session_id=session_id,
+                ),
+            )
+            if raw:
+                records.append(SessionRecord.model_validate_json(raw))
+            else:
+                missing.append(session_id)
+        if missing:
+            await self._client.srem(index_key, *missing)
+        records.sort(
+            key=lambda record: (record.updated_at, record.created_at),
+            reverse=True,
+        )
+        return records
+
     async def delete_session(
         self,
         user_id: str,
@@ -917,6 +966,13 @@ class RedisStorage(StorageBase):
         )
         await self._client.delete(key)
         await self._client.srem(index_key, session_id)
+        await self._client.srem(
+            self._key(
+                self.key_config.session_global_index,
+                user_id=user_id,
+            ),
+            session_id,
+        )
         await self._client.delete(msg_key)
 
         if record.source_schedule_id:

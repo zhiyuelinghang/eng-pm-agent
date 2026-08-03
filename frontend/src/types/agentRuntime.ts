@@ -66,12 +66,14 @@ export type AgentRuntimeMessage = {
   usage?: { input_tokens: number; output_tokens: number } | null
   error?: { type?: string; message?: string } | null
   model_names?: string[]
+  platform_collaboration_status?: 'waiting' | 'continued' | null
 }
 
 export type AgentTask = {
   id: string | number
   subject: string
   state: 'pending' | 'in_progress' | 'completed' | string
+  owner?: string | null
   blocked_by?: Array<string | number>
 }
 
@@ -109,7 +111,7 @@ export type AgentRuntimeEvent = {
 }
 
 export type ApiAgentMessage = {
-  id: number
+  id: string | number
   conversation_id?: number
   role: 'assistant' | 'user'
   content: string
@@ -118,6 +120,82 @@ export type ApiAgentMessage = {
 }
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
+
+function cloneContentBlock(block: AgentContentBlock): AgentContentBlock {
+  if (block.type === 'data') {
+    return {
+      ...block,
+      source: { ...block.source },
+    }
+  }
+  if (block.type === 'hint') {
+    return {
+      ...block,
+      hint: Array.isArray(block.hint)
+        ? block.hint.map(item => (
+            item.type === 'data'
+              ? { ...item, source: { ...item.source } }
+              : { ...item }
+          ))
+        : block.hint,
+    }
+  }
+  if (block.type === 'tool_call') {
+    return {
+      ...block,
+      suggested_rules: block.suggested_rules?.map(rule => ({ ...rule })),
+    }
+  }
+  if (block.type === 'tool_result') {
+    return {
+      ...block,
+      output: Array.isArray(block.output)
+        ? block.output.map(item => (
+            item.type === 'data'
+              ? { ...item, source: { ...item.source } }
+              : { ...item }
+          ))
+        : block.output,
+      metadata: block.metadata ? { ...block.metadata } : block.metadata,
+    }
+  }
+  return { ...block }
+}
+
+function cloneRuntimeTraceForUpdate(
+  current: AgentRuntimeTrace | null,
+): AgentRuntimeTrace {
+  if (!current) return createEmptyRuntimeTrace()
+  return {
+    ...current,
+    messages: current.messages.map(message => ({
+      ...message,
+      content: [...message.content],
+      usage: message.usage ? { ...message.usage } : message.usage,
+      error: message.error ? { ...message.error } : message.error,
+      model_names: message.model_names ? [...message.model_names] : undefined,
+    })),
+    modelNames: [...current.modelNames],
+    tasksContext: current.tasksContext
+      ? {
+          tasks: current.tasksContext.tasks.map(task => ({
+            ...task,
+            blocked_by: task.blocked_by ? [...task.blocked_by] : undefined,
+          })),
+        }
+      : null,
+    subagentHitl: current.subagentHitl.map(entry => ({
+      ...entry,
+      event: {
+        ...entry.event,
+        tool_calls: entry.event.tool_calls?.map(toolCall => ({
+          ...toolCall,
+          suggested_rules: toolCall.suggested_rules?.map(rule => ({ ...rule })),
+        })),
+      },
+    })),
+  }
+}
 
 export function createEmptyRuntimeTrace(status = 'running'): AgentRuntimeTrace {
   return {
@@ -163,6 +241,14 @@ export function runtimeTraceFromExtraData(
     ? summary.subagent_hitl as AgentSubagentHitlEntry[]
     : []
   const messages = clone(collection)
+  for (const message of messages) {
+    if (message.platform_collaboration_status === 'continued') {
+      message.finished_reason = 'collaboration_continued'
+    } else if (message.platform_collaboration_status === 'waiting') {
+      message.finished_at = null
+      message.finished_reason = 'waiting_for_collaboration'
+    }
+  }
   if (modelNames.length && messages.length) {
     messages[messages.length - 1].model_names = modelNames
   }
@@ -176,15 +262,26 @@ export function runtimeTraceFromExtraData(
   }
 }
 
-function findBlock<T extends AgentContentBlock['type']>(
+function findMutableBlock<T extends AgentContentBlock['type']>(
   message: AgentRuntimeMessage,
   type: T,
   id: string,
+  mutableBlocks: WeakSet<object>,
 ): Extract<AgentContentBlock, { type: T }> | undefined {
-  return message.content.find(
-    (block): block is Extract<AgentContentBlock, { type: T }> =>
-      block.type === type && block.id === id,
+  const index = message.content.findIndex(
+    block => block.type === type && block.id === id,
   )
+  if (index < 0) return undefined
+  let block = message.content[index] as Extract<AgentContentBlock, { type: T }>
+  if (!mutableBlocks.has(block)) {
+    block = cloneContentBlock(block) as Extract<
+      AgentContentBlock,
+      { type: T }
+    >
+    message.content[index] = block
+    mutableBlocks.add(block)
+  }
+  return block
 }
 
 function ensureReply(
@@ -207,11 +304,11 @@ function ensureReply(
   return message
 }
 
-export function applyAgentRuntimeEvent(
-  current: AgentRuntimeTrace | null,
+function applyAgentRuntimeEventMutable(
+  trace: AgentRuntimeTrace,
   incoming: AgentRuntimeEvent,
-): AgentRuntimeTrace {
-  const trace = clone(current || createEmptyRuntimeTrace())
+  mutableBlocks: WeakSet<object>,
+): void {
   const event = incoming as Record<string, any>
 
   if (event.type === 'CUSTOM') {
@@ -238,37 +335,57 @@ export function applyAgentRuntimeEvent(
         item => `${item.worker_session_id}:${item.reply_id}` !== key,
       )
     }
-    return trace
+    return
   }
 
   if (event.type === 'REPLY_START') {
     const replyId = String(event.reply_id)
+    const startedAt = String(event.created_at || new Date().toISOString())
+    for (const waitingMessage of trace.messages) {
+      if (
+        waitingMessage.finished_reason === 'waiting_for_collaboration'
+        && waitingMessage.id !== replyId
+      ) {
+        waitingMessage.finished_at = startedAt
+        waitingMessage.finished_reason = 'collaboration_continued'
+        waitingMessage.platform_collaboration_status = 'continued'
+      }
+    }
     if (!trace.messages.some(item => item.id === replyId)) {
       trace.messages.push({
         id: replyId,
         name: String(event.name || '智能体'),
         role: 'assistant',
         content: [],
-        created_at: String(event.created_at || new Date().toISOString()),
+        created_at: startedAt,
       })
     }
     trace.status = 'running'
-    return trace
+    return
   }
 
   const message = ensureReply(trace, incoming)
-  if (!message) return trace
+  if (!message) return
 
   switch (event.type) {
     case 'REPLY_END':
-      message.finished_at = String(event.created_at || new Date().toISOString())
-      message.finished_reason = String(event.finished_reason || 'completed')
-      message.error = event.error || null
-      trace.status = message.error
-        ? 'error'
-        : message.finished_reason === 'interrupted'
-          ? 'interrupted'
-          : 'completed'
+      if (event.platform_collaboration_pending) {
+        message.finished_at = null
+        message.finished_reason = 'waiting_for_collaboration'
+        message.platform_collaboration_status = 'waiting'
+        message.error = null
+        trace.status = 'running'
+      } else {
+        message.finished_at = String(event.created_at || new Date().toISOString())
+        message.finished_reason = String(event.finished_reason || 'completed')
+        message.platform_collaboration_status = null
+        message.error = event.error || null
+        trace.status = message.error
+          ? 'error'
+          : message.finished_reason === 'interrupted'
+            ? 'interrupted'
+            : 'completed'
+      }
       break
     case 'MODEL_CALL_START': {
       const modelName = String(event.model_name || '')
@@ -291,7 +408,12 @@ export function applyAgentRuntimeEvent(
       })
       break
     case 'TEXT_BLOCK_DELTA': {
-      const block = findBlock(message, 'text', String(event.block_id))
+      const block = findMutableBlock(
+        message,
+        'text',
+        String(event.block_id),
+        mutableBlocks,
+      )
       if (block) block.text += String(event.delta || '')
       break
     }
@@ -303,7 +425,12 @@ export function applyAgentRuntimeEvent(
       })
       break
     case 'THINKING_BLOCK_DELTA': {
-      const block = findBlock(message, 'thinking', String(event.block_id))
+      const block = findMutableBlock(
+        message,
+        'thinking',
+        String(event.block_id),
+        mutableBlocks,
+      )
       if (block) block.thinking += String(event.delta || '')
       break
     }
@@ -319,7 +446,12 @@ export function applyAgentRuntimeEvent(
       })
       break
     case 'DATA_BLOCK_DELTA': {
-      const block = findBlock(message, 'data', String(event.block_id))
+      const block = findMutableBlock(
+        message,
+        'data',
+        String(event.block_id),
+        mutableBlocks,
+      )
       if (block && block.source.type === 'base64') {
         block.source.data = `${block.source.data || ''}${String(event.data || '')}`
       }
@@ -344,7 +476,12 @@ export function applyAgentRuntimeEvent(
       })
       break
     case 'TOOL_CALL_DELTA': {
-      const block = findBlock(message, 'tool_call', String(event.tool_call_id))
+      const block = findMutableBlock(
+        message,
+        'tool_call',
+        String(event.tool_call_id),
+        mutableBlocks,
+      )
       if (block) block.input += String(event.delta || '')
       break
     }
@@ -358,7 +495,12 @@ export function applyAgentRuntimeEvent(
       })
       break
     case 'TOOL_RESULT_TEXT_DELTA': {
-      const block = findBlock(message, 'tool_result', String(event.tool_call_id))
+      const block = findMutableBlock(
+        message,
+        'tool_result',
+        String(event.tool_call_id),
+        mutableBlocks,
+      )
       if (!block) break
       if (typeof block.output === 'string') {
         block.output = [{ type: 'text', id: `${block.id}-text`, text: block.output }]
@@ -376,7 +518,12 @@ export function applyAgentRuntimeEvent(
       break
     }
     case 'TOOL_RESULT_DATA_DELTA': {
-      const block = findBlock(message, 'tool_result', String(event.tool_call_id))
+      const block = findMutableBlock(
+        message,
+        'tool_result',
+        String(event.tool_call_id),
+        mutableBlocks,
+      )
       if (!block) break
       if (typeof block.output === 'string') {
         block.output = [{ type: 'text', id: `${block.id}-text`, text: block.output }]
@@ -399,18 +546,33 @@ export function applyAgentRuntimeEvent(
       break
     }
     case 'TOOL_RESULT_END': {
-      const result = findBlock(message, 'tool_result', String(event.tool_call_id))
+      const result = findMutableBlock(
+        message,
+        'tool_result',
+        String(event.tool_call_id),
+        mutableBlocks,
+      )
       if (result) {
         result.state = event.state || 'success'
         result.metadata = event.metadata || {}
       }
-      const call = findBlock(message, 'tool_call', String(event.tool_call_id))
+      const call = findMutableBlock(
+        message,
+        'tool_call',
+        String(event.tool_call_id),
+        mutableBlocks,
+      )
       if (call) call.state = 'finished'
       break
     }
     case 'REQUIRE_USER_CONFIRM':
       for (const incomingCall of event.tool_calls || []) {
-        const call = findBlock(message, 'tool_call', String(incomingCall.id))
+        const call = findMutableBlock(
+          message,
+          'tool_call',
+          String(incomingCall.id),
+          mutableBlocks,
+        )
         if (call) {
           call.state = 'asking'
           call.suggested_rules = incomingCall.suggested_rules || []
@@ -420,7 +582,12 @@ export function applyAgentRuntimeEvent(
       break
     case 'REQUIRE_EXTERNAL_EXECUTION':
       for (const incomingCall of event.tool_calls || []) {
-        const call = findBlock(message, 'tool_call', String(incomingCall.id))
+        const call = findMutableBlock(
+          message,
+          'tool_call',
+          String(incomingCall.id),
+          mutableBlocks,
+        )
         if (call) call.state = 'submitted'
       }
       trace.status = 'awaiting_external_result'
@@ -429,5 +596,23 @@ export function applyAgentRuntimeEvent(
       message.finished_reason = 'exceed_max_iters'
       break
   }
+}
+
+export function applyAgentRuntimeEvents(
+  current: AgentRuntimeTrace | null,
+  incoming: AgentRuntimeEvent[],
+): AgentRuntimeTrace {
+  const trace = cloneRuntimeTraceForUpdate(current)
+  const mutableBlocks = new WeakSet<object>()
+  for (const event of incoming) {
+    applyAgentRuntimeEventMutable(trace, event, mutableBlocks)
+  }
   return trace
+}
+
+export function applyAgentRuntimeEvent(
+  current: AgentRuntimeTrace | null,
+  incoming: AgentRuntimeEvent,
+): AgentRuntimeTrace {
+  return applyAgentRuntimeEvents(current, [incoming])
 }

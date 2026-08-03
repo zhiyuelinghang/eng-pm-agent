@@ -14,14 +14,18 @@ from backend.app.agentscope_client import (
     AgentScopeReply,
 )
 from backend.app.api import (
+    _annotate_collaboration_event,
     _agent_conversation_or_404,
     _agent_reply_extra_data,
     _agentscope_assistant_groups,
+    _agentscope_platform_messages,
     _agentscope_reply_from_group,
     _catalog_agent_for_conversation,
+    _project_agentscope_user_message,
     _sse_frame,
     create_agent_conversation,
     list_agent_conversations,
+    list_agent_conversation_messages,
     stream_agent_conversation_tool_confirmation,
 )
 from backend.app.config import Settings
@@ -75,6 +79,67 @@ class AgentScopeClientTest(TestCase):
             _agent_conversation_or_404(database, conversation.id, admin)
 
         self.assertEqual(caught.exception.status_code, 403)
+
+    def test_history_reads_agentscope_without_querying_message_mirror(
+        self,
+    ) -> None:
+        conversation = SimpleNamespace(
+            id=7,
+            user_id=2,
+            project_id=5,
+            agent_id="initializer",
+            agentscope_session_id="session-7",
+            status="running",
+            last_error=None,
+            updated_at=None,
+        )
+        database = Mock()
+        database.get.return_value = conversation
+        user = SimpleNamespace(id=2, role="admin")
+        gateway = Mock()
+        gateway.session_status.return_value = "idle"
+        gateway.list_all_messages.return_value = {
+            "messages": [
+                {
+                    "id": "user-1",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "<user-request>读取人员表</user-request>",
+                        },
+                    ],
+                },
+                {
+                    "id": "assistant-1",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "已读取"}],
+                    "finished_at": "2026-07-31T10:00:00+08:00",
+                },
+            ],
+        }
+
+        with (
+            patch("backend.app.api.project_for_user_or_403"),
+            patch("backend.app.api._agentscope_client", return_value=gateway),
+        ):
+            result = list_agent_conversation_messages(
+                conversation_id=7,
+                db=database,
+                user=user,
+            )
+
+        self.assertEqual(
+            [item["content"] for item in result["data"]],
+            ["读取人员表", "已读取"],
+        )
+        gateway.list_all_messages.assert_called_once_with(
+            "session-7",
+            "initializer",
+        )
+        database.scalars.assert_not_called()
+        self.assertEqual(conversation.status, "completed")
+        database.commit.assert_called_once()
 
     def test_initialization_conversation_list_serializes_conversations(
         self,
@@ -176,11 +241,23 @@ class AgentScopeClientTest(TestCase):
                 "parameters": {"mode": "agentic", "top_k": 5},
             },
         }
+        platform_context = {
+            "user_id": "u1",
+            "username": "zhangsan",
+            "display_name": "张三",
+            "project_id": "p2",
+            "project_name": "测试项目",
+            "conversation_id": "c3",
+            "conversation_title": "测试会话",
+            "conversation_type": "primary",
+            "agent_name": "进度分析师",
+        }
 
         session_id = client.create_session(
             agent=agent,
             workspace_id="platform-u1-p2-c3",
             name="测试会话",
+            platform_context=platform_context,
         )
 
         self.assertEqual(session_id, "session-1")
@@ -191,10 +268,15 @@ class AgentScopeClientTest(TestCase):
             agent["knowledge_config"],
         )
         self.assertEqual(
+            create_call.kwargs["json"]["platform_context"],
+            platform_context,
+        )
+        self.assertEqual(
             patch_call.kwargs["json"],
             {
                 "permission_mode": "explore",
                 "knowledge_config": agent["knowledge_config"],
+                "platform_context": platform_context,
             },
         )
 
@@ -244,6 +326,119 @@ class AgentScopeClientTest(TestCase):
         request_body = client._request.call_args.kwargs["json"]
         self.assertEqual(request_body["input"]["id"], "user-message")
         self.assertEqual(request_body["input"]["metadata"]["source"], "test")
+
+    def test_team_state_keeps_idle_queued_member_pending(self) -> None:
+        client = _client()
+        client._request = Mock(  # type: ignore[method-assign]
+            return_value={
+                "sessions": [
+                    {
+                        "session": {
+                            "id": "leader-session",
+                            "team_id": "team-1",
+                        },
+                        "team": {
+                            "team": {
+                                "data": {
+                                    "work_revision": 2,
+                                    "leader_completed_revision": 0,
+                                },
+                            },
+                            "members": [
+                                {
+                                    "session_id": "worker-session",
+                                    "work_revision": 2,
+                                    "settled_revision": 1,
+                                    "work_status": "queued",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+
+        detail = client.session_team_state_detail(
+            "leader-session",
+            "leader-agent",
+        )
+
+        self.assertTrue(detail.team_exists)
+        self.assertTrue(detail.members_pending)
+        self.assertTrue(detail.leader_summary_pending)
+        self.assertTrue(detail.pending)
+
+    def test_team_remains_pending_until_leader_summarizes(self) -> None:
+        client = _client()
+        client._request = Mock(  # type: ignore[method-assign]
+            return_value={
+                "sessions": [
+                    {
+                        "session": {
+                            "id": "leader-session",
+                            "team_id": "team-1",
+                        },
+                        "team": {
+                            "team": {
+                                "data": {
+                                    "work_revision": 3,
+                                    "leader_completed_revision": 2,
+                                },
+                            },
+                            "members": [
+                                {
+                                    "work_revision": 3,
+                                    "settled_revision": 3,
+                                    "work_status": "reported",
+                                },
+                            ],
+                        },
+                    },
+                ],
+            },
+        )
+
+        exists, pending = client.session_team_state(
+            "leader-session",
+            "leader-agent",
+        )
+
+        self.assertTrue(exists)
+        self.assertTrue(pending)
+        self.assertFalse(
+            client.session_team_state_detail(
+                "leader-session",
+                "leader-agent",
+            ).members_pending,
+        )
+        self.assertTrue(
+            client.session_team_work_pending(
+                "leader-session",
+                "leader-agent",
+            ),
+        )
+
+    def test_reply_end_is_annotated_while_collaboration_is_pending(
+        self,
+    ) -> None:
+        client = _client()
+        client.session_team_work_pending = Mock(  # type: ignore[method-assign]
+            return_value=True,
+        )
+
+        event = asyncio.run(
+            _annotate_collaboration_event(
+                client,
+                session_id="leader-session",
+                agent_id="leader-agent",
+                runtime_event={
+                    "type": "REPLY_END",
+                    "finished_reason": "completed",
+                },
+            ),
+        )
+
+        self.assertTrue(event["platform_collaboration_pending"])
 
     def test_chat_waits_for_team_follow_up_before_returning(self) -> None:
         client = _client()
@@ -296,6 +491,10 @@ class AgentScopeClientTest(TestCase):
         self.assertEqual(reply.message_id, "final")
         self.assertEqual(reply.content, "成员已核验，最终结论")
         self.assertEqual(reply.raw_messages, [interim, final])
+        self.assertEqual(
+            interim["platform_collaboration_status"],
+            "continued",
+        )
 
     def test_chat_does_not_require_team_deletion_after_members_settle(
         self,
@@ -752,6 +951,174 @@ class AgentScopeClientTest(TestCase):
         )
 
         self.assertEqual(groups, [[first, follow_up], [final]])
+
+    def test_complete_history_is_loaded_page_by_page(self) -> None:
+        client = _client()
+        client.list_messages = Mock(  # type: ignore[method-assign]
+            side_effect=[
+                {
+                    "messages": [
+                        {"id": "message-3"},
+                        {"id": "message-4"},
+                    ],
+                    "is_running": True,
+                    "has_more": True,
+                },
+                {
+                    "messages": [
+                        {"id": "message-1"},
+                        {"id": "message-2"},
+                    ],
+                    "is_running": False,
+                    "has_more": False,
+                },
+            ],
+        )
+
+        result = client.list_all_messages("session-1", "agent-1")
+
+        self.assertEqual(
+            [item["id"] for item in result["messages"]],
+            ["message-1", "message-2", "message-3", "message-4"],
+        )
+        self.assertTrue(result["is_running"])
+        client.list_messages.assert_any_call(
+            "session-1",
+            "agent-1",
+            before="message-3",
+        )
+
+    def test_message_metadata_is_updated_in_agentscope(self) -> None:
+        client = _client()
+        client._request = Mock(  # type: ignore[method-assign]
+            return_value={"id": "reply-1", "metadata": {"status": "done"}},
+        )
+
+        result = client.update_message_metadata(
+            "session-1",
+            "agent-1",
+            "reply-1",
+            {"status": "done"},
+        )
+
+        self.assertEqual(result["metadata"], {"status": "done"})
+        client._request.assert_called_once_with(
+            "PATCH",
+            "/sessions/session-1/messages/reply-1/metadata",
+            params={"agent_id": "agent-1"},
+            json={"metadata": {"status": "done"}},
+        )
+
+    def test_user_message_projection_uses_agentscope_metadata(self) -> None:
+        projected = _project_agentscope_user_message(
+            7,
+            {
+                "id": "user-1",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "<platform-context>内部上下文</platform-context>"
+                            "<user-request>请分析附件</user-request>"
+                        ),
+                    },
+                ],
+                "metadata": {
+                    "platform_display_content": "请分析附件",
+                    "platform_initialization_files": [
+                        {"id": 11, "name": "人员表.xlsx", "size": 1024},
+                    ],
+                },
+                "created_at": "2026-07-31T10:00:00+08:00",
+            },
+        )
+
+        self.assertEqual(projected["id"], "user-1")
+        self.assertEqual(projected["content"], "请分析附件")
+        self.assertEqual(
+            projected["extra_data"]["initialization_files"],
+            [{"id": 11, "name": "人员表.xlsx", "size": 1024}],
+        )
+
+    def test_agentscope_history_projects_one_platform_turn(self) -> None:
+        messages = [
+            {
+                "id": "user-1",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "<user-request>开始初始化</user-request>",
+                    },
+                ],
+                "metadata": {},
+            },
+            {
+                "id": "assistant-interim",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "等待专家"}],
+                "finished_at": "2026-07-31T10:00:01+08:00",
+            },
+            {
+                "id": "assistant-final",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "初始化完成"}],
+                "finished_at": "2026-07-31T10:00:02+08:00",
+                "metadata": {
+                    "platform_status": "completed",
+                    "platform_runtime_trace": {"team_update_count": 2},
+                    "platform_collaboration_statuses": {
+                        "assistant-interim": "continued",
+                    },
+                },
+            },
+        ]
+
+        projected = _agentscope_platform_messages(7, messages, "idle")
+
+        self.assertEqual(len(projected), 2)
+        self.assertEqual(projected[0]["content"], "开始初始化")
+        self.assertEqual(projected[1]["content"], "初始化完成")
+        self.assertEqual(
+            projected[1]["extra_data"]["agentscope_messages"][0][
+                "platform_collaboration_status"
+            ],
+            "continued",
+        )
+        self.assertEqual(
+            projected[1]["extra_data"]["runtime_trace"],
+            {"team_update_count": 2},
+        )
+
+    def test_latest_interim_reply_remains_running(self) -> None:
+        projected = _agentscope_platform_messages(
+            7,
+            [
+                {
+                    "id": "user-1",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "<user-request>协同处理</user-request>",
+                        },
+                    ],
+                },
+                {
+                    "id": "assistant-interim",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "等待成员汇报"}],
+                    "finished_at": "2026-07-31T10:00:01+08:00",
+                },
+            ],
+            "running",
+        )
+
+        self.assertEqual(
+            projected[-1]["extra_data"]["status"],
+            "running",
+        )
 
     def test_stale_global_main_conversation_is_rejected(self) -> None:
         conversation = SimpleNamespace(

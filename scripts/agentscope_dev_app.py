@@ -131,6 +131,45 @@ knowledge_base_manager = CollectionPerKbManager(
     vector_store=QdrantStore(path=str(QDRANT_HOME)),
 )
 
+
+async def _create_platform_agent_tools(
+    user_id: str,
+    agent_id: str,
+    session_id: str,
+):
+    """Bind an internal worker to its leader's Dobby platform context."""
+    platform_session_id = session_id
+    platform_agent_id = agent_id
+    read_only = False
+    initialization_role: str | None = None
+    agent_record = await storage.get_agent(user_id, agent_id)
+    if agent_record is not None:
+        initialization_role = (
+            agent_record.data.platform_config.initialization_role
+        )
+    session = await storage.get_session(user_id, agent_id, session_id)
+    if session is not None and session.team_id is not None:
+        team = await storage.get_team(user_id, session.team_id)
+        if team is not None and team.session_id != session_id:
+            leader_session = await storage.get_session(
+                user_id,
+                "",
+                team.session_id,
+            )
+            if leader_session is not None:
+                platform_session_id = leader_session.id
+                platform_agent_id = leader_session.agent_id
+                read_only = True
+    return await create_dobby_agent_tools(
+        user_id,
+        agent_id,
+        session_id,
+        platform_session_id=platform_session_id,
+        platform_agent_id=platform_agent_id,
+        read_only=read_only,
+        initialization_role=initialization_role,
+    )
+
 app = create_app(
     storage=storage,
     message_bus=InMemoryMessageBus(),
@@ -158,7 +197,7 @@ app = create_app(
             os.getenv("AGENTSCOPE_MANAGEMENT_TOKEN_TTL_SECONDS", "28800"),
         ),
     ),
-    extra_agent_tools=create_dobby_agent_tools,
+    extra_agent_tools=_create_platform_agent_tools,
     extra_middlewares=[
         Middleware(
             CORSMiddleware,

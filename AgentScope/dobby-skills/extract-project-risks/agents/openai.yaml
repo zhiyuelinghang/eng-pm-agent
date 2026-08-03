@@ -1,0 +1,4 @@
+interface:
+  display_name: "提取项目风险源"
+  short_description: "提取相关工序、风险要素和风险窗口"
+  default_prompt: "使用 $extract-project-risks 提取风险源并核对风险窗口。"

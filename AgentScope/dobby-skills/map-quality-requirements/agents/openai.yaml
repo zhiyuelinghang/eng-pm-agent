@@ -1,0 +1,4 @@
+interface:
+  display_name: "映射质量指标"
+  short_description: "提取质量验收要求并按WBS编码建立可核对的确定性关联"
+  default_prompt: "使用 $map-quality-requirements 提取并映射工序质量要求。"

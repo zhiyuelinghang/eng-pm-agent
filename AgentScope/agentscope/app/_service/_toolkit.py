@@ -34,6 +34,18 @@ from ..access import ResourceKind
 from ._access import ResourceAccessService
 
 
+_GLOBALLY_DISABLED_TOOL_NAMES = frozenset({"PowerShell"})
+
+
+def _filter_globally_disabled_tools(tools: list[Any]) -> list[Any]:
+    """Remove tools disabled for every AgentScope and Dobby chat surface."""
+    return [
+        tool
+        for tool in tools
+        if str(getattr(tool, "name", "")) not in _GLOBALLY_DISABLED_TOOL_NAMES
+    ]
+
+
 async def get_toolkit(
     *,
     storage: StorageBase,
@@ -194,12 +206,20 @@ time or interval"
     if team_role == "worker":
         tools.append(TeamSay(**team_tool_kwargs, role="worker"))
     else:
+        from ._platform_settings import get_project_initializer_agent_id
+
+        project_initializer_agent_id = (
+            await get_project_initializer_agent_id(storage, user_id)
+        )
+        tools.append(TeamCreate(**team_tool_kwargs))
+        if project_initializer_agent_id != agent_record.id:
+            tools.append(
+                AgentCreate(
+                    **team_tool_kwargs,
+                    sub_agent_templates=sub_agent_templates or {},
+                ),
+            )
         tools += [
-            TeamCreate(**team_tool_kwargs),
-            AgentCreate(
-                **team_tool_kwargs,
-                sub_agent_templates=sub_agent_templates or {},
-            ),
             TeamSay(**team_tool_kwargs, role="leader"),
             TeamDelete(**team_tool_kwargs),
         ]
@@ -234,6 +254,7 @@ time or interval"
                 (
                     caller_is_global_main
                     and view.data.platform_config.enabled
+                    and view.data.platform_config.allow_global_main_call
                     and view.id != global_main_agent_id
                 )
                 or (
@@ -264,6 +285,13 @@ time or interval"
     # Tools from middleware
     for mw in middlewares:
         tools.extend(await mw.list_tools())
+
+    # Temporary global command-execution policy: PowerShell must not be
+    # available in either the AgentScope management chat or a Dobby business
+    # chat.  Keep this final defensive filter after every direct tool source
+    # so a caller-supplied factory or middleware cannot accidentally add it
+    # back.  Revisit only together with the planned isolated code sandbox.
+    tools = _filter_globally_disabled_tools(tools)
 
     return Toolkit(
         tools=tools,

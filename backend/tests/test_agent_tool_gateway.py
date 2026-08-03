@@ -16,7 +16,9 @@ from backend.app.models import (
     AgentConversation,
     OperationLog,
     Project,
+    ProjectInitializationArtifact,
     ProjectInitializationDraft,
+    ProjectInitializationDraftSection,
     ProjectInitializationFile,
     ProjectMember,
     ProjectMemberPosition,
@@ -28,6 +30,7 @@ from backend.app.models import (
 from backend.app.project_initialization import (
     ApplyInitializationDraftInput,
     PersonnelCredentialInput,
+    ProjectInitializationPayload,
     apply_initialization_draft,
 )
 
@@ -141,7 +144,6 @@ def _initialization_payload() -> dict:
         "risks": [
             {
                 "serial_no": 1,
-                "related_wbs_code": "1.1",
                 "related_process_name": "基础施工",
                 "risk_part": "基坑",
                 "risk_level": "较大风险",
@@ -158,6 +160,134 @@ def _initialization_payload() -> dict:
             },
         ],
     }
+
+
+def test_legacy_risk_wbs_relation_is_discarded() -> None:
+    payload = _initialization_payload()
+    payload["risks"][0]["related_wbs_code"] = "1.1"
+
+    normalized = ProjectInitializationPayload.model_validate(payload).model_dump()
+
+    assert "related_wbs_code" not in normalized["risks"][0]
+
+
+def _create_finalized_initialization_draft(
+    db: Session,
+    context,
+    payload: dict | None = None,
+) -> ProjectInitializationDraft:
+    data = payload or _initialization_payload()
+    sections = [
+        "project",
+        "personnel",
+        "wbs",
+        "risks",
+        "quality_requirements",
+    ]
+    normalization_id = _create_ready_initialization_normalization(
+        db,
+        context,
+        data,
+        sections,
+    )
+    started, _ = execute_tool_operation(
+        db,
+        context,
+        "begin_project_initialization_draft",
+        {
+            "normalization_id": normalization_id,
+            "expected_sections": sections,
+        },
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    draft_id = started["draft"]["id"]
+    for section in sections:
+        execute_tool_operation(
+            db,
+            context,
+            "import_project_initialization_artifact",
+            {
+                "draft_id": draft_id,
+                "normalization_id": normalization_id,
+            },
+            actor_agent_id=f"{section}-specialist",
+            initialization_role=section,
+        )
+    execute_tool_operation(
+        db,
+        context,
+        "finalize_project_initialization_draft",
+        {
+            "draft_id": draft_id,
+            "semantic_issues": [],
+        },
+        actor_agent_id="validator",
+        initialization_role="validator",
+    )
+    draft = db.get(ProjectInitializationDraft, draft_id)
+    assert draft is not None
+    return draft
+
+
+def _create_ready_initialization_normalization(
+    db: Session,
+    context,
+    payload: dict,
+    sections: list[str],
+) -> int:
+    started, _ = execute_tool_operation(
+        db,
+        context,
+        "begin_project_initialization_normalization",
+        {"source_file_ids": []},
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    normalization_id = started["id"]
+    for section in sections:
+        value = payload[section]
+        parts = (
+            [value]
+            if section == "project"
+            else [
+                value[:1],
+                *[
+                    value[index:index + 20]
+                    for index in range(1, len(value), 20)
+                ],
+            ]
+        )
+        for part_index, part in enumerate(parts, start=1):
+            execute_tool_operation(
+                db,
+                context,
+                "write_project_initialization_artifact",
+                {
+                    "normalization_id": normalization_id,
+                    "section": section,
+                    "artifact_format": "json",
+                    "part_index": part_index,
+                    "file_name": f"{section}-{part_index}.json",
+                    "json_data": part,
+                    "source_file_ids": [],
+                    "source_locations": [f"测试标准资料：{section}"],
+                },
+                actor_agent_id="initializer",
+                initialization_role="orchestrator",
+            )
+    execute_tool_operation(
+        db,
+        context,
+        "finalize_project_initialization_normalization",
+        {
+            "normalization_id": normalization_id,
+            "expected_sections": sections,
+        },
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    return normalization_id
 
 
 def test_read_operation_is_strictly_scoped_to_bound_project(db: Session) -> None:
@@ -294,7 +424,7 @@ def test_admin_main_can_update_new_wbs_fields_and_audit(db: Session) -> None:
     assert "Dobby 智能体会话" in log.detail
 
 
-def test_initialization_agent_can_only_submit_draft(db: Session) -> None:
+def test_initialization_agent_can_only_maintain_draft(db: Session) -> None:
     _, project, conversation = _seed_context(
         db,
         role="admin",
@@ -302,20 +432,12 @@ def test_initialization_agent_can_only_submit_draft(db: Session) -> None:
     )
     context = resolve_tool_context(db, conversation.agentscope_session_id)
 
-    draft, _ = execute_tool_operation(
-        db,
-        context,
-        "submit_project_initialization_draft",
-        {
-            "payload": _initialization_payload(),
-            "source_files": ["人员名单.xlsx", "总进度计划.xlsx"],
-        },
-    )
+    draft = _create_finalized_initialization_draft(db, context)
 
-    assert draft["status"] == "ready"
-    assert draft["summary"]["wbs"] == 2
-    assert draft["payload"]["wbs"][0]["progress_percent"] == "0"
-    assert draft["payload"]["wbs"][0]["parent_wbs_code"] is None
+    assert draft.status == "ready"
+    assert len(draft.payload["wbs"]) == 2
+    assert draft.payload["wbs"][0]["progress_percent"] == "0"
+    assert draft.payload["wbs"][0]["parent_wbs_code"] is None
     assert db.get(Project, project.id).engineering_type_description is None
     with pytest.raises(HTTPException) as error:
         execute_tool_operation(
@@ -327,7 +449,402 @@ def test_initialization_agent_can_only_submit_draft(db: Session) -> None:
     assert error.value.status_code == 403
 
 
-def test_initialization_agent_reads_and_incrementally_updates_draft(
+def test_draft_cannot_start_before_standardization_is_ready(
+    db: Session,
+) -> None:
+    _, _, conversation = _seed_context(
+        db,
+        role="admin",
+        conversation_type="initialization",
+        session_id="normalization-required",
+    )
+    context = resolve_tool_context(db, conversation.agentscope_session_id)
+    normalization, _ = execute_tool_operation(
+        db,
+        context,
+        "begin_project_initialization_normalization",
+        {"source_file_ids": []},
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+
+    with pytest.raises(HTTPException) as not_ready:
+        execute_tool_operation(
+            db,
+            context,
+            "begin_project_initialization_draft",
+            {
+                "normalization_id": normalization["id"],
+                "expected_sections": ["wbs"],
+            },
+            actor_agent_id="initializer",
+            initialization_role="orchestrator",
+        )
+    assert not_ready.value.status_code == 409
+    assert "标准化" in not_ready.value.detail
+
+    execute_tool_operation(
+        db,
+        context,
+        "write_project_initialization_artifact",
+        {
+            "normalization_id": normalization["id"],
+            "section": "wbs",
+            "artifact_format": "markdown",
+            "part_index": 1,
+            "file_name": "wbs.md",
+            "markdown_content": "# WBS 说明\n只有说明，尚无规范数据。",
+        },
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    with pytest.raises(HTTPException) as markdown_only:
+        execute_tool_operation(
+            db,
+            context,
+            "finalize_project_initialization_normalization",
+            {
+                "normalization_id": normalization["id"],
+                "expected_sections": ["wbs"],
+            },
+            actor_agent_id="initializer",
+            initialization_role="orchestrator",
+        )
+    assert markdown_only.value.status_code == 422
+    assert "只有 Markdown" in str(markdown_only.value.detail)
+
+
+def test_standardized_json_parts_are_read_and_bulk_imported(
+    db: Session,
+) -> None:
+    _, _, conversation = _seed_context(
+        db,
+        role="admin",
+        conversation_type="initialization",
+        session_id="artifact-parts",
+    )
+    context = resolve_tool_context(db, conversation.agentscope_session_id)
+    payload = _initialization_payload()
+    normalization, _ = execute_tool_operation(
+        db,
+        context,
+        "begin_project_initialization_normalization",
+        {"source_file_ids": []},
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    normalization_id = normalization["id"]
+    for index, item in enumerate(payload["wbs"], start=1):
+        execute_tool_operation(
+            db,
+            context,
+            "write_project_initialization_artifact",
+            {
+                "normalization_id": normalization_id,
+                "section": "wbs",
+                "artifact_format": "json",
+                "part_index": index,
+                "file_name": f"wbs-{index}.json",
+                "json_data": [item],
+                "source_locations": [f"计划表第 {index + 1} 行"],
+            },
+            actor_agent_id="initializer",
+            initialization_role="orchestrator",
+        )
+
+    ready, _ = execute_tool_operation(
+        db,
+        context,
+        "finalize_project_initialization_normalization",
+        {
+            "normalization_id": normalization_id,
+            "expected_sections": ["wbs"],
+        },
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    assert ready["status"] == "ready"
+    manifest, _ = execute_tool_operation(
+        db,
+        context,
+        "read_project_initialization_artifact",
+        {
+            "normalization_id": normalization_id,
+            "section": "wbs",
+        },
+        actor_agent_id="wbs-specialist",
+        initialization_role="wbs",
+    )
+    assert [item["part_index"] for item in manifest["parts"]] == [1, 2]
+    first_part, _ = execute_tool_operation(
+        db,
+        context,
+        "read_project_initialization_artifact",
+        {
+            "normalization_id": normalization_id,
+            "section": "wbs",
+            "artifact_format": "json",
+            "part_index": 1,
+            "start": 1,
+            "limit": 1,
+        },
+        actor_agent_id="wbs-specialist",
+        initialization_role="wbs",
+    )
+    assert first_part["data"][0]["wbs_code"] == "1"
+
+    started, _ = execute_tool_operation(
+        db,
+        context,
+        "begin_project_initialization_draft",
+        {
+            "normalization_id": normalization_id,
+            "expected_sections": ["wbs"],
+        },
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    imported, _ = execute_tool_operation(
+        db,
+        context,
+        "import_project_initialization_artifact",
+        {
+            "normalization_id": normalization_id,
+            "draft_id": started["draft"]["id"],
+        },
+        actor_agent_id="wbs-specialist",
+        initialization_role="wbs",
+    )
+    assert imported["record_count"] == 2
+    assert imported["workflow"]["completed_sections"] == ["wbs"]
+
+
+def test_artifact_json_requires_one_record_probe_before_batches(
+    db: Session,
+) -> None:
+    _, _, conversation = _seed_context(
+        db,
+        role="admin",
+        conversation_type="initialization",
+        session_id="artifact-probe",
+    )
+    context = resolve_tool_context(db, conversation.agentscope_session_id)
+    normalization, _ = execute_tool_operation(
+        db,
+        context,
+        "begin_project_initialization_normalization",
+        {"source_file_ids": []},
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    records = _initialization_payload()["wbs"]
+
+    with pytest.raises(HTTPException) as bulk_first:
+        execute_tool_operation(
+            db,
+            context,
+            "write_project_initialization_artifact",
+            {
+                "normalization_id": normalization["id"],
+                "section": "wbs",
+                "artifact_format": "json",
+                "part_index": 1,
+                "file_name": "wbs-1.json",
+                "json_data": records,
+            },
+            actor_agent_id="initializer",
+            initialization_role="orchestrator",
+        )
+    assert bulk_first.value.status_code == 422
+    assert "只提交 1 条" in str(bulk_first.value.detail)
+
+    probe, _ = execute_tool_operation(
+        db,
+        context,
+        "write_project_initialization_artifact",
+        {
+            "normalization_id": normalization["id"],
+            "section": "wbs",
+            "artifact_format": "json",
+            "part_index": 1,
+            "file_name": "wbs-1.json",
+            "json_data": records[:1],
+        },
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    assert probe["write_stage"] == "probe_accepted"
+    assert probe["record_count"] == 1
+    assert probe["schema_validated"] is True
+    assert probe["batch_limit"] == 20
+    assert probe["next_part_index"] == 2
+
+
+def test_artifact_batches_are_bounded_and_validation_errors_are_compact(
+    db: Session,
+) -> None:
+    _, _, conversation = _seed_context(
+        db,
+        role="admin",
+        conversation_type="initialization",
+        session_id="artifact-bounds",
+    )
+    context = resolve_tool_context(db, conversation.agentscope_session_id)
+    normalization, _ = execute_tool_operation(
+        db,
+        context,
+        "begin_project_initialization_normalization",
+        {"source_file_ids": []},
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    bad_record = {
+        "wbs_code": "1",
+        "parent_code": None,
+        "name": "错误字段试写",
+        "start_date": "2026-07-01",
+        "end_date": "2026-07-02",
+        "progress_percent": 0,
+        "status": None,
+        "priority": None,
+        "level": 1,
+    }
+    with pytest.raises(HTTPException) as invalid:
+        execute_tool_operation(
+            db,
+            context,
+            "write_project_initialization_artifact",
+            {
+                "normalization_id": normalization["id"],
+                "section": "wbs",
+                "artifact_format": "json",
+                "part_index": 1,
+                "file_name": "wbs-1.json",
+                "json_data": [bad_record],
+            },
+            actor_agent_id="initializer",
+            initialization_role="orchestrator",
+        )
+    detail = invalid.value.detail
+    assert detail["error_count"] > 0
+    assert len(detail["errors"]) <= 5
+    assert detail["truncated"] is True
+    assert "parent_wbs_code" in detail["expected_fields"]
+    assert "planned_start_at" in detail["expected_fields"]
+    assert "input" not in str(detail)
+    assert len(str(detail)) < 4000
+
+    valid_record = _initialization_payload()["wbs"][0]
+    execute_tool_operation(
+        db,
+        context,
+        "write_project_initialization_artifact",
+        {
+            "normalization_id": normalization["id"],
+            "section": "wbs",
+            "artifact_format": "json",
+            "part_index": 1,
+            "file_name": "wbs-1.json",
+            "json_data": [valid_record],
+        },
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    oversized_batch = [
+        {
+            **valid_record,
+            "wbs_code": f"1.{index}",
+            "parent_wbs_code": "1",
+            "level": 2,
+        }
+        for index in range(1, 22)
+    ]
+    with pytest.raises(HTTPException) as oversized:
+        execute_tool_operation(
+            db,
+            context,
+            "write_project_initialization_artifact",
+            {
+                "normalization_id": normalization["id"],
+                "section": "wbs",
+                "artifact_format": "json",
+                "part_index": 2,
+                "file_name": "wbs-2.json",
+                "json_data": oversized_batch,
+            },
+            actor_agent_id="initializer",
+            initialization_role="orchestrator",
+        )
+    assert oversized.value.status_code == 422
+    assert "最多 20 条" in str(oversized.value.detail)
+
+
+def test_json_and_markdown_artifacts_with_same_part_do_not_overwrite(
+    db: Session,
+) -> None:
+    _, _, conversation = _seed_context(
+        db,
+        role="admin",
+        conversation_type="initialization",
+        session_id="artifact-formats",
+    )
+    context = resolve_tool_context(db, conversation.agentscope_session_id)
+    normalization, _ = execute_tool_operation(
+        db,
+        context,
+        "begin_project_initialization_normalization",
+        {"source_file_ids": []},
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    for artifact_format, content in (
+        ("json", {"json_data": _initialization_payload()["project"]}),
+        (
+            "markdown",
+            {"markdown_content": "# 工程信息来源\n来自工程描述第一段。"},
+        ),
+    ):
+        execute_tool_operation(
+            db,
+            context,
+            "write_project_initialization_artifact",
+            {
+                "normalization_id": normalization["id"],
+                "section": "project",
+                "artifact_format": artifact_format,
+                "part_index": 1,
+                "file_name": f"project.{ 'json' if artifact_format == 'json' else 'md'}",
+                **content,
+            },
+            actor_agent_id="initializer",
+            initialization_role="orchestrator",
+        )
+
+    rows = db.scalars(
+        select(ProjectInitializationArtifact).where(
+            ProjectInitializationArtifact.normalization_id
+            == normalization["id"],
+        ),
+    ).all()
+    assert {(row.artifact_format, row.part_index) for row in rows} == {
+        ("json", 1),
+        ("markdown", 1),
+    }
+    ready, _ = execute_tool_operation(
+        db,
+        context,
+        "finalize_project_initialization_normalization",
+        {
+            "normalization_id": normalization["id"],
+            "expected_sections": ["project"],
+        },
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    assert ready["status"] == "ready"
+
+
+def test_new_workflow_run_preserves_unrequested_existing_sections(
     db: Session,
 ) -> None:
     _, _, conversation = _seed_context(
@@ -336,86 +853,258 @@ def test_initialization_agent_reads_and_incrementally_updates_draft(
         conversation_type="initialization",
     )
     context = resolve_tool_context(db, conversation.agentscope_session_id)
-    created, _ = execute_tool_operation(
+    first = _create_finalized_initialization_draft(db, context)
+    payload = _initialization_payload()
+    payload["risks"] = [
+        {
+            "serial_no": 2,
+            "related_process_name": "基础施工",
+            "risk_part": "临边防护",
+            "risk_level": "一般风险",
+            "evaluation_condition": "临边防护缺失",
+        },
+    ]
+    normalization_id = _create_ready_initialization_normalization(
         db,
         context,
-        "submit_project_initialization_draft",
-        {
-            "payload": _initialization_payload(),
-            "source_files": ["总进度计划.xlsx"],
-        },
+        payload,
+        ["risks"],
     )
 
+    started, _ = execute_tool_operation(
+        db,
+        context,
+        "begin_project_initialization_draft",
+        {
+            "normalization_id": normalization_id,
+            "expected_sections": ["risks"],
+            "source_files": ["工程风险清单.xlsx"],
+        },
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
     wbs_page, _ = execute_tool_operation(
         db,
         context,
         "get_project_initialization_draft",
         {"section": "wbs", "start": 1, "limit": 1},
     )
-    assert wbs_page["draft"]["id"] == created["id"]
-    assert wbs_page["draft"]["revision"] == 1
+    assert wbs_page["draft"]["id"] == first.id
     assert wbs_page["total"] == 2
     assert wbs_page["next_start"] == 2
     assert [item["wbs_code"] for item in wbs_page["data"]] == ["1"]
 
-    updated, _ = execute_tool_operation(
+    written, _ = execute_tool_operation(
         db,
         context,
-        "update_project_initialization_draft",
+        "write_project_initialization_draft_section",
         {
-            "draft_id": created["id"],
-            "expected_revision": 1,
+            "draft_id": started["draft"]["id"],
             "source_files": ["工程风险清单.xlsx"],
-            "patch": {
-                "project": {
-                    "contract_amount_wan_yuan": 1234.5,
+            "data": [
+                {
+                    "serial_no": 2,
+                    "related_process_name": "基础施工",
+                    "risk_part": "临边防护",
+                    "risk_level": "一般风险",
+                    "evaluation_condition": "临边防护缺失",
                 },
-                "risks": [
-                    {
-                        "serial_no": 2,
-                        "related_wbs_code": "1.1",
-                        "related_process_name": "基础施工",
-                        "risk_part": "临边防护",
-                        "risk_level": "一般风险",
-                        "evaluation_condition": "临边防护缺失",
-                    },
-                ],
-            },
+            ],
         },
+        actor_agent_id="risk-specialist",
+        initialization_role="risks",
     )
-    assert updated["revision"] == 2
-    assert updated["updated_sections"] == ["project", "risks"]
-    assert updated["summary"]["wbs"] == 2
-    assert updated["summary"]["risks"] == 1
-    assert updated["source_files"] == [
-        "总进度计划.xlsx",
-        "工程风险清单.xlsx",
-    ]
+    assert written["workflow"]["stage"] == "reviewing"
+    finalized, _ = execute_tool_operation(
+        db,
+        context,
+        "finalize_project_initialization_draft",
+        {
+            "draft_id": first.id,
+            "semantic_issues": [],
+        },
+        actor_agent_id="validator",
+        initialization_role="validator",
+    )
+    assert finalized["summary"]["wbs"] == 2
+    assert finalized["summary"]["risks"] == 1
+    assert finalized["source_files"] == ["工程风险清单.xlsx"]
 
-    draft = db.get(ProjectInitializationDraft, created["id"])
+    draft = db.get(ProjectInitializationDraft, first.id)
     assert draft is not None
     assert len(draft.payload["wbs"]) == 2
     assert len(draft.payload["personnel"]) == 1
     assert draft.payload["project"]["engineering_type_description"] == (
         "社区卫生服务中心扩建工程"
     )
-    assert draft.payload["project"]["contract_amount_wan_yuan"] == "1234.5"
     assert draft.payload["risks"][0]["serial_no"] == 2
     assert len(draft.payload["quality_requirements"]) == 1
 
-    with pytest.raises(HTTPException) as stale:
+
+def test_specialists_write_independent_draft_sections_before_review(
+    db: Session,
+) -> None:
+    _, _, conversation = _seed_context(
+        db,
+        role="admin",
+        conversation_type="initialization",
+        session_id="sectioned-draft",
+    )
+    context = resolve_tool_context(db, conversation.agentscope_session_id)
+    normalization_id = _create_ready_initialization_normalization(
+        db,
+        context,
+        _initialization_payload(),
+        ["project", "personnel"],
+    )
+    started, _ = execute_tool_operation(
+        db,
+        context,
+        "begin_project_initialization_draft",
+        {
+            "normalization_id": normalization_id,
+            "expected_sections": ["project", "personnel"],
+            "source_files": ["工程描述.txt", "人员名单.xlsx"],
+        },
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+    draft_id = started["draft"]["id"]
+    assert started["workflow"]["pending_sections"] == [
+        "project",
+        "personnel",
+    ]
+
+    project_result, _ = execute_tool_operation(
+        db,
+        context,
+        "write_project_initialization_draft_section",
+        {
+            "draft_id": draft_id,
+            "data": {
+                "engineering_type_description": "社区医院扩建工程",
+                "construction_unit_name": "建设单位",
+            },
+            "source_files": ["工程描述.txt"],
+            "extraction_notes": ["工程描述.txt 第 1 段"],
+        },
+        actor_agent_id="project-specialist",
+        initialization_role="project",
+    )
+    assert project_result["workflow"]["completed_sections"] == ["project"]
+    assert project_result["workflow"]["pending_sections"] == ["personnel"]
+
+    with pytest.raises(HTTPException) as wrong_scope:
         execute_tool_operation(
             db,
             context,
-            "update_project_initialization_draft",
+            "write_project_initialization_draft_section",
             {
-                "draft_id": created["id"],
-                "expected_revision": 1,
-                "patch": {"risks": []},
+                "draft_id": draft_id,
+                "data": [],
             },
+            actor_agent_id="risk-specialist",
+            initialization_role="risks",
         )
-    assert stale.value.status_code == 409
-    assert "重新读取草稿" in stale.value.detail
+    assert wrong_scope.value.status_code == 409
+
+    personnel_result, _ = execute_tool_operation(
+        db,
+        context,
+        "write_project_initialization_draft_section",
+        {
+            "draft_id": draft_id,
+            "data": _initialization_payload()["personnel"],
+            "source_files": ["人员名单.xlsx"],
+        },
+        actor_agent_id="personnel-specialist",
+        initialization_role="personnel",
+    )
+    assert personnel_result["workflow"]["stage"] == "reviewing"
+    assert personnel_result["workflow"]["pending_sections"] == []
+
+    rows = db.scalars(
+        select(ProjectInitializationDraftSection)
+        .where(ProjectInitializationDraftSection.draft_id == draft_id),
+    ).all()
+    assert {row.section for row in rows} == {"project", "personnel"}
+    draft = db.get(ProjectInitializationDraft, draft_id)
+    assert draft is not None
+    # The parent snapshot is intentionally not rewritten by concurrent
+    # specialists; it becomes authoritative only after independent review.
+    assert draft.payload["personnel"] == []
+
+    finalized, _ = execute_tool_operation(
+        db,
+        context,
+        "finalize_project_initialization_draft",
+        {
+            "draft_id": draft_id,
+            "semantic_issues": [
+                {
+                    "level": "warning",
+                    "path": "project",
+                    "message": "工程说明中的范围需要用户核对",
+                },
+            ],
+            "review_summary": "两个分区已完成独立核验。",
+        },
+        actor_agent_id="validator",
+        initialization_role="validator",
+    )
+    assert finalized["status"] == "ready"
+    assert finalized["workflow"]["stage"] == "completed"
+    assert finalized["payload"]["project"]["construction_unit_name"] == "建设单位"
+    assert len(finalized["payload"]["personnel"]) == 1
+    assert any(
+        issue["message"] == "工程说明中的范围需要用户核对"
+        for issue in finalized["validation_issues"]
+    )
+
+
+def test_validator_cannot_finalize_before_all_expected_sections(
+    db: Session,
+) -> None:
+    _, _, conversation = _seed_context(
+        db,
+        role="admin",
+        conversation_type="initialization",
+        session_id="incomplete-review",
+    )
+    context = resolve_tool_context(db, conversation.agentscope_session_id)
+    normalization_id = _create_ready_initialization_normalization(
+        db,
+        context,
+        _initialization_payload(),
+        ["wbs", "risks"],
+    )
+    started, _ = execute_tool_operation(
+        db,
+        context,
+        "begin_project_initialization_draft",
+        {
+            "normalization_id": normalization_id,
+            "expected_sections": ["wbs", "risks"],
+        },
+        actor_agent_id="initializer",
+        initialization_role="orchestrator",
+    )
+
+    with pytest.raises(HTTPException) as incomplete:
+        execute_tool_operation(
+            db,
+            context,
+            "finalize_project_initialization_draft",
+            {
+                "draft_id": started["draft"]["id"],
+                "semantic_issues": [],
+            },
+            actor_agent_id="validator",
+            initialization_role="validator",
+        )
+    assert incomplete.value.status_code == 409
+    assert "wbs" in incomplete.value.detail
+    assert "risks" in incomplete.value.detail
 
 
 def test_initialization_file_is_bound_to_its_agent_session(
@@ -472,14 +1161,7 @@ def test_confirmed_draft_is_applied_in_one_transaction(db: Session) -> None:
         conversation_type="initialization",
     )
     context = resolve_tool_context(db, conversation.agentscope_session_id)
-    result, _ = execute_tool_operation(
-        db,
-        context,
-        "submit_project_initialization_draft",
-        {"payload": _initialization_payload()},
-    )
-    draft = db.get(ProjectInitializationDraft, result["id"])
-    assert draft is not None
+    draft = _create_finalized_initialization_draft(db, context)
 
     applied = apply_initialization_draft(
         db,
@@ -532,14 +1214,7 @@ def test_existing_platform_account_is_added_to_project_without_recreation(
     db.add(existing_user)
     db.commit()
     context = resolve_tool_context(db, conversation.agentscope_session_id)
-    result, _ = execute_tool_operation(
-        db,
-        context,
-        "submit_project_initialization_draft",
-        {"payload": _initialization_payload()},
-    )
-    draft = db.get(ProjectInitializationDraft, result["id"])
-    assert draft is not None
+    draft = _create_finalized_initialization_draft(db, context)
 
     applied = apply_initialization_draft(
         db,
@@ -583,14 +1258,7 @@ def test_one_project_member_can_hold_multiple_positions(
         },
     )
     context = resolve_tool_context(db, conversation.agentscope_session_id)
-    result, _ = execute_tool_operation(
-        db,
-        context,
-        "submit_project_initialization_draft",
-        {"payload": payload},
-    )
-    draft = db.get(ProjectInitializationDraft, result["id"])
-    assert draft is not None
+    draft = _create_finalized_initialization_draft(db, context, payload)
 
     applied = apply_initialization_draft(
         db,

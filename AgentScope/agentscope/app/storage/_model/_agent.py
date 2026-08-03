@@ -187,6 +187,36 @@ class PlatformAgentConfig(BaseModel):
         title="Published",
     )
 
+    allow_global_main_call: bool = Field(
+        default=False,
+        description=(
+            "Whether the platform-wide main agent may invite this agent "
+            "directly. This target-side permission is independent from "
+            "ordinary agents' selected call allowlists."
+        ),
+        title="Allow Platform Main Agent Call",
+    )
+
+    initialization_role: SkipJsonSchema[
+        Literal[
+            "orchestrator",
+            "project",
+            "personnel",
+            "wbs",
+            "risks",
+            "quality_requirements",
+            "validator",
+        ]
+        | None
+    ] = Field(
+        default=None,
+        description=(
+            "Internal project-initialization role used to grant one bounded "
+            "draft capability. Hidden from the schema-driven management form "
+            "and maintained by Dobby's provisioning command."
+        ),
+    )
+
     description: str | None = Field(
         default=None,
         description=(

@@ -56,11 +56,31 @@ export interface WbsItem {
   name: string
   level: number
   parentId: string | null
+  sortOrder?: number
+  colorValue?: string
+  itemType?: string
+  assignedToText?: string
   planStart: string
   planEnd: string
+  deadline?: string
   actualStart?: string
   progress: number
   status: 'not_started' | 'in_progress' | 'done' | 'delayed'
+  statusText?: string
+  priorityText?: string
+  durationHours?: number
+  estimatedHours?: number
+  timeLogMinutes?: number
+  description?: string
+  budget?: number
+  actualCost?: number
+  predecessorIds?: string[]
+  predecessorCodes?: string[]
+  mspUid?: string
+  mspId?: string
+  sourceCreatedAt?: string
+  sourceCreator?: string
+  sourceProjectPath?: string
   responsibleId: string
   projectId: string
   supervision?: {
@@ -75,15 +95,21 @@ export interface WbsItem {
 
 export interface RiskSource {
   id: string
+  serialNo?: number
   name: string
   level: RiskLevel
+  levelText?: string
   type: string
+  relatedProcessName?: string
+  riskPart?: string
   controlStart: string
   controlEnd: string
   responsibleId: string
   confirmatorId: string
   materials: string[]
   controlMeasures?: string
+  evaluationCondition?: string
+  summary?: string
   projectId: string
 }
 
@@ -91,10 +117,15 @@ export interface QualityMetric {
   id: string
   projectId: string
   wbsId?: string
+  wbsCode?: string
+  wbsName?: string
   name: string
+  acceptanceItem?: string
   requirement: string
+  controlIndicator?: string
   inspectionFrequency: string
   requiredMaterials: string[]
+  relatedDocuments?: string
   ownerId?: string
   status: 'pending' | 'processing' | 'passed' | 'failed'
 }

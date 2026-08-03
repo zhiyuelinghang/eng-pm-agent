@@ -8,13 +8,14 @@ import re
 from typing import Any, Literal
 
 from pypinyin import lazy_pinyin
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .models import (
     Project,
     ProjectInitializationDraft,
+    ProjectInitializationDraftWorkflow,
     ProjectMember,
     ProjectMemberPosition,
     ProjectPosition,
@@ -29,7 +30,18 @@ from .models import (
 from .security import hash_password
 
 
-class ProjectDetailsDraft(BaseModel):
+INITIALIZATION_ARTIFACT_BATCH_LIMIT = 20
+INITIALIZATION_ARTIFACT_MAX_BYTES = 64 * 1024
+INITIALIZATION_ARTIFACT_ERROR_LIMIT = 5
+
+
+class StrictInitializationModel(BaseModel):
+    """Canonical initialization data must never silently discard fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProjectDetailsDraft(StrictInitializationModel):
     engineering_type_description: str | None = Field(default=None, max_length=10000)
     contract_start_date: date | None = None
     contract_end_date: date | None = None
@@ -42,7 +54,7 @@ class ProjectDetailsDraft(BaseModel):
     survey_unit_name: str | None = Field(default=None, max_length=300)
 
 
-class PersonnelDraft(BaseModel):
+class PersonnelDraft(StrictInitializationModel):
     serial_no: int = Field(gt=0)
     real_name: str = Field(min_length=1, max_length=100)
     identity_card_no: str = Field(min_length=1, max_length=30)
@@ -51,7 +63,7 @@ class PersonnelDraft(BaseModel):
     responsibility_description: str = Field(min_length=1, max_length=10000)
 
 
-class WbsDraft(BaseModel):
+class WbsDraft(StrictInitializationModel):
     wbs_code: str = Field(min_length=1, max_length=128)
     parent_wbs_code: str | None = Field(max_length=128)
     predecessor_wbs_codes: list[str] = Field(default_factory=list, max_length=100)
@@ -80,9 +92,8 @@ class WbsDraft(BaseModel):
     level: int = Field(gt=0, le=100)
 
 
-class RiskDraftItem(BaseModel):
+class RiskDraftItem(StrictInitializationModel):
     serial_no: int = Field(gt=0)
-    related_wbs_code: str | None = Field(default=None, max_length=128)
     related_process_name: str = Field(min_length=1, max_length=300)
     risk_part: str = Field(min_length=1, max_length=300)
     risk_level: str = Field(min_length=1, max_length=50)
@@ -91,8 +102,17 @@ class RiskDraftItem(BaseModel):
     risk_window_end_date: date | None = None
     summary: str | None = Field(default=None, max_length=20000)
 
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_wbs_relation(cls, value: Any) -> Any:
+        """Accept saved legacy drafts without carrying their obsolete WBS relation forward."""
+        if isinstance(value, dict) and "related_wbs_code" in value:
+            value = dict(value)
+            value.pop("related_wbs_code", None)
+        return value
 
-class QualityRequirementDraft(BaseModel):
+
+class QualityRequirementDraft(StrictInitializationModel):
     wbs_code: str = Field(min_length=1, max_length=128)
     quality_acceptance_item: str = Field(min_length=1, max_length=20000)
     control_indicator: str = Field(min_length=1, max_length=20000)
@@ -100,7 +120,7 @@ class QualityRequirementDraft(BaseModel):
     related_documents: str = Field(min_length=1, max_length=20000)
 
 
-class ProjectInitializationPayload(BaseModel):
+class ProjectInitializationPayload(StrictInitializationModel):
     project: ProjectDetailsDraft = Field(default_factory=ProjectDetailsDraft)
     personnel: list[PersonnelDraft] = Field(default_factory=list, max_length=2000)
     wbs: list[WbsDraft] = Field(default_factory=list, max_length=10000)
@@ -109,12 +129,6 @@ class ProjectInitializationPayload(BaseModel):
         default_factory=list,
         max_length=10000,
     )
-
-
-class SubmitInitializationDraftArgs(BaseModel):
-    draft_id: int | None = Field(default=None, gt=0)
-    payload: ProjectInitializationPayload
-    source_files: list[str] = Field(default_factory=list, max_length=100)
 
 
 InitializationDraftSection = Literal[
@@ -126,6 +140,27 @@ InitializationDraftSection = Literal[
     "validation_issues",
 ]
 
+WritableInitializationDraftSection = Literal[
+    "project",
+    "personnel",
+    "wbs",
+    "risks",
+    "quality_requirements",
+]
+
+InitializationAgentRole = Literal[
+    "orchestrator",
+    "project",
+    "personnel",
+    "wbs",
+    "risks",
+    "quality_requirements",
+    "validator",
+]
+
+
+InitializationArtifactFormat = Literal["json", "markdown"]
+
 
 class ReadInitializationDraftArgs(BaseModel):
     section: InitializationDraftSection
@@ -133,33 +168,123 @@ class ReadInitializationDraftArgs(BaseModel):
     limit: int = Field(default=100, ge=1, le=500)
 
 
-class ProjectInitializationPatch(BaseModel):
-    project: ProjectDetailsDraft | None = None
-    personnel: list[PersonnelDraft] | None = Field(default=None, max_length=2000)
-    wbs: list[WbsDraft] | None = Field(default=None, max_length=10000)
-    risks: list[RiskDraftItem] | None = Field(default=None, max_length=5000)
-    quality_requirements: list[QualityRequirementDraft] | None = Field(
-        default=None,
-        max_length=10000,
-    )
+class BeginInitializationNormalizationArgs(BaseModel):
+    source_file_ids: list[int] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="after")
-    def require_non_null_section(self) -> "ProjectInitializationPatch":
-        if not self.model_fields_set:
-            raise ValueError("至少需要提供一个待更新的草稿分区")
-        if any(
-            getattr(self, field_name) is None
-            for field_name in self.model_fields_set
-        ):
-            raise ValueError("草稿分区不能为 null；清空列表分区时请传空数组")
+    def normalize_source_file_ids(
+        self,
+    ) -> "BeginInitializationNormalizationArgs":
+        self.source_file_ids = list(dict.fromkeys(self.source_file_ids))
         return self
 
 
-class UpdateInitializationDraftArgs(BaseModel):
-    draft_id: int = Field(gt=0)
-    expected_revision: int = Field(gt=0)
-    patch: ProjectInitializationPatch
+class WriteInitializationArtifactArgs(BaseModel):
+    normalization_id: int = Field(gt=0)
+    section: WritableInitializationDraftSection
+    artifact_format: InitializationArtifactFormat
+    part_index: int = Field(default=1, gt=0, le=1000)
+    file_name: str = Field(min_length=1, max_length=300)
+    json_data: Any | None = None
+    markdown_content: str | None = Field(
+        default=None,
+        max_length=INITIALIZATION_ARTIFACT_MAX_BYTES,
+    )
+    source_file_ids: list[int] = Field(default_factory=list, max_length=100)
+    source_locations: list[str] = Field(default_factory=list, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_content(self) -> "WriteInitializationArtifactArgs":
+        self.source_file_ids = list(dict.fromkeys(self.source_file_ids))
+        self.source_locations = [
+            item.strip()
+            for item in self.source_locations
+            if item.strip()
+        ]
+        if self.artifact_format == "json":
+            if self.json_data is None:
+                raise ValueError("JSON 标准资料必须提供 json_data")
+            if self.markdown_content is not None:
+                raise ValueError("JSON 标准资料不能同时提供 markdown_content")
+        else:
+            if not (self.markdown_content or "").strip():
+                raise ValueError("Markdown 标准资料不能为空")
+            if self.json_data is not None:
+                raise ValueError("Markdown 标准资料不能同时提供 json_data")
+            self.markdown_content = self.markdown_content.strip()
+        return self
+
+
+class FinalizeInitializationNormalizationArgs(BaseModel):
+    normalization_id: int = Field(gt=0)
+    expected_sections: list[WritableInitializationDraftSection] = Field(
+        min_length=1,
+        max_length=5,
+    )
+
+    @model_validator(mode="after")
+    def normalize_expected_sections(
+        self,
+    ) -> "FinalizeInitializationNormalizationArgs":
+        self.expected_sections = list(dict.fromkeys(self.expected_sections))
+        return self
+
+
+class ReadInitializationArtifactArgs(BaseModel):
+    normalization_id: int = Field(gt=0)
+    section: WritableInitializationDraftSection
+    artifact_format: InitializationArtifactFormat | None = None
+    part_index: int | None = Field(default=None, gt=0, le=1000)
+    start: int = Field(default=1, ge=1)
+    limit: int = Field(default=100, ge=1, le=500)
+
+    @model_validator(mode="after")
+    def require_format_for_part(self) -> "ReadInitializationArtifactArgs":
+        if self.part_index is not None and self.artifact_format is None:
+            raise ValueError("读取指定分片时必须提供 artifact_format")
+        return self
+
+
+class BeginInitializationDraftArgs(BaseModel):
+    normalization_id: int = Field(gt=0)
+    expected_sections: list[WritableInitializationDraftSection] = Field(
+        min_length=1,
+        max_length=5,
+    )
     source_files: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def normalize_expected_sections(self) -> "BeginInitializationDraftArgs":
+        self.expected_sections = list(dict.fromkeys(self.expected_sections))
+        return self
+
+
+class WriteInitializationDraftSectionArgs(BaseModel):
+    draft_id: int = Field(gt=0)
+    data: Any
+    source_files: list[str] = Field(default_factory=list, max_length=100)
+    extraction_notes: list[str] = Field(default_factory=list, max_length=200)
+
+
+class ImportInitializationArtifactArgs(BaseModel):
+    draft_id: int = Field(gt=0)
+    normalization_id: int = Field(gt=0)
+    extraction_notes: list[str] = Field(default_factory=list, max_length=200)
+
+
+class InitializationSemanticIssue(BaseModel):
+    level: Literal["error", "warning"]
+    path: str = Field(min_length=1, max_length=300)
+    message: str = Field(min_length=1, max_length=2000)
+
+
+class FinalizeInitializationDraftArgs(BaseModel):
+    draft_id: int = Field(gt=0)
+    semantic_issues: list[InitializationSemanticIssue] = Field(
+        default_factory=list,
+        max_length=500,
+    )
+    review_summary: str | None = Field(default=None, max_length=10000)
 
 
 class PersonnelCredentialInput(BaseModel):
@@ -537,14 +662,6 @@ def validate_initialization_payload(
     for serial_no in sorted(_duplicates([item.serial_no for item in payload.risks])):
         issues.append(_issue("error", "risks", f"风险序号 {serial_no} 重复"))
     for item in payload.risks:
-        if item.related_wbs_code and item.related_wbs_code not in wbs_by_code:
-            issues.append(
-                _issue(
-                    "error",
-                    f"risks.{item.serial_no}.related_wbs_code",
-                    f"关联 WBS {item.related_wbs_code} 不存在",
-                ),
-            )
         if (
             item.risk_window_start_date
             and item.risk_window_end_date
@@ -732,27 +849,20 @@ def build_initialization_state(
             for item in wbs_rows
         ],
         "risks": [
-            {
-                **_row(
-                    item,
-                    (
-                        "id",
-                        "serial_no",
-                        "related_process_name",
-                        "risk_part",
-                        "risk_level",
-                        "evaluation_condition",
-                        "risk_window_start_date",
-                        "risk_window_end_date",
-                        "summary",
-                    ),
+            _row(
+                item,
+                (
+                    "id",
+                    "serial_no",
+                    "related_process_name",
+                    "risk_part",
+                    "risk_level",
+                    "evaluation_condition",
+                    "risk_window_start_date",
+                    "risk_window_end_date",
+                    "summary",
                 ),
-                "related_wbs_code": (
-                    wbs_by_id[item.related_wbs_item_id].wbs_code
-                    if item.related_wbs_item_id in wbs_by_id
-                    else None
-                ),
-            }
+            )
             for item in risks
         ],
         "quality_requirements": [
@@ -798,8 +908,26 @@ def apply_initialization_draft(
     """Replace initialization sections atomically inside the caller transaction."""
     if draft.status == "applied":
         raise InitializationApplyError("该初始化草稿已经入库")
+    workflow = db.get(ProjectInitializationDraftWorkflow, draft.id)
+    if workflow is not None and workflow.stage != "completed":
+        raise InitializationApplyError("初始化专项整理或统一核验尚未完成")
     payload = ProjectInitializationPayload.model_validate(draft.payload)
-    issues = validate_initialization_payload(payload)
+    deterministic_issues = validate_initialization_payload(payload)
+    deterministic_keys = {
+        (item["level"], item["path"], item["message"])
+        for item in deterministic_issues
+    }
+    semantic_issues = [
+        item
+        for item in (draft.validation_issues or [])
+        if (
+            item.get("level"),
+            item.get("path"),
+            item.get("message"),
+        )
+        not in deterministic_keys
+    ]
+    issues = [*deterministic_issues, *semantic_issues]
     errors = [item for item in issues if item["level"] == "error"]
     warnings = [item for item in issues if item["level"] == "warning"]
     if errors:
@@ -982,11 +1110,6 @@ def apply_initialization_draft(
             RiskSource(
                 project_id=project.id,
                 serial_no=item.serial_no,
-                related_wbs_item_id=(
-                    wbs_by_code[item.related_wbs_code].id
-                    if item.related_wbs_code
-                    else None
-                ),
                 related_process_name=item.related_process_name,
                 risk_part=item.risk_part,
                 risk_level=item.risk_level,

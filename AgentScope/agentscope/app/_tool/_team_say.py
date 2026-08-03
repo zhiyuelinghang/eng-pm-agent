@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """The TeamSay tool — sends a message to one or all team members."""
+import copy
 from typing import Any
 
 from pydantic import Field
 
 from ._constants import HANDLE_LEN
 from ._team_tool_base import _TeamToolBase
+from .._team_lifecycle import assign_team_member, settle_team_member
 from .._team_messaging import deliver_team_message
 from ..storage._utils import _ensure_team_members
 from ...message import TextBlock, ToolResultState
@@ -58,15 +60,16 @@ questions or requirements. ``TeamSay`` is for coordination, not chit-chat — \
 your top priority is to complete the overall task.
 """
 
-_WORKER_DESCRIPTION = """Send a message to the team leader or broadcast to \
-all team members.
+_WORKER_DESCRIPTION = """Send a message to the team leader or a named team \
+member.
 
 ## When to Use This Tool
 - **IMPORTANT**: When you finish your assigned task, you MUST call this \
 tool to report your results back to the leader. The leader is waiting \
-for your report — do not end your turn without sending it.
+for your report — omit ``to`` to send directly to the leader, and do not end \
+your turn without sending it.
 - Share intermediate findings or ask the leader for clarification.
-- Broadcast information that other members might need.
+- Send information to a named peer only when that peer specifically needs it.
 
 ## When NOT to Use This Tool
 - You want to talk to yourself — use your own reasoning.
@@ -113,9 +116,17 @@ class TeamSay(_TeamToolBase):
                 Forwarded to :class:`_TeamToolBase.__init__`.
         """
         super().__init__(*args, **kwargs)
+        self._role = role
         self.description = (
             _LEADER_DESCRIPTION if role == "leader" else _WORKER_DESCRIPTION
         )
+        self.input_schema = copy.deepcopy(self.input_schema)
+        if role == "worker":
+            self.input_schema["properties"]["to"]["description"] = (
+                "Recipient member name. Leave null (the default) to report "
+                "directly to the team leader. Set a name only when sending "
+                "to a specific peer."
+            )
 
     async def __call__(
         self,
@@ -263,11 +274,16 @@ class TeamSay(_TeamToolBase):
                 )
 
             if to is None:
-                recipients: list[tuple[str, str]] = [
-                    (sid, aid)
-                    for sid, aid in directory.values()
-                    if sid != self._session_id
-                ]
+                if self._role == "worker":
+                    recipients = [
+                        (leader_session.id, leader_session.agent_id),
+                    ]
+                else:
+                    recipients = [
+                        (sid, aid)
+                        for sid, aid in directory.values()
+                        if sid != self._session_id
+                    ]
             else:
                 resolved = directory.get(to)
                 if resolved is None:
@@ -310,7 +326,37 @@ class TeamSay(_TeamToolBase):
                 else self._agent_id
             )
 
+            reported_to_leader = (
+                self._session_id != leader_session.id
+                and any(
+                    sid == leader_session.id
+                    for sid, _aid in recipients
+                )
+            )
+            if reported_to_leader:
+                await settle_team_member(
+                    self._storage,
+                    self._message_bus,
+                    user_id=self._user_id,
+                    team_id=team.id,
+                    member_session_id=self._session_id,
+                    status="reported",
+                )
+
             for sid, aid in recipients:
+                if self._session_id == leader_session.id:
+                    assigned_revision = await assign_team_member(
+                        self._storage,
+                        self._message_bus,
+                        user_id=self._user_id,
+                        team_id=team.id,
+                        member_session_id=sid,
+                    )
+                    if assigned_revision is None:
+                        raise RuntimeError(
+                            "team member disappeared before the assignment "
+                            "could be recorded",
+                        )
                 await deliver_team_message(
                     self._message_bus,
                     user_id=self._user_id,
@@ -321,7 +367,13 @@ class TeamSay(_TeamToolBase):
                 )
 
             count = len(recipients)
-            target = "broadcast" if to is None else f"member {to!r}"
+            target = (
+                "leader"
+                if to is None and self._role == "worker"
+                else "broadcast"
+                if to is None
+                else f"member {to!r}"
+            )
             return ToolChunk(
                 content=[
                     TextBlock(

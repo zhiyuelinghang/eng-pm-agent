@@ -154,7 +154,12 @@ async def _synchronise_project_initializer_role(
     global_config_id: str,
     selected_agent_id: str | None,
 ) -> None:
-    """Keep the selected initializer hidden and unable to call other agents."""
+    """Keep the selected initializer hidden with an explicit allowlist.
+
+    Its selected-agent ids are administrator-managed and preserved so the
+    initializer can invite its persistent internal specialists without gaining
+    access to arbitrary agents.
+    """
     if selected_agent_id is None:
         return
     record = await storage.get_agent(global_config_id, selected_agent_id)
@@ -165,7 +170,7 @@ async def _synchronise_project_initializer_role(
     if (
         platform_config.role == "system_internal"
         and not platform_config.published
-        and call_config.scope == "none"
+        and call_config.scope == "selected"
     ):
         return
     updated = record.model_copy(
@@ -180,8 +185,7 @@ async def _synchronise_project_initializer_role(
                     ),
                     "call_config": call_config.model_copy(
                         update={
-                            "scope": "none",
-                            "allowed_agent_ids": [],
+                            "scope": "selected",
                         },
                     ),
                 },
@@ -881,8 +885,7 @@ async def update_agent(
                 ),
                 "call_config": updated_data.call_config.model_copy(
                     update={
-                        "scope": "none",
-                        "allowed_agent_ids": [],
+                        "scope": "selected",
                     },
                 ),
             },

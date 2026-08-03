@@ -24,11 +24,13 @@ from pydantic import Field
 
 from ._constants import HANDLE_LEN
 from ._team_tool_base import _TeamToolBase
+from .._team_lifecycle import assign_team_member
 from ..message_bus import MessageBusKeys
 from .._bus_ops import enqueue_run_trigger
 from ..storage import SessionConfig, TeamMember
 from ..storage._utils import _ensure_team_members
 from ...message import HintBlock, TextBlock, ToolResultState
+from ...permission import PermissionContext
 from ...state import AgentState
 from ...tool import ToolChunk, ParamsBase
 from ..._utils._common import _generate_id
@@ -319,6 +321,7 @@ class AgentInvite(_TeamToolBase):
             global_main_target_allowed = (
                 caller_is_global_main
                 and invited.data.platform_config.enabled
+                and invited.data.platform_config.allow_global_main_call
                 and invited.id != global_main_agent_id
             )
             configured_target_allowed = (
@@ -356,6 +359,9 @@ class AgentInvite(_TeamToolBase):
                     and (
                         fresh.id == global_main_agent_id
                         or not fresh.data.platform_config.enabled
+                        or not (
+                            fresh.data.platform_config.allow_global_main_call
+                        )
                     )
                 )
             ):
@@ -438,7 +444,10 @@ class AgentInvite(_TeamToolBase):
                 leader_session.config.fallback_chat_model_config
             )
 
-            # Permission context is NOT inherited from the leader.
+            # Permission rules and working directories are NOT inherited from
+            # the leader. The invited agent does, however, keep its
+            # administrator-selected platform permission mode so platform team
+            # workers honour the same Auto/Explore policy as direct sessions.
             # PermissionContext.working_directories and allow/deny/ask
             # rules are anchored to the leader's workspace, which the
             # invited agent may not share (it has its own workspace_id).
@@ -448,14 +457,10 @@ class AgentInvite(_TeamToolBase):
             # from the invited agent's own primary session — the
             # team-scoped conversation is a separate context; prior
             # "user approved X" state should not silently cross over.
-            # HITL prompts in this team will re-confirm any sensitive
-            # tool call.
             worker_state = AgentState(
-                # permission_context defaults to a fresh
-                # ``PermissionContext()``; tasks_context defaults to
-                # empty. Both are the intended reset for the borrowed
-                # session — the invited agent's main-session state
-                # stays with its own session.
+                permission_context=PermissionContext(
+                    mode=invited.data.platform_config.permission_mode,
+                ),
             )
 
             invited_display = _display_name(
@@ -463,6 +468,17 @@ class AgentInvite(_TeamToolBase):
                 invited.id,
             )
             invited_handle = _display_handle(invited.id)
+            worker_platform_context = leader_session.config.platform_context
+            if worker_platform_context is not None:
+                worker_platform_context = worker_platform_context.model_copy(
+                    update={
+                        "session_role": "worker",
+                        "root_session_id": (
+                            worker_platform_context.root_session_id
+                            or leader_session.id
+                        ),
+                    },
+                )
             borrowed = await self._storage.upsert_session(
                 user_id=self._user_id,
                 agent_id=invited.id,
@@ -472,8 +488,10 @@ class AgentInvite(_TeamToolBase):
                     chat_model_config=borrowed_chat_model,
                     fallback_chat_model_config=borrowed_fallback_model,
                     knowledge_config=borrowed_knowledge_config,
+                    platform_context=worker_platform_context,
                 ),
                 state=worker_state,
+                source=leader_session.source,
             )
             await self._storage.set_session_team_id(
                 self._user_id,
@@ -491,6 +509,18 @@ class AgentInvite(_TeamToolBase):
                 ),
             ]
             await self._storage.upsert_team(self._user_id, team)
+            assigned_revision = await assign_team_member(
+                self._storage,
+                self._message_bus,
+                user_id=self._user_id,
+                team_id=team.id,
+                member_session_id=borrowed.id,
+            )
+            if assigned_revision is None:
+                raise RuntimeError(
+                    "invited member disappeared before its initial "
+                    "assignment could be recorded",
+                )
 
             hint = HintBlock(
                 hint=(

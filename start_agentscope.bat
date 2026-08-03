@@ -20,50 +20,54 @@ if not defined AGENTSCOPE_STORAGE set "AGENTSCOPE_STORAGE=sqlite"
 if not defined AGENTSCOPE_WEBUI_PORT set "AGENTSCOPE_WEBUI_PORT=25173"
 if not defined AGENTSCOPE_WEBUI_HELPER_PORT set "AGENTSCOPE_WEBUI_HELPER_PORT=23000"
 
-if not exist "%PYTHON_EXE%" (
-    echo [错误] 未找到项目内嵌 Python：%PYTHON_EXE%
-    pause
-    exit /b 1
-)
-
-if not exist "%AGENTSCOPE_CORE_HOME%\__init__.py" (
-    echo [错误] 未找到项目内 AgentScope 核心目录：%AGENTSCOPE_CORE_HOME%
-    pause
-    exit /b 1
-)
+if not exist "%PYTHON_EXE%" goto ERROR_PYTHON
+if not exist "%AGENTSCOPE_CORE_HOME%\__init__.py" goto ERROR_CORE
 
 "%PYTHON_EXE%" -c "import agentscope; from agentscope.app.storage import AsyncSQLAlchemyStorage; assert agentscope.__version__ == '2.0.5'" >nul
-if errorlevel 1 (
-    echo [错误] 无法导入项目内 AgentScope 2.0.5 核心。
-    pause
-    exit /b 1
-)
+if errorlevel 1 goto ERROR_CORE_IMPORT
 
-"%PYTHON_EXE%" -c "import aiosqlite, alembic, qdrant_client, sqlalchemy, pypdf, pandas, pptx" >nul
-if errorlevel 1 (
-    echo [错误] AgentScope 知识库依赖不完整。
-    echo [提示] 请执行："%PYTHON_EXE%" -m pip install -r "%~dp0requirements-agentscope.txt"
-    pause
-    exit /b 1
-)
-
-if not exist "%WEBUI_HOME%\package.json" (
-    echo [错误] 未找到 AgentScope Web UI：%WEBUI_HOME%
-    pause
-    exit /b 1
-)
+"%PYTHON_EXE%" -c "import aiosqlite, alembic, qdrant_client, sqlalchemy, pypdf, pandas, pptx, openpyxl, xlrd, docx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime" >nul
+if errorlevel 1 goto ERROR_DEPENDENCIES
+if not exist "%WEBUI_HOME%\package.json" goto ERROR_WEBUI
 
 where pnpm >nul 2>nul
-if errorlevel 1 (
-    echo [错误] 未找到 pnpm，请先安装 pnpm。
-    pause
-    exit /b 1
-)
+if errorlevel 1 goto ERROR_PNPM
 
-if /I "%AGENTSCOPE_VALIDATE_ONLY%"=="1" (
-    echo [AgentScope] 启动脚本与知识库依赖检查通过。
-    exit /b 0
-)
+if /I "%AGENTSCOPE_VALIDATE_ONLY%"=="1" exit /b 0
+goto START_RUNTIME
+
+:ERROR_PYTHON
+echo [错误] 未找到项目内嵌 Python：%PYTHON_EXE%
+pause
+exit /b 1
+
+:ERROR_CORE
+echo [错误] 未找到项目内 AgentScope 核心目录：%AGENTSCOPE_CORE_HOME%
+pause
+exit /b 1
+
+:ERROR_CORE_IMPORT
+echo [错误] 无法导入项目内 AgentScope 2.0.5 核心。
+pause
+exit /b 1
+
+:ERROR_DEPENDENCIES
+echo [错误] AgentScope 知识库依赖不完整。
+echo [提示] 请执行："%PYTHON_EXE%" -m pip install -r "%~dp0requirements-agentscope.txt"
+pause
+exit /b 1
+
+:ERROR_WEBUI
+echo [错误] 未找到 AgentScope Web UI：%WEBUI_HOME%
+pause
+exit /b 1
+
+:ERROR_PNPM
+echo [错误] 未找到 pnpm，请先安装 pnpm。
+pause
+exit /b 1
+
+:START_RUNTIME
 
 echo [AgentScope] 正在检查并强制关闭占用启动端口的旧进程……
 taskkill /F /T /FI "WINDOWTITLE eq AgentScope API*" >nul 2>nul

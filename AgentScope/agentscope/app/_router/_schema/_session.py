@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
 """Request / response schemas for the session router."""
+from datetime import datetime
+from typing import Any, Literal
+
 from pydantic import BaseModel, Field
 
 from ....permission import PermissionMode
 from ...storage import (
     ChatModelConfig,
+    PlatformSessionContext,
     SessionKnowledgeConfig,
     TTSModelConfig,
     SessionRecord,
@@ -31,6 +35,35 @@ class TeamMemberView(BaseModel):
             "inconsistent state (worker without a session)."
         ),
     )
+    work_revision: int = Field(
+        default=0,
+        description="Revision of the member's latest assigned task.",
+    )
+    settled_revision: int = Field(
+        default=0,
+        description="Latest task revision that has reached a terminal state.",
+    )
+    active_revision: int = Field(
+        default=0,
+        description="Assignment revision currently being executed.",
+    )
+    work_status: Literal[
+        "idle",
+        "queued",
+        "running",
+        "reported",
+        "completed",
+        "failed",
+        "interrupted",
+    ] = Field(
+        default="idle",
+        description="Durable lifecycle of the member's latest task.",
+    )
+    assigned_at: datetime | None = None
+    started_at: datetime | None = None
+    settled_at: datetime | None = None
+    last_reply_id: str | None = None
+    last_error: str | None = None
 
 
 class TeamDetailResponse(BaseModel):
@@ -94,6 +127,13 @@ class CreateSessionRequest(BaseModel):
             "via PATCH."
         ),
     )
+    platform_context: PlatformSessionContext | None = Field(
+        default=None,
+        description=(
+            "Engineering-platform ownership snapshot. Accepted only from "
+            "the authenticated platform service."
+        ),
+    )
 
 
 class CreateSessionResponse(BaseModel):
@@ -138,6 +178,13 @@ class UpdateSessionRequest(BaseModel):
     permission_mode: PermissionMode | None = Field(
         default=None,
         description="New permission mode for the session.",
+    )
+    platform_context: PlatformSessionContext | None = Field(
+        default=None,
+        description=(
+            "Updated engineering-platform ownership snapshot. Accepted "
+            "only from the authenticated platform service."
+        ),
     )
 
 
@@ -198,6 +245,18 @@ class ListMessagesResponse(BaseModel):
             "Whether there are older messages before this page. "
             "When ``True``, pass a message ID from this response as "
             "the ``before`` parameter to load the previous page."
+        ),
+    )
+
+
+class UpdateMessageMetadataRequest(BaseModel):
+    """Merge application-owned metadata into one persisted message."""
+
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Metadata keys to merge into the existing message metadata. "
+            "Message content and lifecycle fields are not modified."
         ),
     )
 

@@ -123,27 +123,31 @@ class LocalWorkspace(WorkspaceBase):
         self._mcp_lock = asyncio.Lock()
 
     async def list_tools(self) -> list[ToolBase]:
-        """Return builtin tools, using PowerShell as the shell on Windows."""
-        from ..tool import Bash, Edit, Glob, Grep, PowerShell, Read, Write
+        """Return the enabled local-workspace builtin tools.
+
+        PowerShell is intentionally not exposed on Windows.  Dobby currently
+        applies one shared tool policy to management and business chats so an
+        agent cannot acquire a shell dependency while being developed and
+        then fail after publication.  Non-Windows upstream behaviour remains
+        unchanged until the broader command-execution policy is designed.
+        """
+        from ..tool import Bash, Edit, Glob, Grep, Read, Write
 
         backend = self.get_backend()
         glob_kwargs: dict = {"backend": backend}
         if self._glob_helper_path is not None:
             glob_kwargs["glob_helper_path"] = self._glob_helper_path
 
-        if os.name == "nt":
-            shell: ToolBase = PowerShell(cwd=self.workdir, backend=backend)
-        else:
-            shell = Bash(cwd=self.workdir, backend=backend)
-
-        return [
-            shell,
+        tools: list[ToolBase] = [
             Edit(backend=backend),
             Glob(**glob_kwargs),
             Grep(backend=backend),
             Read(backend=backend),
             Write(backend=backend),
         ]
+        if os.name != "nt":
+            tools.insert(0, Bash(cwd=self.workdir, backend=backend))
+        return tools
 
     async def initialize(self) -> None:
         """Initialise the workspace.

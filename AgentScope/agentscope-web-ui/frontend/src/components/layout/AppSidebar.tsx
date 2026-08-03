@@ -7,6 +7,7 @@ import {
 	Languages,
 	LibraryBig,
 	LogOut,
+	MessageSquareText,
 } from 'lucide-react';
 import { useOnborda } from 'onborda';
 import { useNavigate, useLocation } from 'react-router-dom';
@@ -81,6 +82,19 @@ export function AppSidebar() {
 									className="px-2.5 md:px-2"
 								>
 									<BotMessageSquare />
+								</SidebarMenuButton>
+							</SidebarMenuItem>
+							<SidebarMenuItem>
+								<SidebarMenuButton
+									tooltip={{
+										children: t('common.platformAudit'),
+										hidden: false,
+									}}
+									isActive={location.pathname === '/platform-audit'}
+									onClick={() => navigate('/platform-audit')}
+									className="px-2"
+								>
+									<MessageSquareText />
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>

@@ -23,6 +23,7 @@
 		"logout": "Sign out",
 		"model": "Model",
 		"name": "Name",
+		"platformAudit": "Platform interaction audit",
 		"platformSettings": "Platform settings",
 		"no": "No",
 		"noData": "No data",
@@ -56,7 +57,7 @@
 		"saved": "The platform main agent has been updated",
 		"main": {
 			"title": "Platform main agent",
-			"description": "This agent handles ordinary conversations and may collaborate with every enabled, invitable sub-agent.",
+			"description": "This agent handles ordinary conversations and may collaborate only with enabled, invitable agents explicitly opened to the platform main agent.",
 			"selector": "Main agent",
 			"placeholder": "Select an agent",
 			"requirement": "Only enabled, editable agents with a fixed chat model are shown.",
@@ -86,7 +87,7 @@
 			"noCandidates": "No eligible agents. Create and enable an agent with a fixed chat model first.",
 			"invalidCurrentTitle": "The current initialization agent is unavailable",
 			"invalidCurrent": "The current agent is disabled or has no fixed model. Select another available agent.",
-			"effect": "The selected agent is hidden and cannot collaborate with other agents. It may read the current project and submit a review draft, but it cannot write formal project data.",
+			"effect": "The selected agent is hidden and may collaborate only with explicitly assigned system specialists. It may read the current project and submit a review draft, but it cannot write formal project data.",
 			"save": "Set as initializer"
 		}
 	},
@@ -246,7 +247,7 @@
 					"system_internal": "Internal system agent"
 				},
 				"descriptions": {
-					"global_main": "Handles ordinary platform chat and can dynamically collaborate with every enabled, invitable non-main agent.",
+					"global_main": "Handles ordinary platform chat and can dynamically collaborate with non-main agents explicitly opened to the platform main agent.",
 					"business": "Appears automatically on the Business Tools page when published and can be called by authorised agents.",
 					"system_internal": "Used only by internal system flows and never shown in the business-tool catalogue."
 				}
@@ -254,6 +255,8 @@
 			"globalMainNotice": "This agent is selected as the main agent in Platform Settings. Switch it there; its role and enabled state cannot be changed here.",
 			"enabled": "Allow platform execution",
 			"published": "Publish to platform",
+			"allowGlobalMainCall": "Allow calls from platform main agent",
+			"allowGlobalMainCallDescription": "Only enabled agents with this option enter the platform main agent's collaboration pool. Ordinary agents still use their own allowlists.",
 			"catalogDescription": "Platform description",
 			"descriptionPlaceholder": "Explain what this agent offers to business users.",
 			"category": "Business category",
@@ -892,6 +895,26 @@
 			"emptyDescription": "Nothing matches “{{query}}”."
 		},
 		"loading": "Loading…"
+	},
+	"platformAudit": {
+		"title": "Platform interaction audit",
+		"description": "Review complete transcripts by platform user, project, and conversation. This page is strictly read-only.",
+		"total": "{{count}} conversations",
+		"refresh": "Refresh",
+		"users": "Platform users",
+		"projects": "Projects",
+		"conversations": "Conversations",
+		"transcript": "Complete transcript",
+		"readOnly": "Read-only",
+		"running": "The agent is still running; this transcript will update automatically",
+		"empty": "No platform interactions yet",
+		"selectUser": "Select a platform user first",
+		"selectProject": "Select a project",
+		"selectConversation": "Select a conversation",
+		"selectConversationHint": "Select a conversation to display its complete interaction history at once.",
+		"projectCount": "{{count}} projects",
+		"conversationCount": "{{count}} conversations",
+		"noMessages": "This conversation has no messages yet"
 	},
 	"team-sidebar": {
 		"membersHeading": "Members",

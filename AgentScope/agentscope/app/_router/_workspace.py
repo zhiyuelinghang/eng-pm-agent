@@ -4,10 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from ..deps import (
+    get_current_principal,
     get_current_user_id,
     get_storage,
     get_workspace_manager,
 )
+from .._auth import AgentScopePrincipal
+from .._session_access import require_runtime_session_access
 from ..workspace_manager import WorkspaceManagerBase
 from ..storage import StorageBase
 from ...mcp import MCPClient
@@ -43,6 +46,7 @@ async def _resolve_workspace(
     session_id: str,
     storage: StorageBase,
     workspace_manager: WorkspaceManagerBase,
+    principal: AgentScopePrincipal,
 ) -> WorkspaceBase:
     """Resolve the workspace for the given session, raising 404 if not
     found."""
@@ -52,6 +56,7 @@ async def _resolve_workspace(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session {session_id!r} not found.",
         )
+    require_runtime_session_access(principal, session_record)
     return await workspace_manager.get_workspace(
         user_id,
         agent_id,
@@ -70,6 +75,7 @@ async def list_mcps(
     agent_id: str = Query(...),
     session_id: str = Query(...),
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     workspace_manager: WorkspaceManagerBase = Depends(get_workspace_manager),
 ) -> list[MCPClientStatus]:
@@ -80,6 +86,7 @@ async def list_mcps(
         session_id,
         storage,
         workspace_manager,
+        principal,
     )
     clients = await workspace.list_mcps()
 
@@ -116,6 +123,7 @@ async def add_mcp(
     agent_id: str = Query(...),
     session_id: str = Query(...),
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     workspace_manager: WorkspaceManagerBase = Depends(get_workspace_manager),
 ) -> None:
@@ -126,6 +134,7 @@ async def add_mcp(
         session_id,
         storage,
         workspace_manager,
+        principal,
     )
     await workspace.add_mcp(mcp)
 
@@ -139,6 +148,7 @@ async def remove_mcp(
     agent_id: str = Query(...),
     session_id: str = Query(...),
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     workspace_manager: WorkspaceManagerBase = Depends(get_workspace_manager),
 ) -> None:
@@ -149,6 +159,7 @@ async def remove_mcp(
         session_id,
         storage,
         workspace_manager,
+        principal,
     )
     await workspace.remove_mcp(mcp_name)
 
@@ -163,6 +174,7 @@ async def list_skills(
     agent_id: str = Query(...),
     session_id: str = Query(...),
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     workspace_manager: WorkspaceManagerBase = Depends(get_workspace_manager),
 ) -> list[Skill]:
@@ -173,6 +185,7 @@ async def list_skills(
         session_id,
         storage,
         workspace_manager,
+        principal,
     )
     return await workspace.list_skills()
 
@@ -183,6 +196,7 @@ async def add_skill(
     agent_id: str = Query(...),
     session_id: str = Query(...),
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     workspace_manager: WorkspaceManagerBase = Depends(get_workspace_manager),
 ) -> None:
@@ -193,6 +207,7 @@ async def add_skill(
         session_id,
         storage,
         workspace_manager,
+        principal,
     )
     await workspace.add_skill(body.skill_path)
 
@@ -206,6 +221,7 @@ async def remove_skill(
     agent_id: str = Query(...),
     session_id: str = Query(...),
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     workspace_manager: WorkspaceManagerBase = Depends(get_workspace_manager),
 ) -> None:
@@ -216,5 +232,6 @@ async def remove_skill(
         session_id,
         storage,
         workspace_manager,
+        principal,
     )
     await workspace.remove_skill(skill_name)

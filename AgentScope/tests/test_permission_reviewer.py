@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 from agentscope.agent import Agent
 from agentscope.app import create_app
+from agentscope.app._auth import AgentScopePrincipal
 from agentscope.app._router._schema import UpdateSessionRequest
 from agentscope.app._router._session import update_session
 from agentscope.app.message_bus import InMemoryMessageBus
@@ -228,6 +229,10 @@ class AutoPermissionModeRouterTest(IsolatedAsyncioTestCase):
                 storage=storage,
                 access=self._access(),
                 permission_review_service=reviewer_service,
+                principal=AgentScopePrincipal(
+                    kind="management",
+                    subject=session.user_id,
+                ),
             )
 
         self.assertEqual(raised.exception.status_code, 422)
@@ -267,6 +272,10 @@ class AutoPermissionModeRouterTest(IsolatedAsyncioTestCase):
             storage=storage,
             access=self._access(),
             permission_review_service=reviewer_service,
+            principal=AgentScopePrincipal(
+                kind="management",
+                subject=session.user_id,
+            ),
         )
 
         persisted_state = storage.upsert_session.await_args.kwargs["state"]

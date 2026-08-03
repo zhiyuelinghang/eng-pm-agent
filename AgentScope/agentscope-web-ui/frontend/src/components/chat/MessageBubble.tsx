@@ -417,7 +417,9 @@ function renderBlock(
 							{visible.map((pair) => renderToolCall(pair, t))}
 						</CollapsibleContent>
 					</Collapsible>
-					{askingCall && renderConfirmCard(askingCall, onUserConfirm)}
+					{askingCall &&
+						onUserConfirm &&
+						renderConfirmCard(askingCall, onUserConfirm)}
 				</div>
 			);
 		}
@@ -578,7 +580,7 @@ function renderBlock(
 
 interface MessageBubbleProps {
 	message: Msg;
-	onUserConfirm: (
+	onUserConfirm?: (
 		toolCallBlock: ToolCallBlock,
 		confirm: boolean,
 		replyId: string,
@@ -660,14 +662,16 @@ export function MessageBubble({ message, onUserConfirm }: MessageBubbleProps) {
 							block,
 							i,
 							t,
-							(
-								toolCall: ToolCallBlock,
-								confirm: boolean,
-								rules?: ToolCallBlock['suggested_rules'],
-							) => {
-								onUserConfirm(toolCall, confirm, message.id, rules);
-								toolCall.state = confirm ? 'allowed' : 'finished';
-							},
+							onUserConfirm
+								? (
+										toolCall: ToolCallBlock,
+										confirm: boolean,
+										rules?: ToolCallBlock['suggested_rules'],
+									) => {
+										onUserConfirm(toolCall, confirm, message.id, rules);
+										toolCall.state = confirm ? 'allowed' : 'finished';
+									}
+								: undefined,
 						),
 					)}
 				</div>

@@ -130,6 +130,30 @@ export function AgentPlatformConfigFields({ values, onChange }: Props) {
 				</Field>
 			</div>
 
+			<Field orientation="horizontal">
+				<Checkbox
+					id="agent-platform-global-main-call"
+					checked={values.allow_global_main_call ?? false}
+					disabled={role === 'global_main'}
+					onCheckedChange={(checked) =>
+						onChange('allow_global_main_call', checked === true)
+					}
+				/>
+				<div className="grid gap-1">
+					<FieldLabel
+						htmlFor="agent-platform-global-main-call"
+						className="font-normal"
+					>
+						{t('agent-form.platform-config.allowGlobalMainCall')}
+					</FieldLabel>
+					<FieldDescription>
+						{t(
+							'agent-form.platform-config.allowGlobalMainCallDescription',
+						)}
+					</FieldDescription>
+				</div>
+			</Field>
+
 			<Field>
 				<FieldLabel htmlFor="agent-platform-description">
 					{t('agent-form.platform-config.catalogDescription')}

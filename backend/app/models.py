@@ -281,7 +281,6 @@ class WbsItem(TimestampMixin, Base):
     status_text: Mapped[str | None] = mapped_column(
         String(100),
         nullable=True,
-        default="not_started",
     )
     priority_text: Mapped[str | None] = mapped_column(String(100), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -334,7 +333,6 @@ class RiskSource(TimestampMixin, Base):
             name="ck_project_risk_date_order",
         ),
         Index("ix_project_risk_project", "project_id"),
-        Index("ix_project_risk_wbs", "related_wbs_item_id"),
         Index("ix_project_risk_level", "risk_level"),
         Index("ix_project_risk_window", "risk_window_start_date", "risk_window_end_date"),
     )
@@ -343,10 +341,6 @@ class RiskSource(TimestampMixin, Base):
         ForeignKey("projects.id", ondelete="CASCADE"),
     )
     serial_no: Mapped[int] = mapped_column(Integer)
-    related_wbs_item_id: Mapped[int | None] = mapped_column(
-        ForeignKey("project_wbs_items.id"),
-        nullable=True,
-    )
     related_process_name: Mapped[str] = mapped_column(String(300))
     risk_part: Mapped[str] = mapped_column(String(300))
     risk_level: Mapped[str] = mapped_column(String(50))
@@ -548,27 +542,114 @@ class AgentConversation(TimestampMixin, Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-class AgentConversationMessage(Base):
-    """Auditable platform-side mirror of a message handled by AgentScope."""
+class ProjectInitializationNormalization(TimestampMixin, Base):
+    """One source-normalization run completed before specialist delegation."""
 
-    __tablename__ = "agent_conversation_messages"
+    __tablename__ = "project_initialization_normalizations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('collecting', 'ready', 'consumed')",
+            name="ck_project_initialization_normalizations_status",
+        ),
+        Index(
+            "ix_project_initialization_normalizations_conversation",
+            "conversation_id",
+            "created_at",
+        ),
+    )
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
     conversation_id: Mapped[int] = mapped_column(
         ForeignKey("agent_conversations.id", ondelete="CASCADE"),
         index=True,
     )
-    role: Mapped[str] = mapped_column(String(32))
-    content: Mapped[str] = mapped_column(Text)
-    agentscope_message_id: Mapped[str | None] = mapped_column(
-        String(64),
+    draft_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_initialization_drafts.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
-    extra_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
+    created_by_agent_id: Mapped[str] = mapped_column(String(128), index=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default="collecting",
+        index=True,
     )
+    source_file_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    source_files: Mapped[list[str]] = mapped_column(JSON, default=list)
+    expected_sections: Mapped[list[str]] = mapped_column(JSON, default=list)
+    validation_issues: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON,
+        default=list,
+    )
+
+
+class ProjectInitializationArtifact(TimestampMixin, Base):
+    """Canonical JSON or Markdown produced before specialist work starts."""
+
+    __tablename__ = "project_initialization_artifacts"
+    __table_args__ = (
+        CheckConstraint(
+            "section IN ("
+            "'project', 'personnel', 'wbs', 'risks', "
+            "'quality_requirements'"
+            ")",
+            name="ck_project_initialization_artifacts_section",
+        ),
+        CheckConstraint(
+            "artifact_format IN ('json', 'markdown')",
+            name="ck_project_initialization_artifacts_format",
+        ),
+        CheckConstraint(
+            "part_index > 0",
+            name="ck_project_initialization_artifacts_part_index",
+        ),
+        UniqueConstraint(
+            "normalization_id",
+            "section",
+            "artifact_format",
+            "part_index",
+            name="uq_project_initialization_artifacts_part",
+        ),
+        Index(
+            "ix_project_initialization_artifacts_section",
+            "normalization_id",
+            "section",
+            "artifact_format",
+            "part_index",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    normalization_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "project_initialization_normalizations.id",
+            ondelete="CASCADE",
+        ),
+        index=True,
+    )
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+        index=True,
+    )
+    section: Mapped[str] = mapped_column(String(40))
+    artifact_format: Mapped[str] = mapped_column(String(20))
+    part_index: Mapped[int] = mapped_column(Integer, default=1)
+    file_name: Mapped[str] = mapped_column(String(300))
+    json_payload: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+    markdown_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_file_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    source_locations: Mapped[list[str]] = mapped_column(JSON, default=list)
+    writer_agent_id: Mapped[str] = mapped_column(String(128), index=True)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    content_size: Mapped[int] = mapped_column(Integer)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
 
 
 class ProjectInitializationDraft(TimestampMixin, Base):
@@ -611,6 +692,85 @@ class ProjectInitializationDraft(TimestampMixin, Base):
         DateTime(timezone=True),
         nullable=True,
     )
+
+
+class ProjectInitializationDraftSection(TimestampMixin, Base):
+    """One independently maintained section of an initialization draft."""
+
+    __tablename__ = "project_initialization_draft_sections"
+    __table_args__ = (
+        CheckConstraint(
+            "section IN ("
+            "'project', 'personnel', 'wbs', 'risks', "
+            "'quality_requirements'"
+            ")",
+            name="ck_project_initialization_draft_sections_section",
+        ),
+        UniqueConstraint(
+            "draft_id",
+            "section",
+            name="uq_project_initialization_draft_sections_draft_section",
+        ),
+        Index(
+            "ix_project_initialization_draft_sections_project",
+            "project_id",
+            "draft_id",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    draft_id: Mapped[int] = mapped_column(
+        ForeignKey("project_initialization_drafts.id", ondelete="CASCADE"),
+        index=True,
+    )
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+        index=True,
+    )
+    section: Mapped[str] = mapped_column(String(40))
+    writer_agent_id: Mapped[str] = mapped_column(String(128), index=True)
+    workflow_revision: Mapped[int] = mapped_column(Integer, default=1)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    payload: Mapped[dict[str, Any] | list[dict[str, Any]]] = mapped_column(
+        JSON,
+    )
+    source_files: Mapped[list[str]] = mapped_column(JSON, default=list)
+    extraction_notes: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+
+class ProjectInitializationDraftWorkflow(TimestampMixin, Base):
+    """Current collection/review run for one initialization draft."""
+
+    __tablename__ = "project_initialization_draft_workflows"
+    __table_args__ = (
+        CheckConstraint(
+            "stage IN ('collecting', 'reviewing', 'completed')",
+            name="ck_project_initialization_draft_workflows_stage",
+        ),
+    )
+    draft_id: Mapped[int] = mapped_column(
+        ForeignKey("project_initialization_drafts.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    expected_sections: Mapped[list[str]] = mapped_column(JSON, default=list)
+    stage: Mapped[str] = mapped_column(
+        String(32),
+        default="collecting",
+        index=True,
+    )
+    run_revision: Mapped[int] = mapped_column(Integer, default=1)
+    reviewer_agent_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+    semantic_issues: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON,
+        default=list,
+    )
+    review_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ProjectInitializationFile(TimestampMixin, Base):

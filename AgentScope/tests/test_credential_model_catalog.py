@@ -362,6 +362,59 @@ class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
             {"enable_thinking": True},
         )
 
+    async def test_runtime_model_uses_builtin_catalog_context_size(self):
+        credential = DeepSeekCredential(api_key="secret")
+        access = SimpleNamespace(
+            resolve_credential=AsyncMock(
+                return_value=SimpleNamespace(
+                    data=_dump_with_secrets(credential),
+                ),
+            ),
+        )
+
+        model = await get_model(
+            user_id="model-test",
+            config=ChatModelConfig(
+                type="deepseek_credential",
+                credential_id=credential.id,
+                model="deepseek-v4-flash",
+                parameters={},
+            ),
+            access=access,
+        )
+
+        self.assertEqual(model.context_size, 1_000_000)
+
+    async def test_runtime_model_honors_manual_context_size_override(self):
+        credential = _credential()
+        credential.model_catalog.manual_models = [
+            CredentialModelDefinition(
+                name="qwen/qwen3-max",
+                context_size=256_000,
+                output_size=16_384,
+            ),
+        ]
+        access = SimpleNamespace(
+            resolve_credential=AsyncMock(
+                return_value=SimpleNamespace(
+                    data=_dump_with_secrets(credential),
+                ),
+            ),
+        )
+
+        model = await get_model(
+            user_id="model-test",
+            config=ChatModelConfig(
+                type="custom_openai_credential",
+                credential_id=credential.id,
+                model="qwen/qwen3-max",
+                parameters={},
+            ),
+            access=access,
+        )
+
+        self.assertEqual(model.context_size, 256_000)
+
     async def test_agent_fixed_model_parameters_are_normalized(self):
         credential = _credential()
         credential.model_catalog.manual_models = [

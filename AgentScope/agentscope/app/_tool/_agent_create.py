@@ -10,6 +10,7 @@ from pydantic import Field
 
 from ._team_tool_base import _TeamToolBase
 from .._types import SubAgentTemplate
+from .._team_lifecycle import assign_team_member
 from ..message_bus import MessageBusKeys
 from .._bus_ops import enqueue_run_trigger
 from ..storage import AgentData, AgentRecord, SessionConfig, TeamMember
@@ -488,6 +489,17 @@ optional):
                     deep=True,
                 ),
             )
+            worker_platform_context = leader_session.config.platform_context
+            if worker_platform_context is not None:
+                worker_platform_context = worker_platform_context.model_copy(
+                    update={
+                        "session_role": "worker",
+                        "root_session_id": (
+                            worker_platform_context.root_session_id
+                            or leader_session.id
+                        ),
+                    },
+                )
             worker_session = await self._storage.upsert_session(
                 user_id=self._user_id,
                 agent_id=worker_agent.id,
@@ -500,8 +512,10 @@ optional):
                     fallback_chat_model_config=(
                         leader_session.config.fallback_chat_model_config
                     ),
+                    platform_context=worker_platform_context,
                 ),
                 state=worker_state,
+                source=leader_session.source,
             )
             await self._storage.set_session_team_id(
                 self._user_id,
@@ -530,6 +544,18 @@ optional):
                 ),
             ]
             await self._storage.upsert_team(self._user_id, team)
+            assigned_revision = await assign_team_member(
+                self._storage,
+                self._message_bus,
+                user_id=self._user_id,
+                team_id=team.id,
+                member_session_id=worker_session.id,
+            )
+            if assigned_revision is None:
+                raise RuntimeError(
+                    "created member disappeared before its initial "
+                    "assignment could be recorded",
+                )
 
             # 4. Deliver the initial task to the worker's inbox + wakeup.
             hint = HintBlock(

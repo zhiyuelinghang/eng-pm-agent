@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -57,36 +58,52 @@ class MemberInput(BaseModel):
 
 
 class WbsInput(BaseModel):
-    code: str
-    name: str
-    level: int = 1
+    code: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=300)
+    level: int = Field(default=1, gt=0, le=100)
     parent_id: int | None = None
+    sort_order: int | None = Field(default=None, ge=0)
+    color_value: str | None = Field(default=None, max_length=50)
+    assigned_to_text: str | None = Field(default=None, max_length=300)
     planned_start: str | None = None
     planned_finish: str | None = None
-    progress: int = Field(default=0, ge=0, le=100)
-    status: str = "not_started"
+    deadline: str | None = None
+    progress: Decimal | None = Field(default=0, ge=0, le=100)
+    duration_hours: Decimal | None = Field(default=None, ge=0)
+    estimated_hours: Decimal | None = Field(default=None, ge=0)
+    time_log_minutes: int | None = Field(default=None, ge=0)
+    status: str | None = Field(default=None, max_length=100)
+    priority_text: str | None = Field(default=None, max_length=100)
+    description: str | None = Field(default=None, max_length=20000)
+    budget: Decimal | None = Field(default=None, ge=0)
+    actual_cost: Decimal | None = Field(default=None, ge=0)
+    item_type: str | None = Field(default=None, max_length=100)
+    predecessor_ids: list[int] | None = None
     responsible_user_id: int | None = None
     raw_data: dict[str, Any] = Field(default_factory=dict)
 
 
 class RiskInput(BaseModel):
-    name: str
-    level: str = "medium"
-    risk_type: str = "综合风险"
+    serial_no: int | None = Field(default=None, gt=0)
+    name: str = Field(min_length=1, max_length=300)
+    level: str = Field(default="一般", min_length=1, max_length=50)
+    risk_type: str = Field(default="综合风险", min_length=1, max_length=300)
     planned_start: str | None = None
     planned_finish: str | None = None
+    summary: str | None = Field(default=None, max_length=20000)
     responsible_user_id: int | None = None
     confirmer_user_id: int | None = None
     material_requirements: list[str] = Field(default_factory=list)
-    control_requirements: str | None = None
+    control_requirements: str | None = Field(default=None, max_length=20000)
     status: str = "active"
 
 
 class QualityMetricInput(BaseModel):
     wbs_item_id: int | None = None
     name: str = Field(min_length=1, max_length=300)
-    requirement: str = Field(min_length=1)
-    inspection_frequency: str | None = None
+    requirement: str = Field(min_length=1, max_length=20000)
+    inspection_frequency: str | None = Field(default=None, max_length=10000)
+    related_documents: str | None = Field(default=None, max_length=20000)
     required_materials: list[str] = Field(default_factory=list)
     owner_user_id: int | None = None
     status: str = "pending"

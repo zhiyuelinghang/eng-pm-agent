@@ -17,6 +17,12 @@ import json
 from fastapi import HTTPException
 
 from .._bus_ops import enqueue_run_trigger, publish_session_event
+from .._team_lifecycle import (
+    mark_team_leader_completed,
+    mark_team_leader_running,
+    mark_team_member_running,
+    settle_team_member,
+)
 from .._team_messaging import deliver_team_message
 from ..message_bus import MessageBus, MessageBusKeys
 from ..rag.knowledge_base_manager import KnowledgeBaseManagerBase
@@ -239,6 +245,21 @@ class ChatService:
                 agent_id,
                 str(e),
             )
+            try:
+                await self._report_unhandled_team_worker_failure(
+                    user_id=user_id,
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    error_message=_classify_error(e).message,
+                )
+            except Exception:  # pylint: disable=broad-except
+                logger.exception(
+                    "Failed to settle an unhandled team-worker error for "
+                    "user_id=%s session_id=%s agent_id=%s",
+                    user_id,
+                    session_id,
+                    agent_id,
+                )
 
     async def interrupt(
         self,
@@ -583,6 +604,23 @@ class ChatService:
             ttl_secs=MessageBusKeys.SESSION_RUN_TTL_SECS,
         ):
             reply_msg: Msg | None = None
+            member_work_revision: int | None = None
+            leader_settlement_revision: int | None = None
+            if session_record.team_id is not None:
+                member_work_revision = await mark_team_member_running(
+                    self._storage,
+                    self._message_bus,
+                    user_id=user_id,
+                    team_id=session_record.team_id,
+                    member_session_id=session_id,
+                )
+                leader_settlement_revision = await mark_team_leader_running(
+                    self._storage,
+                    self._message_bus,
+                    user_id=user_id,
+                    team_id=session_record.team_id,
+                    leader_session_id=session_id,
+                )
             try:
                 if input_msg is None or isinstance(input_msg, (Msg, list)):
                     # Case A: new reply (user message(s), or retrigger with
@@ -771,6 +809,7 @@ class ChatService:
                             agent_id=agent_id,
                             agent_record=agent_record,
                             reply_msg=reply_msg,
+                            work_revision=member_work_revision,
                         )
                     except Exception:  # pylint: disable=broad-except
                         # A delivery failure must not roll back the completed
@@ -783,6 +822,21 @@ class ChatService:
                             user_id,
                             session_id,
                             agent_id,
+                        )
+                    if (
+                        current_session.team_id is not None
+                        and reply_msg is not None
+                        and reply_msg.finished_reason is not None
+                    ):
+                        await mark_team_leader_completed(
+                            self._storage,
+                            self._message_bus,
+                            user_id=user_id,
+                            team_id=current_session.team_id,
+                            leader_session_id=session_id,
+                            observed_settlement_revision=(
+                                leader_settlement_revision
+                            ),
                         )
 
                 persist_task = asyncio.create_task(_persist())
@@ -826,6 +880,7 @@ class ChatService:
         agent_id: str,
         agent_record: AgentRecord,
         reply_msg: Msg | None,
+        work_revision: int | None = None,
     ) -> None:
         """Reliably forward a terminal worker reply to its team leader.
 
@@ -835,12 +890,10 @@ class ChatService:
         max-iteration worker turn contains no successful TeamSay to the
         leader, its final result is delivered automatically so the leader can
         resume instead of waiting forever. Intentionally interrupted workers
-        are not reported.
+        are reported as interrupted so the assignment cannot remain pending
+        forever.
         """
-        if reply_msg is None or reply_msg.finished_reason in {
-            None,
-            ReplyFinishedReason.INTERRUPTED,
-        }:
+        if reply_msg is None or reply_msg.finished_reason is None:
             return
 
         current_session = await self._storage.get_session(
@@ -874,6 +927,16 @@ class ChatService:
             else leader_session.agent_id
         )
         if self._reported_to_leader(reply_msg, leader_name):
+            await settle_team_member(
+                self._storage,
+                self._message_bus,
+                user_id=user_id,
+                team_id=team.id,
+                member_session_id=session_id,
+                status="reported",
+                revision=work_revision,
+                reply_id=reply_msg.id,
+            )
             return
 
         text_blocks = reply_msg.get_content_blocks("text")
@@ -895,11 +958,34 @@ class ChatService:
                 f"子智能体执行失败：{error_message}"
                 + (f"\n已生成的最后文本：{final_text}" if final_text else "")
             )
+            terminal_status = "failed"
+        elif reply_msg.finished_reason == ReplyFinishedReason.INTERRUPTED:
+            content = (
+                "子智能体任务已中断。"
+                + (f"\n中断前已生成：{final_text}" if final_text else "")
+            )
+            terminal_status = "interrupted"
         else:
             content = final_text or (
                 "本轮任务已经结束，但子智能体没有生成可供转发的"
                 "文本结果。"
             )
+            terminal_status = "completed"
+        await settle_team_member(
+            self._storage,
+            self._message_bus,
+            user_id=user_id,
+            team_id=team.id,
+            member_session_id=session_id,
+            status=terminal_status,
+            revision=work_revision,
+            reply_id=reply_msg.id,
+            error=(
+                content
+                if terminal_status in {"failed", "interrupted"}
+                else None
+            ),
+        )
         await deliver_team_message(
             self._message_bus,
             user_id=user_id,
@@ -914,6 +1000,61 @@ class ChatService:
             reply_msg.id,
             session_id,
             leader_session.id,
+        )
+
+    async def _report_unhandled_team_worker_failure(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        agent_id: str,
+        error_message: str,
+    ) -> None:
+        """Settle and report failures raised before a reply could close."""
+        current_session = await self._storage.get_session(
+            user_id,
+            agent_id,
+            session_id,
+        )
+        if current_session is None or current_session.team_id is None:
+            return
+        team = await self._storage.get_team(
+            user_id,
+            current_session.team_id,
+        )
+        if team is None or team.session_id == session_id:
+            return
+        newly_settled = await settle_team_member(
+            self._storage,
+            self._message_bus,
+            user_id=user_id,
+            team_id=team.id,
+            member_session_id=session_id,
+            status="failed",
+            error=error_message,
+        )
+        if not newly_settled:
+            return
+        leader_session = await self._storage.get_session(
+            user_id,
+            "",
+            team.session_id,
+        )
+        if leader_session is None:
+            return
+        worker_agent = await self._storage.get_agent(user_id, agent_id)
+        sender_name = (
+            worker_agent.data.name
+            if worker_agent is not None
+            else agent_id
+        )
+        await deliver_team_message(
+            self._message_bus,
+            user_id=user_id,
+            recipient_session_id=leader_session.id,
+            recipient_agent_id=leader_session.agent_id,
+            sender_name=sender_name,
+            content=f"子智能体执行失败：{error_message}",
         )
 
     async def _project_event(

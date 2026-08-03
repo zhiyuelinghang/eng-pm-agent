@@ -353,6 +353,17 @@ class StorageBase(ABC):
         """
 
     @abstractmethod
+    async def list_all_sessions(
+        self,
+        user_id: str,
+    ) -> list[SessionRecord]:
+        """List every session in one storage namespace, newest first.
+
+        This supports cross-agent management audit views. Authorization and
+        source filtering remain the responsibility of the calling service.
+        """
+
+    @abstractmethod
     async def get_session(
         self,
         user_id: str,

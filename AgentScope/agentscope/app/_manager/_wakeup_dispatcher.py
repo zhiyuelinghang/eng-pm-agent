@@ -19,6 +19,9 @@ handled:
   the parked tail at trigger time. It is re-queued after a short backoff
   until the parked run releases its session lock, then spawned with the
   carried input event.
+- ``team`` (a durable inter-agent message): also re-queued while busy.
+  For a leader, the durable team revision suppresses the retry when the
+  current run already consumed and summarized that report.
 
 All bus keys live on the :class:`MessageBus` base class (see
 ``enqueue_wakeup`` / ``enqueue_input``, ``dequeue_wakeups``,
@@ -38,6 +41,7 @@ from ...event import (
 )
 from ..message_bus import MessageBusKeys
 from .._bus_ops import enqueue_run_trigger
+from .._team_lifecycle import team_work_is_pending
 
 if TYPE_CHECKING:
     from ..message_bus import MessageBus
@@ -222,12 +226,14 @@ class WakeupDispatcher:
             agent_id (`str`):
                 The agent that owns the session.
             kind (`str`):
-                Trigger kind (``wake`` / ``resume``); see module docstring.
+                Trigger kind (``wake`` / ``resume`` / ``team``); see module
+                docstring.
             raw_input (`dict | None`):
                 Serialised input event for ``resume`` triggers, else
                 ``None``.
         """
         is_resume = kind == MessageBusKeys.WAKEUP_KIND_RESUME
+        is_team_wake = kind == MessageBusKeys.WAKEUP_KIND_TEAM
 
         # Parse the resume input early so every downstream path
         # (lock-retry, spawn-retry) receives a typed event object
@@ -266,6 +272,12 @@ class WakeupDispatcher:
                     agent_id,
                     input_msg,
                 )
+            elif is_team_wake:
+                self._schedule_team_wake_retry(
+                    user_id,
+                    session_id,
+                    agent_id,
+                )
             # ``wake`` triggers are safe to drop while running — the
             # live run drains the inbox itself.
             return
@@ -275,10 +287,12 @@ class WakeupDispatcher:
         # BG-task completion callback or a schedule trigger) will still
         # arrive here. Drop it rather than letting ChatService.run crash
         # on a missing storage record.
-        if (
-            await self._storage.get_session(user_id, agent_id, session_id)
-            is None
-        ):
+        session = await self._storage.get_session(
+            user_id,
+            agent_id,
+            session_id,
+        )
+        if session is None:
             logger.warning(
                 "WakeupDispatcher: dropping %s trigger for session %s "
                 "(agent %s, user %s) — session no longer exists in "
@@ -290,6 +304,19 @@ class WakeupDispatcher:
                 user_id,
             )
             return
+
+        if is_team_wake and session.team_id is not None:
+            team = await self._storage.get_team(user_id, session.team_id)
+            if (
+                team is not None
+                and team.session_id == session_id
+                and not team_work_is_pending(team)
+            ):
+                # The leader's previous run consumed the report and closed
+                # the corresponding work revision before this deferred
+                # trigger acquired the session lock. No extra empty turn is
+                # needed.
+                return
 
         try:
             self._registry.spawn(
@@ -312,6 +339,12 @@ class WakeupDispatcher:
                     session_id,
                     agent_id,
                     input_msg,
+                )
+            elif is_team_wake:
+                self._schedule_team_wake_retry(
+                    user_id,
+                    session_id,
+                    agent_id,
                 )
             else:
                 logger.debug(
@@ -370,6 +403,40 @@ class WakeupDispatcher:
         task = asyncio.create_task(
             _retry(),
             name=f"resume-retry:{session_id}",
+        )
+        self._retry_tasks.add(task)
+        task.add_done_callback(self._retry_tasks.discard)
+
+    def _schedule_team_wake_retry(
+        self,
+        user_id: str,
+        session_id: str,
+        agent_id: str,
+    ) -> None:
+        """Re-enqueue a team message after the recipient releases its lock."""
+
+        async def _retry() -> None:
+            try:
+                await asyncio.sleep(_RESUME_RETRY_BACKOFF_SECS)
+                await enqueue_run_trigger(
+                    self._bus,
+                    user_id=user_id,
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    kind=MessageBusKeys.WAKEUP_KIND_TEAM,
+                )
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # pylint: disable=broad-except
+                logger.exception(
+                    "WakeupDispatcher: failed to re-enqueue team trigger "
+                    "for session %s.",
+                    session_id,
+                )
+
+        task = asyncio.create_task(
+            _retry(),
+            name=f"team-wake-retry:{session_id}",
         )
         self._retry_tasks.add(task)
         task.add_done_callback(self._retry_tasks.discard)

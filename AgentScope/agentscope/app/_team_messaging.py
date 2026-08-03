@@ -38,4 +38,5 @@ async def deliver_team_message(
         user_id=user_id,
         session_id=recipient_session_id,
         agent_id=recipient_agent_id,
+        kind=MessageBusKeys.WAKEUP_KIND_TEAM,
     )

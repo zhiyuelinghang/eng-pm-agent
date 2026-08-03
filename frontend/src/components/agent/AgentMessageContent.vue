@@ -1,6 +1,6 @@
 <template>
   <div class="agent-message-content">
-    <section v-if="runtimeTrace?.tasksContext?.tasks?.length" class="agent-plan">
+    <section v-if="showPlan && runtimeTrace?.tasksContext?.tasks?.length" class="agent-plan">
       <header>
         <span><n-icon :size="15"><ListCheck /></n-icon>执行计划</span>
         <strong>{{ completedTasks }}/{{ runtimeTrace.tasksContext.tasks.length }}</strong>
@@ -166,9 +166,9 @@
 
         <footer v-if="runtimeMessage.role === 'assistant'">
           <div class="agent-runtime-status">
-            <span class="agent-runtime-state" :class="{ running: isMessageRunning(runtimeMessage), interrupted: isMessageInterrupted(runtimeMessage), error: Boolean(runtimeMessage.error) }">
+            <span class="agent-runtime-state" :class="{ running: isMessageRunning(runtimeMessage) || isMessageWaiting(runtimeMessage), interrupted: isMessageInterrupted(runtimeMessage), error: Boolean(runtimeMessage.error) }">
               <n-icon :size="13">
-                <Loader v-if="isMessageRunning(runtimeMessage)" class="spin" />
+                <Loader v-if="isMessageRunning(runtimeMessage) || isMessageWaiting(runtimeMessage)" class="spin" />
                 <AlertTriangle v-else-if="runtimeMessage.error" />
                 <Circle v-else-if="isMessageInterrupted(runtimeMessage)" />
                 <CircleCheck v-else />
@@ -226,10 +226,12 @@ const props = withDefaults(defineProps<{
   content?: string
   runtimeTrace?: AgentRuntimeTrace | null
   streaming?: boolean
+  showPlan?: boolean
 }>(), {
   content: '',
   runtimeTrace: null,
   streaming: false,
+  showPlan: true,
 })
 
 defineEmits<{
@@ -250,6 +252,8 @@ markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
     ? defaultLinkOpen(tokens, index, options, env, self)
     : self.renderToken(tokens, index, options)
 }
+const markdownCache = new Map<string, string>()
+const markdownCacheLimit = 256
 
 const now = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | null = null
@@ -279,7 +283,16 @@ const isTraceActive = computed(() =>
 )
 
 function renderMarkdown(value: string) {
-  return markdown.render(value || '')
+  const source = value || ''
+  const cached = markdownCache.get(source)
+  if (cached !== undefined) return cached
+  const rendered = markdown.render(source)
+  if (markdownCache.size >= markdownCacheLimit) {
+    const oldest = markdownCache.keys().next().value
+    if (oldest !== undefined) markdownCache.delete(oldest)
+  }
+  markdownCache.set(source, rendered)
+  return rendered
 }
 
 function toolResult(message: AgentRuntimeMessage, id: string) {
@@ -378,7 +391,13 @@ function dataUrl(block: AgentDataBlock) {
 }
 
 function isMessageRunning(message: AgentRuntimeMessage) {
-  return !message.finished_at && isTraceActive.value
+  return !message.finished_at
+    && !isMessageWaiting(message)
+    && isTraceActive.value
+}
+
+function isMessageWaiting(message: AgentRuntimeMessage) {
+  return message.finished_reason === 'waiting_for_collaboration'
 }
 
 function isMessageInterrupted(message: AgentRuntimeMessage) {
@@ -386,10 +405,12 @@ function isMessageInterrupted(message: AgentRuntimeMessage) {
 }
 
 function messageStatusLabel(message: AgentRuntimeMessage) {
+  if (isMessageWaiting(message)) return '等待协同'
   if (isMessageRunning(message)) return '执行中'
   if (message.error || message.finished_reason === 'error') return '执行失败'
   if (isMessageInterrupted(message)) return '已中断'
   if (message.finished_reason === 'exceed_max_iters') return '已达执行上限'
+  if (message.finished_reason === 'collaboration_continued') return '协同已接续'
   return '已完成'
 }
 
@@ -427,36 +448,36 @@ function formatNumber(value: number) {
 .agent-runtime-message + .agent-runtime-message { margin-top:4px; border-top:1px dashed #d9e6e2; padding-top:12px; }
 .agent-plan { display:grid; gap:8px; border:1px solid #d8e7e3; border-radius:8px; padding:11px 12px; background:#f6faf9; }
 .agent-plan header { display:flex; align-items:center; justify-content:space-between; color:#315c56; font-size:12px; }
-.agent-plan header span { display:flex; align-items:center; gap:6px; font-weight:800; }.agent-plan header strong { font-size:11px; }
+.agent-plan header span { display:flex; align-items:center; gap:6px; font-weight:800; }.agent-plan header strong { font-size:12px; }
 .agent-plan-track { height:4px; overflow:hidden; border-radius:99px; background:#dce9e6; }.agent-plan-track i { display:block; height:100%; border-radius:inherit; background:#0e8b79; transition:width .2s; }
 .agent-plan ul { display:grid; gap:5px; max-height:150px; margin:0; padding:0; overflow:auto; list-style:none; }
 .agent-plan li { display:flex; align-items:flex-start; gap:7px; color:#647d78; font-size:12px; line-height:1.45; }.agent-plan li.completed { opacity:.65; }.agent-plan li.completed span { text-decoration:line-through; }
 .agent-subagent-hitl { display:grid; gap:9px; border:1px solid #e6c77e; border-radius:9px; padding:10px; background:#fffaf0; }
-.agent-subagent-hitl>header { display:flex; align-items:flex-start; gap:8px; color:#875c13; }.agent-subagent-hitl>header>div { display:grid; gap:2px; }.agent-subagent-hitl>header strong { font-size:12px; }.agent-subagent-hitl>header span { color:#967743; font-size:10px; line-height:1.45; }
-.agent-subagent-hitl>article { display:grid; gap:6px; }.agent-subagent-name { display:flex; align-items:center; gap:7px; color:#654b20; }.agent-subagent-name span { font-size:11px; font-weight:800; }.agent-subagent-name small { border-radius:999px; padding:2px 6px; color:#886a35; background:#f8ebcf; font-size:9px; }
+.agent-subagent-hitl>header { display:flex; align-items:flex-start; gap:8px; color:#875c13; }.agent-subagent-hitl>header>div { display:grid; gap:2px; }.agent-subagent-hitl>header strong { font-size:12px; }.agent-subagent-hitl>header span { color:#967743; font-size:12px; line-height:1.45; }
+.agent-subagent-hitl>article { display:grid; gap:6px; }.agent-subagent-name { display:flex; align-items:center; gap:7px; color:#654b20; }.agent-subagent-name span { font-size:12px; font-weight:800; }.agent-subagent-name small { border-radius:999px; padding:2px 6px; color:#886a35; background:#f8ebcf; font-size:12px; }
 .agent-thinking,.agent-tool,.agent-hint { overflow:hidden; border:1px solid #dbe7e4; border-radius:8px; background:#f8fbfa; }
 .agent-thinking summary,.agent-hint summary { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:9px 11px; color:#54706b; font-size:12px; cursor:pointer; list-style:none; }
 .agent-thinking summary::-webkit-details-marker,.agent-tool summary::-webkit-details-marker,.agent-hint summary::-webkit-details-marker { display:none; }
 .agent-thinking summary span,.agent-hint summary { font-weight:750; }.agent-thinking summary span { display:flex; align-items:center; gap:6px; }
-.agent-thinking summary em { display:flex; align-items:center; gap:5px; color:#7c908c; font-size:11px; font-style:normal; font-weight:500; }
+.agent-thinking summary em { display:flex; align-items:center; gap:5px; color:#7c908c; font-size:12px; font-style:normal; font-weight:500; }
 .agent-thinking summary em i { width:6px; height:6px; border-radius:50%; background:#17a680; box-shadow:0 0 0 3px rgba(23,166,128,.1); }
 .agent-thinking>div { max-height:240px; overflow:auto; border-top:1px solid #e2ebe9; padding:10px 12px; color:#607672; font-size:12px; line-height:1.65; white-space:pre-wrap; }
 .agent-tool>summary { display:grid; grid-template-columns:28px minmax(0,1fr) auto 16px; align-items:center; gap:8px; padding:9px 10px; cursor:pointer; list-style:none; }
 .agent-tool-icon { display:grid; width:27px; height:27px; place-items:center; border-radius:6px; color:#176b61; background:#e5f3ef; }
-.agent-tool-title { display:grid; min-width:0; gap:1px; }.agent-tool-title strong { color:#31534e; font-size:12px; }.agent-tool-title small { overflow:hidden; color:#849792; font:10px/1.25 ui-monospace,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
-.agent-tool summary>em { display:flex; align-items:center; gap:5px; border-radius:999px; padding:3px 7px; color:#60746f; background:#edf3f1; font-size:10px; font-style:normal; white-space:nowrap; }
+.agent-tool-title { display:grid; min-width:0; gap:1px; }.agent-tool-title strong { color:#31534e; font-size:12px; }.agent-tool-title small { overflow:hidden; color:#849792; font:12px/1.25 ui-monospace,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
+.agent-tool summary>em { display:flex; align-items:center; gap:5px; border-radius:999px; padding:3px 7px; color:#60746f; background:#edf3f1; font-size:12px; font-style:normal; white-space:nowrap; }
 .agent-tool summary>em.state-asking { color:#9b5b00; background:#fff2d9; }.agent-tool summary>em.state-error,.agent-tool summary>em.state-denied { color:#ae472b; background:#fff0eb; }.agent-tool summary>em.state-success { color:#08735f; background:#e7f5f0; }
 .spin-dot { width:6px; height:6px; border:1px solid #57958a; border-top-color:transparent; border-radius:50%; animation:spin .7s linear infinite; }
 .agent-tool-chevron { color:#81938f; transition:transform .15s; }.agent-tool[open]>summary .agent-tool-chevron,.agent-hint[open]>summary .agent-tool-chevron { transform:rotate(90deg); }
 .agent-tool-detail { display:grid; gap:9px; border-top:1px solid #e0eae7; padding:10px; background:#f2f7f5; }
-.agent-tool-detail section { min-width:0; }.agent-tool-detail section>span { display:block; margin-bottom:5px; color:#687f7a; font-size:10px; font-weight:800; text-transform:uppercase; }
-.agent-tool-detail pre { max-height:240px; margin:0; overflow:auto; border:1px solid #d9e4e1; border-radius:6px; padding:9px 10px; color:#34534e; background:#fff; font:11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
-.agent-tool-detail pre.error { border-color:#efd4ca; color:#9e452d; background:#fff8f5; }.agent-tool-waiting { margin:0; color:#7c908b; font-size:11px; }
-.agent-confirm { display:flex; align-items:center; gap:7px; border-top:1px solid #efdcb9; padding:10px; background:#fffaf0; }.agent-confirm>div { display:grid; flex:1; gap:2px; }.agent-confirm strong { color:#84520b; font-size:11px; }.agent-confirm span { color:#967549; font-size:10px; }
-.agent-confirm button { border-radius:5px; padding:6px 9px; font:inherit; font-size:11px; font-weight:750; cursor:pointer; }.agent-confirm .deny { border:1px solid #d9cbb7; color:#725f45; background:#fff; }.agent-confirm .allow { border:1px solid #177b6d; color:#fff; background:#177b6d; }
+.agent-tool-detail section { min-width:0; }.agent-tool-detail section>span { display:block; margin-bottom:5px; color:#687f7a; font-size:12px; font-weight:800; text-transform:uppercase; }
+.agent-tool-detail pre { max-height:240px; margin:0; overflow:auto; border:1px solid #d9e4e1; border-radius:6px; padding:9px 10px; color:#34534e; background:#fff; font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
+.agent-tool-detail pre.error { border-color:#efd4ca; color:#9e452d; background:#fff8f5; }.agent-tool-waiting { margin:0; color:#7c908b; font-size:12px; }
+.agent-confirm { display:flex; align-items:center; gap:7px; border-top:1px solid #efdcb9; padding:10px; background:#fffaf0; }.agent-confirm>div { display:grid; flex:1; gap:2px; }.agent-confirm strong { color:#84520b; font-size:12px; }.agent-confirm span { color:#967549; font-size:12px; }
+.agent-confirm button { border-radius:5px; padding:6px 9px; font:inherit; font-size:12px; font-weight:750; cursor:pointer; }.agent-confirm .deny { border:1px solid #d9cbb7; color:#725f45; background:#fff; }.agent-confirm .allow { border:1px solid #177b6d; color:#fff; background:#177b6d; }
 .agent-hint summary { justify-content:flex-start; }.agent-hint summary span { flex:1; }.agent-hint>.agent-markdown,.agent-hint-blocks { border-top:1px solid #e1ebe8; padding:10px 12px; background:#fff; }.agent-hint-blocks { display:grid; gap:8px; }.agent-hint-blocks img { max-width:100%; max-height:300px; border-radius:6px; }
 .agent-media { margin:0; }.agent-media img { max-width:100%; max-height:360px; border-radius:8px; object-fit:contain; }.agent-media a { color:#0d7469; font-size:12px; }
-.agent-runtime-error { display:flex; align-items:flex-start; gap:8px; border:1px solid #efcfc5; border-radius:7px; padding:9px 10px; color:#a23f25; background:#fff5f1; }.agent-runtime-error>div { display:grid; gap:2px; }.agent-runtime-error strong { font-size:12px; }.agent-runtime-error span { font-size:11px; line-height:1.5; }
+.agent-runtime-error { display:flex; align-items:flex-start; gap:8px; border:1px solid #efcfc5; border-radius:7px; padding:9px 10px; color:#a23f25; background:#fff5f1; }.agent-runtime-error>div { display:grid; gap:2px; }.agent-runtime-error strong { font-size:12px; }.agent-runtime-error span { font-size:12px; line-height:1.5; }
 .agent-runtime-message footer { display:flex; min-width:0; align-items:center; gap:12px; color:#82928f; font-size:12px; }
 .agent-runtime-message footer span { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
 .agent-runtime-status { display:flex; min-width:0; align-items:center; gap:8px; }

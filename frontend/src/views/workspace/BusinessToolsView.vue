@@ -129,7 +129,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import { NIcon, useMessage } from 'naive-ui'
 import { ChartBar, CircleCheck, Database, FileText, Paperclip, PlayerStop, Robot, Route, Send, ShieldCheck } from '@vicons/tabler'
 import type { Component } from 'vue'
@@ -141,7 +141,7 @@ import {
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
 import { useAppStore } from '@/stores/app'
 import {
-  applyAgentRuntimeEvent,
+  applyAgentRuntimeEvents,
   createEmptyRuntimeTrace,
   runtimeTraceFromExtraData,
   type AgentRuntimeTrace,
@@ -210,7 +210,7 @@ const catalogError = ref('')
 const threadViewport = ref<HTMLElement | null>(null)
 const toolMessages = ref<Record<string, ToolMessage[]>>({})
 const conversationIds = ref<Record<string, number>>({})
-const streamingTraces = ref<Record<string, AgentRuntimeTrace | null>>({})
+const streamingTraces = shallowRef<Record<string, AgentRuntimeTrace | null>>({})
 const emptyTool: BusinessTool = {
   id: '',
   name: '业务智能体',
@@ -374,10 +374,13 @@ async function submitToolMessage() {
     selectedFiles.value = []
     const completion: { message: ApiAgentMessage | null } = { message: null }
     await streamAgentConversationMessage(conversationId, text, {
-      onEvent: async runtimeEvent => {
+      onEvents: async runtimeEvents => {
         streamingTraces.value = {
           ...streamingTraces.value,
-          [agentId]: applyAgentRuntimeEvent(streamingTraces.value[agentId], runtimeEvent),
+          [agentId]: applyAgentRuntimeEvents(
+            streamingTraces.value[agentId],
+            runtimeEvents,
+          ),
         }
         await nextTick()
         threadViewport.value?.scrollTo({ top: threadViewport.value.scrollHeight })
@@ -454,12 +457,12 @@ async function confirmToolCall(
             ),
           )
         },
-        onEvent: async runtimeEvent => {
+        onEvents: async runtimeEvents => {
           streamingTraces.value = {
             ...streamingTraces.value,
-            [agentId]: applyAgentRuntimeEvent(
+            [agentId]: applyAgentRuntimeEvents(
               streamingTraces.value[agentId],
-              runtimeEvent,
+              runtimeEvents,
             ),
           }
           await nextTick()

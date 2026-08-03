@@ -1,8 +1,6 @@
 """AgentScope tools backed by Dobby's session-bound internal gateway."""
 
 import asyncio
-import csv
-import io
 import json
 import logging
 import os
@@ -18,12 +16,22 @@ from agentscope.permission import (
 )
 from agentscope.tool import ToolBase, ToolChunk
 
+from scripts.initialization_file_parser import (
+    parse_initialization_file as _parse_initialization_file,
+)
+
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_GATEWAY_URL = (
     "http://127.0.0.1:38430/api/internal/agent-tools"
 )
+
+_INITIALIZATION_WORKER_READ_TOOL_NAMES = {
+    "dobby_get_project_initialization_state",
+    "dobby_get_project_initialization_draft",
+    "dobby_read_project_initialization_artifact",
+}
 
 
 READ_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
@@ -140,37 +148,10 @@ INITIALIZATION_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
             "additionalProperties": False,
         },
     },
-    {
-        "name": "dobby_submit_project_initialization_draft",
-        "operation": "submit_project_initialization_draft",
-        "description": (
-            "首次创建结构化初始化草稿，或在用户明确要求从全部原始资料重新"
-            "构建时整体替换草稿。已有草稿的日常补充必须改用增量更新工具，"
-            "避免覆盖其他分区。该工具只保存待核对草稿，不会修改正式项目"
-            "数据；必须保留附件原值，无法确认的内容留空，"
-            "不得编造。数值 0 是有效原值，必须保留为 0，不能按空值或缺失值"
-            "处理。附件中每一条带 WBS 编码的记录都必须提交，即使名称疑似"
-            "占位内容也不得静默丢弃。WBS 编码只表示层级和同级自然顺序，不"
-            "表示前置依赖；前置关系只能来自附件或用户明确提供的信息，不得"
-            "根据编码、名称或日期推断。同一上级下按 WBS 编码自然排序后，"
-            "计划开始时间不得倒退；发现冲突时保留原值并交给用户核对，不得"
-            "自行解释或改写。返回任何错误或警告时，必须简要说明问题，并明确"
-            "提示用户点击 Dobby 平台中的“核对草稿”查看、修正或确认。"
-        ),
-        "schema": {
-            "type": "object",
-            "properties": {
-                "draft_id": {
-                    "type": ["integer", "null"],
-                    "description": "更新已有草稿时填写；首次提交传 null。",
-                },
-                "source_files": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "maxItems": 100,
-                    "description": "本次识别所依据的附件文件名。",
-                },
-                "payload": {
+)
+
+
+_INITIALIZATION_PAYLOAD_SCHEMA: dict[str, Any] = {
                     "type": "object",
                     "properties": {
                         "project": {
@@ -292,7 +273,6 @@ INITIALIZATION_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
                                 "type": "object",
                                 "properties": {
                                     "serial_no": {"type": "integer", "minimum": 1},
-                                    "related_wbs_code": {"type": ["string", "null"]},
                                     "related_process_name": {"type": "string"},
                                     "risk_part": {"type": "string"},
                                     "risk_level": {"type": "string"},
@@ -341,18 +321,7 @@ INITIALIZATION_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
                         "quality_requirements",
                     ],
                     "additionalProperties": False,
-                },
-            },
-            "required": ["payload"],
-            "additionalProperties": False,
-        },
-    },
-)
-
-
-_INITIALIZATION_PAYLOAD_SCHEMA = INITIALIZATION_TOOL_DEFINITIONS[1]["schema"][
-    "properties"
-]["payload"]
+}
 
 INITIALIZATION_TOOL_DEFINITIONS += (
     {
@@ -362,8 +331,8 @@ INITIALIZATION_TOOL_DEFINITIONS += (
             "读取当前初始化会话最新草稿的完整结构化数据。必须按分区读取；"
             "WBS、人员、风险、质量和校验结果支持 start/limit 分页。补充已有"
             "草稿前，先读取本次所需分区；不得因为正式业务表尚未入库就重新"
-            "解析全部旧附件。草稿中的 WBS 可以直接用于匹配新增风险和质量"
-            "指标。"
+            "解析全部旧附件。草稿中的 WBS 可以用于匹配新增质量指标；风险源"
+            "不关联 WBS。"
         ),
         "schema": {
             "type": "object",
@@ -399,16 +368,460 @@ INITIALIZATION_TOOL_DEFINITIONS += (
         },
     },
     {
-        "name": "dobby_update_project_initialization_draft",
-        "operation": "update_project_initialization_draft",
+        "name": "dobby_read_project_initialization_artifact",
+        "operation": "read_project_initialization_artifact",
         "description": (
-            "增量更新已有初始化草稿。只替换 patch 中明确提供的分区，未提供"
-            "的工程信息、人员、WBS、风险和质量分区保持不变；project 对象按"
-            "字段合并，人员、WBS、风险和质量等列表分区整体替换。更新前必须"
-            "读取草稿并传入最新 expected_revision，防止覆盖并发修改。列表"
-            "分区传空数组表示明确清空；不得传 null。新增风险或质量指标时，"
-            "应先读取草稿 WBS 完成编码匹配，无需重新读取旧 WBS 附件。返回"
-            "任何错误或警告时，必须提示用户点击“核对草稿”。"
+            "读取初始化主智能体已经整理并通过校验的标准资料。先不传 "
+            "part_index 读取分片清单，再按分片分页读取 JSON 记录或 "
+            "Markdown 行；读取指定分片时必须同时传 artifact_format。"
+            "专项智能体只能读取这里的标准资料，不得重新读取原始附件。"
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "normalization_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "初始化主智能体完成的标准化批次 ID。",
+                },
+                "section": {
+                    "type": "string",
+                    "enum": [
+                        "project",
+                        "personnel",
+                        "wbs",
+                        "risks",
+                        "quality_requirements",
+                    ],
+                    "description": "要读取的标准资料业务分区。",
+                },
+                "part_index": {
+                    "type": ["integer", "null"],
+                    "minimum": 1,
+                    "description": "不填时返回分片清单，填写后返回该分片内容。",
+                },
+                "artifact_format": {
+                    "type": ["string", "null"],
+                    "enum": ["json", "markdown", None],
+                    "description": (
+                        "读取指定 part_index 时必填，避免同编号 JSON 与 "
+                        "Markdown 混淆。"
+                    ),
+                },
+                "start": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 1,
+                    "description": "JSON 数组记录或 Markdown 行的起始位置。",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 500,
+                    "default": 100,
+                    "description": "本次最多读取的记录数或行数。",
+                },
+            },
+            "required": ["normalization_id", "section"],
+            "additionalProperties": False,
+        },
+    },
+)
+
+_INITIALIZATION_READ_TOOL_DEFINITIONS = tuple(
+    definition
+    for definition in INITIALIZATION_TOOL_DEFINITIONS
+    if definition["name"] in _INITIALIZATION_WORKER_READ_TOOL_NAMES
+)
+
+
+def _canonical_record_schema(
+    title: str,
+    properties: dict[str, Any],
+    required: list[str],
+) -> dict[str, Any]:
+    return {
+        "title": title,
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+_PROJECT_ARTIFACT_SCHEMA = _canonical_record_schema(
+    "工程基本信息对象",
+    {
+        "engineering_type_description": {
+            "type": ["string", "null"],
+            "maxLength": 10000,
+        },
+        "contract_start_date": {
+            "type": ["string", "null"],
+            "format": "date",
+        },
+        "contract_end_date": {
+            "type": ["string", "null"],
+            "format": "date",
+        },
+        "contract_duration_days": {
+            "type": ["integer", "null"],
+            "minimum": 1,
+        },
+        "contract_amount_wan_yuan": {
+            "type": ["number", "string", "null"],
+        },
+        "construction_unit_name": {"type": ["string", "null"]},
+        "general_contractor_unit_name": {"type": ["string", "null"]},
+        "supervision_unit_name": {"type": ["string", "null"]},
+        "design_unit_name": {"type": ["string", "null"]},
+        "survey_unit_name": {"type": ["string", "null"]},
+    },
+    [],
+)
+
+_PERSONNEL_ARTIFACT_SCHEMA = _canonical_record_schema(
+    "人员任职记录",
+    {
+        "serial_no": {"type": "integer", "minimum": 1},
+        "real_name": {"type": "string", "minLength": 1},
+        "identity_card_no": {"type": "string", "minLength": 1},
+        "position_name": {"type": "string", "minLength": 1},
+        "certificate_no": {"type": "string", "minLength": 1},
+        "responsibility_description": {"type": "string", "minLength": 1},
+    },
+    [
+        "serial_no",
+        "real_name",
+        "identity_card_no",
+        "position_name",
+        "certificate_no",
+        "responsibility_description",
+    ],
+)
+
+_WBS_ARTIFACT_SCHEMA = _canonical_record_schema(
+    "WBS 记录",
+    {
+        "wbs_code": {"type": "string", "minLength": 1},
+        "parent_wbs_code": {"type": ["string", "null"]},
+        "predecessor_wbs_codes": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 100,
+        },
+        "sort_order": {"type": "integer", "minimum": 0},
+        "color_value": {"type": ["string", "null"]},
+        "name": {"type": "string", "minLength": 1},
+        "assigned_to_text": {"type": ["string", "null"]},
+        "planned_start_at": {"type": ["string", "null"]},
+        "planned_finish_at": {"type": ["string", "null"]},
+        "deadline_at": {"type": ["string", "null"]},
+        "progress_percent": {
+            "type": ["number", "string", "null"],
+        },
+        "duration_hours": {"type": ["number", "string", "null"]},
+        "estimated_hours": {"type": ["number", "string", "null"]},
+        "time_log_minutes": {"type": ["integer", "null"]},
+        "status_text": {"type": ["string", "null"]},
+        "priority_text": {"type": ["string", "null"]},
+        "description": {"type": ["string", "null"]},
+        "budget": {"type": ["number", "string", "null"]},
+        "actual_cost": {"type": ["number", "string", "null"]},
+        "msp_uid": {"type": ["string", "null"]},
+        "msp_id": {"type": ["string", "null"]},
+        "source_created_at": {"type": ["string", "null"]},
+        "source_creator": {"type": ["string", "null"]},
+        "item_type": {"type": ["string", "null"]},
+        "source_project_path": {"type": ["string", "null"]},
+        "level": {"type": "integer", "minimum": 1},
+    },
+    [
+        "wbs_code",
+        "parent_wbs_code",
+        "name",
+        "planned_start_at",
+        "planned_finish_at",
+        "progress_percent",
+        "status_text",
+        "priority_text",
+        "level",
+    ],
+)
+
+_RISK_ARTIFACT_SCHEMA = _canonical_record_schema(
+    "风险源记录",
+    {
+        "serial_no": {"type": "integer", "minimum": 1},
+        "related_process_name": {"type": "string", "minLength": 1},
+        "risk_part": {"type": "string", "minLength": 1},
+        "risk_level": {"type": "string", "minLength": 1},
+        "evaluation_condition": {"type": "string", "minLength": 1},
+        "risk_window_start_date": {
+            "type": ["string", "null"],
+            "format": "date",
+        },
+        "risk_window_end_date": {
+            "type": ["string", "null"],
+            "format": "date",
+        },
+        "summary": {"type": ["string", "null"]},
+    },
+    [
+        "serial_no",
+        "related_process_name",
+        "risk_part",
+        "risk_level",
+        "evaluation_condition",
+    ],
+)
+
+_QUALITY_ARTIFACT_SCHEMA = _canonical_record_schema(
+    "质量指标记录",
+    {
+        "wbs_code": {"type": "string", "minLength": 1},
+        "quality_acceptance_item": {"type": "string", "minLength": 1},
+        "control_indicator": {"type": "string", "minLength": 1},
+        "inspection_frequency": {"type": "string", "minLength": 1},
+        "related_documents": {"type": "string", "minLength": 1},
+    },
+    [
+        "wbs_code",
+        "quality_acceptance_item",
+        "control_indicator",
+        "inspection_frequency",
+        "related_documents",
+    ],
+)
+
+_INITIALIZATION_ARTIFACT_JSON_SCHEMA: dict[str, Any] = {
+    "anyOf": [
+        _PROJECT_ARTIFACT_SCHEMA,
+        *[
+            {
+                "title": title,
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 20,
+                "items": item_schema,
+            }
+            for title, item_schema in (
+                ("人员记录数组", _PERSONNEL_ARTIFACT_SCHEMA),
+                ("WBS 记录数组", _WBS_ARTIFACT_SCHEMA),
+                ("风险源记录数组", _RISK_ARTIFACT_SCHEMA),
+                ("质量指标记录数组", _QUALITY_ARTIFACT_SCHEMA),
+            )
+        ],
+    ],
+    "description": (
+        "必须与 section 对应。工程信息为一个对象；其他分区为数组。"
+        "数组第 1 部分必须只提交 1 条试写记录，成功后后续每部分最多 20 条。"
+        "只能使用这里声明的标准字段，禁止自造别名。"
+    ),
+}
+
+
+INITIALIZATION_ORCHESTRATOR_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "dobby_begin_project_initialization_normalization",
+        "operation": "begin_project_initialization_normalization",
+        "description": (
+            "在读取本轮原始附件前建立标准化批次。只有初始化主智能体可以"
+            "调用。复杂附件必须先完成本批次的读取、拆分、标准资料写入和"
+            "校验，之后才能创建计划、团队或邀请专项智能体。"
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "source_file_ids": {
+                    "type": "array",
+                    "items": {"type": "integer", "minimum": 1},
+                    "maxItems": 100,
+                    "uniqueItems": True,
+                    "description": "本轮需要读取和标准化的原始附件 ID。",
+                },
+            },
+            "required": ["source_file_ids"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "dobby_write_project_initialization_artifact",
+        "operation": "write_project_initialization_artifact",
+        "description": (
+            "把主智能体从任意原始附件中整理出的单个业务分区写成标准 JSON "
+            "或 Markdown。结构化入库数据必须写成符合平台字段规范的 JSON；"
+            "Markdown 只用于叙述、证据或补充说明。除工程信息外，每个分区"
+            "第一次必须用 part_index=1 且只提交 1 条记录试写；收到 "
+            "probe_accepted 后，才从 part_index=2 起按每批最多 20 条连续"
+            "写入。单个分片最多 64KB，禁止把不同业务分区混在同一份资料中。"
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "normalization_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                },
+                "section": {
+                    "type": "string",
+                    "enum": [
+                        "project",
+                        "personnel",
+                        "wbs",
+                        "risks",
+                        "quality_requirements",
+                    ],
+                },
+                "artifact_format": {
+                    "type": "string",
+                    "enum": ["json", "markdown"],
+                },
+                "part_index": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1000,
+                    "default": 1,
+                },
+                "file_name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "description": "仅文件名；格式为 json 时使用 .json 后缀。",
+                },
+                "json_data": {
+                    **_INITIALIZATION_ARTIFACT_JSON_SCHEMA,
+                },
+                "markdown_content": {
+                    "type": ["string", "null"],
+                    "maxLength": 65536,
+                    "description": "Markdown 格式时提供。",
+                },
+                "source_file_ids": {
+                    "type": "array",
+                    "items": {"type": "integer", "minimum": 1},
+                    "maxItems": 100,
+                    "uniqueItems": True,
+                },
+                "source_locations": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 1000,
+                    "description": "来源工作表、行号、页码或文档段落。",
+                },
+            },
+            "required": [
+                "normalization_id",
+                "section",
+                "artifact_format",
+                "part_index",
+                "file_name",
+            ],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "dobby_finalize_project_initialization_normalization",
+        "operation": "finalize_project_initialization_normalization",
+        "description": (
+            "校验并封存本轮标准资料。每个待入草稿的业务分区都必须有可直接"
+            "批量导入的规范 JSON；所有分片完整且字段合法后才会返回 ready。"
+            "只有返回 ready 后，才允许创建执行计划、团队和草稿任务。"
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "normalization_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                },
+                "expected_sections": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "project",
+                            "personnel",
+                            "wbs",
+                            "risks",
+                            "quality_requirements",
+                        ],
+                    },
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "uniqueItems": True,
+                },
+            },
+            "required": ["normalization_id", "expected_sections"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "dobby_begin_project_initialization_draft",
+        "operation": "begin_project_initialization_draft",
+        "description": (
+            "使用已经 ready 的标准化批次建立本轮草稿任务。只有初始化主"
+            "智能体可以调用；不得跳过标准化直接建立草稿。工具会返回 "
+            "draft_id 和待完成分区，之后再邀请对应持久化专项智能体。"
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "normalization_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "已经完成并通过校验的标准化批次 ID。",
+                },
+                "expected_sections": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "project",
+                            "personnel",
+                            "wbs",
+                            "risks",
+                            "quality_requirements",
+                        ],
+                    },
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "uniqueItems": True,
+                    "description": "本轮附件或问答实际涉及、必须重新完成的分区。",
+                },
+                "source_files": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 100,
+                    "description": "本轮使用的附件文件名。",
+                },
+            },
+            "required": ["normalization_id", "expected_sections"],
+            "additionalProperties": False,
+        },
+    },
+)
+
+
+def _initialization_section_writer_definition(
+    section: str,
+) -> dict[str, Any]:
+    labels = {
+        "project": "工程基本信息",
+        "personnel": "人员与岗位",
+        "wbs": "WBS 与进度",
+        "risks": "风险源",
+        "quality_requirements": "质量指标",
+    }
+    return {
+        "name": "dobby_write_project_initialization_draft_section",
+        "operation": "write_project_initialization_draft_section",
+        "description": (
+            f"将完整的{labels[section]}识别结果直接写入自己唯一拥有的草稿"
+            "分区。该工具不会写正式业务表，也不能修改其他专家的分区。"
+            "写入前应读取已有同名草稿分区；补充新附件时合并已有有效记录后"
+            "整体替换本分区。完成写入后只需通过 TeamSay 向负责人报告简短"
+            "状态，不要在团队消息中复制整批结构化数据。"
         ),
         "schema": {
             "type": "object",
@@ -416,30 +829,145 @@ INITIALIZATION_TOOL_DEFINITIONS += (
                 "draft_id": {
                     "type": "integer",
                     "minimum": 1,
-                    "description": "读取草稿工具返回的草稿 ID。",
+                    "description": "初始化主智能体建立任务后返回的草稿 ID。",
                 },
-                "expected_revision": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "读取草稿工具返回的当前修订号。",
-                },
+                "data": _INITIALIZATION_PAYLOAD_SCHEMA["properties"][section],
                 "source_files": {
                     "type": "array",
                     "items": {"type": "string"},
                     "maxItems": 100,
-                    "description": "本次增量识别新增使用的附件文件名。",
+                    "description": "本分区实际读取的附件文件名。",
                 },
-                "patch": {
-                    "type": "object",
-                    "properties": _INITIALIZATION_PAYLOAD_SCHEMA["properties"],
-                    "minProperties": 1,
-                    "additionalProperties": False,
+                "extraction_notes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 200,
                     "description": (
-                        "只填写本次需要替换的草稿分区；未填写的分区保持不变。"
+                        "来源位置、无法确定项和原文冲突等简短证据说明；"
+                        "不得在这里改写结构化数据。"
                     ),
                 },
             },
-            "required": ["draft_id", "expected_revision", "patch"],
+            "required": ["draft_id", "data"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _initialization_artifact_import_definition(
+    section: str,
+) -> dict[str, Any]:
+    labels = {
+        "project": "工程基本信息",
+        "personnel": "人员与岗位",
+        "wbs": "WBS 与进度",
+        "risks": "风险源",
+        "quality_requirements": "质量指标",
+    }
+    return {
+        "name": "dobby_import_project_initialization_artifact",
+        "operation": "import_project_initialization_artifact",
+        "description": (
+            f"把主智能体已标准化并通过校验的{labels[section]} JSON 分片"
+            "一次性批量导入当前专家唯一拥有的草稿分区。后端负责合并分片"
+            "和结构校验，不要在工具参数中重新生成或复制整批 JSON。调用前"
+            "先用标准资料读取工具核对清单和必要内容。"
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                },
+                "normalization_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                },
+                "extraction_notes": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "maxItems": 200,
+                    "description": "专项核对结论或需交给统一核验的简短说明。",
+                },
+            },
+            "required": ["draft_id", "normalization_id"],
+            "additionalProperties": False,
+        },
+    }
+
+
+INITIALIZATION_SPECIALIST_TOOL_DEFINITIONS: dict[
+    str,
+    tuple[dict[str, Any], ...],
+] = {
+    section: (
+        _initialization_artifact_import_definition(section),
+        _initialization_section_writer_definition(section),
+    )
+    for section in (
+        "project",
+        "personnel",
+        "wbs",
+        "risks",
+        "quality_requirements",
+    )
+}
+
+INITIALIZATION_VALIDATOR_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "dobby_finalize_project_initialization_draft",
+        "operation": "finalize_project_initialization_draft",
+        "description": (
+            "在所有本轮专项分区写入完成后，提交独立语义核验结论并完成草稿"
+            "汇总。平台会重新执行确定性结构、关联和时间规则校验，再把语义"
+            "问题合并进核对清单。只有初始化核验智能体可以调用；不得代替"
+            "专项智能体提取附件。"
+        ),
+        "schema": {
+            "type": "object",
+            "properties": {
+                "draft_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "待核验的草稿 ID。",
+                },
+                "semantic_issues": {
+                    "type": "array",
+                    "maxItems": 500,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "level": {
+                                "type": "string",
+                                "enum": ["error", "warning"],
+                            },
+                            "path": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 300,
+                            },
+                            "message": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 2000,
+                            },
+                        },
+                        "required": ["level", "path", "message"],
+                        "additionalProperties": False,
+                    },
+                    "description": (
+                        "只提交规则引擎难以确定的跨专业语义问题；"
+                        "没有额外问题时传空数组。"
+                    ),
+                },
+                "review_summary": {
+                    "type": ["string", "null"],
+                    "maxLength": 10000,
+                    "description": "面向初始化主智能体的简短核验摘要。",
+                },
+            },
+            "required": ["draft_id", "semantic_issues"],
             "additionalProperties": False,
         },
     },
@@ -450,9 +978,10 @@ INITIALIZATION_FILE_TOOL_DEFINITION: dict[str, Any] = {
     "name": "dobby_read_project_initialization_file",
     "description": (
         "读取并解析当前项目初始化会话中已上传的原始附件。平台只负责授权"
-        "和传输原始文件，XLSX、DOCX、PDF、CSV、TXT/Markdown 的解析在"
-        "AgentScope 进程内完成。先用初始化状态工具取得 file_id；大文件应"
-        "按 start 和 limit 分段读取，XLSX 可通过 sheet_name 指定工作表。"
+        "和传输原始文件；XLS/XLSX、DOCX、PPTX、PDF、图片、CSV、"
+        "TXT/Markdown 的结构化解析及本地 OCR 在 AgentScope 进程内完成。"
+        "先用初始化状态工具取得 file_id；大文件应按 start 和 limit 分段"
+        "读取，表格文件可通过 sheet_name 指定工作表。"
     ),
     "schema": {
         "type": "object",
@@ -463,7 +992,9 @@ INITIALIZATION_FILE_TOOL_DEFINITION: dict[str, Any] = {
             },
             "sheet_name": {
                 "type": ["string", "null"],
-                "description": "读取 XLSX 时指定工作表；不填则读取第一张表。",
+                "description": (
+                    "读取 XLS/XLSX 时指定工作表；不填则读取第一张表。"
+                ),
             },
             "start": {
                 "type": "integer",
@@ -477,6 +1008,15 @@ INITIALIZATION_FILE_TOOL_DEFINITION: dict[str, Any] = {
                 "maximum": 500,
                 "default": 100,
                 "description": "本次最多返回的行、页或文档块数量。",
+            },
+            "ocr_mode": {
+                "type": "string",
+                "enum": ["auto", "always", "never"],
+                "default": "auto",
+                "description": (
+                    "本地 OCR 策略。auto 仅识别图片或缺少文本层的 PDF；"
+                    "always 强制识别；never 跳过 OCR。"
+                ),
             },
         },
         "required": ["file_id"],
@@ -657,13 +1197,12 @@ ADMIN_WRITE_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "operation": "create_risk",
         "description": (
             "以当前平台管理员身份在当前项目新增真实风险源，并写入审计记录。"
-            "这是管理员级写操作；必须使用风险清单的新字段并先核验关联 WBS。"
+            "这是管理员级写操作；相关工序按风险清单原文填写，并核验风险窗口。"
         ),
         "schema": {
             "type": "object",
             "properties": {
                 "serial_no": {"type": "integer", "minimum": 1},
-                "related_wbs_item_id": {"type": ["integer", "null"]},
                 "related_process_name": {"type": "string", "minLength": 1, "maxLength": 300},
                 "risk_part": {"type": "string", "minLength": 1, "maxLength": 300},
                 "risk_level": {"type": "string", "minLength": 1, "maxLength": 50},
@@ -708,152 +1247,6 @@ ADMIN_WRITE_TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
 )
 
 
-def _json_cell(value: Any) -> Any:
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    return str(value)
-
-
-def _decode_text_file(content: bytes) -> str:
-    for encoding in ("utf-8-sig", "utf-8", "gb18030"):
-        try:
-            return content.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    return content.decode("utf-8", errors="replace")
-
-
-def _parse_initialization_file(
-    content: bytes,
-    suffix: str,
-    sheet_name: str | None,
-    start: int,
-    limit: int,
-) -> dict[str, Any]:
-    """Parse a bounded portion of an initialization file in AgentScope."""
-    if suffix == ".xlsx":
-        from openpyxl import load_workbook
-
-        workbook = load_workbook(
-            io.BytesIO(content),
-            read_only=True,
-            data_only=True,
-        )
-        sheets = list(workbook.sheetnames)
-        selected_sheet = sheet_name or (sheets[0] if sheets else None)
-        if selected_sheet is None or selected_sheet not in sheets:
-            workbook.close()
-            raise ValueError(
-                f"工作表不存在，可选工作表：{json.dumps(sheets, ensure_ascii=False)}",
-            )
-        worksheet = workbook[selected_sheet]
-        end = min(worksheet.max_row, start + limit - 1)
-        rows = [
-            [_json_cell(cell) for cell in row]
-            for row in worksheet.iter_rows(
-                min_row=start,
-                max_row=end,
-                values_only=True,
-            )
-        ]
-        result = {
-            "format": "xlsx",
-            "sheet_names": sheets,
-            "sheet_name": selected_sheet,
-            "start_row": start,
-            "end_row": end,
-            "total_rows": worksheet.max_row,
-            "rows": rows,
-            "next_start": end + 1 if end < worksheet.max_row else None,
-        }
-        workbook.close()
-        return result
-
-    if suffix == ".csv":
-        rows = list(csv.reader(io.StringIO(_decode_text_file(content))))
-        selected = rows[start - 1:start - 1 + limit]
-        end = start + len(selected) - 1
-        return {
-            "format": "csv",
-            "start_row": start,
-            "end_row": end,
-            "total_rows": len(rows),
-            "rows": selected,
-            "next_start": end + 1 if end < len(rows) else None,
-        }
-
-    if suffix in {".txt", ".md"}:
-        lines = _decode_text_file(content).splitlines()
-        selected = lines[start - 1:start - 1 + limit]
-        end = start + len(selected) - 1
-        return {
-            "format": suffix.removeprefix("."),
-            "start_line": start,
-            "end_line": end,
-            "total_lines": len(lines),
-            "lines": selected,
-            "next_start": end + 1 if end < len(lines) else None,
-        }
-
-    if suffix == ".docx":
-        from docx import Document
-
-        document = Document(io.BytesIO(content))
-        blocks: list[dict[str, Any]] = [
-            {"type": "paragraph", "text": paragraph.text}
-            for paragraph in document.paragraphs
-            if paragraph.text.strip()
-        ]
-        for table_index, table in enumerate(document.tables, start=1):
-            for row_index, row in enumerate(table.rows, start=1):
-                blocks.append(
-                    {
-                        "type": "table_row",
-                        "table": table_index,
-                        "row": row_index,
-                        "cells": [cell.text for cell in row.cells],
-                    },
-                )
-        selected = blocks[start - 1:start - 1 + limit]
-        end = start + len(selected) - 1
-        return {
-            "format": "docx",
-            "start_block": start,
-            "end_block": end,
-            "total_blocks": len(blocks),
-            "blocks": selected,
-            "next_start": end + 1 if end < len(blocks) else None,
-        }
-
-    if suffix == ".pdf":
-        import pdfplumber
-
-        with pdfplumber.open(io.BytesIO(content)) as document:
-            total_pages = len(document.pages)
-            page_limit = min(limit, 20)
-            selected_pages = document.pages[start - 1:start - 1 + page_limit]
-            pages = [
-                {
-                    "page": start + index,
-                    "text": (page.extract_text() or "")[:50000],
-                }
-                for index, page in enumerate(selected_pages)
-            ]
-        end = start + len(pages) - 1
-        return {
-            "format": "pdf",
-            "start_page": start,
-            "end_page": end,
-            "total_pages": total_pages,
-            "pages": pages,
-            "next_start": end + 1 if end < total_pages else None,
-        }
-
-    raise ValueError(f"不支持的初始化附件格式：{suffix or '未知'}")
-
-
 class DobbyInitializationFileTool(ToolBase):
     """AgentScope-side parser for raw, session-authorized platform files."""
 
@@ -894,6 +1287,7 @@ class DobbyInitializationFileTool(ToolBase):
         sheet_name: str | None = None,
         start: int = 1,
         limit: int = 100,
+        ocr_mode: str = "auto",
     ) -> ToolChunk:
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
@@ -926,6 +1320,7 @@ class DobbyInitializationFileTool(ToolBase):
                 sheet_name,
                 max(1, start),
                 min(max(1, limit), 500),
+                ocr_mode,
             )
             parsed["file_id"] = file_id
             return ToolChunk(
@@ -975,6 +1370,8 @@ class DobbyGatewayTool(ToolBase):
         self,
         definition: dict[str, Any],
         session_id: str,
+        actor_agent_id: str,
+        initialization_role: str | None,
         base_url: str,
         token: str,
         requires_confirmation: bool,
@@ -987,6 +1384,8 @@ class DobbyGatewayTool(ToolBase):
         self.is_read_only = not changes_business_data
         self._operation = str(definition["operation"])
         self._session_id = session_id
+        self._actor_agent_id = actor_agent_id
+        self._initialization_role = initialization_role
         self._base_url = base_url.rstrip("/")
         self._token = token
         self._requires_confirmation = requires_confirmation
@@ -1013,12 +1412,14 @@ class DobbyGatewayTool(ToolBase):
 
     async def call(self, **kwargs: Any) -> ToolChunk:
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(
                     f"{self._base_url}/execute",
                     headers={"Authorization": f"Bearer {self._token}"},
                     json={
                         "agentscope_session_id": self._session_id,
+                        "actor_agent_id": self._actor_agent_id,
+                        "initialization_role": self._initialization_role,
                         "operation": self._operation,
                         "arguments": kwargs,
                     },
@@ -1083,9 +1484,23 @@ async def create_dobby_agent_tools(
     user_id: str,
     agent_id: str,
     session_id: str,
+    *,
+    platform_session_id: str | None = None,
+    platform_agent_id: str | None = None,
+    read_only: bool = False,
+    initialization_role: str | None = None,
 ) -> list[ToolBase]:
-    """Build tools only for sessions created through the Dobby platform."""
+    """Build tools for a Dobby platform session or its internal worker.
+
+    ``platform_session_id`` lets a temporary team worker inherit the
+    authoritative project/user boundary of its leader's platform conversation.
+    Team workers remain read-only for ordinary business operations. Their
+    persisted ``initialization_role`` may additionally grant exactly one
+    bounded draft operation: write one owned section or finalize review.
+    """
     del user_id
+    context_session_id = platform_session_id or session_id
+    context_agent_id = platform_agent_id or agent_id
     base_url, token = _gateway_settings()
     if not token:
         logger.warning(
@@ -1098,7 +1513,7 @@ async def create_dobby_agent_tools(
             response = await client.get(
                 f"{base_url}/context",
                 headers={"Authorization": f"Bearer {token}"},
-                params={"agentscope_session_id": session_id},
+                params={"agentscope_session_id": context_session_id},
             )
         if response.status_code in {403, 404}:
             return []
@@ -1110,23 +1525,69 @@ async def create_dobby_agent_tools(
 
     # Prevent a mapped session from being used to assemble tools for a
     # different AgentScope agent.
-    if str(context.get("agent_id") or "") != agent_id:
+    if str(context.get("agent_id") or "") != context_agent_id:
         return []
 
     capabilities = context.get("capabilities") or {}
+    effective_initialization_role = initialization_role
+    if (
+        capabilities.get("initialization_draft")
+        and effective_initialization_role is None
+        and not read_only
+    ):
+        # The leader of a platform initialization conversation is the
+        # orchestrator even before its persisted record is re-provisioned.
+        effective_initialization_role = "orchestrator"
     definitions: list[tuple[dict[str, Any], bool, bool]] = [
         *((definition, False, False) for definition in READ_TOOL_DEFINITIONS),
     ]
     if capabilities.get("initialization_draft"):
         definitions.extend(
             (definition, False, False)
-            for definition in INITIALIZATION_TOOL_DEFINITIONS
+            for definition in _INITIALIZATION_READ_TOOL_DEFINITIONS
         )
-    if capabilities.get("write"):
+        if effective_initialization_role == "orchestrator":
+            definitions.extend(
+                (definition, False, False)
+                for definition in INITIALIZATION_ORCHESTRATOR_TOOL_DEFINITIONS
+            )
+        elif (
+            effective_initialization_role
+            in INITIALIZATION_SPECIALIST_TOOL_DEFINITIONS
+        ):
+            definitions.extend(
+                (definition, False, False)
+                for definition in INITIALIZATION_SPECIALIST_TOOL_DEFINITIONS[
+                    effective_initialization_role
+                ]
+            )
+        elif effective_initialization_role == "validator":
+            definitions.extend(
+                (definition, False, False)
+                for definition in INITIALIZATION_VALIDATOR_TOOL_DEFINITIONS
+            )
+    is_initialization_agent = effective_initialization_role in {
+        "orchestrator",
+        "project",
+        "personnel",
+        "wbs",
+        "risks",
+        "quality_requirements",
+        "validator",
+    }
+    if (
+        capabilities.get("write")
+        and not read_only
+        and not is_initialization_agent
+    ):
         definitions.extend(
             (definition, True, True) for definition in WRITE_TOOL_DEFINITIONS
         )
-    if capabilities.get("admin_write"):
+    if (
+        capabilities.get("admin_write")
+        and not read_only
+        and not is_initialization_agent
+    ):
         definitions.extend(
             (definition, True, True)
             for definition in ADMIN_WRITE_TOOL_DEFINITIONS
@@ -1135,7 +1596,9 @@ async def create_dobby_agent_tools(
     tools: list[ToolBase] = [
         DobbyGatewayTool(
             definition=definition,
-            session_id=session_id,
+            session_id=context_session_id,
+            actor_agent_id=agent_id,
+            initialization_role=effective_initialization_role,
             base_url=base_url,
             token=token,
             requires_confirmation=requires_confirmation,
@@ -1147,10 +1610,13 @@ async def create_dobby_agent_tools(
             changes_business_data,
         ) in definitions
     ]
-    if capabilities.get("initialization_draft"):
+    if (
+        capabilities.get("initialization_draft")
+        and effective_initialization_role == "orchestrator"
+    ):
         tools.append(
             DobbyInitializationFileTool(
-                session_id=session_id,
+                session_id=context_session_id,
                 base_url=base_url,
                 token=token,
             ),

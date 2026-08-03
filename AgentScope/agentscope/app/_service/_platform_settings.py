@@ -30,3 +30,20 @@ async def get_global_main_agent_id(
     ):
         return legacy_record.id
     return None
+
+
+async def get_project_initializer_agent_id(
+    storage: StorageBase,
+    user_id: str,
+) -> str | None:
+    """Return the platform-wide project-initializer agent id."""
+    getter = getattr(storage, "get_platform_settings", None)
+    if getter is None:
+        return None
+    try:
+        settings = await getter(user_id)
+    except NotImplementedError:
+        settings = None
+    if settings is None:
+        return None
+    return settings.data.project_initializer_agent_id

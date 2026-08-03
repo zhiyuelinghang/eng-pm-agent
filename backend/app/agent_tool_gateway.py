@@ -8,7 +8,9 @@ session; callers cannot provide or override those identifiers.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -35,7 +37,11 @@ from .models import (
     ProjectChange,
     ProjectInformationRecord,
     ProjectInitializationDraft,
+    ProjectInitializationDraftSection,
+    ProjectInitializationDraftWorkflow,
     ProjectInitializationFile,
+    ProjectInitializationArtifact,
+    ProjectInitializationNormalization,
     ProjectMember,
     ProjectMemberPosition,
     ProjectPosition,
@@ -48,10 +54,26 @@ from .models import (
     WbsItem,
 )
 from .project_initialization import (
+    BeginInitializationDraftArgs,
+    BeginInitializationNormalizationArgs,
+    FinalizeInitializationDraftArgs,
+    FinalizeInitializationNormalizationArgs,
+    ImportInitializationArtifactArgs,
+    INITIALIZATION_ARTIFACT_BATCH_LIMIT,
+    INITIALIZATION_ARTIFACT_ERROR_LIMIT,
+    INITIALIZATION_ARTIFACT_MAX_BYTES,
+    InitializationAgentRole,
+    PersonnelDraft,
+    ProjectDetailsDraft,
     ProjectInitializationPayload,
+    QualityRequirementDraft,
+    ReadInitializationArtifactArgs,
     ReadInitializationDraftArgs,
-    SubmitInitializationDraftArgs,
-    UpdateInitializationDraftArgs,
+    RiskDraftItem,
+    WbsDraft,
+    WritableInitializationDraftSection,
+    WriteInitializationArtifactArgs,
+    WriteInitializationDraftSectionArgs,
     build_initialization_state,
     draft_status,
     validate_initialization_payload,
@@ -76,10 +98,16 @@ OperationName = Literal[
     "get_project_overview",
     "get_project_initialization_state",
     "get_project_initialization_draft",
+    "read_project_initialization_artifact",
+    "begin_project_initialization_normalization",
+    "write_project_initialization_artifact",
+    "finalize_project_initialization_normalization",
+    "begin_project_initialization_draft",
+    "import_project_initialization_artifact",
+    "write_project_initialization_draft_section",
+    "finalize_project_initialization_draft",
     "list_project_items",
     "search_documents",
-    "submit_project_initialization_draft",
-    "update_project_initialization_draft",
     "create_task",
     "update_task",
     "create_risk",
@@ -92,6 +120,8 @@ OperationName = Literal[
 
 class ToolExecuteRequest(BaseModel):
     agentscope_session_id: str = Field(min_length=1, max_length=128)
+    actor_agent_id: str | None = Field(default=None, max_length=128)
+    initialization_role: InitializationAgentRole | None = None
     operation: OperationName
     arguments: dict[str, Any] = Field(default_factory=dict)
 
@@ -138,7 +168,6 @@ class UpdateTaskArgs(BaseModel):
 
 class CreateRiskArgs(BaseModel):
     serial_no: int = Field(gt=0)
-    related_wbs_item_id: int | None = None
     related_process_name: str = Field(min_length=1, max_length=300)
     risk_part: str = Field(min_length=1, max_length=300)
     risk_level: str = Field(min_length=1, max_length=50)
@@ -275,8 +304,41 @@ def _parse_args(model: type[BaseModel], raw: dict[str, Any]) -> BaseModel:
     except ValidationError as exc:
         raise HTTPException(
             status_code=422,
-            detail=exc.errors(include_url=False),
+            detail=_compact_validation_error_detail(
+                exc,
+                message="工具参数校验失败",
+            ),
         ) from exc
+
+
+def _compact_validation_error_detail(
+    exc: ValidationError,
+    *,
+    message: str,
+    expected_fields: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return bounded validation feedback without echoing large raw inputs."""
+
+    errors = exc.errors(include_url=False, include_input=False)
+    visible = []
+    for error in errors[:INITIALIZATION_ARTIFACT_ERROR_LIMIT]:
+        location = ".".join(str(item) for item in error.get("loc", ())) or "$"
+        visible.append(
+            {
+                "path": location,
+                "message": str(error.get("msg") or "字段不合法"),
+                "type": str(error.get("type") or "validation_error"),
+            },
+        )
+    detail: dict[str, Any] = {
+        "message": message,
+        "error_count": len(errors),
+        "errors": visible,
+        "truncated": len(errors) > len(visible),
+    }
+    if expected_fields is not None:
+        detail["expected_fields"] = expected_fields
+    return detail
 
 
 def _require_write(context: ToolContext) -> None:
@@ -537,8 +599,7 @@ def _list_items(
             stmt.order_by(RiskSource.serial_no).limit(args.limit),
         ).all()
         fields = (
-            "id", "serial_no", "related_wbs_item_id",
-            "related_process_name", "risk_part", "risk_level",
+            "id", "serial_no", "related_process_name", "risk_part", "risk_level",
             "evaluation_condition", "risk_window_start_date",
             "risk_window_end_date", "summary", "updated_at",
         )
@@ -778,6 +839,17 @@ def _get_initialization_state(
             )
             for item in files
         ]
+        draft = _initialization_draft_for_context(db, context)
+        if draft is not None and state.get("latest_draft"):
+            state["latest_draft"]["workflow"] = (
+                initialization_draft_workflow_summary(db, draft)
+            )
+        normalization = _latest_normalization_for_context(db, context)
+        state["latest_normalization"] = (
+            _normalization_summary(db, normalization)
+            if normalization is not None
+            else None
+        )
     return state
 
 
@@ -799,6 +871,1078 @@ def _initialization_draft_for_context(
     )
 
 
+_INITIALIZATION_SECTION_BY_ROLE: dict[
+    InitializationAgentRole,
+    WritableInitializationDraftSection,
+] = {
+    "project": "project",
+    "personnel": "personnel",
+    "wbs": "wbs",
+    "risks": "risks",
+    "quality_requirements": "quality_requirements",
+}
+
+
+def _require_initialization_actor(
+    context: ToolContext,
+    role: InitializationAgentRole | None,
+    allowed_roles: set[InitializationAgentRole],
+) -> InitializationAgentRole:
+    if not context.can_submit_initialization_draft:
+        raise HTTPException(
+            status_code=403,
+            detail="只有项目初始化智能体会话可以执行该操作",
+        )
+    if role not in allowed_roles:
+        raise HTTPException(
+            status_code=403,
+            detail="当前初始化智能体职责不允许执行该操作",
+        )
+    return role
+
+
+def _initialization_files_by_ids(
+    db: Session,
+    context: ToolContext,
+    file_ids: list[int],
+) -> list[ProjectInitializationFile]:
+    unique_ids = list(dict.fromkeys(file_ids))
+    if not unique_ids:
+        return []
+    rows = db.scalars(
+        select(ProjectInitializationFile).where(
+            ProjectInitializationFile.id.in_(unique_ids),
+            ProjectInitializationFile.project_id == context.project.id,
+            ProjectInitializationFile.conversation_id == context.conversation.id,
+        ),
+    ).all()
+    by_id = {row.id: row for row in rows}
+    if any(file_id not in by_id for file_id in unique_ids):
+        raise HTTPException(
+            status_code=422,
+            detail="标准化资料引用了不存在或不属于当前会话的附件",
+        )
+    return [by_id[file_id] for file_id in unique_ids]
+
+
+def _normalization_for_context_by_id(
+    db: Session,
+    context: ToolContext,
+    normalization_id: int,
+) -> ProjectInitializationNormalization:
+    normalization = db.get(ProjectInitializationNormalization, normalization_id)
+    if (
+        normalization is None
+        or normalization.project_id != context.project.id
+        or normalization.conversation_id != context.conversation.id
+    ):
+        raise HTTPException(status_code=404, detail="初始化标准化批次不存在")
+    return normalization
+
+
+def _latest_normalization_for_context(
+    db: Session,
+    context: ToolContext,
+) -> ProjectInitializationNormalization | None:
+    return db.scalar(
+        select(ProjectInitializationNormalization)
+        .where(
+            ProjectInitializationNormalization.project_id == context.project.id,
+            ProjectInitializationNormalization.conversation_id
+            == context.conversation.id,
+        )
+        .order_by(
+            ProjectInitializationNormalization.updated_at.desc(),
+            ProjectInitializationNormalization.id.desc(),
+        ),
+    )
+
+
+def _normalization_artifact_rows(
+    db: Session,
+    normalization_id: int,
+    section: WritableInitializationDraftSection | None = None,
+) -> list[ProjectInitializationArtifact]:
+    stmt = select(ProjectInitializationArtifact).where(
+        ProjectInitializationArtifact.normalization_id == normalization_id,
+    )
+    if section is not None:
+        stmt = stmt.where(ProjectInitializationArtifact.section == section)
+    return list(
+        db.scalars(
+            stmt.order_by(
+                ProjectInitializationArtifact.section,
+                ProjectInitializationArtifact.artifact_format,
+                ProjectInitializationArtifact.part_index,
+            ),
+        ).all(),
+    )
+
+
+def _normalization_summary(
+    db: Session,
+    normalization: ProjectInitializationNormalization,
+) -> dict[str, Any]:
+    artifacts = _normalization_artifact_rows(db, normalization.id)
+    sections: dict[str, dict[str, Any]] = {}
+    for row in artifacts:
+        item = sections.setdefault(
+            row.section,
+            {
+                "parts": 0,
+                "json_parts": 0,
+                "markdown_parts": 0,
+                "formats": [],
+                "json_import_ready": False,
+            },
+        )
+        item["parts"] += 1
+        if row.artifact_format not in item["formats"]:
+            item["formats"].append(row.artifact_format)
+        if row.artifact_format == "json":
+            item["json_import_ready"] = True
+            item["json_parts"] += 1
+        else:
+            item["markdown_parts"] += 1
+    return {
+        "id": normalization.id,
+        "status": normalization.status,
+        "draft_id": normalization.draft_id,
+        "source_file_ids": list(normalization.source_file_ids or []),
+        "source_files": list(normalization.source_files or []),
+        "expected_sections": list(normalization.expected_sections or []),
+        "validation_issues": list(normalization.validation_issues or []),
+        "sections": sections,
+        "created_at": (
+            normalization.created_at.isoformat()
+            if normalization.created_at is not None
+            else None
+        ),
+        "updated_at": (
+            normalization.updated_at.isoformat()
+            if normalization.updated_at is not None
+            else None
+        ),
+    }
+
+
+def _begin_initialization_normalization(
+    db: Session,
+    context: ToolContext,
+    args: BeginInitializationNormalizationArgs,
+    actor_agent_id: str | None,
+) -> dict[str, Any]:
+    if not actor_agent_id:
+        raise HTTPException(status_code=403, detail="无法确认初始化主智能体")
+    files = _initialization_files_by_ids(db, context, args.source_file_ids)
+    normalization = ProjectInitializationNormalization(
+        project_id=context.project.id,
+        conversation_id=context.conversation.id,
+        created_by_agent_id=actor_agent_id,
+        status="collecting",
+        source_file_ids=[row.id for row in files],
+        source_files=[row.file_name for row in files],
+        expected_sections=[],
+        validation_issues=[],
+    )
+    db.add(normalization)
+    db.flush()
+    _audit(
+        db,
+        context,
+        "Dobby 开始标准化项目初始化资料",
+        (
+            f"标准化批次 {normalization.id}；"
+            f"{len(files)} 个原始附件；编排智能体 {actor_agent_id}"
+        ),
+        "project_initialization_normalization",
+        normalization.id,
+    )
+    db.commit()
+    db.refresh(normalization)
+    return _normalization_summary(db, normalization)
+
+
+def _canonical_artifact_payload(
+    section: WritableInitializationDraftSection,
+    rows: list[ProjectInitializationArtifact],
+) -> dict[str, Any] | list[dict[str, Any]]:
+    json_rows = [row for row in rows if row.artifact_format == "json"]
+    if not json_rows:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{section} 标准资料只有 Markdown，尚不能直接批量写入草稿",
+        )
+    if section == "project":
+        if len(json_rows) != 1 or not isinstance(json_rows[0].json_payload, dict):
+            raise HTTPException(
+                status_code=422,
+                detail="工程基本信息必须使用一个 JSON 对象标准化",
+            )
+        return _normalize_initialization_section(
+            section,
+            json_rows[0].json_payload,
+        )
+
+    combined: list[dict[str, Any]] = []
+    for row in json_rows:
+        if not isinstance(row.json_payload, list):
+            raise HTTPException(
+                status_code=422,
+                detail=f"{section} 的每个 JSON 分片都必须是数组",
+            )
+        combined.extend(row.json_payload)
+    return _normalize_initialization_section(section, combined)
+
+
+def _write_initialization_artifact(
+    db: Session,
+    context: ToolContext,
+    args: WriteInitializationArtifactArgs,
+    actor_agent_id: str | None,
+) -> dict[str, Any]:
+    if not actor_agent_id:
+        raise HTTPException(status_code=403, detail="无法确认标准资料写入智能体")
+    normalization = _normalization_for_context_by_id(
+        db,
+        context,
+        args.normalization_id,
+    )
+    if normalization.status != "collecting":
+        raise HTTPException(
+            status_code=409,
+            detail="标准化批次已经完成，不能继续修改",
+        )
+    batch_file_ids = set(normalization.source_file_ids or [])
+    if any(file_id not in batch_file_ids for file_id in args.source_file_ids):
+        raise HTTPException(
+            status_code=422,
+            detail="标准资料只能引用本标准化批次中的原始附件",
+        )
+    _initialization_files_by_ids(db, context, args.source_file_ids)
+
+    safe_name = Path(args.file_name).name
+    if safe_name != args.file_name:
+        raise HTTPException(status_code=422, detail="标准资料名称不能包含路径")
+    suffix = Path(safe_name).suffix.lower()
+    expected_suffixes = (
+        {".json"}
+        if args.artifact_format == "json"
+        else {".md", ".markdown"}
+    )
+    if suffix not in expected_suffixes:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "标准资料名称后缀必须与格式一致："
+                + (".json" if args.artifact_format == "json" else ".md")
+            ),
+        )
+
+    existing_rows = _normalization_artifact_rows(
+        db,
+        normalization.id,
+        args.section,
+    )
+    format_rows = [
+        row
+        for row in existing_rows
+        if row.artifact_format == args.artifact_format
+    ]
+    row = next(
+        (item for item in format_rows if item.part_index == args.part_index),
+        None,
+    )
+    if row is None:
+        expected_part_index = (
+            max(item.part_index for item in format_rows) + 1
+            if format_rows
+            else 1
+        )
+        if args.part_index != expected_part_index:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{args.artifact_format} 分片必须连续写入；"
+                    f"当前应写第 {expected_part_index} 部分"
+                ),
+            )
+
+    json_payload: Any | None = None
+    markdown_content: str | None = None
+    record_count: int | None = None
+    write_stage = "markdown"
+    if args.artifact_format == "json":
+        if args.section == "project" and args.part_index != 1:
+            raise HTTPException(
+                status_code=422,
+                detail="工程基本信息 JSON 不允许拆成多个分片",
+            )
+        if args.section != "project":
+            if not isinstance(args.json_data, list):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"{args.section} 标准 JSON 必须使用记录数组；"
+                        "第一部分只放 1 条，后续每部分最多 "
+                        f"{INITIALIZATION_ARTIFACT_BATCH_LIMIT} 条"
+                    ),
+                )
+            record_count = len(args.json_data)
+            if args.part_index == 1 and record_count != 1:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "首个 JSON 分片必须只提交 1 条记录进行字段试写；"
+                        "试写成功后再从第 2 部分开始批量提交"
+                    ),
+                )
+            if args.part_index > 1 and not (
+                1 <= record_count <= INITIALIZATION_ARTIFACT_BATCH_LIMIT
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "批量 JSON 分片每次最多 "
+                        f"{INITIALIZATION_ARTIFACT_BATCH_LIMIT} 条记录，"
+                        "且至少提交 1 条"
+                    ),
+                )
+            write_stage = (
+                "probe_accepted"
+                if args.part_index == 1
+                else "batch_accepted"
+            )
+        else:
+            record_count = 1
+            write_stage = "single_object_accepted"
+        json_payload = _normalize_initialization_section(
+            args.section,
+            args.json_data,
+        )
+        encoded = json.dumps(
+            json_payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    else:
+        markdown_content = (args.markdown_content or "").strip()
+        encoded = markdown_content.encode("utf-8")
+
+    if len(encoded) > INITIALIZATION_ARTIFACT_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                "单个标准资料分片不能超过 "
+                f"{INITIALIZATION_ARTIFACT_MAX_BYTES // 1024}KB；"
+                "请继续拆分后写入"
+            ),
+        )
+
+    values = {
+        "artifact_format": args.artifact_format,
+        "file_name": safe_name,
+        "json_payload": json_payload,
+        "markdown_content": markdown_content,
+        "source_file_ids": list(args.source_file_ids),
+        "source_locations": list(args.source_locations),
+        "writer_agent_id": actor_agent_id,
+        "schema_version": 1,
+        "content_size": len(encoded),
+        "content_hash": hashlib.sha256(encoded).hexdigest(),
+    }
+    if row is None:
+        row = ProjectInitializationArtifact(
+            normalization_id=normalization.id,
+            project_id=context.project.id,
+            conversation_id=context.conversation.id,
+            section=args.section,
+            part_index=args.part_index,
+            revision=1,
+            **values,
+        )
+        db.add(row)
+    else:
+        for key, value in values.items():
+            setattr(row, key, value)
+        row.revision += 1
+    normalization.validation_issues = []
+    db.flush()
+    _audit(
+        db,
+        context,
+        "Dobby 写入项目初始化标准资料",
+        (
+            f"标准化批次 {normalization.id}；{args.section}；"
+            f"第 {args.part_index} 部分；{args.artifact_format}"
+        ),
+        "project_initialization_artifact",
+        row.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return {
+        "artifact_id": row.id,
+        "normalization_id": normalization.id,
+        "section": row.section,
+        "format": row.artifact_format,
+        "part_index": row.part_index,
+        "file_name": row.file_name,
+        "revision": row.revision,
+        "content_size": row.content_size,
+        "content_hash": row.content_hash,
+        "record_count": record_count,
+        "write_stage": write_stage,
+        "schema_validated": args.artifact_format == "json",
+        "batch_limit": INITIALIZATION_ARTIFACT_BATCH_LIMIT,
+        "max_bytes": INITIALIZATION_ARTIFACT_MAX_BYTES,
+        "next_part_index": max(
+            (
+                item.part_index
+                for item in _normalization_artifact_rows(
+                    db,
+                    normalization.id,
+                    args.section,
+                )
+                if item.artifact_format == args.artifact_format
+            ),
+            default=0,
+        )
+        + 1,
+    }
+
+
+def _finalize_initialization_normalization(
+    db: Session,
+    context: ToolContext,
+    args: FinalizeInitializationNormalizationArgs,
+) -> dict[str, Any]:
+    normalization = _normalization_for_context_by_id(
+        db,
+        context,
+        args.normalization_id,
+    )
+    if normalization.status != "collecting":
+        raise HTTPException(
+            status_code=409,
+            detail="标准化批次已经完成",
+        )
+    rows = _normalization_artifact_rows(db, normalization.id)
+    by_section: dict[str, list[ProjectInitializationArtifact]] = {}
+    for row in rows:
+        by_section.setdefault(row.section, []).append(row)
+
+    issues: list[dict[str, Any]] = []
+    for section in args.expected_sections:
+        section_rows = by_section.get(section, [])
+        if not section_rows:
+            issues.append(
+                {
+                    "section": section,
+                    "message": "缺少该业务分区的标准资料",
+                },
+            )
+            continue
+        json_rows = [
+            row
+            for row in section_rows
+            if row.artifact_format == "json"
+        ]
+        if not json_rows:
+            issues.append(
+                {
+                    "section": section,
+                    "message": (
+                        "该业务分区只有 Markdown，"
+                        "或尚未写入可入草稿的标准 JSON"
+                    ),
+                },
+            )
+            continue
+        indices = sorted(row.part_index for row in json_rows)
+        expected_indices = list(range(1, max(indices) + 1))
+        if indices != expected_indices:
+            issues.append(
+                {
+                    "section": section,
+                    "message": "标准资料分片编号必须从 1 连续排列",
+                },
+            )
+        try:
+            _canonical_artifact_payload(section, section_rows)
+        except HTTPException as exc:
+            issues.append(
+                {
+                    "section": section,
+                    "message": exc.detail,
+                },
+            )
+
+    normalization.expected_sections = list(args.expected_sections)
+    normalization.validation_issues = issues
+    if issues:
+        db.commit()
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "标准资料尚未通过校验",
+                "issues": issues,
+            },
+        )
+    normalization.status = "ready"
+    _audit(
+        db,
+        context,
+        "Dobby 完成项目初始化资料标准化",
+        (
+            f"标准化批次 {normalization.id}；"
+            f"分区：{'、'.join(args.expected_sections)}"
+        ),
+        "project_initialization_normalization",
+        normalization.id,
+    )
+    db.commit()
+    db.refresh(normalization)
+    return _normalization_summary(db, normalization)
+
+
+def _read_initialization_artifact(
+    db: Session,
+    context: ToolContext,
+    args: ReadInitializationArtifactArgs,
+) -> dict[str, Any]:
+    normalization = _normalization_for_context_by_id(
+        db,
+        context,
+        args.normalization_id,
+    )
+    rows = _normalization_artifact_rows(
+        db,
+        normalization.id,
+        args.section,
+    )
+    manifest = [
+        {
+            "artifact_id": row.id,
+            "part_index": row.part_index,
+            "file_name": row.file_name,
+            "format": row.artifact_format,
+            "revision": row.revision,
+            "content_size": row.content_size,
+            "source_file_ids": list(row.source_file_ids or []),
+            "source_locations": list(row.source_locations or []),
+        }
+        for row in rows
+    ]
+    if args.part_index is None:
+        return {
+            "normalization": _normalization_summary(db, normalization),
+            "section": args.section,
+            "parts": manifest,
+            "data": None,
+        }
+    row = next(
+        (
+            item
+            for item in rows
+            if item.part_index == args.part_index
+            and item.artifact_format == args.artifact_format
+        ),
+        None,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="标准资料分片不存在")
+
+    if row.artifact_format == "json":
+        content = row.json_payload
+        if isinstance(content, list):
+            selected = content[
+                args.start - 1:args.start - 1 + args.limit
+            ]
+            total = len(content)
+            end = args.start + len(selected) - 1 if selected else None
+            next_start = end + 1 if end is not None and end < total else None
+            data: Any = selected
+        else:
+            total = 1
+            end = 1
+            next_start = None
+            data = content
+    else:
+        lines = (row.markdown_content or "").splitlines()
+        selected_lines = lines[
+            args.start - 1:args.start - 1 + args.limit
+        ]
+        total = len(lines)
+        end = args.start + len(selected_lines) - 1 if selected_lines else None
+        next_start = end + 1 if end is not None and end < total else None
+        data = "\n".join(selected_lines)
+
+    return {
+        "normalization_id": normalization.id,
+        "section": args.section,
+        "artifact": next(
+            item
+            for item in manifest
+            if item["part_index"] == args.part_index
+            and item["format"] == args.artifact_format
+        ),
+        "start": args.start,
+        "end": end,
+        "total": total,
+        "next_start": next_start,
+        "data": data,
+    }
+
+
+def _draft_for_context_by_id(
+    db: Session,
+    context: ToolContext,
+    draft_id: int,
+) -> ProjectInitializationDraft:
+    draft = db.get(ProjectInitializationDraft, draft_id)
+    if (
+        draft is None
+        or draft.project_id != context.project.id
+        or draft.conversation_id != context.conversation.id
+    ):
+        raise HTTPException(status_code=404, detail="初始化草稿不存在")
+    if draft.status in {"applied", "rejected"}:
+        raise HTTPException(status_code=409, detail="该初始化草稿已结束，不能继续修改")
+    return draft
+
+
+def _workflow_for_draft(
+    db: Session,
+    draft_id: int,
+) -> ProjectInitializationDraftWorkflow | None:
+    return db.get(ProjectInitializationDraftWorkflow, draft_id)
+
+
+def _section_rows(
+    db: Session,
+    draft_id: int,
+) -> list[ProjectInitializationDraftSection]:
+    return list(
+        db.scalars(
+            select(ProjectInitializationDraftSection)
+            .where(ProjectInitializationDraftSection.draft_id == draft_id)
+            .order_by(ProjectInitializationDraftSection.id),
+        ).all(),
+    )
+
+
+_INITIALIZATION_SECTION_MODELS: dict[
+    WritableInitializationDraftSection,
+    type[BaseModel],
+] = {
+    "project": ProjectDetailsDraft,
+    "personnel": PersonnelDraft,
+    "wbs": WbsDraft,
+    "risks": RiskDraftItem,
+    "quality_requirements": QualityRequirementDraft,
+}
+
+
+def _normalize_initialization_section(
+    section: WritableInitializationDraftSection,
+    data: Any,
+) -> dict[str, Any] | list[dict[str, Any]]:
+    try:
+        normalized = ProjectInitializationPayload.model_validate(
+            {section: data},
+        )
+    except ValidationError as exc:
+        expected_fields = list(
+            _INITIALIZATION_SECTION_MODELS[section].model_fields,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=_compact_validation_error_detail(
+                exc,
+                message=f"{section} 标准资料字段校验失败",
+                expected_fields=expected_fields,
+            ),
+        ) from exc
+    value = normalized.model_dump(mode="json")[section]
+    assert isinstance(value, (dict, list))
+    return value
+
+
+def compose_initialization_draft_payload(
+    db: Session,
+    draft: ProjectInitializationDraft,
+) -> ProjectInitializationPayload:
+    """Compose the current draft from independent specialist-owned sections."""
+    base = ProjectInitializationPayload.model_validate(draft.payload or {})
+    data = base.model_dump(mode="python")
+    for row in _section_rows(db, draft.id):
+        section = row.section
+        if section in _INITIALIZATION_SECTION_BY_ROLE.values():
+            data[section] = row.payload
+    return ProjectInitializationPayload.model_validate(data)
+
+
+def initialization_draft_workflow_summary(
+    db: Session,
+    draft: ProjectInitializationDraft,
+) -> dict[str, Any] | None:
+    workflow = _workflow_for_draft(db, draft.id)
+    if workflow is None:
+        return None
+    current_sections = {
+        row.section
+        for row in _section_rows(db, draft.id)
+        if row.workflow_revision == workflow.run_revision
+    }
+    expected = list(workflow.expected_sections or [])
+    completed = [section for section in expected if section in current_sections]
+    pending = [section for section in expected if section not in current_sections]
+    return {
+        "stage": workflow.stage,
+        "run_revision": workflow.run_revision,
+        "expected_sections": expected,
+        "completed_sections": completed,
+        "pending_sections": pending,
+        "reviewer_agent_id": workflow.reviewer_agent_id,
+        "semantic_issues": list(workflow.semantic_issues or []),
+        "review_summary": workflow.review_summary,
+        "updated_at": (
+            workflow.updated_at.isoformat()
+            if workflow.updated_at is not None
+            else None
+        ),
+    }
+
+
+def _begin_initialization_draft(
+    db: Session,
+    context: ToolContext,
+    args: BeginInitializationDraftArgs,
+    actor_agent_id: str | None,
+) -> dict[str, Any]:
+    normalization = _normalization_for_context_by_id(
+        db,
+        context,
+        args.normalization_id,
+    )
+    if normalization.status != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail="必须先完成原始附件标准化，才能建立草稿任务",
+        )
+    if set(normalization.expected_sections or []) != set(
+        args.expected_sections,
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="草稿任务分区必须与已完成的标准化分区一致",
+        )
+    draft = _initialization_draft_for_context(db, context)
+    if draft is None or draft.status in {"applied", "rejected"}:
+        draft = ProjectInitializationDraft(
+            project_id=context.project.id,
+            conversation_id=context.conversation.id,
+            created_by_user_id=context.user.id,
+            status="invalid",
+            revision=1,
+            payload=ProjectInitializationPayload().model_dump(mode="json"),
+            validation_issues=[],
+            source_files=[],
+        )
+        db.add(draft)
+        db.flush()
+        workflow = ProjectInitializationDraftWorkflow(
+            draft_id=draft.id,
+            expected_sections=list(args.expected_sections),
+            stage="collecting",
+            run_revision=1,
+        )
+        db.add(workflow)
+    else:
+        workflow = _workflow_for_draft(db, draft.id)
+        if workflow is None:
+            workflow = ProjectInitializationDraftWorkflow(
+                draft_id=draft.id,
+                expected_sections=list(args.expected_sections),
+                stage="collecting",
+                run_revision=1,
+            )
+            db.add(workflow)
+        else:
+            workflow.expected_sections = list(args.expected_sections)
+            workflow.stage = "collecting"
+            workflow.run_revision += 1
+            workflow.reviewer_agent_id = None
+            workflow.semantic_issues = []
+            workflow.review_summary = None
+        draft.status = "invalid"
+        draft.validation_issues = []
+
+    source_files = [
+        item.strip()
+        for item in [
+            *(normalization.source_files or []),
+            *args.source_files,
+        ]
+        if item.strip()
+    ]
+    draft.source_files = list(
+        dict.fromkeys([*(draft.source_files or []), *source_files]),
+    )
+    normalization.status = "consumed"
+    normalization.draft_id = draft.id
+    _audit(
+        db,
+        context,
+        "Dobby 开始项目初始化草稿任务",
+        (
+            f"本轮等待分区：{'、'.join(args.expected_sections)}；"
+            f"标准化批次 {normalization.id}；"
+            f"编排智能体 {actor_agent_id or '未知'}"
+        ),
+        "project_initialization_draft",
+        draft.id,
+    )
+    db.commit()
+    db.refresh(draft)
+    return {
+        "draft": _public_row(
+            draft,
+            (
+                "id",
+                "project_id",
+                "conversation_id",
+                "status",
+                "revision",
+                "source_files",
+                "created_at",
+                "updated_at",
+            ),
+        ),
+        "workflow": initialization_draft_workflow_summary(db, draft),
+        "normalization": _normalization_summary(db, normalization),
+    }
+
+
+def _write_initialization_draft_section(
+    db: Session,
+    context: ToolContext,
+    args: WriteInitializationDraftSectionArgs,
+    actor_agent_id: str | None,
+    actor_role: InitializationAgentRole,
+) -> dict[str, Any]:
+    section = _INITIALIZATION_SECTION_BY_ROLE.get(actor_role)
+    if section is None:
+        raise HTTPException(status_code=403, detail="当前智能体没有可写入的草稿分区")
+    if not actor_agent_id:
+        raise HTTPException(status_code=403, detail="无法确认草稿分区写入智能体")
+    draft = _draft_for_context_by_id(db, context, args.draft_id)
+    workflow = _workflow_for_draft(db, draft.id)
+    if workflow is None:
+        raise HTTPException(status_code=409, detail="请先由初始化主智能体建立草稿任务")
+    if section not in (workflow.expected_sections or []):
+        raise HTTPException(
+            status_code=409,
+            detail=f"本轮初始化任务未要求处理 {section} 分区",
+        )
+
+    normalized = _normalize_initialization_section(section, args.data)
+    row = db.scalar(
+        select(ProjectInitializationDraftSection).where(
+            ProjectInitializationDraftSection.draft_id == draft.id,
+            ProjectInitializationDraftSection.section == section,
+        ),
+    )
+    source_files = [
+        item.strip()
+        for item in args.source_files
+        if item.strip()
+    ]
+    notes = [
+        item.strip()
+        for item in args.extraction_notes
+        if item.strip()
+    ]
+    if row is None:
+        row = ProjectInitializationDraftSection(
+            draft_id=draft.id,
+            project_id=context.project.id,
+            conversation_id=context.conversation.id,
+            section=section,
+            writer_agent_id=actor_agent_id,
+            workflow_revision=workflow.run_revision,
+            revision=1,
+            payload=normalized,
+            source_files=source_files,
+            extraction_notes=notes,
+        )
+        db.add(row)
+    else:
+        row.writer_agent_id = actor_agent_id
+        row.workflow_revision = workflow.run_revision
+        row.revision += 1
+        row.payload = normalized
+        row.source_files = source_files
+        row.extraction_notes = notes
+
+    draft.source_files = list(
+        dict.fromkeys([*(draft.source_files or []), *source_files]),
+    )
+    db.flush()
+    summary = initialization_draft_workflow_summary(db, draft)
+    if summary and not summary["pending_sections"]:
+        workflow.stage = "reviewing"
+    _audit(
+        db,
+        context,
+        "Dobby 写入项目初始化草稿分区",
+        f"{actor_agent_id} 完成 {section} 分区",
+        "project_initialization_draft",
+        draft.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return {
+        "draft_id": draft.id,
+        "section": section,
+        "section_revision": row.revision,
+        "record_count": len(normalized) if isinstance(normalized, list) else 1,
+        "workflow": initialization_draft_workflow_summary(db, draft),
+    }
+
+
+def _import_initialization_artifact(
+    db: Session,
+    context: ToolContext,
+    args: ImportInitializationArtifactArgs,
+    actor_agent_id: str | None,
+    actor_role: InitializationAgentRole,
+) -> dict[str, Any]:
+    section = _INITIALIZATION_SECTION_BY_ROLE.get(actor_role)
+    if section is None:
+        raise HTTPException(status_code=403, detail="当前智能体没有可导入的草稿分区")
+    normalization = _normalization_for_context_by_id(
+        db,
+        context,
+        args.normalization_id,
+    )
+    if (
+        normalization.status != "consumed"
+        or normalization.draft_id != args.draft_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="标准化批次尚未绑定到当前草稿任务",
+        )
+    rows = _normalization_artifact_rows(
+        db,
+        normalization.id,
+        section,
+    )
+    normalized = _canonical_artifact_payload(section, rows)
+    artifact_refs = [
+        f"{row.file_name}#{row.part_index}"
+        for row in rows
+        if row.artifact_format == "json"
+    ]
+    result = _write_initialization_draft_section(
+        db,
+        context,
+        WriteInitializationDraftSectionArgs(
+            draft_id=args.draft_id,
+            data=normalized,
+            source_files=list(normalization.source_files or []),
+            extraction_notes=[
+                f"由标准化批次 {normalization.id} 批量导入："
+                + "、".join(artifact_refs),
+                *args.extraction_notes,
+            ],
+        ),
+        actor_agent_id,
+        actor_role,
+    )
+    return {
+        **result,
+        "normalization_id": normalization.id,
+        "imported_artifacts": artifact_refs,
+    }
+
+
+def _finalize_initialization_draft(
+    db: Session,
+    context: ToolContext,
+    args: FinalizeInitializationDraftArgs,
+    actor_agent_id: str | None,
+) -> dict[str, Any]:
+    if not actor_agent_id:
+        raise HTTPException(status_code=403, detail="无法确认初始化核验智能体")
+    draft = _draft_for_context_by_id(db, context, args.draft_id)
+    workflow = _workflow_for_draft(db, draft.id)
+    if workflow is None:
+        raise HTTPException(status_code=409, detail="初始化草稿尚未建立执行流程")
+    summary = initialization_draft_workflow_summary(db, draft)
+    assert summary is not None
+    if summary["pending_sections"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "仍有专项分区尚未完成："
+                + "、".join(summary["pending_sections"])
+            ),
+        )
+
+    payload = compose_initialization_draft_payload(db, draft)
+    deterministic_issues = validate_initialization_payload(payload)
+    semantic_issues = [
+        item.model_dump(mode="json")
+        for item in args.semantic_issues
+    ]
+    issues = [*deterministic_issues, *semantic_issues]
+    draft.payload = payload.model_dump(mode="json")
+    draft.validation_issues = issues
+    draft.status = draft_status(issues)
+    draft.revision += 1
+    workflow.stage = "completed"
+    workflow.reviewer_agent_id = actor_agent_id
+    workflow.semantic_issues = semantic_issues
+    workflow.review_summary = args.review_summary
+    _audit(
+        db,
+        context,
+        "Dobby 完成项目初始化草稿核验",
+        (
+            f"核验智能体 {actor_agent_id} 完成审查；"
+            f"{len(deterministic_issues)} 项规则问题，"
+            f"{len(semantic_issues)} 项语义问题"
+        ),
+        "project_initialization_draft",
+        draft.id,
+    )
+    db.commit()
+    db.refresh(draft)
+    return {
+        **_public_row(
+            draft,
+            (
+                "id",
+                "project_id",
+                "conversation_id",
+                "status",
+                "revision",
+                "payload",
+                "validation_issues",
+                "source_files",
+                "created_at",
+                "updated_at",
+            ),
+        ),
+        "workflow": initialization_draft_workflow_summary(db, draft),
+        "summary": _draft_summary(payload, issues),
+    }
+
+
 def _get_initialization_draft(
     db: Session,
     context: ToolContext,
@@ -817,7 +1961,7 @@ def _get_initialization_draft(
             "data": None,
         }
 
-    payload = ProjectInitializationPayload.model_validate(draft.payload)
+    payload = compose_initialization_draft_payload(db, draft)
     if args.section == "validation_issues":
         section_data: dict[str, Any] | list[Any] = list(
             draft.validation_issues or [],
@@ -854,6 +1998,7 @@ def _get_initialization_draft(
             ),
         ),
         "section": args.section,
+        "workflow": initialization_draft_workflow_summary(db, draft),
         "start": args.start,
         "end": end,
         "total": total,
@@ -873,167 +2018,6 @@ def _draft_summary(
         "quality_requirements": len(payload.quality_requirements),
         "errors": sum(item["level"] == "error" for item in issues),
         "warnings": sum(item["level"] == "warning" for item in issues),
-    }
-
-
-def _submit_initialization_draft(
-    db: Session,
-    context: ToolContext,
-    args: SubmitInitializationDraftArgs,
-) -> dict[str, Any]:
-    if not context.can_submit_initialization_draft:
-        raise HTTPException(
-            status_code=403,
-            detail="只有项目初始化智能体会话可以提交初始化草稿",
-        )
-    issues = validate_initialization_payload(args.payload)
-    status_value = draft_status(issues)
-    source_files = list(dict.fromkeys(item.strip() for item in args.source_files if item.strip()))
-    if args.draft_id is None:
-        draft = ProjectInitializationDraft(
-            project_id=context.project.id,
-            conversation_id=context.conversation.id,
-            created_by_user_id=context.user.id,
-            status=status_value,
-            revision=1,
-            payload=args.payload.model_dump(mode="json"),
-            validation_issues=issues,
-            source_files=source_files,
-        )
-        db.add(draft)
-        db.flush()
-        action = "Dobby 提交项目初始化草稿"
-    else:
-        draft = db.get(ProjectInitializationDraft, args.draft_id)
-        if (
-            draft is None
-            or draft.project_id != context.project.id
-            or draft.conversation_id != context.conversation.id
-        ):
-            raise HTTPException(status_code=404, detail="初始化草稿不存在")
-        if draft.status == "applied":
-            raise HTTPException(status_code=409, detail="已入库草稿不能继续修改")
-        draft.status = status_value
-        draft.revision += 1
-        draft.payload = args.payload.model_dump(mode="json")
-        draft.validation_issues = issues
-        draft.source_files = source_files
-        action = "Dobby 更新项目初始化草稿"
-        db.flush()
-    _audit(
-        db,
-        context,
-        action,
-        f"初始化草稿第 {draft.revision} 版，状态 {draft.status}",
-        "project_initialization_draft",
-        draft.id,
-    )
-    db.commit()
-    db.refresh(draft)
-    return {
-        **_public_row(
-            draft,
-            (
-                "id",
-                "project_id",
-                "conversation_id",
-                "status",
-                "revision",
-                "payload",
-                "validation_issues",
-                "source_files",
-                "created_at",
-                "updated_at",
-            ),
-        ),
-        "summary": {
-            **_draft_summary(args.payload, issues),
-        },
-    }
-
-
-def _update_initialization_draft(
-    db: Session,
-    context: ToolContext,
-    args: UpdateInitializationDraftArgs,
-) -> dict[str, Any]:
-    if not context.can_submit_initialization_draft:
-        raise HTTPException(
-            status_code=403,
-            detail="只有项目初始化智能体会话可以更新初始化草稿",
-        )
-    draft = db.get(ProjectInitializationDraft, args.draft_id)
-    if (
-        draft is None
-        or draft.project_id != context.project.id
-        or draft.conversation_id != context.conversation.id
-    ):
-        raise HTTPException(status_code=404, detail="初始化草稿不存在")
-    if draft.status == "applied":
-        raise HTTPException(status_code=409, detail="已入库草稿不能继续修改")
-    if draft.revision != args.expected_revision:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"初始化草稿已更新，当前修订号为 {draft.revision}；"
-                "请重新读取草稿后再提交增量修改"
-            ),
-        )
-
-    current = ProjectInitializationPayload.model_validate(draft.payload)
-    merged_data = current.model_dump(mode="python")
-    patch_data = args.patch.model_dump(mode="python", exclude_unset=True)
-    if "project" in patch_data:
-        merged_project = dict(merged_data.get("project") or {})
-        merged_project.update(patch_data["project"])
-        patch_data["project"] = merged_project
-    merged_data.update(patch_data)
-    merged = ProjectInitializationPayload.model_validate(merged_data)
-    issues = validate_initialization_payload(merged)
-
-    new_source_files = [
-        item.strip()
-        for item in args.source_files
-        if item.strip()
-    ]
-    draft.status = draft_status(issues)
-    draft.revision += 1
-    draft.payload = merged.model_dump(mode="json")
-    draft.validation_issues = issues
-    draft.source_files = list(
-        dict.fromkeys([*(draft.source_files or []), *new_source_files]),
-    )
-    updated_sections = sorted(args.patch.model_fields_set)
-    _audit(
-        db,
-        context,
-        "Dobby 增量更新项目初始化草稿",
-        (
-            f"更新草稿分区：{'、'.join(updated_sections)}；"
-            f"状态 {draft.status}"
-        ),
-        "project_initialization_draft",
-        draft.id,
-    )
-    db.commit()
-    db.refresh(draft)
-    return {
-        **_public_row(
-            draft,
-            (
-                "id",
-                "project_id",
-                "conversation_id",
-                "status",
-                "revision",
-                "validation_issues",
-                "source_files",
-                "created_at",
-                "updated_at",
-            ),
-        ),
-        "updated_sections": updated_sections,
-        "summary": _draft_summary(merged, issues),
     }
 
 
@@ -1274,14 +2258,6 @@ def _create_risk(
                 status_code=422,
                 detail="风险窗口结束日期不能早于开始日期",
             )
-    if args.related_wbs_item_id is not None:
-        _project_entity(
-            db,
-            WbsItem,
-            args.related_wbs_item_id,
-            context.project.id,
-            "关联 WBS 不存在",
-        )
     duplicate = db.scalar(
         select(RiskSource).where(
             RiskSource.project_id == context.project.id,
@@ -1293,7 +2269,6 @@ def _create_risk(
     risk = RiskSource(
         project_id=context.project.id,
         serial_no=args.serial_no,
-        related_wbs_item_id=args.related_wbs_item_id,
         related_process_name=args.related_process_name.strip(),
         risk_part=args.risk_part.strip(),
         risk_level=args.risk_level.strip(),
@@ -1317,8 +2292,7 @@ def _create_risk(
     return _public_row(
         risk,
         (
-            "id", "serial_no", "related_wbs_item_id",
-            "related_process_name", "risk_part", "risk_level",
+            "id", "serial_no", "related_process_name", "risk_part", "risk_level",
             "evaluation_condition", "risk_window_start_date",
             "risk_window_end_date", "summary", "created_at",
         ),
@@ -1480,6 +2454,9 @@ def execute_tool_operation(
     context: ToolContext,
     operation: OperationName,
     arguments: dict[str, Any],
+    *,
+    actor_agent_id: str | None = None,
+    initialization_role: InitializationAgentRole | None = None,
 ) -> tuple[Any, str]:
     """Dispatch one allow-listed semantic operation."""
     if operation == "get_project_overview":
@@ -1500,6 +2477,145 @@ def execute_tool_operation(
             _get_initialization_draft(db, context, args),
             "已读取当前项目初始化草稿",
         )
+    if operation == "read_project_initialization_artifact":
+        _require_initialization_actor(
+            context,
+            initialization_role,
+            {
+                "orchestrator",
+                "project",
+                "personnel",
+                "wbs",
+                "risks",
+                "quality_requirements",
+                "validator",
+            },
+        )
+        args = _parse_args(ReadInitializationArtifactArgs, arguments)
+        assert isinstance(args, ReadInitializationArtifactArgs)
+        return (
+            _read_initialization_artifact(db, context, args),
+            "已读取项目初始化标准资料",
+        )
+    if operation == "begin_project_initialization_normalization":
+        _require_initialization_actor(
+            context,
+            initialization_role,
+            {"orchestrator"},
+        )
+        args = _parse_args(BeginInitializationNormalizationArgs, arguments)
+        assert isinstance(args, BeginInitializationNormalizationArgs)
+        return (
+            _begin_initialization_normalization(
+                db,
+                context,
+                args,
+                actor_agent_id,
+            ),
+            "项目初始化资料标准化批次已建立",
+        )
+    if operation == "write_project_initialization_artifact":
+        _require_initialization_actor(
+            context,
+            initialization_role,
+            {"orchestrator"},
+        )
+        args = _parse_args(WriteInitializationArtifactArgs, arguments)
+        assert isinstance(args, WriteInitializationArtifactArgs)
+        return (
+            _write_initialization_artifact(
+                db,
+                context,
+                args,
+                actor_agent_id,
+            ),
+            "项目初始化标准资料已写入",
+        )
+    if operation == "finalize_project_initialization_normalization":
+        _require_initialization_actor(
+            context,
+            initialization_role,
+            {"orchestrator"},
+        )
+        args = _parse_args(
+            FinalizeInitializationNormalizationArgs,
+            arguments,
+        )
+        assert isinstance(args, FinalizeInitializationNormalizationArgs)
+        return (
+            _finalize_initialization_normalization(db, context, args),
+            "项目初始化标准资料已完成校验",
+        )
+    if operation == "begin_project_initialization_draft":
+        _require_initialization_actor(
+            context,
+            initialization_role,
+            {"orchestrator"},
+        )
+        args = _parse_args(BeginInitializationDraftArgs, arguments)
+        assert isinstance(args, BeginInitializationDraftArgs)
+        return (
+            _begin_initialization_draft(
+                db,
+                context,
+                args,
+                actor_agent_id,
+            ),
+            "项目初始化草稿任务已建立",
+        )
+    if operation == "write_project_initialization_draft_section":
+        actor_role = _require_initialization_actor(
+            context,
+            initialization_role,
+            set(_INITIALIZATION_SECTION_BY_ROLE),
+        )
+        args = _parse_args(WriteInitializationDraftSectionArgs, arguments)
+        assert isinstance(args, WriteInitializationDraftSectionArgs)
+        return (
+            _write_initialization_draft_section(
+                db,
+                context,
+                args,
+                actor_agent_id,
+                actor_role,
+            ),
+            "项目初始化草稿分区已写入",
+        )
+    if operation == "import_project_initialization_artifact":
+        actor_role = _require_initialization_actor(
+            context,
+            initialization_role,
+            set(_INITIALIZATION_SECTION_BY_ROLE),
+        )
+        args = _parse_args(ImportInitializationArtifactArgs, arguments)
+        assert isinstance(args, ImportInitializationArtifactArgs)
+        return (
+            _import_initialization_artifact(
+                db,
+                context,
+                args,
+                actor_agent_id,
+                actor_role,
+            ),
+            "项目初始化标准资料已批量导入草稿",
+        )
+    if operation == "finalize_project_initialization_draft":
+        _require_initialization_actor(
+            context,
+            initialization_role,
+            {"validator"},
+        )
+        args = _parse_args(FinalizeInitializationDraftArgs, arguments)
+        assert isinstance(args, FinalizeInitializationDraftArgs)
+        return (
+            _finalize_initialization_draft(
+                db,
+                context,
+                args,
+                actor_agent_id,
+            ),
+            "项目初始化草稿已完成统一核验",
+        )
     if operation == "list_project_items":
         args = _parse_args(ListItemsArgs, arguments)
         assert isinstance(args, ListItemsArgs)
@@ -1508,20 +2624,6 @@ def execute_tool_operation(
         args = _parse_args(SearchDocumentsArgs, arguments)
         assert isinstance(args, SearchDocumentsArgs)
         return _search_documents(db, context, args), "已检索当前项目资料"
-    if operation == "submit_project_initialization_draft":
-        args = _parse_args(SubmitInitializationDraftArgs, arguments)
-        assert isinstance(args, SubmitInitializationDraftArgs)
-        return (
-            _submit_initialization_draft(db, context, args),
-            "项目初始化草稿已提交，等待用户核对",
-        )
-    if operation == "update_project_initialization_draft":
-        args = _parse_args(UpdateInitializationDraftArgs, arguments)
-        assert isinstance(args, UpdateInitializationDraftArgs)
-        return (
-            _update_initialization_draft(db, context, args),
-            "项目初始化草稿已增量更新，等待用户核对",
-        )
     if operation == "create_task":
         args = _parse_args(CreateTaskArgs, arguments)
         assert isinstance(args, CreateTaskArgs)
@@ -1623,5 +2725,7 @@ def execute_agent_tool(
         context,
         payload.operation,
         payload.arguments,
+        actor_agent_id=payload.actor_agent_id,
+        initialization_role=payload.initialization_role,
     )
     return _ok(data, message)

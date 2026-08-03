@@ -26,6 +26,7 @@ from ._schedule import ScheduleData, ScheduleRecord, ScheduleSource
 from ._session import (
     SessionRecord,
     SessionConfig,
+    PlatformSessionContext,
     SessionKnowledgeConfig,
     ChatModelConfig,
     TTSModelConfig,
@@ -56,6 +57,7 @@ __all__ = [
     "ScheduleRecord",
     "ScheduleSource",
     "SessionConfig",
+    "PlatformSessionContext",
     "SessionKnowledgeConfig",
     "SessionRecord",
     "SessionSource",

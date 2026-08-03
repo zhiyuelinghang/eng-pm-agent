@@ -38,6 +38,11 @@ class MessageBusKeys:
     drop the entry while the session is running; it re-queues until the
     parked run releases its lock."""
 
+    WAKEUP_KIND_TEAM: Final = "team"
+    """Trigger kind: deliver a durable team message. If the recipient is
+    busy, the dispatcher re-queues this trigger so a report arriving at the
+    end of a leader turn cannot be lost between inbox-drain cycles."""
+
     # ------------------------------------------------------------------
     # Cross-session UI projection — a generic per-session Redis-hash
     # store onto which one session can project UI cards owned by another
@@ -132,6 +137,17 @@ class MessageBusKeys:
     def session_lock(cls, session_id: str) -> str:
         """Per-session distributed-lock key."""
         return cls._SESSION_LOCK.format(sid=session_id)
+
+    # ------------------------------------------------------------------
+    # Team lifecycle lock
+    # ------------------------------------------------------------------
+
+    _TEAM_LIFECYCLE_LOCK = "agentscope:team:lifecycle:lock:{team_id}"
+
+    @classmethod
+    def team_lifecycle_lock(cls, team_id: str) -> str:
+        """Lock serialising persistent team-work lifecycle updates."""
+        return cls._TEAM_LIFECYCLE_LOCK.format(team_id=team_id)
 
     # ------------------------------------------------------------------
     # Session inbox

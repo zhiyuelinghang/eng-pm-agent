@@ -25,9 +25,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from ..deps import (
     get_chat_run_registry,
     get_chat_service,
+    get_current_principal,
     get_current_user_id,
     get_message_bus,
+    get_storage,
 )
+from .._auth import AgentScopePrincipal
+from .._session_access import require_runtime_session_access
 from ._schema import ChatRequest, ChatTriggerResponse
 from .._manager import ChatRunRegistry
 from .._service import (
@@ -36,6 +40,7 @@ from .._service import (
     SubagentHitlProjector,
 )
 from ..message_bus import MessageBus, MessageBusKeys
+from ..storage import StorageBase
 from .._bus_ops import enqueue_run_trigger
 from ...event import UserConfirmResultEvent, ExternalExecutionResultEvent
 
@@ -54,6 +59,8 @@ chat_router = APIRouter(
 async def chat(
     request: ChatRequest,
     user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
+    storage: StorageBase = Depends(get_storage),
     chat_service: ChatService = Depends(get_chat_service),
     chat_run_registry: ChatRunRegistry = Depends(get_chat_run_registry),
     message_bus: MessageBus = Depends(get_message_bus),
@@ -98,6 +105,18 @@ async def chat(
             Only direct-spawn paths (new messages / ``None``) can raise
             this; the enqueued resume path never does.
     """
+    session = await storage.get_session(
+        user_id,
+        request.agent_id,
+        request.session_id,
+    )
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session '{request.session_id}' not found.",
+        )
+    require_runtime_session_access(principal, session)
+
     # ------------------------------------------------------------------
     # HITL resume — route to the owning session, then enqueue.
     #

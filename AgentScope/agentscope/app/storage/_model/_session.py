@@ -2,6 +2,7 @@
 """The session data class for storage."""
 from datetime import datetime
 from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -14,6 +15,23 @@ class SessionSource(str, Enum):
 
     USER = "user"
     SCHEDULE = "schedule"
+    PLATFORM = "platform"
+
+
+class PlatformSessionContext(BaseModel):
+    """Platform ownership snapshot used to group read-only audit records."""
+
+    user_id: str
+    username: str
+    display_name: str
+    project_id: str
+    project_name: str
+    conversation_id: str
+    conversation_title: str
+    conversation_type: str
+    agent_name: str
+    session_role: Literal["primary", "worker"] = "primary"
+    root_session_id: str | None = None
 
 
 class ChatModelConfig(BaseModel):
@@ -144,6 +162,9 @@ class SessionConfig(BaseModel):
     """Knowledge bases attached to this session and the corresponding
     :class:`~agentscope.middleware.RAGMiddleware` parameters.
     ``None`` means no knowledge base is wired."""
+
+    platform_context: PlatformSessionContext | None = None
+    """Platform identity/grouping metadata; never a copy of chat content."""
 
 
 class SessionRecord(_RecordBase):

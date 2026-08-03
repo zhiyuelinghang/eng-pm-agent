@@ -23,6 +23,7 @@
 		"logout": "退出管理中心",
 		"model": "模型",
 		"name": "名称",
+		"platformAudit": "平台交互审计",
 		"platformSettings": "平台设置",
 		"no": "否",
 		"noData": "暂无数据",
@@ -56,7 +57,7 @@
 		"saved": "平台总控智能体已更新",
 		"main": {
 			"title": "平台总控智能体",
-			"description": "普通对话统一由该智能体承接；它拥有全部已启用且允许协同的子智能体调用权限。",
+			"description": "普通对话统一由该智能体承接；它只能调用已启用、允许协同且明确开放给平台总智能体的成员。",
 			"selector": "总控智能体",
 			"placeholder": "选择一个智能体",
 			"requirement": "这里只显示已启用、可编辑且配置了固定对话模型的智能体。",
@@ -86,7 +87,7 @@
 			"noCandidates": "暂无符合条件的智能体。请先创建并启用一个使用固定对话模型的智能体。",
 			"invalidCurrentTitle": "当前初始化智能体不可用",
 			"invalidCurrent": "当前智能体已停用或缺少固定模型，请选择另一个可用智能体。",
-			"effect": "保存后会自动隐藏该智能体并禁用智能体协同；它只能读取当前项目和提交待核对草稿，不能直接写入正式业务表。",
+			"effect": "保存后会自动隐藏该智能体，并将协同范围限制为管理员明确分配的系统专家；它只能读取当前项目和提交待核对草稿，不能直接写入正式业务表。",
 			"save": "设为初始化智能体"
 		}
 	},
@@ -246,7 +247,7 @@
 					"system_internal": "系统内置智能体"
 				},
 				"descriptions": {
-					"global_main": "承接平台普通对话，并可动态协同全部已启用、已开放调用的非主智能体。",
+					"global_main": "承接平台普通对话，并可动态协同已明确开放给平台总智能体的非主智能体。",
 					"business": "发布后自动显示在平台“业务工具”页面，也可以被授权的智能体协同调用。",
 					"system_internal": "只供系统内部流程使用，不会显示在业务工具目录中。"
 				}
@@ -254,6 +255,8 @@
 			"globalMainNotice": "该智能体当前由“平台设置”指定为总控。请前往平台设置切换；总控不能在此处直接停用或更改角色。",
 			"enabled": "允许平台运行",
 			"published": "发布到平台",
+			"allowGlobalMainCall": "允许平台总智能体调用",
+			"allowGlobalMainCallDescription": "开启后，该智能体才会进入平台总智能体的可协同范围；普通智能体仍按各自白名单控制。",
 			"catalogDescription": "平台展示说明",
 			"descriptionPlaceholder": "说明该智能体面向业务用户提供什么能力。",
 			"category": "业务分类",
@@ -892,6 +895,26 @@
 			"emptyDescription": "没有匹配 “{{query}}” 的结果。"
 		},
 		"loading": "加载中…"
+	},
+	"platformAudit": {
+		"title": "平台交互审计",
+		"description": "按平台用户、项目和会话查看完整交互记录；本页面只读，不会影响用户会话。",
+		"total": "共 {{count}} 个会话",
+		"refresh": "刷新",
+		"users": "平台用户",
+		"projects": "项目",
+		"conversations": "会话",
+		"transcript": "完整交互记录",
+		"readOnly": "只读",
+		"running": "智能体仍在运行，记录将自动更新",
+		"empty": "还没有平台交互记录",
+		"selectUser": "请先选择平台用户",
+		"selectProject": "请选择项目",
+		"selectConversation": "请选择会话",
+		"selectConversationHint": "点击左侧具体会话后，将一次显示该会话的全部交互记录。",
+		"projectCount": "{{count}} 个项目",
+		"conversationCount": "{{count}} 个会话",
+		"noMessages": "该会话暂时没有消息"
 	},
 	"team-sidebar": {
 		"membersHeading": "成员",

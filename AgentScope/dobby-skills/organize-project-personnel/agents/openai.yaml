@@ -1,0 +1,4 @@
+interface:
+  display_name: "整理人员与岗位"
+  short_description: "整理人员身份、证书、岗位职责以及同一人员的多岗位关系"
+  default_prompt: "使用 $organize-project-personnel 整理项目人员身份和岗位关系。"

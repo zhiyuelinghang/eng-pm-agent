@@ -977,7 +977,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { NIcon, useMessage } from 'naive-ui'
 import {
@@ -994,6 +994,7 @@ import {
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
 import {
   applyAgentRuntimeEvent,
+  applyAgentRuntimeEvents,
   createEmptyRuntimeTrace,
   runtimeTraceFromExtraData,
   type AgentRuntimeTrace,
@@ -1521,10 +1522,10 @@ async function dispatchQuickCommand() {
       runtimeStatus: string
     } = { message: null, runtimeStatus: 'running' }
     await streamAgentConversationMessage(conversation.id, content, {
-      onEvent: async runtimeEvent => {
-        homeQuickStreamingTrace.value = applyAgentRuntimeEvent(
+      onEvents: async runtimeEvents => {
+        homeQuickStreamingTrace.value = applyAgentRuntimeEvents(
           homeQuickStreamingTrace.value,
-          runtimeEvent,
+          runtimeEvents,
         )
         await nextTick()
         scrollHomeQuick()
@@ -1610,10 +1611,10 @@ async function confirmHomeToolCall(
             ),
           )
         },
-        onEvent: async runtimeEvent => {
-          homeQuickStreamingTrace.value = applyAgentRuntimeEvent(
+        onEvents: async runtimeEvents => {
+          homeQuickStreamingTrace.value = applyAgentRuntimeEvents(
             homeQuickStreamingTrace.value,
-            runtimeEvent,
+            runtimeEvents,
           )
           await nextTick()
           scrollHomeQuick()
@@ -1684,11 +1685,11 @@ const chatSuggestionsOpen = ref(false)
 const generatedChatSuggestions = ref<Record<string, ChatSuggestion[]>>({})
 const sessionMessages = ref<Record<string, ChatMessage[]>>({})
 const collaborationConversations = ref<Record<string, ApiAgentConversation>>({})
-const collaborationStreamingTraces = ref<Record<string, AgentRuntimeTrace | null>>({})
+const collaborationStreamingTraces = shallowRef<Record<string, AgentRuntimeTrace | null>>({})
 const collaborationMessagesViewport = ref<HTMLElement | null>(null)
 const homeAgentConversation = ref<ApiAgentConversation | null>(null)
 const homeQuickChatMessages = ref<ChatMessage[]>([])
-const homeQuickStreamingTrace = ref<AgentRuntimeTrace | null>(null)
+const homeQuickStreamingTrace = shallowRef<AgentRuntimeTrace | null>(null)
 const homeQuickViewport = ref<HTMLElement | null>(null)
 const homeQuickSession = computed(() => homeAgentConversation.value)
 const homeQuickSessionTitle = computed(() => homeQuickSession.value?.title ?? '')
@@ -1910,12 +1911,12 @@ async function runCollaborationPrompt(content: string): Promise<ChatMessage | nu
           ),
         }
       },
-      onEvent: async runtimeEvent => {
+      onEvents: async runtimeEvents => {
         collaborationStreamingTraces.value = {
           ...collaborationStreamingTraces.value,
-          [sessionId]: applyAgentRuntimeEvent(
+          [sessionId]: applyAgentRuntimeEvents(
             collaborationStreamingTraces.value[sessionId] ?? null,
-            runtimeEvent,
+            runtimeEvents,
           ),
         }
         await nextTick()
@@ -2063,12 +2064,12 @@ async function confirmCollaborationToolCall(
             ),
           )
         },
-        onEvent: async runtimeEvent => {
+        onEvents: async runtimeEvents => {
           collaborationStreamingTraces.value = {
             ...collaborationStreamingTraces.value,
-            [sessionId]: applyAgentRuntimeEvent(
+            [sessionId]: applyAgentRuntimeEvents(
               collaborationStreamingTraces.value[sessionId] ?? null,
-              runtimeEvent,
+              runtimeEvents,
             ),
           }
           await nextTick()

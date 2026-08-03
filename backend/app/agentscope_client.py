@@ -44,6 +44,19 @@ class AgentScopeConfirmationSubmission:
     routed_session_id: str
 
 
+@dataclass(slots=True)
+class AgentScopeTeamState:
+    """Persistent collaboration state for one leader session."""
+
+    team_exists: bool = False
+    members_pending: bool = False
+    leader_summary_pending: bool = False
+
+    @property
+    def pending(self) -> bool:
+        return self.members_pending or self.leader_summary_pending
+
+
 class AgentScopeClient:
     """Minimal backend-only client for catalogue and chat operations."""
 
@@ -200,6 +213,7 @@ class AgentScopeClient:
         agent: dict[str, Any],
         workspace_id: str,
         name: str,
+        platform_context: dict[str, Any],
     ) -> str:
         if not agent.get("model_ready"):
             raise AgentScopeGatewayError(
@@ -212,10 +226,15 @@ class AgentScopeClient:
             "workspace_id": workspace_id,
             "name": name,
             "knowledge_config": agent.get("knowledge_config"),
+            "platform_context": platform_context,
         }
         created = self._request("POST", "/sessions/", json=body)
         session_id = str(created["session_id"])
-        self.sync_session(agent=agent, session_id=session_id)
+        self.sync_session(
+            agent=agent,
+            session_id=session_id,
+            platform_context=platform_context,
+        )
         return session_id
 
     def sync_session(
@@ -223,6 +242,7 @@ class AgentScopeClient:
         *,
         agent: dict[str, Any],
         session_id: str,
+        platform_context: dict[str, Any],
     ) -> None:
         """Apply the latest admin-managed runtime policy to a session."""
         permission_mode = str(agent.get("permission_mode") or "auto")
@@ -233,14 +253,67 @@ class AgentScopeClient:
             json={
                 "permission_mode": permission_mode,
                 "knowledge_config": agent.get("knowledge_config"),
+                "platform_context": platform_context,
             },
         )
 
-    def list_messages(self, session_id: str, agent_id: str) -> dict[str, Any]:
+    def list_messages(
+        self,
+        session_id: str,
+        agent_id: str,
+        *,
+        before: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        params: dict[str, str] = {
+            "agent_id": agent_id,
+            "limit": str(limit),
+        }
+        if before:
+            params["before"] = before
         return self._request(
             "GET",
             f"/sessions/{session_id}/messages",
-            params={"agent_id": agent_id, "limit": "200"},
+            params=params,
+        )
+
+    def list_all_messages(
+        self,
+        session_id: str,
+        agent_id: str,
+    ) -> dict[str, Any]:
+        """Read the complete AgentScope history in chronological order."""
+        page = self.list_messages(session_id, agent_id)
+        messages = list(page.get("messages", []))
+        is_running = bool(page.get("is_running"))
+        while page.get("has_more") and messages:
+            page = self.list_messages(
+                session_id,
+                agent_id,
+                before=str(messages[0]["id"]),
+            )
+            older = list(page.get("messages", []))
+            messages = [*older, *messages]
+            is_running = is_running or bool(page.get("is_running"))
+        return {
+            "messages": messages,
+            "is_running": is_running,
+            "has_more": False,
+        }
+
+    def update_message_metadata(
+        self,
+        session_id: str,
+        agent_id: str,
+        message_id: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Merge presentation metadata into the AgentScope source message."""
+        return self._request(
+            "PATCH",
+            f"/sessions/{session_id}/messages/{message_id}/metadata",
+            params={"agent_id": agent_id},
+            json={"metadata": metadata},
         )
 
     def session_status(self, session_id: str, agent_id: str) -> str:
@@ -263,6 +336,26 @@ class AgentScopeClient:
         Member sessions are checked individually so the gateway waits for
         actual collaboration work, not for an optional ``TeamDelete`` call.
         """
+        state = self.session_team_state_detail(session_id, agent_id)
+        return state.team_exists, state.pending
+
+    def session_team_work_pending(
+        self,
+        session_id: str,
+        agent_id: str,
+    ) -> bool:
+        """Return whether member work or the leader's final summary is due."""
+        return self.session_team_state_detail(
+            session_id,
+            agent_id,
+        ).pending
+
+    def session_team_state_detail(
+        self,
+        session_id: str,
+        agent_id: str,
+    ) -> AgentScopeTeamState:
+        """Read durable member and leader-summary revisions."""
         payload = self._request(
             "GET",
             "/sessions/",
@@ -273,22 +366,30 @@ class AgentScopeClient:
             if str(session.get("id")) == session_id:
                 team = view.get("team")
                 if not session.get("team_id") or not team:
-                    return False, False
+                    return AgentScopeTeamState()
+                team_record = team.get("team") or {}
+                team_data = team_record.get("data") or {}
+                members_pending = False
                 for member in team.get("members") or []:
-                    member_agent = member.get("agent") or {}
-                    member_session_id = str(member.get("session_id") or "")
-                    member_agent_id = str(member_agent.get("id") or "")
-                    if (
-                        member_session_id
-                        and member_agent_id
-                        and self.session_status(
-                            member_session_id,
-                            member_agent_id,
-                        )
-                        != "idle"
-                    ):
-                        return True, True
-                return True, False
+                    assigned_revision = int(
+                        member.get("work_revision") or 0,
+                    )
+                    settled_revision = int(
+                        member.get("settled_revision") or 0,
+                    )
+                    if settled_revision < assigned_revision:
+                        members_pending = True
+                work_revision = int(team_data.get("work_revision") or 0)
+                leader_completed_revision = int(
+                    team_data.get("leader_completed_revision") or 0,
+                )
+                return AgentScopeTeamState(
+                    team_exists=True,
+                    members_pending=members_pending,
+                    leader_summary_pending=(
+                        leader_completed_revision < work_revision
+                    ),
+                )
         raise AgentScopeGatewayError(
             f"AgentScope 会话 {session_id} 不存在或不可见。",
             status_code=409,
@@ -365,6 +466,7 @@ class AgentScopeClient:
         content: str,
         sender_name: str,
         metadata: dict[str, Any],
+        user_message_id: str | None = None,
     ) -> AgentScopeReply:
         before = self.list_messages(session_id, agent_id)
         existing_ids = {
@@ -372,7 +474,7 @@ class AgentScopeClient:
             for message in before.get("messages", [])
             if message.get("id")
         }
-        user_message_id = uuid4().hex
+        resolved_user_message_id = user_message_id or uuid4().hex
         self._request(
             "POST",
             "/chat/",
@@ -380,7 +482,7 @@ class AgentScopeClient:
                 "agent_id": agent_id,
                 "session_id": session_id,
                 "input": {
-                    "id": user_message_id,
+                    "id": resolved_user_message_id,
                     "name": sender_name,
                     "role": "user",
                     "content": [{"type": "text", "text": content}],
@@ -392,6 +494,7 @@ class AgentScopeClient:
         observed_running = False
         last_assistant: dict[str, Any] | None = None
         new_assistants: list[dict[str, Any]] = []
+        collaboration_waiting_ids: set[str] = set()
         settled_message_id: str | None = None
         settled_since: float | None = None
         settle_seconds = max(0.6, self._poll_interval * 2)
@@ -440,6 +543,10 @@ class AgentScopeClient:
                     agent_id,
                 )
                 if team_work_pending:
+                    if last_assistant.get("id"):
+                        collaboration_waiting_ids.add(
+                            str(last_assistant["id"]),
+                        )
                     settled_message_id = None
                     settled_since = None
                 else:
@@ -452,6 +559,14 @@ class AgentScopeClient:
                         and time.monotonic() - settled_since
                         >= settle_seconds
                     ):
+                        for message in new_assistants:
+                            if (
+                                str(message.get("id") or "")
+                                in collaboration_waiting_ids
+                            ):
+                                message[
+                                    "platform_collaboration_status"
+                                ] = "continued"
                         return AgentScopeReply(
                             status=self._terminal_reply_status(
                                 last_assistant,
@@ -593,6 +708,7 @@ class AgentScopeClient:
         existing_ids = submission.existing_ids
         last_assistant: dict[str, Any] | None = None
         relevant: list[dict[str, Any]] = []
+        collaboration_waiting_ids: set[str] = set()
         settled_since: float | None = None
         settle_seconds = max(0.6, self._poll_interval * 2)
         while True:
@@ -649,10 +765,22 @@ class AgentScopeClient:
                     agent_id,
                 )
                 if team_work_pending:
+                    if last_assistant.get("id"):
+                        collaboration_waiting_ids.add(
+                            str(last_assistant["id"]),
+                        )
                     settled_since = None
                 elif settled_since is None:
                     settled_since = time.monotonic()
                 elif time.monotonic() - settled_since >= settle_seconds:
+                    for message in relevant:
+                        if (
+                            str(message.get("id") or "")
+                            in collaboration_waiting_ids
+                        ):
+                            message[
+                                "platform_collaboration_status"
+                            ] = "continued"
                     return AgentScopeReply(
                         status=self._terminal_reply_status(last_assistant),
                         content=self._message_text(last_assistant)

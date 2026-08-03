@@ -1,0 +1,4 @@
+interface:
+  display_name: "校验WBS时间线"
+  short_description: "构建完整WBS树并核验层级、同级时间线和明确前置关系"
+  default_prompt: "使用 $validate-wbs-timeline 解析并校验项目WBS计划。"

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """The team storage class."""
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -56,6 +57,79 @@ class TeamMember(BaseModel):
         ),
     )
 
+    work_revision: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Revision of the latest task assigned to this member. A new "
+            "leader-to-member assignment advances the team's global work "
+            "revision and stores that value here."
+        ),
+    )
+
+    settled_revision: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Latest assigned revision that has produced a terminal report. "
+            "The member still has outstanding work while this is smaller "
+            "than ``work_revision``."
+        ),
+    )
+
+    active_revision: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Assignment revision currently being executed by the member. "
+            "This remains stable when another task is queued during the "
+            "active run, preventing that later task from being settled by "
+            "the earlier reply."
+        ),
+    )
+
+    work_status: Literal[
+        "idle",
+        "queued",
+        "running",
+        "reported",
+        "completed",
+        "failed",
+        "interrupted",
+    ] = Field(
+        default="idle",
+        description=(
+            "Durable lifecycle of the member's latest assignment. Unlike "
+            "the transient session run lock, this survives the idle gaps "
+            "between asynchronous team turns."
+        ),
+    )
+
+    assigned_at: datetime | None = Field(
+        default=None,
+        description="When the latest assignment was queued.",
+    )
+
+    started_at: datetime | None = Field(
+        default=None,
+        description="When the member started the latest assignment.",
+    )
+
+    settled_at: datetime | None = Field(
+        default=None,
+        description="When the latest assignment reached a terminal state.",
+    )
+
+    last_reply_id: str | None = Field(
+        default=None,
+        description="Terminal reply id for the latest settled assignment.",
+    )
+
+    last_error: str | None = Field(
+        default=None,
+        description="Failure detail for the latest assignment, if any.",
+    )
+
 
 class TeamData(BaseModel):
     """The team data model."""
@@ -98,6 +172,39 @@ class TeamData(BaseModel):
             "transparently."
         ),
         title="Members",
+    )
+
+    work_revision: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Monotonic revision advanced whenever the leader assigns work "
+            "to a member."
+        ),
+        title="Work Revision",
+    )
+
+    leader_completed_revision: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Latest team work revision for which the leader completed a "
+            "turn after every assigned member had settled. Team work is "
+            "not globally complete until this catches up to "
+            "``work_revision``."
+        ),
+        title="Leader Completed Revision",
+    )
+
+    settlement_revision: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Monotonic counter advanced whenever a member assignment "
+            "settles. A leader turn only closes team work when no new "
+            "settlement occurred after that turn started."
+        ),
+        title="Settlement Revision",
     )
 
 

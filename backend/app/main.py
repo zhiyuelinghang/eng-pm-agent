@@ -13,6 +13,7 @@ from .models import (Attachment, DailyReport, DocumentFolder, DocumentFolderItem
                      ProjectInformationRecord, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectStatusSnapshot, QualityMetric, RiskSource,
                      Task, User, WbsItem, WbsRiskLink)
 from .security import hash_password
+from .schema_migrations import upgrade_database_schema
 
 
 def seed_admin() -> None:
@@ -283,7 +284,7 @@ def seed_prototype_project() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    upgrade_database_schema(engine, Base.metadata)
     seed_admin()
     yield
 

@@ -16,6 +16,7 @@ export type AgentStreamDone = {
 export type AgentStreamHandlers = {
   onAccepted?: (payload: AgentStreamAccepted) => void | Promise<void>
   onEvent?: (event: AgentRuntimeEvent) => void | Promise<void>
+  onEvents?: (events: AgentRuntimeEvent[]) => void | Promise<void>
   onDone?: (payload: AgentStreamDone) => void | Promise<void>
 }
 
@@ -99,10 +100,69 @@ async function streamAgentConversationRequest(
   let buffer = ''
   let eventName = 'message'
   let dataLines: string[] = []
+  const pendingAgentEvents: AgentRuntimeEvent[] = []
+  const eventBatchIntervalMs = 50
+  let eventBatchTimer: ReturnType<typeof setTimeout> | null = null
+  let eventBatchChain = Promise.resolve()
+  let eventBatchError: unknown = null
+
+  const dispatchAgentEventBatch = async (events: AgentRuntimeEvent[]) => {
+    if (!events.length) return
+    if (handlers.onEvents) {
+      await handlers.onEvents(events)
+      return
+    }
+    for (const event of events) {
+      await handlers.onEvent?.(event)
+    }
+  }
+
+  const queueAgentEventFlush = () => {
+    if (eventBatchTimer) return
+    eventBatchTimer = setTimeout(() => {
+      eventBatchTimer = null
+      const batch = pendingAgentEvents.splice(0)
+      if (!batch.length) return
+      eventBatchChain = eventBatchChain
+        .then(() => dispatchAgentEventBatch(batch))
+        .catch((error) => {
+          eventBatchError = error
+        })
+    }, eventBatchIntervalMs)
+  }
+
+  const flushAgentEvents = async () => {
+    if (eventBatchTimer) {
+      clearTimeout(eventBatchTimer)
+      eventBatchTimer = null
+    }
+    const batch = pendingAgentEvents.splice(0)
+    if (batch.length) {
+      eventBatchChain = eventBatchChain
+        .then(() => dispatchAgentEventBatch(batch))
+        .catch((error) => {
+          eventBatchError = error
+        })
+    }
+    await eventBatchChain
+    if (eventBatchError) throw eventBatchError
+  }
+
+  const bufferedHandlers: AgentStreamHandlers = {
+    ...handlers,
+    onEvent: (event) => {
+      pendingAgentEvents.push(event)
+      queueAgentEventFlush()
+    },
+    onDone: async (payload) => {
+      await flushAgentEvents()
+      await handlers.onDone?.(payload)
+    },
+  }
 
   const consumeLine = async (line: string) => {
     if (line === '') {
-      await dispatchFrame(eventName, dataLines, handlers)
+      await dispatchFrame(eventName, dataLines, bufferedHandlers)
       eventName = 'message'
       dataLines = []
       return
@@ -117,6 +177,7 @@ async function streamAgentConversationRequest(
 
   try {
     while (true) {
+      if (eventBatchError) throw eventBatchError
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
@@ -126,9 +187,16 @@ async function streamAgentConversationRequest(
     }
     buffer += decoder.decode()
     if (buffer) await consumeLine(buffer)
-    if (dataLines.length) await dispatchFrame(eventName, dataLines, handlers)
+    if (dataLines.length) {
+      await dispatchFrame(eventName, dataLines, bufferedHandlers)
+    }
   } finally {
-    reader.releaseLock()
+    try {
+      await flushAgentEvents()
+    } finally {
+      if (eventBatchTimer) clearTimeout(eventBatchTimer)
+      reader.releaseLock()
+    }
   }
 }
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "提取工程基本信息"
+  short_description: "从合同和工程资料中提取并核验全部项目基础字段与来源"
+  default_prompt: "使用 $extract-project-basics 提取并核验工程基本信息。"

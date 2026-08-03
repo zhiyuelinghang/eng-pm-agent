@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock
 from fastapi import HTTPException
 
 from agentscope.agent import ContextConfig, ReActConfig
+from agentscope.message import UserMsg
+from agentscope.app._auth import AgentScopePrincipal
 from agentscope.app._router._agent import (
     _demote_other_global_main_agents,
     _normalise_platform_agent_data,
@@ -18,10 +20,15 @@ from agentscope.app._router._agent import (
 )
 from agentscope.app._router._schema import (
     CreateSessionRequest,
+    UpdateMessageMetadataRequest,
     UpdatePlatformSettingsRequest,
     UpdateSessionRequest,
 )
-from agentscope.app._router._session import create_session, update_session
+from agentscope.app._router._session import (
+    create_session,
+    update_message_metadata,
+    update_session,
+)
 from agentscope.app._service import AgentView
 from agentscope.app.storage import (
     AgentCallConfig,
@@ -105,6 +112,24 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         self.assertEqual(legacy.platform_config.role, "business")
         self.assertTrue(legacy.platform_config.enabled)
         self.assertTrue(legacy.platform_config.published)
+        self.assertFalse(
+            legacy.platform_config.allow_global_main_call,
+        )
+
+    def test_initialization_role_is_persisted_but_hidden_from_form_schema(
+        self,
+    ) -> None:
+        config = PlatformAgentConfig(initialization_role="validator")
+
+        self.assertEqual(config.initialization_role, "validator")
+        self.assertEqual(
+            config.model_dump(mode="json")["initialization_role"],
+            "validator",
+        )
+        self.assertNotIn(
+            "initialization_role",
+            PlatformAgentConfig.model_json_schema()["properties"],
+        )
 
     def test_role_invariants_are_normalised(self) -> None:
         main = _record("main", "Main", role="global_main").data.model_copy(
@@ -242,7 +267,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         )
         self.assertEqual(updated["selected"].data.call_config.scope, "all")
 
-    async def test_project_initializer_is_hidden_and_cannot_collaborate(
+    async def test_project_initializer_is_hidden_with_selected_collaboration(
         self,
     ) -> None:
         main = _record(
@@ -255,6 +280,21 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             "initializer",
             "Initializer",
             fixed_model=True,
+        ).model_copy(
+            update={
+                "data": _record(
+                    "initializer",
+                    "Initializer",
+                    fixed_model=True,
+                ).data.model_copy(
+                    update={
+                        "call_config": AgentCallConfig(
+                            scope="selected",
+                            allowed_agent_ids=["specialist"],
+                        ),
+                    },
+                ),
+            },
         )
         storage = SimpleNamespace(
             get_agent=AsyncMock(return_value=initializer),
@@ -305,7 +345,11 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             updated_initializer.data.call_config.scope,
-            "none",
+            "selected",
+        )
+        self.assertEqual(
+            updated_initializer.data.call_config.allowed_agent_ids,
+            ["specialist"],
         )
 
     async def test_selecting_main_demotes_the_previous_main(self) -> None:
@@ -386,6 +430,10 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             storage=storage,
             workspace_manager=workspace,
             access=access,
+            principal=AgentScopePrincipal(
+                kind="management",
+                subject=USER_ID,
+            ),
         )
 
         self.assertEqual(response.session_id, "session-id")
@@ -426,12 +474,65 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             storage=storage,
             access=access,
             permission_review_service=SimpleNamespace(),
+            principal=AgentScopePrincipal(
+                kind="management",
+                subject=USER_ID,
+            ),
         )
 
         session_config = storage.upsert_session.await_args.kwargs["config"]
         self.assertEqual(
             session_config.chat_model_config.model,
             "latest-fixed-model",
+        )
+
+    async def test_platform_metadata_is_merged_into_source_message(
+        self,
+    ) -> None:
+        message = UserMsg(
+            name="平台用户",
+            content="测试消息",
+            id="message-1",
+            metadata={"source": "engineering_platform"},
+        )
+        session = SessionRecord(
+            user_id=USER_ID,
+            agent_id="agent-1",
+            config=SessionConfig(workspace_id="workspace"),
+        )
+        storage = SimpleNamespace(
+            get_session=AsyncMock(return_value=session),
+            get_message=AsyncMock(return_value=message),
+            upsert_message=AsyncMock(),
+        )
+
+        result = await update_message_metadata(
+            session_id="session-1",
+            message_id="message-1",
+            body=UpdateMessageMetadataRequest(
+                metadata={"platform_status": "completed"},
+            ),
+            agent_id="agent-1",
+            user_id=USER_ID,
+            storage=storage,
+            principal=AgentScopePrincipal(
+                kind="management",
+                subject=USER_ID,
+            ),
+        )
+
+        self.assertEqual(result["content"][0]["text"], "测试消息")
+        self.assertEqual(
+            result["metadata"],
+            {
+                "source": "engineering_platform",
+                "platform_status": "completed",
+            },
+        )
+        persisted = storage.upsert_message.await_args.args[2]
+        self.assertEqual(
+            persisted.metadata["platform_status"],
+            "completed",
         )
 
     async def test_platform_settings_round_trip_through_sqlite(self) -> None:

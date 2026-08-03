@@ -8,6 +8,7 @@ from contextlib import suppress
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -23,8 +24,12 @@ from .agentscope_client import (
 )
 from .config import get_settings
 from .db import SessionLocal, get_db
-from .models import (AgentConversation, AgentConversationMessage, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectInitializationDraft, ProjectInitializationFile, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectSettings, ProjectStatusSnapshot,
-                      QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsRiskLink)
+from .models import (AgentConversation, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectInitializationDraft, ProjectInitializationFile, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectSettings, ProjectStatusSnapshot,
+                      QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsPredecessor, WbsRiskLink)
+from .agent_tool_gateway import (
+    compose_initialization_draft_payload,
+    initialization_draft_workflow_summary,
+)
 from .project_initialization import (
     ApplyInitializationDraftInput,
     InitializationApplyError,
@@ -333,6 +338,26 @@ def _catalog_agent_for_conversation(
     return selected
 
 
+def _platform_session_context(
+    user: User,
+    project: Project,
+    conversation: AgentConversation,
+) -> dict[str, Any]:
+    """Build the grouping snapshot stored with the AgentScope session."""
+    return {
+        "user_id": str(user.id),
+        "username": user.username,
+        "display_name": user.real_name,
+        "project_id": str(project.id),
+        "project_name": project.name,
+        "conversation_id": str(conversation.id),
+        "conversation_title": conversation.title,
+        "conversation_type": conversation.conversation_type,
+        "agent_name": conversation.agent_name,
+        "session_role": "primary",
+    }
+
+
 def _agent_conversation_or_404(
     db: Session,
     conversation_id: int,
@@ -351,9 +376,18 @@ INITIALIZATION_FILE_SUFFIXES = {
     ".txt",
     ".md",
     ".csv",
+    ".xls",
     ".xlsx",
     ".docx",
+    ".pptx",
     ".pdf",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".bmp",
+    ".webp",
+    ".tif",
+    ".tiff",
 }
 INITIALIZATION_FILE_MAX_BYTES = 30 * 1024 * 1024
 
@@ -434,54 +468,79 @@ def _initialization_agent_instruction(
         return ""
     return (
         "\n<project-initialization-role>\n"
-        "你是当前项目的专用初始化助手。项目名称已经由用户创建，不得修改。"
-        "你的任务是通过问答和原始附件补全工程基本信息、人员、WBS、风险源"
-        "与质量指标。\n"
-        "工作规则：\n"
-        "1. 先调用 dobby_get_project_initialization_state，确认正式业务数据、"
-        "最新草稿摘要和当前会话可读取的附件。必须明确区分正式业务数据与"
-        "尚未确认的草稿数据；正式表为空不代表草稿为空。\n"
-        "2. 如果 latest_draft 不为空，回答草稿内容或继续补充数据前，必须"
-        "调用 dobby_get_project_initialization_draft 按需读取相关分区。"
-        "新增风险或质量指标时，应读取草稿 WBS 并使用其中编码完成匹配，"
-        "不得因为正式 WBS 尚未入库就重新解析全部旧附件。\n"
-        "3. 已有草稿的日常补充必须调用 "
-        "dobby_update_project_initialization_draft 增量更新，只提交本次"
-        "改变的分区，并使用读取草稿返回的最新 revision。只有尚无草稿，"
-        "或用户明确要求从全部原始资料整体重建时，才调用 "
-        "dobby_submit_project_initialization_draft。\n"
-        "4. 新附件或用户要求重新核验原文时，必须调用 "
-        "dobby_read_project_initialization_file 读取；"
-        "平台不会把解析文本直接塞进提示词。大文件应按工作表或分页分段读取。\n"
-        "5. 只使用用户明确提供、附件实际包含、正式业务工具或草稿读取工具"
-        "返回的信息；缺失字段应询问用户，不得猜测。\n"
-        "6. 读取表格时必须区分数值 0 与空单元格：0 是真实数据，必须原样"
-        "提交；只有原始单元格为空时才使用 null。每条 WBS 都要明确提交"
-        "上级编码、计划开始、计划完成、进度、状态和优先级，缺失项填 null。\n"
-        "7. WBS 编码表示层级和同级自然顺序，但不表示前置依赖。上级编码只能"
-        "由点分编码的直接前缀确定，根节点上级必须为 null；层级等于编码段数。"
-        "不得把空值改写成“顶级 WBS”“未提供”等文本。predecessor_wbs_codes "
-        "只能来自附件或用户明确给出的前置关系；没有明确前置关系时必须传空"
-        "数组，禁止根据相邻编码、名称或日期自行推断前置关系。\n"
-        "8. WBS、风险和质量指标必须使用 WBS 编码建立关系，并在提交前检查"
-        "父子编码、明确给出的前置工序和关联编码是否真实存在。同一上级下，"
-        "按 WBS 编码自然顺序排列的工序，其计划开始时间不得倒退。附件中每一"
-        "条带 WBS 编码的记录都必须提交，不得因为名称像占位符而静默丢弃。"
-        "发现时间线、前置日期、父子关系或占位内容异常时必须保留原值并交给"
-        "用户核对，不得自行解释、补造依赖或改写原始计划。\n"
-        "9. 人员以身份证号识别同一自然人。同一身份证号在名单中承担多个"
-        "岗位时，必须保留为多条人员任职记录，分别保留岗位、证书和职责；"
-        "不得误判为重复人员，也不得合并或丢弃其中任一岗位。平台确认入库时"
-        "会让这些岗位共用同一个账号。\n"
-        "10. 提交和增量更新工具都只保存待确认草稿，不会写入正式业务表；"
-        "不得声称已经入库。\n"
-        "11. 必须检查草稿工具返回的校验结果。只要存在错误或警告，就要在回复"
-        "中简要说明发现了哪些问题，并明确提示用户点击 Dobby 平台中的“核对"
-        "草稿”查看、修正或确认；不得只说整理完成，也不得把问题隐藏在工具"
-        "结果中。\n"
-        "12. 用户必须在 Dobby 平台核对并确认草稿后，平台才会执行正式写入；"
-        "你不能绕过这一确认步骤。人员登录账号和初始密码由平台在核对阶段"
-        "自动生成或复用已有账号，不得在草稿中编造凭证。\n"
+        "你是当前项目的专用初始化主智能体。项目名称已经由用户创建，不得"
+        "修改。你的职责是先把用户问答和任意格式附件整理成平台标准资料，"
+        "再交给对应专项智能体批量写入待确认草稿。你写入的 artifact 只是"
+        "标准化中间资料，不是业务草稿，更不是正式业务入库。\n"
+        "不可打乱的执行顺序：\n"
+        "一、先调用 dobby_get_project_initialization_state。若已有待核对"
+        "草稿，按需调用 dobby_get_project_initialization_draft 读取相关旧"
+        "分区；增量资料必须与旧分区合并为完整结果。\n"
+        "二、任何需要更新草稿的任务，都先调用 "
+        "dobby_begin_project_initialization_normalization 建立标准化批次。"
+        "只有你可以调用原始附件工具。附件可能是 XLS/XLSX、CSV、TXT、"
+        "Markdown、DOCX、PPTX、PDF、图片或其他已支持格式，也可能在一份"
+        "文件的不同工作表、页面或段落中混合多个业务分区。不得按扩展名、"
+        "文件名或固定模板猜测，必须读取实际内容。\n"
+        "三、简单明确的内容直接整理；复杂内容按工程信息、人员、WBS、风险"
+        "源、质量指标拆分。通过 dobby_write_project_initialization_artifact "
+        "写标准资料：待入草稿的结构化数据必须写成符合平台字段规范的 JSON；"
+        "叙述、证据和补充说明可以写 Markdown。除工程信息外，每个结构化"
+        "分区必须先用 part_index=1 只提交 1 条代表性记录；必须等待工具返回"
+        " probe_accepted，失败时只修正这一条，严禁预先生成或发送其余批次。"
+        "试写成功后，剩余记录从 part_index=2 开始按连续编号分片，每批最多"
+        " 20 条且不超过 64KB。只能使用工具参数中声明的标准字段名，禁止"
+        "自造字段别名。每份标准资料只能属于一个业务分区，并保留附件 ID、"
+        "工作表、行号、页码或段落等来源。\n"
+        "四、调用 dobby_finalize_project_initialization_normalization。只有"
+        "返回 ready 才代表标准化完成。此前严禁调用 TaskCreate、TeamCreate、"
+        "AgentInvite 或 dobby_begin_project_initialization_draft，也不得把"
+        "原始附件交给任何专项智能体。\n"
+        "五、标准化 ready 后再判断任务复杂度。简单问答、读取明确字段、解释"
+        "结果且不更新草稿的单步任务不为形式创建计划。只要本轮需要写入或"
+        "更新任一草稿分区，就必须把该分区交给对应专项智能体；即使只有一个"
+        "分区也不得由你代写。多个分区、批量数据、跨表关联、统一核验或多"
+        "智能体协同时，使用 TaskCreate/TaskUpdate 建立并维护简洁计划。已有"
+        "同一任务的未完成计划时继续使用，不重复创建；状态必须跟随真实"
+        "进展。\n"
+        "六、使用 ready 的 normalization_id 调用 "
+        "dobby_begin_project_initialization_draft，只填写本轮实际涉及的"
+        " expected_sections。随后必须创建临时团队，通过 AgentInvite 邀请"
+        "已持久化配置的工程信息专家、人员与岗位专家、WBS 与进度专家、"
+        "风险源专家、质量指标专家。禁止使用 AgentCreate 临时创建专家，也"
+        "不要邀请无关成员。只邀请 expected_sections 对应的专家；标准化"
+        "完成后不得继续由主智能体处理草稿分区。\n"
+        "七、给专项专家的任务只提供 normalization_id、draft_id、业务分区"
+        "和核对要求。专家只能读取标准 JSON/Markdown，并优先调用 "
+        "dobby_import_project_initialization_artifact 批量导入；不得读取原始"
+        "附件。读取具体分片时必须明确 artifact_format；不得在工具参数或"
+        "团队消息中重新生成、复制整批 JSON。所有"
+        "必需分区完成后，再邀请初始化核验专家读取草稿做跨分区统一核验；"
+        "核验成功前不得结束团队。\n"
+        "数据规则：\n"
+        "1. 只使用用户明确提供、附件实际包含、正式业务工具、旧草稿或标准"
+        "资料工具返回的信息；缺失值使用 null 或空数组，不得用常识补造。\n"
+        "2. 数值 0 是真实值，必须原样保留；只有原始空值才是 null。\n"
+        "3. WBS 编码表示层级和同级自然顺序，但不自动表示前置依赖。上级"
+        "只能由点分编码的直接前缀确定，根节点上级为 null，层级等于编码"
+        "段数。不得写“顶级 WBS”“未提供”等替代空值。前置编码只能来自"
+        "原文或用户明确说明，没有时传空数组。\n"
+        "4. 质量指标通过 WBS 编码关联；风险源不关联 WBS，只保留风险清单"
+        "中的相关工序文字和风险起止日期。标准化时检查 WBS 父子编码、明确"
+        "前置关系和质量指标关联编码是否存在；同一上级下按 WBS 编码自然顺序"
+        "排列的工序，其计划开始时间不得倒退。发现时间线、父子关系、前置"
+        "日期、关联或占位内容异常时，必须保留原值并形成核对说明，不得"
+        "自行修正、补造依赖或揣摩原因。\n"
+        "5. 人员以身份证号识别自然人。同一身份证号在同一项目承担多个岗位"
+        "时保留多条任职记录，共用一个平台账号，不得误判为重复人员。\n"
+        "6. 标准资料、专项导入和核验都只产生待确认草稿，不写正式业务表。"
+        "用户在 Dobby 平台核对并确认后才正式入库；人员账号由平台自动生成"
+        "或复用，智能体不得生成登录凭证。\n"
+        "完成规则：只有 expected_sections 全部出现在草稿 workflow 的 "
+        "completed_sections，且核验专家完成最终核验，才算本轮完成。成员"
+        "回复结束、TeamSay 已发送、工具调用成功或正在等待专家都不等于整轮"
+        "完成。核验存在错误或警告时，必须概括问题并明确提示用户点击"
+        "“核对草稿”查看和处理。\n"
         "</project-initialization-role>"
     )
 
@@ -584,80 +643,204 @@ def _agent_reply_extra_data(
     reply: AgentScopeReply,
     trace_summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build the durable, UI-facing runtime payload for one platform reply."""
+    """Project AgentScope-owned runtime data into the platform API shape."""
     runtime_messages = reply.raw_messages or (
         [reply.raw_message] if reply.raw_message else []
     )
+    persisted_trace = None
+    if reply.raw_message:
+        metadata = reply.raw_message.get("metadata") or {}
+        if isinstance(metadata, dict):
+            persisted_trace = metadata.get("platform_runtime_trace")
     result: dict[str, Any] = {
         "status": reply.status,
         "agentscope_message": reply.raw_message,
         "agentscope_messages": runtime_messages,
     }
-    if trace_summary:
-        result["runtime_trace"] = trace_summary
+    resolved_trace = trace_summary or persisted_trace
+    if isinstance(resolved_trace, dict):
+        result["runtime_trace"] = resolved_trace
     return result
 
 
-def _persist_agent_reply(
+def _message_text(message: dict[str, Any]) -> str:
+    return "\n".join(
+        str(block.get("text") or "")
+        for block in message.get("content", [])
+        if isinstance(block, dict)
+        and block.get("type") == "text"
+        and block.get("text")
+    )
+
+
+def _tagged_content(text: str, tag: str) -> str | None:
+    matched = re.search(
+        rf"<{re.escape(tag)}>\s*(.*?)\s*</{re.escape(tag)}>",
+        text,
+        flags=re.DOTALL,
+    )
+    return matched.group(1).strip() if matched else None
+
+
+def _initialization_files_from_agentscope_message(
+    message: dict[str, Any],
+) -> list[dict[str, Any]]:
+    metadata = message.get("metadata") or {}
+    stored = (
+        metadata.get("platform_initialization_files")
+        if isinstance(metadata, dict)
+        else None
+    )
+    if isinstance(stored, list):
+        return [item for item in stored if isinstance(item, dict)]
+    raw = _tagged_content(_message_text(message), "initialization-files")
+    if not raw:
+        return []
+    matched = re.search(r"(\[[\s\S]*\])", raw)
+    if not matched:
+        return []
+    try:
+        parsed = json.loads(matched.group(1))
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [
+        {
+            "id": item.get("file_id"),
+            "name": item.get("file_name"),
+            "size": item.get("file_size") or 0,
+        }
+        for item in parsed
+        if isinstance(item, dict)
+        and item.get("file_id") is not None
+        and item.get("file_name")
+    ]
+
+
+def _project_agentscope_user_message(
+    conversation_id: int,
+    message: dict[str, Any],
+) -> dict[str, Any]:
+    metadata = message.get("metadata") or {}
+    display_content = (
+        metadata.get("platform_display_content")
+        if isinstance(metadata, dict)
+        else None
+    )
+    if not isinstance(display_content, str):
+        display_content = _tagged_content(
+            _message_text(message),
+            "user-request",
+        )
+    if display_content is None:
+        display_content = _message_text(message)
+    return {
+        "id": str(message.get("id") or uuid4().hex),
+        "conversation_id": conversation_id,
+        "role": "user",
+        "content": display_content,
+        "extra_data": {
+            "initialization_files": (
+                _initialization_files_from_agentscope_message(message)
+            ),
+        },
+        "created_at": str(
+            message.get("created_at") or datetime.now(UTC).isoformat(),
+        ),
+    }
+
+
+def _project_agentscope_reply(
     conversation_id: int,
     reply: AgentScopeReply,
     trace_summary: dict[str, Any] | None = None,
-    *,
-    audit_new: bool = True,
-) -> dict[str, Any] | None:
-    """Persist a streamed AgentScope reply using a fresh DB session.
+) -> dict[str, Any]:
+    source = reply.raw_message or (
+        reply.raw_messages[-1] if reply.raw_messages else {}
+    )
+    return {
+        "id": str(source.get("id") or reply.message_id or uuid4().hex),
+        "conversation_id": conversation_id,
+        "role": "assistant",
+        "content": reply.content,
+        "agentscope_message_id": (
+            str(source.get("id"))
+            if source.get("id") is not None
+            else reply.message_id
+        ),
+        "extra_data": _agent_reply_extra_data(reply, trace_summary),
+        "created_at": str(
+            source.get("created_at") or datetime.now(UTC).isoformat(),
+        ),
+    }
 
-    Streaming responses outlive the request-scoped SQLAlchemy session.  A
-    fresh session also lets completion continue after the browser disconnects.
-    The AgentScope message id is used as an idempotency key so a resumed
-    permission request updates its parked message instead of duplicating it.
-    """
+
+def _finalize_agent_reply(
+    conversation_id: int,
+    reply: AgentScopeReply,
+    trace_summary: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Annotate the AgentScope source message and update conversation state."""
     with SessionLocal() as db:
         conversation = db.get(AgentConversation, conversation_id)
         if conversation is None:
             return None
-        assistant: AgentConversationMessage | None = None
-        if reply.message_id:
-            assistant = db.scalar(
-                select(AgentConversationMessage).where(
-                    AgentConversationMessage.conversation_id
-                    == conversation_id,
-                    AgentConversationMessage.agentscope_message_id
-                    == reply.message_id,
-                ),
+        if not conversation.agentscope_session_id:
+            return None
+        client = _agentscope_client()
+        runtime_messages = reply.raw_messages or (
+            [reply.raw_message] if reply.raw_message else []
+        )
+        final_message = next(
+            (
+                message
+                for message in reversed(runtime_messages)
+                if str(message.get("id") or "")
+                == str(reply.message_id or "")
+            ),
+            reply.raw_message,
+        )
+        if final_message and reply.message_id:
+            collaboration_statuses = {
+                str(message["id"]): str(
+                    message["platform_collaboration_status"],
+                )
+                for message in runtime_messages
+                if message.get("id")
+                and message.get("platform_collaboration_status")
+            }
+            metadata_update: dict[str, Any] = {
+                "platform_status": reply.status,
+            }
+            if collaboration_statuses:
+                metadata_update["platform_collaboration_statuses"] = (
+                    collaboration_statuses
+                )
+            if trace_summary:
+                metadata_update["platform_runtime_trace"] = trace_summary
+            updated = client.update_message_metadata(
+                conversation.agentscope_session_id,
+                conversation.agent_id,
+                str(reply.message_id),
+                metadata_update,
             )
-        is_new = assistant is None
-        if assistant is None:
-            assistant = AgentConversationMessage(
-                conversation_id=conversation.id,
-                role="assistant",
-                content=reply.content,
-                agentscope_message_id=reply.message_id,
-                extra_data={},
+            final_message["metadata"] = updated.get(
+                "metadata",
+                {
+                    **(final_message.get("metadata") or {}),
+                    **metadata_update,
+                },
             )
-            db.add(assistant)
-        assistant.content = reply.content
-        assistant.extra_data = {
-            **(assistant.extra_data or {}),
-            **_agent_reply_extra_data(reply, trace_summary),
-        }
         conversation.status = reply.status
         conversation.last_error = None
         conversation.updated_at = datetime.now(UTC)
-        user = db.get(User, conversation.user_id)
-        if is_new and user is not None and audit_new:
-            audit(
-                db,
-                user,
-                "调用智能体",
-                f"调用「{conversation.agent_name}」处理平台消息",
-                conversation.project_id,
-                "agent_conversation",
-                conversation.id,
-            )
         db.commit()
-        db.refresh(assistant)
-        return serialize(assistant)
+        return _project_agentscope_reply(
+            conversation.id,
+            reply,
+            trace_summary,
+        )
 
 
 def _agentscope_assistant_groups(
@@ -679,17 +862,92 @@ def _agentscope_assistant_groups(
     return groups
 
 
+def _agentscope_platform_messages(
+    conversation_id: int,
+    messages: list[dict[str, Any]],
+    live_status: str,
+) -> list[dict[str, Any]]:
+    """Project one authorized AgentScope history without a local mirror."""
+    result: list[dict[str, Any]] = []
+    assistant_group: list[dict[str, Any]] = []
+
+    def flush_assistants(*, latest: bool) -> None:
+        if not assistant_group:
+            return
+        final_metadata = assistant_group[-1].get("metadata") or {}
+        persisted_statuses = (
+            final_metadata.get("platform_collaboration_statuses")
+            if isinstance(final_metadata, dict)
+            else None
+        )
+        if isinstance(persisted_statuses, dict):
+            for grouped_message in assistant_group:
+                grouped_message_id = str(grouped_message.get("id") or "")
+                collaboration_status = persisted_statuses.get(
+                    grouped_message_id,
+                )
+                if collaboration_status:
+                    grouped_message["platform_collaboration_status"] = (
+                        collaboration_status
+                    )
+        result.append(
+            _project_agentscope_reply(
+                conversation_id,
+                _agentscope_reply_from_group(
+                    list(assistant_group),
+                    live_status if latest else "idle",
+                ),
+            ),
+        )
+        assistant_group.clear()
+
+    for source in messages:
+        role = str(source.get("role") or "")
+        metadata = source.get("metadata") or {}
+        message = dict(source)
+        if isinstance(metadata, dict):
+            collaboration_status = metadata.get(
+                "platform_collaboration_status",
+            )
+            if collaboration_status:
+                message["platform_collaboration_status"] = (
+                    collaboration_status
+                )
+        if role == "user":
+            flush_assistants(latest=False)
+            result.append(
+                _project_agentscope_user_message(
+                    conversation_id,
+                    message,
+                ),
+            )
+        elif role == "assistant":
+            assistant_group.append(message)
+    flush_assistants(latest=True)
+    return result
+
+
 def _agentscope_reply_from_group(
     messages: list[dict[str, Any]],
     live_status: str,
 ) -> AgentScopeReply:
     """Project one AgentScope turn into the platform's durable reply shape."""
     last = messages[-1]
+    metadata = last.get("metadata") or {}
+    persisted_status = (
+        metadata.get("platform_status")
+        if isinstance(metadata, dict)
+        else None
+    )
     finished_reason = str(last.get("finished_reason") or "")
     if last.get("error") or finished_reason == "error":
         status_value = "error"
     elif finished_reason == "interrupted":
         status_value = "interrupted"
+    elif persisted_status:
+        status_value = str(persisted_status)
+    elif live_status not in {"idle", "active", "completed"}:
+        status_value = live_status
     elif last.get("finished_at") is not None:
         status_value = "completed"
     else:
@@ -712,43 +970,6 @@ def _agentscope_reply_from_group(
         raw_message=last,
         raw_messages=messages,
     )
-
-
-def _reconcile_agent_conversation_messages(
-    conversation: AgentConversation,
-) -> None:
-    """Recover finished/parked AgentScope replies missing from platform DB."""
-    if not conversation.agentscope_session_id:
-        return
-    client = _agentscope_client()
-    live_status = client.session_status(
-        conversation.agentscope_session_id,
-        conversation.agent_id,
-    )
-    # The active SSE request owns persistence while a turn is running.
-    # Reconciliation is for interrupted/disconnected/parked/finished turns.
-    # Parked statuses are intentionally included by the caller: an interrupt
-    # can race with the original SSE persistence and temporarily restore
-    # ``awaiting_permission`` after the interrupt endpoint set
-    # ``interrupting``. Re-reading history must still reconcile the eventual
-    # interrupted AgentScope message.
-    if live_status == "running":
-        return
-    payload = client.list_messages(
-        conversation.agentscope_session_id,
-        conversation.agent_id,
-    )
-    messages = [
-        item
-        for item in payload.get("messages", [])
-        if isinstance(item, dict)
-    ]
-    for group in _agentscope_assistant_groups(messages):
-        _persist_agent_reply(
-            conversation.id,
-            _agentscope_reply_from_group(group, live_status),
-            audit_new=False,
-        )
 
 
 def _record_agent_turn_error(conversation_id: int, detail: str) -> None:
@@ -783,18 +1004,41 @@ def _sse_frame(event: str, data: Any) -> str:
     )
 
 
-async def _persist_agent_reply_after_disconnect(
+async def _annotate_collaboration_event(
+    client: AgentScopeClient,
+    *,
+    session_id: str,
+    agent_id: str,
+    runtime_event: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep an interim leader reply open while team members still work."""
+    if str(runtime_event.get("type") or "") != "REPLY_END":
+        return runtime_event
+    collaboration_pending = await asyncio.to_thread(
+        client.session_team_work_pending,
+        session_id,
+        agent_id,
+    )
+    if not collaboration_pending:
+        return runtime_event
+    return {
+        **runtime_event,
+        "platform_collaboration_pending": True,
+    }
+
+
+async def _finalize_agent_reply_after_disconnect(
     chat_task: asyncio.Task[AgentScopeReply],
     conversation_id: int,
     trace_summary: dict[str, Any],
 ) -> None:
-    """Finish persistence when the browser closes an in-flight stream."""
+    """Finish source annotation when the browser closes an in-flight stream."""
     try:
         reply = await asyncio.shield(chat_task)
         if reply.projected:
             return
         await asyncio.to_thread(
-            _persist_agent_reply,
+            _finalize_agent_reply,
             conversation_id,
             reply,
             trace_summary,
@@ -996,6 +1240,7 @@ def create_agent_conversation(
                 f"platform-u{user.id}-p{project.id}-conversation-{row.id}"
             ),
             name=row.title,
+            platform_context=_platform_session_context(user, project, row),
         )
         row.status = "active"
         audit(
@@ -1065,7 +1310,8 @@ def upload_project_initialization_file(
         raise HTTPException(
             status_code=422,
             detail=(
-                "初始化附件仅支持 TXT、Markdown、CSV、XLSX、DOCX 和 PDF"
+                "初始化附件仅支持 TXT、Markdown、CSV、XLS/XLSX、"
+                "DOCX、PPTX、PDF 和常见图片"
             ),
         )
     content = file.file.read(INITIALIZATION_FILE_MAX_BYTES + 1)
@@ -1163,34 +1409,50 @@ def list_agent_conversation_messages(
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     conversation = _agent_conversation_or_404(db, conversation_id, user)
-    reconciled = False
-    if conversation.status in {
-        "creating",
-        "running",
-        "interrupting",
-        "awaiting_permission",
-        "awaiting_external_result",
-        "error",
-    } or conversation.last_error:
-        try:
-            _reconcile_agent_conversation_messages(conversation)
-            reconciled = True
-        except AgentScopeGatewayError:
-            # Local history must remain readable while AgentScope is
-            # temporarily unavailable.
-            pass
-    if reconciled:
-        # Reconciliation persists through a separate session so it can also
-        # finish after an SSE client disconnects. End this request session's
-        # earlier read transaction before selecting rows, otherwise SQLite
-        # may return the pre-reconciliation message snapshot.
-        db.rollback()
-    rows = db.scalars(
-        select(AgentConversationMessage)
-        .where(AgentConversationMessage.conversation_id == conversation_id)
-        .order_by(AgentConversationMessage.created_at),
-    ).all()
-    return ok([serialize(row) for row in rows])
+    if not conversation.agentscope_session_id:
+        raise HTTPException(
+            status_code=409,
+            detail="智能体会话尚未完成初始化",
+        )
+    client = _agentscope_client()
+    try:
+        live_status = client.session_status(
+            conversation.agentscope_session_id,
+            conversation.agent_id,
+        )
+        history = client.list_all_messages(
+            conversation.agentscope_session_id,
+            conversation.agent_id,
+        )
+    except AgentScopeGatewayError as exc:
+        conversation.status = "error"
+        conversation.last_error = str(exc)
+        conversation.updated_at = datetime.now(UTC)
+        db.commit()
+        _raise_agentscope_http_error(exc)
+
+    messages = _agentscope_platform_messages(
+        conversation.id,
+        list(history.get("messages") or []),
+        live_status,
+    )
+    latest_assistant = next(
+        (item for item in reversed(messages) if item["role"] == "assistant"),
+        None,
+    )
+    if live_status not in {"idle", "active", "completed"}:
+        conversation.status = live_status
+    elif latest_assistant:
+        conversation.status = str(
+            (latest_assistant.get("extra_data") or {}).get("status")
+            or "completed",
+        )
+    else:
+        conversation.status = "active"
+    conversation.last_error = None
+    conversation.updated_at = datetime.now(UTC)
+    db.commit()
+    return ok(messages)
 
 
 @router.post("/agent-conversations/{conversation_id}/messages")
@@ -1218,6 +1480,11 @@ def create_agent_conversation_message(
         client.sync_session(
             agent=selected_agent,
             session_id=conversation.agentscope_session_id,
+            platform_context=_platform_session_context(
+                user,
+                project,
+                conversation,
+            ),
         )
     except AgentScopeGatewayError as exc:
         conversation.status = "error"
@@ -1230,23 +1497,14 @@ def create_agent_conversation_message(
         conversation,
         payload.initialization_file_ids,
     )
-    user_message = AgentConversationMessage(
-        conversation_id=conversation.id,
-        role="user",
-        content=payload.content,
-        extra_data={
-            "initialization_files": [
-                {
-                    "id": item.id,
-                    "name": item.file_name,
-                    "size": item.file_size,
-                }
-                for item in initialization_files
-            ],
-        },
-    )
-    db.add(user_message)
-    db.flush()
+    initialization_file_refs = [
+        {
+            "id": item.id,
+            "name": item.file_name,
+            "size": item.file_size,
+        }
+        for item in initialization_files
+    ]
     injected_content = (
         _build_agent_project_context(db, project, user)
         + _initialization_agent_instruction(conversation)
@@ -1255,34 +1513,30 @@ def create_agent_conversation_message(
         + payload.content
         + "\n</user-request>"
     )
-    try:
-        reply = client.chat(
-            agent_id=conversation.agent_id,
-            session_id=conversation.agentscope_session_id,
-            content=injected_content,
-            sender_name=user.real_name,
-            metadata={
-                "source": "engineering_platform",
-                "platform_user_id": user.id,
-                "project_id": project.id,
-                "conversation_id": conversation.id,
-            },
-        )
-    except AgentScopeGatewayError as exc:
-        conversation.status = "error"
-        conversation.last_error = str(exc)
-        db.commit()
-        _raise_agentscope_http_error(exc)
-
-    assistant = AgentConversationMessage(
-        conversation_id=conversation.id,
-        role="assistant",
-        content=reply.content,
-        agentscope_message_id=reply.message_id,
-        extra_data=_agent_reply_extra_data(reply),
+    user_message_id = uuid4().hex
+    user_message_metadata = {
+        "source": "engineering_platform",
+        "platform_user_id": user.id,
+        "platform_username": user.username,
+        "platform_user_display_name": user.real_name,
+        "project_id": project.id,
+        "platform_project_name": project.name,
+        "conversation_id": conversation.id,
+        "platform_display_content": payload.content,
+        "platform_initialization_files": initialization_file_refs,
+    }
+    user_message = _project_agentscope_user_message(
+        conversation.id,
+        {
+            "id": user_message_id,
+            "name": user.real_name,
+            "role": "user",
+            "content": [{"type": "text", "text": injected_content}],
+            "metadata": user_message_metadata,
+            "created_at": datetime.now(UTC).isoformat(),
+        },
     )
-    db.add(assistant)
-    conversation.status = reply.status
+    conversation.status = "running"
     conversation.last_error = None
     conversation.updated_at = datetime.now(UTC)
     audit(
@@ -1295,14 +1549,35 @@ def create_agent_conversation_message(
         conversation.id,
     )
     db.commit()
-    db.refresh(user_message)
-    db.refresh(assistant)
+    try:
+        reply = client.chat(
+            agent_id=conversation.agent_id,
+            session_id=conversation.agentscope_session_id,
+            content=injected_content,
+            sender_name=user.real_name,
+            metadata=user_message_metadata,
+            user_message_id=user_message_id,
+        )
+    except AgentScopeGatewayError as exc:
+        conversation.status = "error"
+        conversation.last_error = str(exc)
+        conversation.updated_at = datetime.now(UTC)
+        db.commit()
+        _raise_agentscope_http_error(exc)
+
+    assistant = _finalize_agent_reply(
+        conversation.id,
+        reply,
+    )
+    if assistant is None:
+        raise HTTPException(status_code=409, detail="平台智能体会话已被删除")
+    db.expire_all()
     db.refresh(conversation)
     return ok(
         {
             "conversation": serialize(conversation),
-            "user_message": serialize(user_message),
-            "message": serialize(assistant),
+            "user_message": user_message,
+            "message": assistant,
             "runtime_status": reply.status,
         },
         (
@@ -1339,6 +1614,11 @@ def stream_agent_conversation_message(
         client.sync_session(
             agent=selected_agent,
             session_id=conversation.agentscope_session_id,
+            platform_context=_platform_session_context(
+                user,
+                project,
+                conversation,
+            ),
         )
     except AgentScopeGatewayError as exc:
         conversation.status = "error"
@@ -1351,28 +1631,6 @@ def stream_agent_conversation_message(
         conversation,
         payload.initialization_file_ids,
     )
-    user_message = AgentConversationMessage(
-        conversation_id=conversation.id,
-        role="user",
-        content=payload.content,
-        extra_data={
-            "initialization_files": [
-                {
-                    "id": item.id,
-                    "name": item.file_name,
-                    "size": item.file_size,
-                }
-                for item in initialization_files
-            ],
-        },
-    )
-    db.add(user_message)
-    conversation.status = "running"
-    conversation.last_error = None
-    conversation.updated_at = datetime.now(UTC)
-    db.commit()
-    db.refresh(user_message)
-
     injected_content = (
         _build_agent_project_context(db, project, user)
         + _initialization_agent_instruction(conversation)
@@ -1381,19 +1639,56 @@ def stream_agent_conversation_message(
         + payload.content
         + "\n</user-request>"
     )
+    initialization_file_refs = [
+        {
+            "id": item.id,
+            "name": item.file_name,
+            "size": item.file_size,
+        }
+        for item in initialization_files
+    ]
+    user_message_id = uuid4().hex
     agent_id = conversation.agent_id
     session_id = conversation.agentscope_session_id
     sender_name = user.real_name
     metadata = {
         "source": "engineering_platform",
         "platform_user_id": user.id,
+        "platform_username": user.username,
+        "platform_user_display_name": user.real_name,
         "project_id": project.id,
+        "platform_project_name": project.name,
         "conversation_id": conversation.id,
-        "platform_message_id": user_message.id,
+        "platform_display_content": payload.content,
+        "platform_initialization_files": initialization_file_refs,
     }
+    user_message = _project_agentscope_user_message(
+        conversation.id,
+        {
+            "id": user_message_id,
+            "name": sender_name,
+            "role": "user",
+            "content": [{"type": "text", "text": injected_content}],
+            "metadata": metadata,
+            "created_at": datetime.now(UTC).isoformat(),
+        },
+    )
+    conversation.status = "running"
+    conversation.last_error = None
+    conversation.updated_at = datetime.now(UTC)
+    audit(
+        db,
+        user,
+        "调用智能体",
+        f"调用「{conversation.agent_name}」处理平台消息",
+        project.id,
+        "agent_conversation",
+        conversation.id,
+    )
+    db.commit()
     accepted_payload = {
         "conversation_id": conversation.id,
-        "user_message": serialize(user_message),
+        "user_message": user_message,
         "runtime_status": "running",
     }
 
@@ -1406,7 +1701,6 @@ def stream_agent_conversation_message(
             "team_update_count": 0,
             "subagent_hitl": [],
         }
-        yield _sse_frame("accepted", accepted_payload)
         try:
             async with client.event_stream(session_id, agent_id) as events:
                 event_task = asyncio.create_task(anext(events))
@@ -1419,8 +1713,10 @@ def stream_agent_conversation_message(
                         content=injected_content,
                         sender_name=sender_name,
                         metadata=metadata,
+                        user_message_id=user_message_id,
                     ),
                 )
+                yield _sse_frame("accepted", accepted_payload)
 
                 while True:
                     waiting: set[asyncio.Task[Any]] = {chat_task}
@@ -1444,6 +1740,14 @@ def stream_agent_conversation_message(
                         except StopAsyncIteration:
                             event_task = None
                         else:
+                            runtime_event = (
+                                await _annotate_collaboration_event(
+                                    client,
+                                    session_id=session_id,
+                                    agent_id=agent_id,
+                                    runtime_event=runtime_event,
+                                )
+                            )
                             event_type = str(runtime_event.get("type") or "")
                             if event_type == "MODEL_CALL_START":
                                 model_name = str(
@@ -1534,7 +1838,7 @@ def stream_agent_conversation_message(
                         await event_task
 
             persisted = await asyncio.to_thread(
-                _persist_agent_reply,
+                _finalize_agent_reply,
                 conversation_id,
                 reply,
                 trace_summary,
@@ -1554,7 +1858,7 @@ def stream_agent_conversation_message(
         except asyncio.CancelledError:
             if chat_task is not None:
                 asyncio.create_task(
-                    _persist_agent_reply_after_disconnect(
+                    _finalize_agent_reply_after_disconnect(
                         chat_task,
                         conversation_id,
                         trace_summary,
@@ -1566,7 +1870,7 @@ def stream_agent_conversation_message(
                 event_task.cancel()
             if chat_task is not None and not chat_task.done():
                 asyncio.create_task(
-                    _persist_agent_reply_after_disconnect(
+                    _finalize_agent_reply_after_disconnect(
                         chat_task,
                         conversation_id,
                         trace_summary,
@@ -1654,7 +1958,7 @@ def confirm_agent_conversation_tool(
             },
             reply.content,
         )
-    persisted = _persist_agent_reply(conversation.id, reply)
+    persisted = _finalize_agent_reply(conversation.id, reply)
     if persisted is None:
         raise HTTPException(status_code=409, detail="平台智能体会话已被删除")
     return ok(
@@ -1759,6 +2063,14 @@ def stream_agent_conversation_tool_confirmation(
                         except StopAsyncIteration:
                             event_task = None
                         else:
+                            runtime_event = (
+                                await _annotate_collaboration_event(
+                                    client,
+                                    session_id=session_id,
+                                    agent_id=agent_id,
+                                    runtime_event=runtime_event,
+                                )
+                            )
                             event_type = str(runtime_event.get("type") or "")
                             if event_type == "MODEL_CALL_START":
                                 model_name = str(
@@ -1860,7 +2172,7 @@ def stream_agent_conversation_tool_confirmation(
                 return
 
             persisted = await asyncio.to_thread(
-                _persist_agent_reply,
+                _finalize_agent_reply,
                 conversation_id,
                 reply,
                 trace_summary,
@@ -1881,7 +2193,7 @@ def stream_agent_conversation_tool_confirmation(
         except asyncio.CancelledError:
             if confirm_task is not None:
                 asyncio.create_task(
-                    _persist_agent_reply_after_disconnect(
+                    _finalize_agent_reply_after_disconnect(
                         confirm_task,
                         conversation_id,
                         trace_summary,
@@ -1894,7 +2206,7 @@ def stream_agent_conversation_tool_confirmation(
                 event_task.cancel()
             if confirm_task is not None and not confirm_task.done():
                 asyncio.create_task(
-                    _persist_agent_reply_after_disconnect(
+                    _finalize_agent_reply_after_disconnect(
                         confirm_task,
                         conversation_id,
                         trace_summary,
@@ -1927,7 +2239,7 @@ def stream_agent_conversation_tool_confirmation(
                     await event_task
             if confirm_task is not None and not reply_handed_off:
                 asyncio.create_task(
-                    _persist_agent_reply_after_disconnect(
+                    _finalize_agent_reply_after_disconnect(
                         confirm_task,
                         conversation_id,
                         trace_summary,
@@ -1988,12 +2300,32 @@ def _initialization_draft_review(
     draft: ProjectInitializationDraft,
 ) -> dict[str, Any]:
     data = serialize(draft)
-    payload = draft.payload if isinstance(draft.payload, dict) else {}
-    current_issues = validate_initialization_payload(
-        ProjectInitializationPayload.model_validate(payload),
+    payload_model = compose_initialization_draft_payload(db, draft)
+    payload = payload_model.model_dump(mode="json")
+    workflow = initialization_draft_workflow_summary(db, draft)
+    semantic_issues = (
+        list(workflow.get("semantic_issues") or [])
+        if workflow
+        else []
     )
+    current_issues = (
+        []
+        if workflow and workflow["stage"] != "completed"
+        else [
+            *validate_initialization_payload(payload_model),
+            *semantic_issues,
+        ]
+    )
+    data["payload"] = payload
+    data["workflow"] = workflow
     data["validation_issues"] = current_issues
-    if draft.status not in {"applied", "rejected"}:
+    if (
+        draft.status not in {"applied", "rejected"}
+        and workflow
+        and workflow["stage"] != "completed"
+    ):
+        data["status"] = workflow["stage"]
+    elif draft.status not in {"applied", "rejected"}:
         data["status"] = (
             "invalid"
             if any(issue["level"] == "error" for issue in current_issues)
@@ -2439,66 +2771,435 @@ def list_for_project(model: type[ModelType], project_id: int, db: Session) -> li
     return [serialize(row) for row in db.scalars(select(model).where(model.project_id == project_id).order_by(model.id.desc())).all()]
 
 
+def serialize_project_wbs(db: Session, project_id: int) -> list[dict[str, Any]]:
+    """Return the normalized WBS tree together with lightweight legacy aliases."""
+    project_or_404(db, project_id)
+    rows = db.scalars(
+        select(WbsItem)
+        .where(WbsItem.project_id == project_id)
+        .order_by(WbsItem.sort_order, WbsItem.id),
+    ).all()
+    row_by_id = {row.id: row for row in rows}
+    predecessor_ids: dict[int, list[int]] = {row.id: [] for row in rows}
+    if row_by_id:
+        links = db.scalars(
+            select(WbsPredecessor)
+            .where(WbsPredecessor.wbs_item_id.in_(row_by_id))
+            .order_by(WbsPredecessor.id),
+        ).all()
+        for link in links:
+            if link.predecessor_wbs_item_id in row_by_id:
+                predecessor_ids.setdefault(link.wbs_item_id, []).append(
+                    link.predecessor_wbs_item_id,
+                )
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        predecessors = predecessor_ids.get(row.id, [])
+        result.append({
+            **serialize(row),
+            # These aliases keep older workbench consumers functional while the
+            # formal-data view uses the normalized field names above.
+            "code": row.wbs_code,
+            "planned_start": row.planned_start_at.isoformat() if row.planned_start_at else None,
+            "planned_finish": row.planned_finish_at.isoformat() if row.planned_finish_at else None,
+            "progress": float(row.progress_percent or 0),
+            "status": row.status_text,
+            "responsible_user_id": None,
+            "raw_data": {},
+            "predecessor_ids": predecessors,
+            "predecessor_codes": [row_by_id[item_id].wbs_code for item_id in predecessors],
+        })
+    return result
+
+
+def serialize_project_risks(db: Session, project_id: int) -> list[dict[str, Any]]:
+    project_or_404(db, project_id)
+    rows = db.scalars(
+        select(RiskSource)
+        .where(RiskSource.project_id == project_id)
+        .order_by(RiskSource.serial_no, RiskSource.id),
+    ).all()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        result.append({
+            **serialize(row),
+            "name": row.risk_part,
+            "level": row.risk_level,
+            "risk_type": row.related_process_name,
+            "planned_start": row.risk_window_start_date.isoformat() if row.risk_window_start_date else None,
+            "planned_finish": row.risk_window_end_date.isoformat() if row.risk_window_end_date else None,
+            "responsible_user_id": None,
+            "confirmer_user_id": None,
+            "material_requirements": [],
+            "control_requirements": row.evaluation_condition,
+            "status": "active",
+        })
+    return result
+
+
+def serialize_project_quality_metrics(db: Session, project_id: int) -> list[dict[str, Any]]:
+    project_or_404(db, project_id)
+    wbs_rows = db.scalars(
+        select(WbsItem)
+        .where(WbsItem.project_id == project_id)
+        .order_by(WbsItem.sort_order, WbsItem.id),
+    ).all()
+    wbs_by_code = {row.wbs_code: row for row in wbs_rows}
+    quality_by_code = {
+        row.wbs_code: row
+        for row in db.scalars(
+            select(QualityMetric).where(QualityMetric.project_id == project_id),
+        ).all()
+    }
+    result: list[dict[str, Any]] = []
+    for code, wbs in wbs_by_code.items():
+        row = quality_by_code.get(code)
+        if row is None:
+            continue
+        result.append({
+            **serialize(row),
+            "wbs_item_id": wbs.id,
+            "wbs_name": wbs.name,
+            "name": row.quality_acceptance_item,
+            "requirement": row.control_indicator,
+            "required_materials": [],
+            "owner_user_id": None,
+            "status": "pending",
+        })
+    return result
+
+
+def parse_optional_datetime(value: str | None, field_name: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"{field_name}格式不正确") from exc
+
+
+def parse_optional_date(value: str | None, field_name: str) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"{field_name}格式不正确") from exc
+
+
+def normalized_risk_level_text(value: str) -> str:
+    return {
+        "critical": "重大",
+        "high": "较大",
+        "medium": "一般",
+        "low": "低",
+    }.get(value, value)
+
+
+def validate_risk_window(start: date | None, finish: date | None) -> None:
+    if start and finish and finish < start:
+        raise HTTPException(status_code=422, detail="风险结束日期不能早于开始日期")
+
+
+def validate_wbs_schedule(
+    planned_start: datetime | None,
+    planned_finish: datetime | None,
+) -> None:
+    if planned_start and planned_finish and planned_finish < planned_start:
+        raise HTTPException(status_code=422, detail="计划完成时间不能早于计划开始时间")
+
+
+def validate_wbs_parent(
+    db: Session,
+    project_id: int,
+    parent_id: int | None,
+    current_item_id: int | None = None,
+) -> WbsItem | None:
+    if parent_id is None:
+        return None
+    parent = db.scalar(
+        select(WbsItem).where(
+            WbsItem.id == parent_id,
+            WbsItem.project_id == project_id,
+        ),
+    )
+    if parent is None:
+        raise HTTPException(status_code=404, detail="上级WBS工序不存在")
+    visited: set[int] = set()
+    cursor: WbsItem | None = parent
+    while cursor is not None and cursor.id not in visited:
+        if current_item_id is not None and cursor.id == current_item_id:
+            raise HTTPException(status_code=422, detail="不能把当前工序或其下级设为上级工序")
+        visited.add(cursor.id)
+        cursor = db.get(WbsItem, cursor.parent_id) if cursor.parent_id else None
+    return parent
+
+
+def replace_wbs_predecessors(
+    db: Session,
+    item: WbsItem,
+    predecessor_ids: list[int],
+) -> None:
+    normalized_ids = list(dict.fromkeys(predecessor_ids))
+    if item.id in normalized_ids:
+        raise HTTPException(status_code=422, detail="WBS工序不能以自身作为前置工序")
+    predecessors = db.scalars(
+        select(WbsItem).where(
+            WbsItem.project_id == item.project_id,
+            WbsItem.id.in_(normalized_ids),
+        ),
+    ).all() if normalized_ids else []
+    if len(predecessors) != len(normalized_ids):
+        raise HTTPException(status_code=404, detail="部分前置WBS工序不存在")
+    project_item_ids = set(db.scalars(
+        select(WbsItem.id).where(WbsItem.project_id == item.project_id),
+    ).all())
+    dependency_graph: dict[int, list[int]] = {item_id: [] for item_id in project_item_ids}
+    if project_item_ids:
+        links = db.scalars(
+            select(WbsPredecessor).where(WbsPredecessor.wbs_item_id.in_(project_item_ids)),
+        ).all()
+        for link in links:
+            if link.wbs_item_id != item.id and link.predecessor_wbs_item_id in project_item_ids:
+                dependency_graph[link.wbs_item_id].append(link.predecessor_wbs_item_id)
+
+    def reaches_current(start_id: int) -> bool:
+        pending = [start_id]
+        visited: set[int] = set()
+        while pending:
+            candidate = pending.pop()
+            if candidate == item.id:
+                return True
+            if candidate in visited:
+                continue
+            visited.add(candidate)
+            pending.extend(dependency_graph.get(candidate, []))
+        return False
+
+    if any(reaches_current(predecessor_id) for predecessor_id in normalized_ids):
+        raise HTTPException(status_code=422, detail="前置工序关系不能形成循环")
+    existing = db.scalars(
+        select(WbsPredecessor).where(WbsPredecessor.wbs_item_id == item.id),
+    ).all()
+    for link in existing:
+        db.delete(link)
+    if existing:
+        db.flush()
+    for predecessor_id in normalized_ids:
+        db.add(WbsPredecessor(
+            wbs_item_id=item.id,
+            predecessor_wbs_item_id=predecessor_id,
+        ))
+
+
 @router.get("/projects/{project_id}/wbs")
 def list_wbs(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    return ok(list_for_project(WbsItem, project_id, db))
+    return ok(serialize_project_wbs(db, project_id))
 
 
 @router.post("/projects/{project_id}/wbs")
 def create_wbs(project_id: int, payload: WbsInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
-    project_or_404(db, project_id); item = WbsItem(project_id=project_id, **payload.model_dump()); db.add(item); db.flush()
+    project_or_404(db, project_id)
+    validate_wbs_parent(db, project_id, payload.parent_id)
+    planned_start = parse_optional_datetime(payload.planned_start, "计划开始时间")
+    planned_finish = parse_optional_datetime(payload.planned_finish, "计划完成时间")
+    validate_wbs_schedule(planned_start, planned_finish)
+    next_sort_order = payload.sort_order
+    if next_sort_order is None:
+        next_sort_order = (
+            db.scalar(select(func.max(WbsItem.sort_order)).where(WbsItem.project_id == project_id))
+            or 0
+        ) + 1
+    responsible = db.get(User, payload.responsible_user_id) if payload.responsible_user_id else None
+    item = WbsItem(
+        project_id=project_id,
+        parent_id=payload.parent_id,
+        sort_order=next_sort_order,
+        color_value=payload.color_value or None,
+        wbs_code=payload.code,
+        name=payload.name,
+        assigned_to_text=responsible.real_name if responsible else payload.assigned_to_text or None,
+        planned_start_at=planned_start,
+        planned_finish_at=planned_finish,
+        deadline_at=parse_optional_datetime(payload.deadline, "截止时间"),
+        progress_percent=payload.progress,
+        duration_hours=payload.duration_hours,
+        estimated_hours=payload.estimated_hours,
+        time_log_minutes=payload.time_log_minutes,
+        status_text=payload.status,
+        priority_text=payload.priority_text or None,
+        description=payload.description or None,
+        budget=payload.budget,
+        actual_cost=payload.actual_cost,
+        item_type=payload.item_type or "任务",
+        level=payload.level,
+    )
+    db.add(item); db.flush()
+    replace_wbs_predecessors(db, item, payload.predecessor_ids or [])
     audit(db, user, "新增WBS工序", f"新增工序「{item.name}」", project_id, "wbs", item.id); db.commit(); db.refresh(item)
-    return ok(serialize(item), "WBS工序已添加")
+    row = next(row for row in serialize_project_wbs(db, project_id) if row["id"] == item.id)
+    return ok(row, "WBS工序已添加")
 
 
 @router.patch("/wbs/{item_id}")
 def update_wbs(item_id: int, payload: WbsInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
     item = entity_or_404(db, WbsItem, item_id, "WBS工序不存在")
-    for key, value in payload.model_dump(exclude_unset=True).items(): setattr(item, key, value)
+    fields = payload.model_fields_set
+    if "parent_id" in fields:
+        validate_wbs_parent(db, item.project_id, payload.parent_id, item.id)
+        item.parent_id = payload.parent_id
+    if "code" in fields: item.wbs_code = payload.code
+    if "name" in fields: item.name = payload.name
+    if "level" in fields: item.level = payload.level
+    if "sort_order" in fields and payload.sort_order is not None: item.sort_order = payload.sort_order
+    if "color_value" in fields: item.color_value = payload.color_value or None
+    if "assigned_to_text" in fields: item.assigned_to_text = payload.assigned_to_text or None
+    if "planned_start" in fields: item.planned_start_at = parse_optional_datetime(payload.planned_start, "计划开始时间")
+    if "planned_finish" in fields: item.planned_finish_at = parse_optional_datetime(payload.planned_finish, "计划完成时间")
+    validate_wbs_schedule(item.planned_start_at, item.planned_finish_at)
+    if "deadline" in fields: item.deadline_at = parse_optional_datetime(payload.deadline, "截止时间")
+    if "progress" in fields: item.progress_percent = payload.progress
+    if "duration_hours" in fields: item.duration_hours = payload.duration_hours
+    if "estimated_hours" in fields: item.estimated_hours = payload.estimated_hours
+    if "time_log_minutes" in fields: item.time_log_minutes = payload.time_log_minutes
+    if "status" in fields: item.status_text = payload.status
+    if "priority_text" in fields: item.priority_text = payload.priority_text or None
+    if "description" in fields: item.description = payload.description or None
+    if "budget" in fields: item.budget = payload.budget
+    if "actual_cost" in fields: item.actual_cost = payload.actual_cost
+    if "item_type" in fields: item.item_type = payload.item_type or None
+    if "responsible_user_id" in fields:
+        responsible = db.get(User, payload.responsible_user_id) if payload.responsible_user_id else None
+        item.assigned_to_text = responsible.real_name if responsible else None
+    if "predecessor_ids" in fields:
+        replace_wbs_predecessors(db, item, payload.predecessor_ids or [])
     audit(db, user, "更新WBS工序", f"更新工序「{item.name}」", item.project_id, "wbs", item.id); db.commit(); db.refresh(item)
-    return ok(serialize(item), "WBS工序已更新")
+    row = next(row for row in serialize_project_wbs(db, item.project_id) if row["id"] == item.id)
+    return ok(row, "WBS工序已更新")
 
 
 @router.get("/projects/{project_id}/risks")
 def list_risks(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    return ok(list_for_project(RiskSource, project_id, db))
+    return ok(serialize_project_risks(db, project_id))
 
 
 @router.post("/projects/{project_id}/risks")
 def create_risk(project_id: int, payload: RiskInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
-    project_or_404(db, project_id); item = RiskSource(project_id=project_id, **payload.model_dump()); db.add(item); db.flush()
-    audit(db, user, "新增风险源", f"新增风险源「{item.name}」", project_id, "risk", item.id); db.commit(); db.refresh(item)
-    return ok(serialize(item), "风险源已添加")
+    project_or_404(db, project_id)
+    next_serial = payload.serial_no
+    if next_serial is None:
+        next_serial = (
+            db.scalar(select(func.max(RiskSource.serial_no)).where(RiskSource.project_id == project_id))
+            or 0
+        ) + 1
+    elif db.scalar(select(RiskSource.id).where(RiskSource.project_id == project_id, RiskSource.serial_no == next_serial)):
+        raise HTTPException(status_code=422, detail="风险序号已存在")
+    risk_start = parse_optional_date(payload.planned_start, "风险开始日期")
+    risk_finish = parse_optional_date(payload.planned_finish, "风险结束日期")
+    validate_risk_window(risk_start, risk_finish)
+    item = RiskSource(
+        project_id=project_id,
+        serial_no=next_serial,
+        related_process_name=payload.risk_type,
+        risk_part=payload.name,
+        risk_level=normalized_risk_level_text(payload.level),
+        evaluation_condition=payload.control_requirements or "",
+        risk_window_start_date=risk_start,
+        risk_window_end_date=risk_finish,
+        summary=payload.summary if payload.summary is not None else "、".join(payload.material_requirements) or None,
+    )
+    db.add(item); db.flush()
+    audit(db, user, "新增风险源", f"新增风险源「{item.risk_part}」", project_id, "risk", item.id); db.commit(); db.refresh(item)
+    row = next(row for row in serialize_project_risks(db, project_id) if row["id"] == item.id)
+    return ok(row, "风险源已添加")
 
 
 @router.patch("/risks/{risk_id}")
 def update_risk(risk_id: int, payload: RiskInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
     item = entity_or_404(db, RiskSource, risk_id, "风险源不存在")
-    for key, value in payload.model_dump(exclude_unset=True).items(): setattr(item, key, value)
-    audit(db, user, "更新风险源", f"更新风险源「{item.name}」", item.project_id, "risk", item.id); db.commit(); db.refresh(item)
-    return ok(serialize(item), "风险源已更新")
+    fields = payload.model_fields_set
+    if "serial_no" in fields and payload.serial_no is not None:
+        duplicate = db.scalar(
+            select(RiskSource.id).where(
+                RiskSource.project_id == item.project_id,
+                RiskSource.serial_no == payload.serial_no,
+                RiskSource.id != item.id,
+            ),
+        )
+        if duplicate:
+            raise HTTPException(status_code=422, detail="风险序号已存在")
+        item.serial_no = payload.serial_no
+    if "name" in fields: item.risk_part = payload.name
+    if "level" in fields: item.risk_level = normalized_risk_level_text(payload.level)
+    if "risk_type" in fields: item.related_process_name = payload.risk_type
+    if "planned_start" in fields: item.risk_window_start_date = parse_optional_date(payload.planned_start, "风险开始日期")
+    if "planned_finish" in fields: item.risk_window_end_date = parse_optional_date(payload.planned_finish, "风险结束日期")
+    validate_risk_window(item.risk_window_start_date, item.risk_window_end_date)
+    if "control_requirements" in fields: item.evaluation_condition = payload.control_requirements or ""
+    if "summary" in fields: item.summary = payload.summary or None
+    elif "material_requirements" in fields: item.summary = "、".join(payload.material_requirements) or None
+    audit(db, user, "更新风险源", f"更新风险源「{item.risk_part}」", item.project_id, "risk", item.id); db.commit(); db.refresh(item)
+    row = next(row for row in serialize_project_risks(db, item.project_id) if row["id"] == item.id)
+    return ok(row, "风险源已更新")
 
 
 @router.get("/projects/{project_id}/quality-metrics")
 def list_quality_metrics(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    return ok(list_for_project(QualityMetric, project_id, db))
+    return ok(serialize_project_quality_metrics(db, project_id))
 
 
 @router.post("/projects/{project_id}/quality-metrics")
 def create_quality_metric(project_id: int, payload: QualityMetricInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
     project_or_404(db, project_id)
-    if payload.wbs_item_id: entity_or_404(db, WbsItem, payload.wbs_item_id, "WBS工序不存在")
-    item = QualityMetric(project_id=project_id, **payload.model_dump()); db.add(item); db.flush()
-    audit(db, user, "新增质量指标", f"新增质量指标「{item.name}」", project_id, "quality_metric", item.id); db.commit(); db.refresh(item)
-    return ok(serialize(item), "质量指标已添加")
+    if not payload.wbs_item_id:
+        raise HTTPException(status_code=422, detail="质量要求必须关联WBS工序")
+    wbs = db.scalar(
+        select(WbsItem).where(
+            WbsItem.id == payload.wbs_item_id,
+            WbsItem.project_id == project_id,
+        ),
+    )
+    if wbs is None:
+        raise HTTPException(status_code=404, detail="WBS工序不存在")
+    item = QualityMetric(
+        project_id=project_id,
+        wbs_code=wbs.wbs_code,
+        quality_acceptance_item=payload.name,
+        control_indicator=payload.requirement,
+        inspection_frequency=payload.inspection_frequency or "",
+        related_documents=payload.related_documents if payload.related_documents is not None else "、".join(payload.required_materials),
+    )
+    db.add(item); db.flush()
+    audit(db, user, "新增质量指标", f"新增质量指标「{item.quality_acceptance_item}」", project_id, "quality_metric", item.id); db.commit(); db.refresh(item)
+    row = next(row for row in serialize_project_quality_metrics(db, project_id) if row["id"] == item.id)
+    return ok(row, "质量指标已添加")
 
 
 @router.patch("/quality-metrics/{metric_id}")
 def update_quality_metric(metric_id: int, payload: QualityMetricInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
     item = entity_or_404(db, QualityMetric, metric_id, "质量指标不存在")
-    for key, value in payload.model_dump(exclude_unset=True).items(): setattr(item, key, value)
-    audit(db, user, "更新质量指标", f"更新质量指标「{item.name}」", item.project_id, "quality_metric", item.id); db.commit(); db.refresh(item)
-    return ok(serialize(item), "质量指标已更新")
+    fields = payload.model_fields_set
+    if "wbs_item_id" in fields:
+        if not payload.wbs_item_id:
+            raise HTTPException(status_code=422, detail="质量要求必须关联WBS工序")
+        wbs = db.scalar(
+            select(WbsItem).where(
+                WbsItem.id == payload.wbs_item_id,
+                WbsItem.project_id == item.project_id,
+            ),
+        )
+        if wbs is None:
+            raise HTTPException(status_code=404, detail="WBS工序不存在")
+        item.wbs_code = wbs.wbs_code
+    if "name" in fields: item.quality_acceptance_item = payload.name
+    if "requirement" in fields: item.control_indicator = payload.requirement
+    if "inspection_frequency" in fields: item.inspection_frequency = payload.inspection_frequency or ""
+    if "related_documents" in fields: item.related_documents = payload.related_documents or ""
+    elif "required_materials" in fields: item.related_documents = "、".join(payload.required_materials)
+    audit(db, user, "更新质量指标", f"更新质量指标「{item.quality_acceptance_item}」", item.project_id, "quality_metric", item.id); db.commit(); db.refresh(item)
+    row = next(row for row in serialize_project_quality_metrics(db, item.project_id) if row["id"] == item.id)
+    return ok(row, "质量指标已更新")
 
 
 @router.get("/projects/{project_id}/platform-field-mappings")
