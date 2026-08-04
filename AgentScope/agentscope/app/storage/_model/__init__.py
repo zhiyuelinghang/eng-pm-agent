@@ -6,6 +6,7 @@ from ._agent import (
     AgentData,
     AgentModelPolicy,
     AgentRecord,
+    AgentToolConfig,
     InviteConfig,
     PlatformAgentConfig,
 )
@@ -38,6 +39,7 @@ from ._user import UserRecord
 
 __all__ = [
     "AgentCallConfig",
+    "AgentToolConfig",
     "AgentData",
     "AgentModelPolicy",
     "AgentRecord",

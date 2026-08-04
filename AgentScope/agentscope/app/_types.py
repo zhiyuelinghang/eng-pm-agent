@@ -24,12 +24,30 @@ AgentMiddlewareFactory = Callable[
 # Async factory signature: ``(user_id, agent_id, session_id)`` →
 # awaitable of :class:`~agentscope.middleware.MiddlewareBase` instances.
 
+
+class AgentToolDescriptor(BaseModel):
+    """Serializable metadata for one assignable application tool."""
+
+    name: str
+    display_name: str | None = None
+    description: str | None = None
+    input_schema: dict = Field(default_factory=dict)
+    read_only: bool = False
+
+
 AgentToolFactory = Callable[
     [str, str, str],
     Awaitable[list[ToolBase]],
 ]
 #  Async factory signature: ``(user_id, agent_id, session_id)`` →
 #  awaitable of :class:`~agentscope.tool.ToolBase` instances.
+
+AgentToolCatalogFactory = Callable[
+    [str, str],
+    Awaitable[list[AgentToolDescriptor]],
+]
+# Async factory signature: ``(user_id, agent_id)`` → serializable metadata for
+# every application tool that may be assigned to the agent.
 
 
 class EventProjector(Protocol):

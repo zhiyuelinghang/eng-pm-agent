@@ -55,6 +55,15 @@
 		"title": "Platform settings",
 		"description": "Manage agent runtime settings shared by the entire Dobby platform.",
 		"saved": "The platform main agent has been updated",
+		"assignments": {
+			"title": "Agent responsibilities",
+			"description": "Choose a platform responsibility, then assign and review its agent on the right.",
+			"assigned": "Assigned",
+			"unassigned": "Not assigned",
+			"pending": "Unsaved changes",
+			"editor": "Responsibility settings",
+			"available": "Configuration ready"
+		},
 		"main": {
 			"title": "Platform main agent",
 			"description": "This agent handles ordinary conversations and may collaborate only with enabled, invitable agents explicitly opened to the platform main agent.",
@@ -472,8 +481,6 @@
 		"editManualModel": "Edit manual model",
 		"hideModel": "Remove from this credential's model list",
 		"deleteManualModel": "Delete manual model",
-		"hiddenModels": "Removed models",
-		"restoreModel": "Restore",
 		"noModelsManualHint": "Discover models or add the provider's model ID manually.",
 		"modelSource": {
 			"builtin": "Default",
@@ -542,6 +549,10 @@
 			"auditTitle": "Recent review decisions",
 			"auditDescription": "Only automatic review decisions are recorded. Sensitive fields are redacted before sending or persistence.",
 			"noAudits": "No automatic review decisions yet.",
+			"auditTotal": "{{count}} records",
+			"auditPage": "Page {{current}} / {{total}}",
+			"previousPage": "Previous page",
+			"nextPage": "Next page",
 			"actions": {
 				"allow_once": "Allow once",
 				"deny": "Deny",
@@ -816,6 +827,8 @@
 		"blockedBy": "blocked by"
 	},
 	"panel": {
+		"collapseSidebar": "Collapse sidebar",
+		"expandSidebar": "Expand sidebar",
 		"plan": {
 			"title": "Plan",
 			"completed": "Completed: {{count}}",
@@ -837,8 +850,81 @@
 			"description": "The skills equipped in the workspace.",
 			"searchPlaceholder": "Search skills in the workspace",
 			"add": "Add Skill",
+			"editTitle": "Edit skill",
+			"editDescription": "Update the skill name, summary, and instructions.",
+			"descriptionLabel": "Summary",
+			"markdownLabel": "Instructions (Markdown)",
+			"editAction": "Edit skill {{name}}",
 			"emptyTitle": "No skills",
 			"emptyDescription": "Add a skill to equip the workspace."
+		},
+		"tool": {
+			"title": "Tools",
+			"description": "Assign the business and workspace tools this agent may call directly.",
+			"globalNotice": "Applies to every session of this agent",
+			"searchPlaceholder": "Search tools",
+			"platform": "Business tools",
+			"workspace": "Workspace tools",
+			"back": "Back to tools",
+			"catalogTitle": "Assignable tools",
+			"selectedSummary": "{{selected}} / {{total}} selected",
+			"selectAll": "Select all",
+			"clear": "Clear",
+			"toggleAssignment": "Toggle assignment for {{name}}",
+			"viewDetails": "View details for {{name}}",
+			"saved": "Tool assignment saved.",
+			"discard": "Discard",
+			"saveChanges": "Save assignment",
+			"readOnlyNotice": "This agent is read-only, so its tool assignment cannot be changed.",
+			"noAgentTitle": "No agent selected",
+			"noAgentDescription": "Select an agent before assigning tools.",
+			"details": "Tool details",
+			"parameters": "Parameters",
+			"required": "Required",
+			"optional": "Optional",
+			"noParameters": "This tool takes no parameters.",
+			"noDescription": "No tool description.",
+			"untranslatedDescription": "This system tool can be assigned to the current agent.",
+			"workspaceTools": {
+				"edit": {
+					"name": "Edit file",
+					"description": "Perform exact text replacements after reading the target content."
+				},
+				"glob": {
+					"name": "Find files",
+					"description": "Find workspace files by filename or path pattern."
+				},
+				"grep": {
+					"name": "Search content",
+					"description": "Search workspace files for text or regular expressions."
+				},
+				"read": {
+					"name": "Read file",
+					"description": "Read workspace file content with optional offset and limit."
+				},
+				"write": {
+					"name": "Write file",
+					"description": "Create a file or overwrite it with complete content."
+				}
+			},
+			"parameterNames": {
+				"file_path": "File path",
+				"path": "Directory path",
+				"pattern": "Pattern",
+				"glob": "File filter",
+				"content": "Content",
+				"old_string": "Old text",
+				"new_string": "New text",
+				"replace_all": "Replace all",
+				"offset": "Offset",
+				"limit": "Limit",
+				"resource": "Resource",
+				"keyword": "Keyword",
+				"status": "Status",
+				"output_mode": "Output mode"
+			},
+			"emptyTitle": "No tools available",
+			"emptyDescription": "No tools are available to assign to this agent."
 		},
 		"knowledge": {
 			"title": "Knowledge Bases",
@@ -901,6 +987,7 @@
 		"description": "Review complete transcripts by platform user, project, and conversation. This page is strictly read-only.",
 		"total": "{{count}} conversations",
 		"refresh": "Refresh",
+		"scope": "Audit scope",
 		"users": "Platform users",
 		"projects": "Projects",
 		"conversations": "Conversations",
@@ -914,6 +1001,7 @@
 		"selectConversationHint": "Select a conversation to display its complete interaction history at once.",
 		"projectCount": "{{count}} projects",
 		"conversationCount": "{{count}} conversations",
+		"noConversations": "This project has no conversations",
 		"noMessages": "This conversation has no messages yet"
 	},
 	"team-sidebar": {

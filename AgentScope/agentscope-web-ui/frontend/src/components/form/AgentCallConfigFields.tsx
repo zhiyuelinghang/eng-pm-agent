@@ -110,7 +110,7 @@ export function AgentCallConfigFields({ values, agents, currentAgentId, onChange
 												</span>
 											)}
 										</span>
-										<span className="text-muted-foreground font-mono text-[10px]">
+										<span className="text-muted-foreground font-mono text-xs">
 											{agent.id.slice(0, 8)}
 										</span>
 									</label>

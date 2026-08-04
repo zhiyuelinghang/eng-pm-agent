@@ -55,6 +55,15 @@
 		"title": "平台设置",
 		"description": "集中管理影响整个 Dobby 平台的智能体运行配置。",
 		"saved": "平台总控智能体已更新",
+		"assignments": {
+			"title": "智能体职责",
+			"description": "选择平台职责，在右侧完成智能体分配与核对。",
+			"assigned": "已分配",
+			"unassigned": "尚未分配",
+			"pending": "待保存",
+			"editor": "职责配置",
+			"available": "配置可用"
+		},
 		"main": {
 			"title": "平台总控智能体",
 			"description": "普通对话统一由该智能体承接；它只能调用已启用、允许协同且明确开放给平台总智能体的成员。",
@@ -472,8 +481,6 @@
 		"editManualModel": "编辑手动模型",
 		"hideModel": "从此凭证的模型列表中移除",
 		"deleteManualModel": "删除手动模型",
-		"hiddenModels": "已移除模型",
-		"restoreModel": "恢复",
 		"noModelsManualHint": "自动获取模型，或手动添加厂商提供的模型 ID。",
 		"modelSource": {
 			"builtin": "默认",
@@ -542,6 +549,10 @@
 			"auditTitle": "最近审核记录",
 			"auditDescription": "仅记录自动审核的结论；敏感字段会在发送和保存前脱敏。",
 			"noAudits": "暂无自动审核记录。",
+			"auditTotal": "共 {{count}} 条记录",
+			"auditPage": "第 {{current}} / {{total}} 页",
+			"previousPage": "上一页",
+			"nextPage": "下一页",
 			"actions": {
 				"allow_once": "本次允许",
 				"deny": "拒绝",
@@ -816,6 +827,8 @@
 		"blockedBy": "依赖"
 	},
 	"panel": {
+		"collapseSidebar": "收起侧栏",
+		"expandSidebar": "展开侧栏",
 		"plan": {
 			"title": "计划",
 			"completed": "已完成：{{count}}",
@@ -837,8 +850,81 @@
 			"description": "工作区中配置的技能。",
 			"searchPlaceholder": "在工作区中搜索技能",
 			"add": "添加技能",
+			"editTitle": "编辑技能",
+			"editDescription": "修改技能名称、简介和执行说明。",
+			"descriptionLabel": "简介",
+			"markdownLabel": "执行说明（Markdown）",
+			"editAction": "编辑技能 {{name}}",
 			"emptyTitle": "暂无技能",
 			"emptyDescription": "添加技能为工作区配备能力。"
+		},
+		"tool": {
+			"title": "工具",
+			"description": "为当前智能体分配可以直接调用的业务工具和工作区工具。",
+			"globalNotice": "对该智能体的所有会话生效",
+			"searchPlaceholder": "搜索工具",
+			"platform": "业务工具",
+			"workspace": "工作区工具",
+			"back": "返回工具列表",
+			"catalogTitle": "可分配工具",
+			"selectedSummary": "已选 {{selected}} / {{total}}",
+			"selectAll": "全选",
+			"clear": "清空",
+			"toggleAssignment": "切换工具 {{name}} 的分配状态",
+			"viewDetails": "查看工具 {{name}} 的详细信息",
+			"saved": "工具分配已保存。",
+			"discard": "撤销",
+			"saveChanges": "保存分配",
+			"readOnlyNotice": "当前智能体为只读，无法修改工具分配。",
+			"noAgentTitle": "未选择智能体",
+			"noAgentDescription": "请选择一个智能体后再分配工具。",
+			"details": "工具说明",
+			"parameters": "调用参数",
+			"required": "必填",
+			"optional": "可选",
+			"noParameters": "此工具无需传入参数。",
+			"noDescription": "暂无工具说明。",
+			"untranslatedDescription": "这是可分配给当前智能体的系统工具，进入详情可查看调用参数。",
+			"workspaceTools": {
+				"edit": {
+					"name": "编辑文件",
+					"description": "在文件中进行精确文本替换；编辑前需要先读取目标内容。"
+				},
+				"glob": {
+					"name": "查找文件",
+					"description": "按文件名或路径规则查找工作区中的文件。"
+				},
+				"grep": {
+					"name": "搜索内容",
+					"description": "在工作区文件中搜索指定文本或正则表达式。"
+				},
+				"read": {
+					"name": "读取文件",
+					"description": "读取工作区中的文件内容，可指定起始位置和读取范围。"
+				},
+				"write": {
+					"name": "写入文件",
+					"description": "创建文件或覆盖写入完整内容。"
+				}
+			},
+			"parameterNames": {
+				"file_path": "文件路径",
+				"path": "目录路径",
+				"pattern": "匹配规则",
+				"glob": "文件筛选",
+				"content": "文件内容",
+				"old_string": "原文本",
+				"new_string": "新文本",
+				"replace_all": "全部替换",
+				"offset": "起始位置",
+				"limit": "返回数量",
+				"resource": "资源类型",
+				"keyword": "关键词",
+				"status": "状态",
+				"output_mode": "输出方式"
+			},
+			"emptyTitle": "暂无可用工具",
+			"emptyDescription": "当前没有可分配给该智能体的工具。"
 		},
 		"knowledge": {
 			"title": "知识库",
@@ -901,6 +987,7 @@
 		"description": "按平台用户、项目和会话查看完整交互记录；本页面只读，不会影响用户会话。",
 		"total": "共 {{count}} 个会话",
 		"refresh": "刷新",
+		"scope": "审计范围",
 		"users": "平台用户",
 		"projects": "项目",
 		"conversations": "会话",
@@ -914,6 +1001,7 @@
 		"selectConversationHint": "点击左侧具体会话后，将一次显示该会话的全部交互记录。",
 		"projectCount": "{{count}} 个项目",
 		"conversationCount": "{{count}} 个会话",
+		"noConversations": "该项目暂无会话记录",
 		"noMessages": "该会话暂时没有消息"
 	},
 	"team-sidebar": {

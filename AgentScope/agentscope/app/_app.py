@@ -21,7 +21,12 @@ from ._router import (
     workspace_router,
 )
 from ._auth import AgentScopeAuthConfig
-from ._types import AgentMiddlewareFactory, AgentToolFactory, SubAgentTemplate
+from ._types import (
+    AgentMiddlewareFactory,
+    AgentToolCatalogFactory,
+    AgentToolFactory,
+    SubAgentTemplate,
+)
 from .message_bus import MessageBus
 from .storage import StorageBase
 from ..agent import Agent
@@ -57,6 +62,7 @@ def create_app(
     extra_middlewares: list[FastAPIMiddleware] | None = None,
     extra_agent_middlewares: AgentMiddlewareFactory | None = None,
     extra_agent_tools: AgentToolFactory | None = None,
+    extra_agent_tool_catalog: AgentToolCatalogFactory | None = None,
     custom_subagent_templates: list[SubAgentTemplate] | None = None,
     custom_agent_cls: Type[Agent] | None = None,
     resource_access_policy: ResourceAccessPolicyBase | None = None,
@@ -171,6 +177,10 @@ def create_app(
             availability depends on the caller (per-tenant integrations,
             user-specific credentials).  The returned tools are added to
             the workspace-derived tools in the toolkit's ``"basic"`` group.
+        extra_agent_tool_catalog (`AgentToolCatalogFactory | None`, optional):
+            Async factory ``(user_id, agent_id) -> descriptors`` used by
+            management surfaces to list every assignable application tool,
+            including tools that require a platform session at runtime.
         custom_subagent_templates (`list[SubAgentTemplate] | None`, optional):
             Reusable blueprints for sub-agent creation within teams.
             Each template defines a sub-agent *type* (e.g. ``"researcher"``,
@@ -218,6 +228,7 @@ def create_app(
     app.state.knowledge_base_manager = knowledge_base_manager
     app.state.extra_agent_middlewares = extra_agent_middlewares
     app.state.extra_agent_tools = extra_agent_tools
+    app.state.extra_agent_tool_catalog = extra_agent_tool_catalog
     app.state.custom_agent_cls = custom_agent_cls
     app.state.resource_access_policy = (
         resource_access_policy or DenyAllResourceAccessPolicy()

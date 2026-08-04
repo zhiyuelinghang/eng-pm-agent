@@ -45,6 +45,11 @@ export interface AgentCallConfig {
 	allowed_agent_ids: string[];
 }
 
+export interface AgentToolConfig {
+	/** null keeps the legacy/default behavior where every catalogue tool is assigned. */
+	allowed_tool_names: string[] | null;
+}
+
 export type AgentModelPolicyMode = 'inherit_session' | 'fixed';
 
 export interface AgentModelPolicy {
@@ -78,6 +83,7 @@ export interface AgentData {
 	platform_config: PlatformAgentConfig;
 	invite_config: InviteConfig;
 	call_config: AgentCallConfig;
+	tool_config: AgentToolConfig;
 }
 
 export interface AgentView extends RecordBase {
@@ -99,6 +105,7 @@ export interface CreateAgentRequest {
 	platform_config?: PlatformAgentConfig;
 	invite_config?: InviteConfig;
 	call_config?: AgentCallConfig;
+	tool_config?: AgentToolConfig;
 }
 
 export interface CreateAgentResponse {
@@ -114,6 +121,7 @@ export interface UpdateAgentRequest {
 	platform_config?: PlatformAgentConfig;
 	invite_config?: InviteConfig;
 	call_config?: AgentCallConfig;
+	tool_config?: AgentToolConfig;
 }
 
 export interface AgentListResponse {
@@ -626,6 +634,14 @@ export interface ToolInfo {
 	description?: string | null;
 }
 
+export interface WorkspaceTool extends ToolInfo {
+	source: 'platform' | 'workspace';
+	display_name?: string | null;
+	assigned: boolean;
+	read_only: boolean;
+	input_schema: Record<string, unknown>;
+}
+
 export interface MCPClientStatus extends MCPClient {
 	is_healthy: boolean;
 	tools: ToolInfo[];
@@ -643,6 +659,12 @@ export interface Skill {
 
 export interface AddSkillRequest {
 	skill_path: string;
+}
+
+export interface UpdateSkillRequest {
+	name: string;
+	description: string;
+	markdown: string;
 }
 
 // ─── Schedule ─────────────────────────────────────────────────────────────────

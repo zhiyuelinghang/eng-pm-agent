@@ -187,6 +187,14 @@ const ChatPageInner = () => {
 		[updateAgent],
 	);
 
+	const handleUpdateAgentToolConfig = useCallback(
+		async (agentId: string, toolConfig: Parameters<typeof updateAgent>[1]['tool_config']) => {
+			if (!toolConfig) return;
+			await updateAgent(agentId, { tool_config: toolConfig }, { silent: true });
+		},
+		[updateAgent],
+	);
+
 	const handleDeleteSession = async (sessionId: string) => {
 		await removeSession(sessionId);
 		// If we just removed the session the URL is pointing at, fall
@@ -379,6 +387,7 @@ const ChatPageInner = () => {
 					agents={agents}
 					agentsLoading={agentsLoading}
 					onUpdateAgentCallConfig={handleUpdateAgentCallConfig}
+					onUpdateAgentToolConfig={handleUpdateAgentToolConfig}
 					onTeamUpdated={refetchSessions}
 				/>
 			</div>

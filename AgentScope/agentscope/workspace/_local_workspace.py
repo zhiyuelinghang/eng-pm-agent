@@ -868,3 +868,82 @@ class LocalWorkspace(WorkspaceBase):
                 mtime if mtime is not None else 0.0
             )
             await self._save_skills_file(skills_dir, skills_file)
+
+    async def update_skill(
+        self,
+        name: str,
+        *,
+        new_name: str,
+        description: str,
+        markdown: str,
+    ) -> None:
+        """Update a local skill and keep the ``.skills`` index consistent.
+
+        Args:
+            name (`str`):
+                Current agent-facing skill name.
+            new_name (`str`):
+                New agent-facing skill name.
+            description (`str`):
+                New front-matter description.
+            markdown (`str`):
+                New Markdown body for ``SKILL.md``.
+
+        Raises:
+            KeyError:
+                If ``name`` does not exist.
+            ValueError:
+                If required fields are empty or ``new_name`` is already used.
+        """
+        new_name = new_name.strip()
+        description = description.strip()
+        if not new_name:
+            raise ValueError("Skill name cannot be empty.")
+        if not description:
+            raise ValueError("Skill description cannot be empty.")
+
+        skills_dir = os.path.join(self.workdir, "skills")
+        async with self._skill_lock:
+            skills_file = await self._load_skills_file(skills_dir)
+            existing: dict[str, _SkillEntry] = skills_file["skills"]
+
+            target_dir: str | None = None
+            for dir_name, entry in existing.items():
+                if entry["skill_name"] == name:
+                    target_dir = dir_name
+                    break
+            if target_dir is None:
+                raise KeyError(f"Skill {name!r} not found.")
+            if new_name != name and any(
+                entry["skill_name"] == new_name for entry in existing.values()
+            ):
+                raise ValueError(f"Skill name {new_name!r} already exists.")
+
+            skill_md_path = os.path.join(skills_dir, target_dir, "SKILL.md")
+            raw = await self._backend.read_file(skill_md_path)
+            document = frontmatter.loads(raw.decode("utf-8"))
+            document["name"] = new_name
+            document["description"] = description
+            document.content = markdown
+            rendered = frontmatter.dumps(document)
+            await self._backend.write_file(
+                skill_md_path,
+                rendered.encode("utf-8"),
+            )
+
+            existing[target_dir] = {
+                "hash": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+                "skill_name": new_name,
+            }
+            skills_file["skills"] = existing
+            mtime = await self._backend.stat_mtime(skills_dir)
+            skills_file["skills_dir_mtime"] = (
+                mtime if mtime is not None else 0.0
+            )
+            await self._save_skills_file(skills_dir, skills_file)
+            logger.info(
+                "Updated local skill %r as %r at %s",
+                name,
+                new_name,
+                skill_md_path,
+            )

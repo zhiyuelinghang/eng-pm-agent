@@ -1,9 +1,10 @@
-import { FileX, PlusCircle, Search, SearchX, Trash } from 'lucide-react';
+import { FileX, Pencil, PlusCircle, Search, SearchX, Trash } from 'lucide-react';
 import { useState } from 'react';
 
-import type { Skill } from '@/api';
+import type { Skill, UpdateSkillRequest } from '@/api';
 import { AddSkillDialog } from '@/components/dialog/AddSkillDialog.tsx';
 import { DeleteDialog } from '@/components/dialog/DeleteDialog.tsx';
+import { EditSkillDialog } from '@/components/dialog/EditSkillDialog';
 import { PanelEmpty } from '@/components/panel/PanelEmpty';
 import { Button } from '@/components/ui/button';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
@@ -21,6 +22,8 @@ interface SkillPanelProps {
 	 * @param skillPath - Path of the skill to add.
 	 */
 	onAdd: (skillPath: string) => Promise<void>;
+	/** Save editable SKILL.md fields. */
+	onUpdate: (currentName: string, input: UpdateSkillRequest) => Promise<void>;
 	/**
 	 * Remove a skill by name.
 	 *
@@ -31,24 +34,29 @@ interface SkillPanelProps {
 
 /**
  * Pure content body for the Skill dock panel: a search box, the list
- * of equipped skills, and an "Add Skill" action. Holds only local UI
- * state (search text, delete confirmation target); all data arrives
- * via props so it owns no data fetching.
- *
- * Renders without its own header/border — the surrounding `Panel`
- * chrome (from `PanelDock`) provides those.
+ * of equipped skills, and add/edit/remove actions. Holds only local UI
+ * state (search text and dialog targets); all data arrives via props so
+ * it owns no data fetching.
  *
  * @param skills - The skills to list.
  * @param loading - Whether the list is loading.
  * @param onAdd - Add-skill callback.
+ * @param onUpdate - Update-skill callback.
  * @param onRemove - Remove-skill callback.
  * @returns The skill panel body.
  */
-export function SkillPanel({ skills, loading = false, onAdd, onRemove }: SkillPanelProps) {
+export function SkillPanel({
+	skills,
+	loading = false,
+	onAdd,
+	onUpdate,
+	onRemove,
+}: SkillPanelProps) {
 	const { t } = useTranslation();
 	const [search, setSearch] = useState('');
 	const [deleteOpen, setDeleteOpen] = useState(false);
 	const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+	const [editTarget, setEditTarget] = useState<Skill | null>(null);
 
 	const filtered = search
 		? skills.filter((s) => s.name.toLowerCase().includes(search.toLowerCase()))
@@ -94,10 +102,24 @@ export function SkillPanel({ skills, loading = false, onAdd, onRemove }: SkillPa
 								<Button
 									variant="outline"
 									size="icon-sm"
+									onClick={() => setEditTarget(skill)}
+									aria-label={t('panel.skill.editAction', { name: skill.name })}
+									title={t('common.edit')}
+								>
+									<Pencil />
+								</Button>
+								<Button
+									variant="outline"
+									size="icon-sm"
 									onClick={() => {
 										setDeleteTarget(skill.name);
 										setDeleteOpen(true);
 									}}
+									aria-label={t('common.deleteTitle', {
+										entity: t('dialog-mcp-delete.skillEntity'),
+										name: skill.name,
+									})}
+									title={t('common.delete')}
 								>
 									<Trash />
 								</Button>
@@ -113,6 +135,15 @@ export function SkillPanel({ skills, loading = false, onAdd, onRemove }: SkillPa
 					{t('panel.skill.add')}
 				</Button>
 			</AddSkillDialog>
+
+			<EditSkillDialog
+				open={editTarget !== null}
+				onOpenChange={(open) => {
+					if (!open) setEditTarget(null);
+				}}
+				skill={editTarget}
+				onSave={onUpdate}
+			/>
 
 			<DeleteDialog
 				open={deleteOpen}

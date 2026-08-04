@@ -17,6 +17,13 @@ import type {
 } from '@/api/types';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import { Button } from '@/components/ui/button';
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from '@/components/ui/select';
 import { useTranslation } from '@/i18n/useI18n';
 import { cn } from '@/lib/utils';
 
@@ -52,7 +59,8 @@ export function PlatformAuditPage() {
 	const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
 	const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
 	const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-	const [transcript, setTranscript] = useState<PlatformAuditMessagesResponse | null>(null);
+	const [transcript, setTranscript] =
+		useState<PlatformAuditMessagesResponse | null>(null);
 	const [treeLoading, setTreeLoading] = useState(true);
 	const [messagesLoading, setMessagesLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -63,7 +71,9 @@ export function PlatformAuditPage() {
 			setTree(await platformAuditApi.tree());
 			setError(null);
 		} catch (requestError) {
-			setError(requestError instanceof Error ? requestError.message : String(requestError));
+			setError(
+				requestError instanceof Error ? requestError.message : String(requestError),
+			);
 		} finally {
 			setTreeLoading(false);
 		}
@@ -76,7 +86,9 @@ export function PlatformAuditPage() {
 			setTranscript(response);
 			setError(null);
 		} catch (requestError) {
-			setError(requestError instanceof Error ? requestError.message : String(requestError));
+			setError(
+				requestError instanceof Error ? requestError.message : String(requestError),
+			);
 		} finally {
 			if (!quiet) setMessagesLoading(false);
 		}
@@ -101,7 +113,9 @@ export function PlatformAuditPage() {
 	);
 	const selectedProject = useMemo(
 		() =>
-			selectedUser?.projects.find((item) => item.project_id === selectedProjectId) ?? null,
+			selectedUser?.projects.find(
+				(item) => item.project_id === selectedProjectId,
+			) ?? null,
 		[selectedProjectId, selectedUser],
 	);
 	const selectedConversation = useMemo(
@@ -115,6 +129,25 @@ export function PlatformAuditPage() {
 	const refresh = async () => {
 		await loadTree();
 		if (selectedSessionId) await loadMessages(selectedSessionId, true);
+	};
+
+	const selectUser = (userId: string) => {
+		setSelectedUserId(userId);
+		setSelectedProjectId(null);
+		setSelectedSessionId(null);
+		setTranscript(null);
+	};
+
+	const selectProject = (projectId: string) => {
+		setSelectedProjectId(projectId);
+		setSelectedSessionId(null);
+		setTranscript(null);
+	};
+
+	const selectConversation = (sessionId: string) => {
+		setSelectedSessionId(sessionId);
+		setTranscript(null);
+		void loadMessages(sessionId);
 	};
 
 	return (
@@ -143,152 +176,183 @@ export function PlatformAuditPage() {
 			</header>
 
 			{error && (
-				<div className="mx-5 mt-4 rounded-lg border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+				<div className="mx-4 mt-4 rounded-lg border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive">
 					{error}
 				</div>
 			)}
 
-			<div className="grid min-h-0 flex-1 grid-cols-[minmax(180px,0.72fr)_minmax(200px,0.85fr)_minmax(240px,1fr)_minmax(440px,2fr)] gap-3 overflow-x-auto p-4">
-				<section className="flex min-h-0 min-w-[180px] flex-col overflow-hidden rounded-xl border bg-background">
-					<div className="flex h-12 shrink-0 items-center gap-2 border-b px-3 text-sm font-semibold">
-						<UserRound className="size-4 text-muted-foreground" />
-						{t('platformAudit.users')}
+			<main className="grid min-h-0 flex-1 grid-cols-[19rem_minmax(28rem,1fr)] gap-3 overflow-x-auto p-4">
+				<aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-background">
+					<div className="flex h-12 shrink-0 items-center justify-between border-b px-4">
+						<div className="flex items-center gap-2 text-sm font-semibold">
+							<Eye className="size-4 text-muted-foreground" />
+							{t('platformAudit.scope')}
+						</div>
+						{treeLoading && !tree && (
+							<Loader2 className="size-4 animate-spin text-muted-foreground" />
+						)}
 					</div>
-					<div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-						{treeLoading && !tree ? (
-							<div className="flex justify-center py-8">
-								<Loader2 className="size-5 animate-spin text-muted-foreground" />
+
+					<div className="space-y-3 border-b bg-muted/20 p-3">
+						<div className="space-y-1.5">
+							<label
+								htmlFor="audit-user"
+								className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
+							>
+								<UserRound className="size-3.5" />
+								{t('platformAudit.users')}
+							</label>
+							<Select
+								value={selectedUserId ?? ''}
+								onValueChange={selectUser}
+								disabled={!tree?.users.length}
+							>
+								<SelectTrigger id="audit-user" className="w-full">
+									<SelectValue placeholder={t('platformAudit.selectUser')} />
+								</SelectTrigger>
+								<SelectContent
+									position="popper"
+									align="start"
+									sideOffset={4}
+									className="w-max min-w-(--radix-select-trigger-width) [&_[data-position=popper]]:h-auto"
+								>
+									{tree?.users.map((user) => (
+										<SelectItem
+											key={user.user_id}
+											value={user.user_id}
+											textValue={`${user.display_name} · ${user.username}`}
+										>
+											<span className="whitespace-nowrap">
+												{user.display_name} · {user.username}
+											</span>
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+
+						<div className="space-y-1.5">
+							<label
+								htmlFor="audit-project"
+								className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"
+							>
+								<FolderKanban className="size-3.5" />
+								{t('platformAudit.projects')}
+							</label>
+							<Select
+								value={selectedProjectId ?? ''}
+								onValueChange={selectProject}
+								disabled={!selectedUser || !selectedUser.projects.length}
+							>
+								<SelectTrigger
+									id="audit-project"
+									className="min-h-12 w-full py-1.5 data-[size=default]:h-auto *:data-[slot=select-value]:line-clamp-none"
+								>
+									<SelectValue placeholder={t('platformAudit.selectProject')}>
+										{selectedProject ? (
+											<span className="line-clamp-2 min-w-0 flex-1 whitespace-normal text-left leading-5">
+												{selectedProject.project_name}
+											</span>
+										) : undefined}
+									</SelectValue>
+								</SelectTrigger>
+								<SelectContent
+									position="popper"
+									align="start"
+									sideOffset={4}
+									className="w-max min-w-(--radix-select-trigger-width) [&_[data-position=popper]]:h-auto"
+								>
+									{selectedUser?.projects.map((project) => (
+										<SelectItem
+											key={project.project_id}
+											value={project.project_id}
+											textValue={project.project_name}
+										>
+											<span className="whitespace-nowrap">
+												{project.project_name}
+											</span>
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						</div>
+					</div>
+
+					<section className="flex min-h-0 flex-1 flex-col">
+						<div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
+							<div className="flex items-center gap-2 text-sm font-semibold">
+								<MessageSquareText className="size-4 text-muted-foreground" />
+								{t('platformAudit.conversations')}
 							</div>
-						) : tree?.users.length ? (
-							tree.users.map((user) => (
-								<button
-									type="button"
-									key={user.user_id}
-									onClick={() => {
-										setSelectedUserId(user.user_id);
-										setSelectedProjectId(null);
-										setSelectedSessionId(null);
-										setTranscript(null);
-									}}
-									className={cn(
-										'w-full rounded-lg border border-transparent px-3 py-2.5 text-left transition-colors',
-										selectedUserId === user.user_id
-											? 'border-primary/20 bg-primary/8'
-											: 'hover:bg-muted/70',
-									)}
-								>
-									<div className="truncate text-sm font-medium">{user.display_name}</div>
-									<div className="mt-1 truncate text-xs text-muted-foreground">
-										{user.username} ·{' '}
-										{t('platformAudit.projectCount', {
-											count: user.projects.length,
-										})}
-									</div>
-								</button>
-							))
-						) : (
-							<p className="px-3 py-8 text-center text-xs text-muted-foreground">
-								{t('platformAudit.empty')}
-							</p>
-						)}
-					</div>
-				</section>
+							{selectedProject && (
+								<span className="text-xs tabular-nums text-muted-foreground">
+									{selectedProject.conversations.length}
+								</span>
+							)}
+						</div>
 
-				<section className="flex min-h-0 min-w-[200px] flex-col overflow-hidden rounded-xl border bg-background">
-					<div className="flex h-12 shrink-0 items-center gap-2 border-b px-3 text-sm font-semibold">
-						<FolderKanban className="size-4 text-muted-foreground" />
-						{t('platformAudit.projects')}
-					</div>
-					<div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-						{selectedUser ? (
-							selectedUser.projects.map((project) => (
-								<button
-									type="button"
-									key={project.project_id}
-									onClick={() => {
-										setSelectedProjectId(project.project_id);
-										setSelectedSessionId(null);
-										setTranscript(null);
-									}}
-									className={cn(
-										'w-full rounded-lg border border-transparent px-3 py-2.5 text-left transition-colors',
-										selectedProjectId === project.project_id
-											? 'border-primary/20 bg-primary/8'
-											: 'hover:bg-muted/70',
-									)}
-								>
-									<div className="line-clamp-2 text-sm font-medium">
-										{project.project_name}
-									</div>
-									<div className="mt-1 text-xs text-muted-foreground">
-										{t('platformAudit.conversationCount', {
-											count: project.conversations.length,
-										})}
-									</div>
-								</button>
-							))
-						) : (
-							<p className="px-3 py-8 text-center text-xs text-muted-foreground">
-								{t('platformAudit.selectUser')}
-							</p>
-						)}
-					</div>
-				</section>
-
-				<section className="flex min-h-0 min-w-[240px] flex-col overflow-hidden rounded-xl border bg-background">
-					<div className="flex h-12 shrink-0 items-center gap-2 border-b px-3 text-sm font-semibold">
-						<MessageSquareText className="size-4 text-muted-foreground" />
-						{t('platformAudit.conversations')}
-					</div>
-					<div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-						{selectedProject ? (
-							selectedProject.conversations.map((conversation) => (
-								<button
-									type="button"
-									key={conversation.session_id}
-									onClick={() => {
-										setSelectedSessionId(conversation.session_id);
-										setTranscript(null);
-										void loadMessages(conversation.session_id);
-									}}
-									className={cn(
-										'w-full rounded-lg border border-transparent px-3 py-2.5 text-left transition-colors',
-										selectedSessionId === conversation.session_id
-											? 'border-primary/20 bg-primary/8'
-											: 'hover:bg-muted/70',
-									)}
-								>
-									<div className="flex items-start justify-between gap-2">
-										<div className="line-clamp-2 text-sm font-medium">
-											{conversation.title}
-										</div>
-										<span
+						<div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
+							{treeLoading && !tree ? (
+								<div className="flex justify-center py-8">
+									<Loader2 className="size-5 animate-spin text-muted-foreground" />
+								</div>
+							) : !tree?.users.length ? (
+								<p className="px-3 py-8 text-center text-xs text-muted-foreground">
+									{t('platformAudit.empty')}
+								</p>
+							) : selectedProject ? (
+								selectedProject.conversations.length ? (
+									selectedProject.conversations.map((conversation) => (
+										<button
+											type="button"
+											key={conversation.session_id}
+											onClick={() => selectConversation(conversation.session_id)}
 											className={cn(
-												'mt-1 size-2 shrink-0 rounded-full',
-												conversation.is_running
-													? 'animate-pulse bg-emerald-500'
-													: 'bg-muted-foreground/35',
+												'w-full rounded-lg border border-transparent px-3 py-2.5 text-left transition-colors active:translate-y-px',
+												selectedSessionId === conversation.session_id
+													? 'border-primary/20 bg-primary/8'
+													: 'hover:bg-muted/70',
 											)}
-										/>
-									</div>
-									<div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-										<Bot className="size-3.5" />
-										<span className="truncate">{conversation.agent_name}</span>
-									</div>
-									<div className="mt-1 text-xs text-muted-foreground">
-										{formatDateTime(conversation.updated_at)}
-									</div>
-								</button>
-							))
-						) : (
-							<p className="px-3 py-8 text-center text-xs text-muted-foreground">
-								{t('platformAudit.selectProject')}
-							</p>
-						)}
-					</div>
-				</section>
+										>
+											<div className="flex items-start justify-between gap-2">
+												<div className="line-clamp-2 text-sm font-medium">
+													{conversation.title}
+												</div>
+												<span
+													className={cn(
+														'mt-1 size-2 shrink-0 rounded-full',
+														conversation.is_running
+															? 'animate-pulse bg-emerald-500'
+															: 'bg-muted-foreground/35',
+													)}
+												/>
+											</div>
+											<div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+												<Bot className="size-3.5" />
+												<span className="truncate">{conversation.agent_name}</span>
+											</div>
+											<div className="mt-1 text-xs tabular-nums text-muted-foreground">
+												{formatDateTime(conversation.updated_at)}
+											</div>
+										</button>
+									))
+								) : (
+									<p className="px-3 py-8 text-center text-xs text-muted-foreground">
+										{t('platformAudit.noConversations')}
+									</p>
+								)
+							) : (
+								<p className="px-3 py-8 text-center text-xs text-muted-foreground">
+									{selectedUser
+										? t('platformAudit.selectProject')
+										: t('platformAudit.selectUser')}
+								</p>
+							)}
+						</div>
+					</section>
+				</aside>
 
-				<section className="flex min-h-0 min-w-[440px] flex-col overflow-hidden rounded-xl border bg-background">
+				<section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-background">
 					<div className="flex min-h-16 shrink-0 items-center justify-between gap-4 border-b px-4 py-3">
 						<div className="min-w-0">
 							<h2 className="truncate text-sm font-semibold">
@@ -361,7 +425,7 @@ export function PlatformAuditPage() {
 						)}
 					</div>
 				</section>
-			</div>
+			</main>
 		</div>
 	);
 }

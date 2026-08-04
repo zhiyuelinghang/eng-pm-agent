@@ -131,14 +131,16 @@ export function EditAgentDialog({ open, onOpenChange, agent, onUpdated }: Props)
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="!w-[560px] !max-w-[560px]">
-				<DialogHeader>
-					<DialogTitle>{t('dialog-agent-edit.title')}</DialogTitle>
-					<DialogDescription className="sr-only">
+			<DialogContent className="grid h-[min(880px,calc(100vh-2rem))] max-h-[calc(100vh-2rem)] !w-[min(900px,calc(100vw-2rem))] !max-w-[900px] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0">
+				<DialogHeader className="border-b px-6 py-6 pr-14">
+					<DialogTitle className="text-2xl leading-tight">
+						{t('dialog-agent-edit.title')}
+					</DialogTitle>
+					<DialogDescription>
 						{t('dialog-agent-edit.description')}
 					</DialogDescription>
 				</DialogHeader>
-				<div className="no-scrollbar -mx-4 max-h-[75vh] overflow-y-auto px-4">
+				<div className="min-h-0">
 					{schema && values ? (
 						<AgentFormFields
 							schema={schema}
@@ -151,35 +153,36 @@ export function EditAgentDialog({ open, onOpenChange, agent, onUpdated }: Props)
 						<p className="text-muted-foreground text-sm">{t('common.loading')}</p>
 					)}
 				</div>
-				{errorMsg && (
-					<Alert variant="destructive">
-						<CircleAlert />
-						<AlertDescription className="whitespace-pre-wrap">
-							{errorMsg}
-						</AlertDescription>
-					</Alert>
-				)}
-				<DialogFooter>
-					<Button
-						variant="ghost"
-						onClick={() => onOpenChange(false)}
-						disabled={submitting}
-					>
-						<CircleAlert className="size-3.5" />
-						{t('common.cancel')}
-					</Button>
-					<Button
-						onClick={handleSubmit}
-						disabled={!nameValid || submitting || !schema || !values}
-					>
-						{submitting ? (
-							<Loader2 className="size-3.5 animate-spin" />
-						) : (
-							<Save className="size-3.5" />
-						)}
-						{submitting ? t('common.saving') : t('common.save')}
-					</Button>
-				</DialogFooter>
+				<div className="shrink-0">
+					{errorMsg && (
+						<Alert variant="destructive" className="mx-6 mt-3 w-auto">
+							<CircleAlert />
+							<AlertDescription className="whitespace-pre-wrap">
+								{errorMsg}
+							</AlertDescription>
+						</Alert>
+					)}
+					<DialogFooter className="m-0 rounded-none bg-background px-6 py-4">
+						<Button
+							variant="ghost"
+							onClick={() => onOpenChange(false)}
+							disabled={submitting}
+						>
+							{t('common.cancel')}
+						</Button>
+						<Button
+							onClick={handleSubmit}
+							disabled={!nameValid || submitting || !schema || !values}
+						>
+							{submitting ? (
+								<Loader2 className="size-3.5 animate-spin" />
+							) : (
+								<Save className="size-3.5" />
+							)}
+							{submitting ? t('common.saving') : t('common.save')}
+						</Button>
+					</DialogFooter>
+				</div>
 			</DialogContent>
 		</Dialog>
 	);

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 
 import { workspaceApi } from '../api';
-import type { Skill } from '../api';
+import type { Skill, UpdateSkillRequest } from '../api';
 
 /**
  * Manages skills available in a session's workspace.
@@ -55,5 +55,15 @@ export function useSkills(agentId: string | null, sessionId: string | null) {
 		[agentId, sessionId, refetch],
 	);
 
-	return { skills, loading, error, refetch, add, remove };
+	/** Updates a skill's editable SKILL.md fields and refreshes the list. */
+	const update = useCallback(
+		async (skillName: string, input: UpdateSkillRequest) => {
+			if (!agentId || !sessionId) throw new Error('No agent/session selected');
+			await workspaceApi.skill.update(skillName, agentId, sessionId, input);
+			await refetch();
+		},
+		[agentId, sessionId, refetch],
+	);
+
+	return { skills, loading, error, refetch, add, update, remove };
 }

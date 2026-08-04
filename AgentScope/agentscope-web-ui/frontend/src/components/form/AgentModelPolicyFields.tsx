@@ -277,7 +277,7 @@ export function AgentModelPolicyFields({ values, onChange }: Props) {
 								{customRequestError && (
 									<p className="text-xs text-destructive">{customRequestError}</p>
 								)}
-								<pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-[11px] leading-relaxed text-muted-foreground">
+								<pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-xs leading-relaxed text-muted-foreground">
 									{t('credential.modelDefaults.customExamples')}
 								</pre>
 							</div>

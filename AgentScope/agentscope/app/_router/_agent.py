@@ -719,6 +719,7 @@ async def create_agent(
             platform_config=body.platform_config,
             invite_config=body.invite_config,
             call_config=body.call_config,
+            tool_config=body.tool_config,
         )
     except ValidationError as exc:
         raise HTTPException(

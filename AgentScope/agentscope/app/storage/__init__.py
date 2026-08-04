@@ -8,6 +8,7 @@ from ._model import (
     AgentCallConfig,
     AgentData,
     AgentModelPolicy,
+    AgentToolConfig,
     PlatformAgentConfig,
     AgentRecord,
     CredentialRecord,
@@ -72,6 +73,7 @@ __all__ = [
     "AsyncSQLAlchemyStorage",
     # The ORM models
     "AgentCallConfig",
+    "AgentToolConfig",
     "AgentModelPolicy",
     "PlatformAgentConfig",
     "InviteConfig",

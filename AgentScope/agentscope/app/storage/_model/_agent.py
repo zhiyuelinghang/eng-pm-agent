@@ -114,6 +114,48 @@ class AgentCallConfig(BaseModel):
         return False
 
 
+class AgentToolConfig(BaseModel):
+    """Controls which assignable direct tools belong to an agent.
+
+    ``None`` preserves the historical behavior for existing agents: every
+    tool contributed by the workspace or the embedding application is
+    available. Once an administrator saves the checklist, the explicit list
+    becomes authoritative for every session of the agent.
+    """
+
+    allowed_tool_names: list[str] | None = Field(
+        default=None,
+        description=(
+            "Direct tool names assigned to this agent. ``None`` means all "
+            "currently available direct tools; a list is an explicit "
+            "allowlist, including an empty list for no assigned tools."
+        ),
+        title="Assigned Tools",
+    )
+
+    @field_validator("allowed_tool_names")
+    @classmethod
+    def _normalise_allowed_tool_names(
+        cls,
+        values: list[str] | None,
+    ) -> list[str] | None:
+        """Trim and de-duplicate explicit tool names in stable order."""
+        if values is None:
+            return None
+        return list(
+            dict.fromkeys(
+                value.strip() for value in values if value.strip()
+            ),
+        )
+
+    def allows(self, tool_name: str) -> bool:
+        """Return whether the direct tool is assigned to this agent."""
+        return (
+            self.allowed_tool_names is None
+            or tool_name in self.allowed_tool_names
+        )
+
+
 class AgentModelPolicy(BaseModel):
     """Controls whether an agent follows its session or pins a model.
 
@@ -328,6 +370,14 @@ class AgentData(BaseModel):
         default_factory=AgentCallConfig,
         description="Controls which existing agents this agent may invite.",
         title="Agent Call Config",
+    )
+
+    tool_config: SkipJsonSchema[AgentToolConfig] = Field(
+        default_factory=AgentToolConfig,
+        description=(
+            "Direct-tool assignment maintained by the chat sidebar. Hidden "
+            "from the schema-driven dialog to avoid duplicate editors."
+        ),
     )
 
 

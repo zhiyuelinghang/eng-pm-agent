@@ -46,6 +46,21 @@ def _filter_globally_disabled_tools(tools: list[Any]) -> list[Any]:
     ]
 
 
+def _filter_agent_assigned_tools(
+    tools: list[Any],
+    allowed_tool_names: list[str] | None,
+) -> list[Any]:
+    """Keep only direct tools assigned in the agent configuration."""
+    if allowed_tool_names is None:
+        return tools
+    allowed = set(allowed_tool_names)
+    return [
+        tool
+        for tool in tools
+        if str(getattr(tool, "name", "")) in allowed
+    ]
+
+
 async def get_toolkit(
     *,
     storage: StorageBase,
@@ -143,7 +158,11 @@ optional):
     tool_groups = []
 
     # The general tools running in the workspace
-    tools = await workspace.list_tools()
+    allowed_tool_names = agent_record.data.tool_config.allowed_tool_names
+    tools = _filter_agent_assigned_tools(
+        await workspace.list_tools(),
+        allowed_tool_names,
+    )
 
     # Planning tools — always on.
     tools += [TaskCreate(), TaskList(), TaskGet(), TaskUpdate()]
@@ -276,10 +295,13 @@ time or interval"
 
     # Caller-supplied extras.
     if extra_factory is not None:
-        tools += await extra_factory(
-            user_id,
-            agent_record.id,
-            session_record.id,
+        tools += _filter_agent_assigned_tools(
+            await extra_factory(
+                user_id,
+                agent_record.id,
+                session_record.id,
+            ),
+            allowed_tool_names,
         )
 
     # Tools from middleware

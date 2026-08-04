@@ -1,3 +1,4 @@
+import { useRef, useState, type UIEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type {
@@ -115,6 +116,9 @@ function sliceSchema(root: JSONSchema): Record<AgentSection, JSONSchema> {
 export function AgentFormFields({ schema, values, agents, currentAgentId, onChange }: Props) {
 	const { t } = useTranslation();
 	const sections = sliceSchema(schema.schema);
+	const scrollContainerRef = useRef<HTMLDivElement | null>(null);
+	const sectionRefs = useRef<Partial<Record<AgentSection, HTMLDivElement | null>>>({});
+	const [activeSection, setActiveSection] = useState<AgentSection>('identity');
 
 	const rows: Array<{ key: AgentSection; i18n: string; sectionSchema: JSONSchema }> = [
 		{ key: 'identity', i18n: IDENTITY_I18N, sectionSchema: sections.identity },
@@ -125,65 +129,144 @@ export function AgentFormFields({ schema, values, agents, currentAgentId, onChan
 		})),
 	];
 
+	const scrollToSection = (sectionKey: AgentSection) => {
+		const container = scrollContainerRef.current;
+		const target = sectionRefs.current[sectionKey];
+		if (!container || !target) return;
+
+		setActiveSection(sectionKey);
+		container.scrollTo({
+			top: Math.max(target.offsetTop - 24, 0),
+			behavior: 'smooth',
+		});
+	};
+
+	const handleScroll = (event: UIEvent<HTMLDivElement>) => {
+		const container = event.currentTarget;
+		if (container.scrollTop + container.clientHeight >= container.scrollHeight - 8) {
+			setActiveSection(rows[rows.length - 1].key);
+			return;
+		}
+
+		const position = container.scrollTop + 48;
+		let current = rows[0].key;
+		for (const row of rows) {
+			const element = sectionRefs.current[row.key];
+			if (!element || element.offsetTop > position) break;
+			current = row.key;
+		}
+		setActiveSection(current);
+	};
+
 	return (
-		<FieldGroup>
-			{rows.map(({ key: sectionKey, i18n: sectionI18n, sectionSchema }, idx) => {
-				const legend = t(`agent-form.${sectionI18n}.legend`, {
-					defaultValue: sectionSchema.title ?? sectionKey,
-				});
-				const description = t(`agent-form.${sectionI18n}.description`, {
-					defaultValue: '',
-				});
-				return (
-					<div key={sectionKey}>
-						{idx > 0 && <FieldSeparator className="my-0" />}
-						<FieldSet>
-							<FieldLegend>{legend}</FieldLegend>
-							{description && <FieldDescription>{description}</FieldDescription>}
-							{sectionKey === 'model_policy' ? (
-								<AgentModelPolicyFields
-									values={values.model_policy as AgentModelPolicyFormValues}
-									onChange={(k, v) =>
-										onChange('model_policy', String(k), v)
-									}
-								/>
-							) : sectionKey === 'platform_config' ? (
-								<AgentPlatformConfigFields
-									values={values.platform_config as Partial<PlatformAgentConfig>}
-									onChange={(k, v) =>
-										onChange('platform_config', String(k), v)
-									}
-								/>
-							) : sectionKey === 'call_config' ? (
-								<AgentCallConfigFields
-									values={values.call_config as Partial<AgentCallConfig>}
-									agents={agents}
-									currentAgentId={currentAgentId}
-									onChange={(k, v) => onChange('call_config', k, v)}
-								/>
-							) : (
-								<SchemaForm
-									schema={sectionSchema}
-									values={values[sectionKey] as Record<string, SchemaFormValue>}
-									onChange={(k, v) => onChange(sectionKey, k, v)}
-									idPrefix={`agent-form-${sectionI18n}`}
-									labelFor={(k, prop) =>
-										t(`agent-form.${sectionI18n}.${toKebab(k)}.label`, {
-											defaultValue: prop.title ?? k.replace(/_/g, ' '),
-										})
-									}
-									placeholderFor={(k, prop) =>
-										t(`agent-form.${sectionI18n}.${toKebab(k)}.placeholder`, {
-											defaultValue: prop.description ?? '',
-										}) || undefined
-									}
-								/>
-							)}
-						</FieldSet>
-					</div>
-				);
-			})}
-		</FieldGroup>
+		<div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[11.5rem_minmax(0,1fr)]">
+			<nav
+				aria-label="Agent configuration sections"
+				className="flex shrink-0 gap-1 overflow-x-auto border-b bg-muted/20 p-3 md:flex-col md:overflow-x-visible md:border-r md:border-b-0 md:px-3 md:py-5"
+			>
+				{rows.map(({ key: sectionKey, i18n: sectionI18n, sectionSchema }) => {
+					const label = t(`agent-form.${sectionI18n}.legend`, {
+						defaultValue: sectionSchema.title ?? sectionKey,
+					});
+					const isActive = activeSection === sectionKey;
+
+					return (
+						<button
+							key={sectionKey}
+							type="button"
+							aria-current={isActive ? 'step' : undefined}
+							aria-controls={`agent-section-${sectionKey}`}
+							onClick={() => scrollToSection(sectionKey)}
+							className={`group flex min-w-max items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors md:min-w-0 ${
+								isActive
+									? 'bg-background text-[#c95622] shadow-sm ring-1 ring-border/70'
+									: 'text-muted-foreground hover:bg-background/80 hover:text-foreground'
+							}`}
+						>
+							<span
+								aria-hidden="true"
+								className={`size-2 shrink-0 rounded-full ${
+									isActive ? 'bg-[#c95622]' : 'bg-border group-hover:bg-muted-foreground/50'
+								}`}
+							/>
+							<span className="truncate">{label}</span>
+						</button>
+					);
+				})}
+			</nav>
+
+			<div
+				ref={scrollContainerRef}
+				onScroll={handleScroll}
+				className="no-scrollbar relative min-h-0 overflow-y-auto scroll-smooth px-5 py-5 sm:px-7 sm:py-6"
+			>
+				<FieldGroup className="mx-auto max-w-2xl gap-0">
+					{rows.map(({ key: sectionKey, i18n: sectionI18n, sectionSchema }, idx) => {
+						const legend = t(`agent-form.${sectionI18n}.legend`, {
+							defaultValue: sectionSchema.title ?? sectionKey,
+						});
+						const description = t(`agent-form.${sectionI18n}.description`, {
+							defaultValue: '',
+						});
+						return (
+							<div
+								key={sectionKey}
+								id={`agent-section-${sectionKey}`}
+								ref={(element) => {
+									sectionRefs.current[sectionKey] = element;
+								}}
+								className="scroll-mt-6 py-1"
+							>
+								{idx > 0 && <FieldSeparator className="my-6" />}
+								<FieldSet>
+									<FieldLegend className="text-lg">{legend}</FieldLegend>
+									{description && <FieldDescription>{description}</FieldDescription>}
+									{sectionKey === 'model_policy' ? (
+										<AgentModelPolicyFields
+											values={values.model_policy as AgentModelPolicyFormValues}
+											onChange={(k, v) =>
+												onChange('model_policy', String(k), v)
+											}
+										/>
+									) : sectionKey === 'platform_config' ? (
+										<AgentPlatformConfigFields
+											values={values.platform_config as Partial<PlatformAgentConfig>}
+											onChange={(k, v) =>
+												onChange('platform_config', String(k), v)
+											}
+										/>
+									) : sectionKey === 'call_config' ? (
+										<AgentCallConfigFields
+											values={values.call_config as Partial<AgentCallConfig>}
+											agents={agents}
+											currentAgentId={currentAgentId}
+											onChange={(k, v) => onChange('call_config', k, v)}
+										/>
+									) : (
+										<SchemaForm
+											schema={sectionSchema}
+											values={values[sectionKey] as Record<string, SchemaFormValue>}
+											onChange={(k, v) => onChange(sectionKey, k, v)}
+											idPrefix={`agent-form-${sectionI18n}`}
+											labelFor={(k, prop) =>
+												t(`agent-form.${sectionI18n}.${toKebab(k)}.label`, {
+													defaultValue: prop.title ?? k.replace(/_/g, ' '),
+												})
+											}
+											placeholderFor={(k, prop) =>
+												t(`agent-form.${sectionI18n}.${toKebab(k)}.placeholder`, {
+													defaultValue: prop.description ?? '',
+												}) || undefined
+											}
+										/>
+									)}
+								</FieldSet>
+							</div>
+						);
+					})}
+				</FieldGroup>
+			</div>
+		</div>
 	);
 }
 

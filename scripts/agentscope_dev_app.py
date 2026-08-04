@@ -27,7 +27,10 @@ from agentscope.rag import (
     TextParser,
     WordParser,
 )
-from scripts.dobby_agent_tools import create_dobby_agent_tools
+from scripts.dobby_agent_tools import (
+    create_dobby_agent_tool_catalog,
+    create_dobby_agent_tools,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -170,6 +173,20 @@ async def _create_platform_agent_tools(
         initialization_role=initialization_role,
     )
 
+
+async def _list_platform_agent_tool_catalog(
+    user_id: str,
+    agent_id: str,
+):
+    """List every Dobby tool assignable to this agent's persisted role."""
+    agent_record = await storage.get_agent(user_id, agent_id)
+    initialization_role = (
+        agent_record.data.platform_config.initialization_role
+        if agent_record is not None
+        else None
+    )
+    return create_dobby_agent_tool_catalog(initialization_role)
+
 app = create_app(
     storage=storage,
     message_bus=InMemoryMessageBus(),
@@ -198,6 +215,7 @@ app = create_app(
         ),
     ),
     extra_agent_tools=_create_platform_agent_tools,
+    extra_agent_tool_catalog=_list_platform_agent_tool_catalog,
     extra_middlewares=[
         Middleware(
             CORSMiddleware,

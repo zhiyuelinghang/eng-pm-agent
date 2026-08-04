@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 
+from agentscope.app._types import AgentToolDescriptor
 from agentscope.message import TextBlock, ToolResultState
 from agentscope.permission import (
     PermissionBehavior,
@@ -31,6 +32,30 @@ _INITIALIZATION_WORKER_READ_TOOL_NAMES = {
     "dobby_get_project_initialization_state",
     "dobby_get_project_initialization_draft",
     "dobby_read_project_initialization_artifact",
+}
+
+_TOOL_DISPLAY_NAMES = {
+    "dobby_get_project_overview": "项目概览",
+    "dobby_list_project_items": "项目数据查询",
+    "dobby_search_documents": "工程资料搜索",
+    "dobby_get_project_initialization_state": "初始化状态",
+    "dobby_get_project_initialization_draft": "读取初始化草稿",
+    "dobby_read_project_initialization_artifact": "读取标准化资料",
+    "dobby_begin_project_initialization_normalization": "开始附件标准化",
+    "dobby_write_project_initialization_artifact": "写入标准化资料",
+    "dobby_finalize_project_initialization_normalization": "完成附件标准化",
+    "dobby_begin_project_initialization_draft": "创建初始化草稿",
+    "dobby_write_project_initialization_draft_section": "写入初始化分区",
+    "dobby_import_project_initialization_artifact": "导入初始化分区",
+    "dobby_finalize_project_initialization_draft": "完成初始化核验",
+    "dobby_read_project_initialization_file": "读取初始化附件",
+    "dobby_create_task": "创建项目任务",
+    "dobby_update_task": "更新项目任务",
+    "dobby_dispose_information": "处置项目信息",
+    "dobby_create_project_change": "登记项目变更",
+    "dobby_update_document_category": "修改资料分类",
+    "dobby_create_risk": "新增风险源",
+    "dobby_update_wbs_progress": "更新 WBS 进度",
 }
 
 
@@ -1478,6 +1503,62 @@ def _gateway_settings() -> tuple[str, str]:
         or os.getenv("AGENTSCOPE_SERVICE_TOKEN", "").strip()
     )
     return base_url, token
+
+
+def create_dobby_agent_tool_catalog(
+    initialization_role: str | None,
+) -> list[AgentToolDescriptor]:
+    """Return the complete assignable Dobby catalogue for one agent role.
+
+    Catalogue construction is deliberately independent from the live platform
+    session. Runtime capabilities still decide which assigned tools can be
+    instantiated for a particular conversation.
+    """
+    read_definitions: list[dict[str, Any]] = list(READ_TOOL_DEFINITIONS)
+    write_definitions: list[dict[str, Any]] = []
+
+    if initialization_role is not None:
+        read_definitions.extend(_INITIALIZATION_READ_TOOL_DEFINITIONS)
+        if initialization_role == "orchestrator":
+            read_definitions.append(INITIALIZATION_FILE_TOOL_DEFINITION)
+            write_definitions.extend(
+                INITIALIZATION_ORCHESTRATOR_TOOL_DEFINITIONS,
+            )
+        elif initialization_role in INITIALIZATION_SPECIALIST_TOOL_DEFINITIONS:
+            write_definitions.extend(
+                INITIALIZATION_SPECIALIST_TOOL_DEFINITIONS[
+                    initialization_role
+                ],
+            )
+        elif initialization_role == "validator":
+            write_definitions.extend(
+                INITIALIZATION_VALIDATOR_TOOL_DEFINITIONS,
+            )
+    else:
+        write_definitions.extend(WRITE_TOOL_DEFINITIONS)
+        write_definitions.extend(ADMIN_WRITE_TOOL_DEFINITIONS)
+
+    descriptors: list[AgentToolDescriptor] = []
+    seen: set[str] = set()
+    for read_only, definitions in (
+        (True, read_definitions),
+        (False, write_definitions),
+    ):
+        for definition in definitions:
+            name = str(definition["name"])
+            if name in seen:
+                continue
+            seen.add(name)
+            descriptors.append(
+                AgentToolDescriptor(
+                    name=name,
+                    display_name=_TOOL_DISPLAY_NAMES.get(name),
+                    description=str(definition.get("description") or ""),
+                    input_schema=dict(definition.get("schema") or {}),
+                    read_only=read_only,
+                ),
+            )
+    return descriptors
 
 
 async def create_dobby_agent_tools(

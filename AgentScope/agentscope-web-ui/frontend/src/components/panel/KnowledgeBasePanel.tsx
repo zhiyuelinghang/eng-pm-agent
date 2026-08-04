@@ -1,4 +1,5 @@
 import { FileX, Search, SearchX } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 
 import type { KnowledgeBaseView, SessionKnowledgeConfig } from '@/api';
@@ -27,17 +28,17 @@ interface KnowledgeBasePanelProps {
 	onChange: (next: SessionKnowledgeConfig | null) => void;
 	/** Disable the entire panel — e.g. when no session is selected. */
 	disabled?: boolean;
+	/** Knowledge-specific controls rendered beside the short description. */
+	actions?: ReactNode;
 }
 
 /**
  * Pure content body for the Knowledge Base dock panel: a search box and
  * a checkbox list of the user's KBs.
  *
- * Middleware parameter editing lives in
- * {@link KnowledgeBaseParametersPopover}, which the owner mounts in the
- * panel header's `actions` slot — that keeps this body focused on
- * picking KBs rather than mixing two unrelated forms in the same scroll
- * area.
+ * Middleware parameter editing is supplied through the compact `actions`
+ * slot beside this panel's description, avoiding a second, duplicate panel
+ * header while keeping the control outside the scrollable list.
  */
 export function KnowledgeBasePanel({
 	knowledgeBases,
@@ -45,6 +46,7 @@ export function KnowledgeBasePanel({
 	value,
 	onChange,
 	disabled = false,
+	actions,
 }: KnowledgeBasePanelProps) {
 	const { t } = useTranslation();
 	const [search, setSearch] = useState('');
@@ -72,9 +74,12 @@ export function KnowledgeBasePanel({
 
 	return (
 		<div className="flex flex-col flex-1 min-h-0 gap-y-2">
-			<span className="text-muted-foreground text-sm">
-				{t('panel.knowledge.description')}
-			</span>
+			<div className="flex min-h-8 items-center justify-between gap-2">
+				<span className="text-muted-foreground text-sm">
+					{t('panel.knowledge.description')}
+				</span>
+				{actions ? <div className="shrink-0">{actions}</div> : null}
+			</div>
 			<InputGroup>
 				<InputGroupInput
 					placeholder={t('panel.knowledge.searchPlaceholder')}

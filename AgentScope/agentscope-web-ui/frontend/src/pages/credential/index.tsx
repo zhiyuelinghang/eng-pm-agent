@@ -6,12 +6,12 @@ import {
 	Eye,
 	EyeOff,
 	FlaskConical,
+	KeyRound,
 	Loader2,
 	Plus,
 	PlusCircle,
 	Pencil,
 	RefreshCw,
-	RotateCcw,
 	SlidersHorizontal,
 	ShieldCheck,
 	Trash2,
@@ -63,18 +63,6 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from '@/components/ui/select';
-import { Separator } from '@/components/ui/separator';
-import {
-	Sidebar,
-	SidebarContent,
-	SidebarGroup,
-	SidebarGroupContent,
-	SidebarGroupLabel,
-	SidebarHeader,
-	SidebarMenu,
-	SidebarMenuButton,
-	SidebarMenuItem,
-} from '@/components/ui/sidebar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Textarea } from '@/components/ui/textarea';
 import { useCredentials } from '@/hooks/useCredentials';
@@ -115,15 +103,15 @@ function ProviderRawResponse({ result }: { result: CredentialModelTestResponse }
 
 	return (
 		<div className="mt-2 min-w-0 rounded-md border border-border/70 bg-muted/60 p-2 text-foreground">
-			<div className="mb-1.5 flex items-center justify-between gap-2 text-[11px] font-medium">
+			<div className="mb-1.5 flex items-center justify-between gap-2 text-xs font-medium">
 				<span>{t('credential.modelTest.rawResponse')}</span>
 				{result.status_code != null && (
-					<Badge variant="outline" className="h-5 font-mono text-[10px]">
+					<Badge variant="outline" className="h-5 font-mono text-xs">
 						HTTP {result.status_code}
 					</Badge>
 				)}
 			</div>
-			<pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-muted-foreground">
+			<pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-muted-foreground">
 				{result.raw_response}
 			</pre>
 		</div>
@@ -347,7 +335,7 @@ function ManualModelDialog({
 							{customRequestError && (
 								<p className="text-xs text-destructive">{customRequestError}</p>
 							)}
-							<pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-background p-2 text-[11px] leading-relaxed text-muted-foreground">
+							<pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-background p-2 text-xs leading-relaxed text-muted-foreground">
 								{t('credential.modelDefaults.customExamples')}
 							</pre>
 						</div>
@@ -431,7 +419,7 @@ function ModelCardItem({
 	const configuredParameterCount = Object.keys(model.default_parameters).length;
 
 	return (
-		<Card className="shadow">
+		<Card className="h-full gap-4 border-border/80 py-4 shadow-none">
 			<CardHeader>
 				<div className="min-w-0">
 					<CardTitle
@@ -441,22 +429,22 @@ function ModelCardItem({
 						{model.label || model.name}
 					</CardTitle>
 					<div
-						className="mt-1 truncate font-mono text-[11px] text-muted-foreground"
+						className="mt-1 truncate font-mono text-xs text-muted-foreground"
 						title={model.name}
 					>
 						{t('credential.modelId')}: {model.name}
 					</div>
 					<div className="mt-1 flex items-center gap-1.5">
-						<Badge variant="secondary" className="text-[10px]">
+						<Badge variant="secondary" className="text-xs">
 							{t(`credential.modelSource.${model.source}`)}
 						</Badge>
 						{reasoning ? (
-							<Badge variant={'outline'} className="text-[10px]">
+							<Badge variant={'outline'} className="text-xs">
 								{t('credential.reasoning')}
 							</Badge>
 						) : null}
 						{configuredParameterCount > 0 && (
-							<Badge variant="default" className="text-[10px]">
+							<Badge variant="default" className="text-xs">
 								{t('credential.modelDefaults.configured', {
 									count: configuredParameterCount,
 								})}
@@ -587,7 +575,7 @@ function EmbeddingModelCardItem({
 	const { t } = useTranslation();
 
 	return (
-		<Card className="shadow">
+		<Card className="h-full gap-4 border-border/80 py-4 shadow-none">
 			<CardHeader>
 				<div className="min-w-0">
 					<CardTitle
@@ -597,16 +585,16 @@ function EmbeddingModelCardItem({
 						{model.label || model.name}
 					</CardTitle>
 					<div
-						className="mt-1 truncate font-mono text-[11px] text-muted-foreground"
+						className="mt-1 truncate font-mono text-xs text-muted-foreground"
 						title={model.name}
 					>
 						{t('credential.modelId')}: {model.name}
 					</div>
 					<div className="mt-1 flex items-center gap-1.5">
-						<Badge variant="secondary" className="text-[10px]">
+						<Badge variant="secondary" className="text-xs">
 							{t(`credential.modelSource.${model.source}`)}
 						</Badge>
-						<Badge variant="outline" className="text-[10px]">
+						<Badge variant="outline" className="text-xs">
 							{t('credential.modelTypes.embedding')}
 						</Badge>
 					</div>
@@ -695,7 +683,7 @@ function TTSModelCardItem({ model }: { model: TTSModelCard }) {
 				: 'outline';
 
 	return (
-		<Card className="shadow">
+		<Card className="h-full gap-4 border-border/80 py-4 shadow-none">
 			<CardHeader>
 				<CardTitle
 					className="text-sm font-semibold leading-tight truncate"
@@ -965,24 +953,6 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 		]);
 	};
 
-	const handleRestoreModel = async (modelName: string) => {
-		if (!catalog) return;
-		await saveCatalog(
-			catalog.manual_models,
-			catalog.hidden_model_ids.filter((id) => id !== modelName),
-			catalog.hidden_embedding_model_ids,
-		);
-	};
-
-	const handleRestoreEmbeddingModel = async (modelName: string) => {
-		if (!catalog) return;
-		await saveCatalog(
-			catalog.manual_models,
-			catalog.hidden_model_ids,
-			catalog.hidden_embedding_model_ids.filter((id) => id !== modelName),
-		);
-	};
-
 	const handleTestModel = async (modelType: 'chat' | 'embedding', modelName: string) => {
 		const testKey = `${modelType}:${modelName}`;
 		setTestingModel(testKey);
@@ -1038,36 +1008,45 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 
 	const name = (credential.data.name as string | undefined) ?? credential.id;
 	const activeModels = catalog?.models.filter((model) => model.enabled) ?? [];
-	const hiddenModels = catalog?.models.filter((model) => !model.enabled) ?? [];
 	const activeEmbeddingModels = catalog?.embedding_models.filter((model) => model.enabled) ?? [];
-	const hiddenEmbeddingModels = catalog?.embedding_models.filter((model) => !model.enabled) ?? [];
 
 	return (
-		<div className="flex flex-col gap-y-6 p-6 overflow-y-auto h-full">
+		<div className="flex h-full min-h-0 flex-col">
 			{/* Header */}
-			<div className="flex items-start justify-between gap-x-4">
-				<div className="flex flex-col gap-y-1">
-					<h2 className="text-lg font-semibold">{name}</h2>
-					<p className="text-muted-foreground text-sm">{type}</p>
-					{!credential.editable && (
-						<Badge variant="secondary" title={t('common.readOnlyTooltip')}>
-							{t('common.readOnly')}
-						</Badge>
-					)}
+			<div className="flex min-h-16 shrink-0 items-center justify-between gap-4 border-b px-5 py-3">
+				<div className="flex min-w-0 items-center gap-3">
+					<div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+						<KeyRound className="size-4.5" />
+					</div>
+					<div className="min-w-0">
+						<div className="flex items-center gap-2">
+							<h2 className="truncate text-base font-semibold">{name}</h2>
+							{!credential.editable && (
+								<Badge variant="secondary" title={t('common.readOnlyTooltip')}>
+									{t('common.readOnly')}
+								</Badge>
+							)}
+						</div>
+						<p className="mt-0.5 truncate text-sm text-muted-foreground">
+							{schema?.title ?? type}
+						</p>
+					</div>
 				</div>
-				<div className="flex items-center gap-x-2 shrink-0">
+				<div className="flex shrink-0 items-center gap-2">
 					<Button
-						size="icon-sm"
+						size="sm"
 						variant="outline"
 						onClick={onEdit}
 						disabled={!credential.editable}
 						tooltip={credential.editable ? undefined : t('common.readOnlyTooltip')}
 					>
 						<Pencil />
+						{t('common.edit')}
 					</Button>
 					<Button
 						size="icon-sm"
-						variant="destructive"
+						variant="ghost"
+						className="text-destructive hover:bg-destructive/10 hover:text-destructive"
 						onClick={onDelete}
 						disabled={!credential.editable}
 						tooltip={credential.editable ? undefined : t('common.readOnlyTooltip')}
@@ -1077,294 +1056,218 @@ function DetailPanel({ credential, schema, onEdit, onDelete }: DetailPanelProps)
 				</div>
 			</div>
 
-			{/* Fields */}
-			<div className="flex flex-col gap-y-3">
-				{displayFields.map(([key, prop]) => {
-					const schemaProp = prop as {
-						title?: string;
-						writeOnly?: boolean;
-						format?: string;
-					};
-					const label = schemaProp.title ?? key.replace(/_/g, ' ');
-					const isSecret = schemaProp.writeOnly || schemaProp.format === 'password';
-					const val = credential.data[key];
-					if (val === undefined || val === null) return null;
-					const strVal = String(val);
-					return (
-						<div key={key} className="flex flex-col gap-y-0.5">
-							<span className="text-muted-foreground text-xs uppercase tracking-wide">
-								{label}
-							</span>
-							{isSecret ? (
-								<MaskedValue value={strVal} />
-							) : (
-								<span className="text-sm font-mono break-all">{strVal}</span>
+			<div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-5">
+				{/* Fields */}
+				<section className="rounded-xl border bg-muted/15 p-4">
+					<div className="grid gap-x-8 gap-y-4 md:grid-cols-2 xl:grid-cols-3">
+						{displayFields.map(([key, prop]) => {
+							const schemaProp = prop as {
+								title?: string;
+								writeOnly?: boolean;
+								format?: string;
+							};
+							const label = schemaProp.title ?? key.replace(/_/g, ' ');
+							const isSecret =
+								schemaProp.writeOnly || schemaProp.format === 'password';
+							const val = credential.data[key];
+							if (val === undefined || val === null) return null;
+							const strVal = String(val);
+							return (
+								<div key={key} className="min-w-0">
+									<div className="text-xs font-medium text-muted-foreground">
+										{label}
+									</div>
+									<div className="mt-1 min-h-8 rounded-md border bg-background px-3 py-1.5">
+										{isSecret ? (
+											<MaskedValue value={strVal} />
+										) : (
+											<span className="break-all font-mono text-sm">
+												{strVal}
+											</span>
+										)}
+									</div>
+								</div>
+							);
+						})}
+					</div>
+				</section>
+
+				{/* Credential-scoped model catalog */}
+				<section className="flex flex-col gap-4 rounded-xl border p-4">
+					<div className="flex items-start justify-between gap-4">
+						<div>
+							<h3 className="text-sm font-semibold">
+								{t('credential.modelCatalog')}
+								{catalog ? ` (${catalog.total})` : ''}
+							</h3>
+							<p className="mt-1 text-xs text-muted-foreground">
+								{t('credential.modelCatalogDescription')}
+							</p>
+						</div>
+						<div className="flex shrink-0 items-center gap-2">
+							<Button
+								size="sm"
+								variant="outline"
+								onClick={handleDiscover}
+								disabled={
+									!credential.editable ||
+									!catalog?.discovery_supported ||
+									discovering ||
+									catalogSaving ||
+									testingModel !== null
+								}
+								tooltip={
+									catalog?.discovery_supported
+										? t('credential.discoverModels')
+										: t('credential.discoveryUnsupported')
+								}
+							>
+								<RefreshCw className={discovering ? 'animate-spin' : ''} />
+								{t('credential.discoverModels')}
+							</Button>
+							<Button
+								size="sm"
+								onClick={handleOpenAddModel}
+								disabled={
+									!credential.editable || catalogSaving || testingModel !== null
+								}
+							>
+								<Plus />
+								{t('credential.manualAdd')}
+							</Button>
+						</div>
+					</div>
+
+					{catalog?.last_discovery_error && (
+						<div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
+							<div className="font-medium">
+								{t('credential.discoveryFallbackTitle')}
+							</div>
+							<div className="mt-0.5 text-xs">{catalog.last_discovery_error}</div>
+						</div>
+					)}
+
+					{modelsLoading ? (
+						<div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
+							{Array.from({ length: 4 }).map((_, i) => (
+								<Skeleton key={i} className="h-20 rounded-lg" />
+							))}
+						</div>
+					) : activeModels.length + activeEmbeddingModels.length === 0 ? (
+						<Empty className="border-none py-6">
+							<EmptyHeader>
+								<EmptyTitle>{t('credential.noModels')}</EmptyTitle>
+								<EmptyDescription>
+									{t('credential.noModelsManualHint')}
+								</EmptyDescription>
+							</EmptyHeader>
+						</Empty>
+					) : (
+						<div className="flex flex-col gap-5">
+							{activeModels.length > 0 && (
+								<section className="flex flex-col gap-2.5">
+									<h4 className="text-xs font-semibold text-muted-foreground">
+										{t('credential.modelTypes.chat')} ({activeModels.length})
+									</h4>
+									<div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
+										{activeModels.map((model) => {
+											const testKey = `chat:${model.name}`;
+											return (
+												<ModelCardItem
+													key={model.name}
+													model={model}
+													onRemove={() => handleRemoveModel(model)}
+													onConfigure={() => setConfiguringModel(model)}
+													onEdit={
+														model.source === 'manual'
+															? () =>
+																	handleOpenEditModel(
+																		'chat',
+																		model.name,
+																	)
+															: undefined
+													}
+													onTest={() =>
+														handleTestModel('chat', model.name)
+													}
+													disabled={
+														!credential.editable ||
+														catalogSaving ||
+														testingModel !== null
+													}
+													testDisabled={
+														testingModel !== null || catalogSaving
+													}
+													testing={testingModel === testKey}
+													testResult={testResults[testKey]}
+												/>
+											);
+										})}
+									</div>
+								</section>
+							)}
+							{activeEmbeddingModels.length > 0 && (
+								<section className="flex flex-col gap-2.5">
+									<h4 className="text-xs font-semibold text-muted-foreground">
+										{t('credential.modelTypes.embedding')} (
+										{activeEmbeddingModels.length})
+									</h4>
+									<div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
+										{activeEmbeddingModels.map((model) => {
+											const testKey = `embedding:${model.name}`;
+											return (
+												<EmbeddingModelCardItem
+													key={model.name}
+													model={model}
+													onRemove={() =>
+														handleRemoveEmbeddingModel(model)
+													}
+													onEdit={
+														model.source === 'manual'
+															? () =>
+																	handleOpenEditModel(
+																		'embedding',
+																		model.name,
+																	)
+															: undefined
+													}
+													onTest={() =>
+														handleTestModel('embedding', model.name)
+													}
+													disabled={
+														!credential.editable ||
+														catalogSaving ||
+														testingModel !== null
+													}
+													testDisabled={
+														testingModel !== null || catalogSaving
+													}
+													testing={testingModel === testKey}
+													testResult={testResults[testKey]}
+												/>
+											);
+										})}
+									</div>
+								</section>
 							)}
 						</div>
-					);
-				})}
-			</div>
+					)}
+				</section>
 
-			<Separator />
-
-			{/* Credential-scoped model catalog */}
-			<div className="flex flex-col gap-y-4">
-				<div className="flex items-start justify-between gap-4">
-					<div>
+				{/* Available TTS Models */}
+				{ttsModels.length > 0 && (
+					<section className="flex flex-col gap-4 rounded-xl border p-4">
 						<h3 className="text-sm font-semibold">
-							{t('credential.modelCatalog')}
-							{catalog ? ` (${catalog.total})` : ''}
-						</h3>
-						<p className="mt-1 text-xs text-muted-foreground">
-							{t('credential.modelCatalogDescription')}
-						</p>
-					</div>
-					<div className="flex shrink-0 items-center gap-2">
-						<Button
-							size="sm"
-							variant="outline"
-							onClick={handleDiscover}
-							disabled={
-								!credential.editable ||
-								!catalog?.discovery_supported ||
-								discovering ||
-								catalogSaving ||
-								testingModel !== null
-							}
-							tooltip={
-								catalog?.discovery_supported
-									? t('credential.discoverModels')
-									: t('credential.discoveryUnsupported')
-							}
-						>
-							<RefreshCw className={discovering ? 'animate-spin' : ''} />
-							{t('credential.discoverModels')}
-						</Button>
-						<Button
-							size="sm"
-							onClick={handleOpenAddModel}
-							disabled={
-								!credential.editable || catalogSaving || testingModel !== null
-							}
-						>
-							<Plus />
-							{t('credential.manualAdd')}
-						</Button>
-					</div>
-				</div>
-
-				{catalog?.last_discovery_error && (
-					<div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-800 dark:text-amber-200">
-						<div className="font-medium">{t('credential.discoveryFallbackTitle')}</div>
-						<div className="mt-0.5 text-xs">{catalog.last_discovery_error}</div>
-					</div>
-				)}
-
-				{modelsLoading ? (
-					<div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
-						{Array.from({ length: 4 }).map((_, i) => (
-							<Skeleton key={i} className="h-20 rounded-lg" />
-						))}
-					</div>
-				) : activeModels.length + activeEmbeddingModels.length === 0 ? (
-					<Empty className="border-none py-6">
-						<EmptyHeader>
-							<EmptyTitle>{t('credential.noModels')}</EmptyTitle>
-							<EmptyDescription>
-								{t('credential.noModelsManualHint')}
-							</EmptyDescription>
-						</EmptyHeader>
-					</Empty>
-				) : (
-					<div className="flex flex-col gap-5">
-						{activeModels.length > 0 && (
-							<section className="flex flex-col gap-2.5">
-								<h4 className="text-xs font-semibold text-muted-foreground">
-									{t('credential.modelTypes.chat')} ({activeModels.length})
-								</h4>
-								<div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
-									{activeModels.map((model) => {
-										const testKey = `chat:${model.name}`;
-										return (
-											<ModelCardItem
-												key={model.name}
-												model={model}
-												onRemove={() => handleRemoveModel(model)}
-												onConfigure={() => setConfiguringModel(model)}
-												onEdit={
-													model.source === 'manual'
-														? () =>
-																handleOpenEditModel(
-																	'chat',
-																	model.name,
-																)
-														: undefined
-												}
-												onTest={() => handleTestModel('chat', model.name)}
-												disabled={
-													!credential.editable ||
-													catalogSaving ||
-													testingModel !== null
-												}
-												testDisabled={
-													testingModel !== null || catalogSaving
-												}
-												testing={testingModel === testKey}
-												testResult={testResults[testKey]}
-											/>
-										);
-									})}
-								</div>
-							</section>
-						)}
-						{activeEmbeddingModels.length > 0 && (
-							<section className="flex flex-col gap-2.5">
-								<h4 className="text-xs font-semibold text-muted-foreground">
-									{t('credential.modelTypes.embedding')} (
-									{activeEmbeddingModels.length})
-								</h4>
-								<div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
-									{activeEmbeddingModels.map((model) => {
-										const testKey = `embedding:${model.name}`;
-										return (
-											<EmbeddingModelCardItem
-												key={model.name}
-												model={model}
-												onRemove={() => handleRemoveEmbeddingModel(model)}
-												onEdit={
-													model.source === 'manual'
-														? () =>
-																handleOpenEditModel(
-																	'embedding',
-																	model.name,
-																)
-														: undefined
-												}
-												onTest={() =>
-													handleTestModel('embedding', model.name)
-												}
-												disabled={
-													!credential.editable ||
-													catalogSaving ||
-													testingModel !== null
-												}
-												testDisabled={
-													testingModel !== null || catalogSaving
-												}
-												testing={testingModel === testKey}
-												testResult={testResults[testKey]}
-											/>
-										);
-									})}
-								</div>
-							</section>
-						)}
-					</div>
-				)}
-
-				{hiddenModels.length > 0 && (
-					<div className="rounded-lg border bg-muted/20">
-						<div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
-							{t('credential.hiddenModels')} ({hiddenModels.length})
-						</div>
-						<div className="divide-y">
-							{hiddenModels.map((model) => (
-								<div
-									key={model.name}
-									className="flex items-center justify-between gap-3 px-3 py-2"
-								>
-									<div className="min-w-0">
-										<div className="flex items-center gap-2">
-											<div className="truncate text-sm font-medium">
-												{model.label || model.name}
-											</div>
-											<Badge variant="outline" className="text-[10px]">
-												{t('credential.modelTypes.chat')}
-											</Badge>
-										</div>
-										<div className="truncate font-mono text-xs text-muted-foreground">
-											{model.name}
-										</div>
-									</div>
-									<Button
-										size="sm"
-										variant="ghost"
-										onClick={() => handleRestoreModel(model.name)}
-										disabled={
-											!credential.editable ||
-											catalogSaving ||
-											testingModel !== null
-										}
-									>
-										<RotateCcw />
-										{t('credential.restoreModel')}
-									</Button>
-								</div>
-							))}
-						</div>
-					</div>
-				)}
-
-				{hiddenEmbeddingModels.length > 0 && (
-					<div className="rounded-lg border bg-muted/20">
-						<div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
-							{t('credential.hiddenModels')} ({hiddenEmbeddingModels.length})
-						</div>
-						<div className="divide-y">
-							{hiddenEmbeddingModels.map((model) => (
-								<div
-									key={model.name}
-									className="flex items-center justify-between gap-3 px-3 py-2"
-								>
-									<div className="min-w-0">
-										<div className="flex items-center gap-2">
-											<div className="truncate text-sm font-medium">
-												{model.label || model.name}
-											</div>
-											<Badge variant="outline" className="text-[10px]">
-												{t('credential.modelTypes.embedding')}
-											</Badge>
-										</div>
-										<div className="truncate font-mono text-xs text-muted-foreground">
-											{model.name}
-										</div>
-									</div>
-									<Button
-										size="sm"
-										variant="ghost"
-										onClick={() => handleRestoreEmbeddingModel(model.name)}
-										disabled={
-											!credential.editable ||
-											catalogSaving ||
-											testingModel !== null
-										}
-									>
-										<RotateCcw />
-										{t('credential.restoreModel')}
-									</Button>
-								</div>
-							))}
-						</div>
-					</div>
-				)}
-			</div>
-
-			{/* Available TTS Models */}
-			{ttsModels.length > 0 && (
-				<>
-					<Separator />
-					<div className="flex flex-col gap-y-4">
-						<h3 className="text-sm font-semibold">
-							{t('credential.availableTTSModels')}({ttsModels.length})
+							{t('credential.availableTTSModels')} ({ttsModels.length})
 						</h3>
 						<div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
 							{ttsModels.map((m) => (
 								<TTSModelCardItem key={m.name} model={m} />
 							))}
 						</div>
-					</div>
-				</>
-			)}
+					</section>
+				)}
+			</div>
 
 			<ModelDefaultParametersDialog
 				open={configuringModel !== null}
@@ -1455,160 +1358,160 @@ export const CredentialPage = () => {
 	}, [selectedCredential, remove]);
 
 	return (
-		<div className="flex h-full w-full">
-			{/* Left sidebar */}
-			<Sidebar collapsible="none" className="border-r">
-				<SidebarHeader className={'flex flex-col mt-5 gap-y-1'}>
-					<div className="text-lg font-semibold">{t('common.credential')}</div>
-					<div className="text-muted-foreground text-xs">{t('credential.subtitle')}</div>
-				</SidebarHeader>
-				{/*<Separator />*/}
-				<SidebarContent>
-					{loading ? (
-						<div className="flex flex-col gap-y-2 p-4">
-							{Array.from({ length: 3 }).map((_, i) => (
-								<Skeleton key={i} className="h-8 rounded" />
-							))}
-						</div>
-					) : groupedByType.length === 0 ? (
-						<Empty className="border-none py-8">
-							<EmptyHeader>
-								<EmptyTitle>{t('credential.noProviders')}</EmptyTitle>
-							</EmptyHeader>
-						</Empty>
-					) : (
-						<>
-							<SidebarGroup>
-								<SidebarGroupLabel>
-									{t('credential.permissionReviewer.systemGroup')}
-								</SidebarGroupLabel>
-								<SidebarGroupContent>
-									<SidebarMenu>
-										<SidebarMenuItem>
-											<SidebarMenuButton
-												isActive={
-													selectedId === SYSTEM_PERMISSION_REVIEWER_ID
-												}
-												onClick={() =>
-													setSelectedId(SYSTEM_PERMISSION_REVIEWER_ID)
-												}
-											>
-												<ShieldCheck />
-												<span className="min-w-0 flex-1 truncate">
-													{t('credential.permissionReviewer.shortTitle')}
-												</span>
-												<Badge
-													variant="secondary"
-													className="text-[10px] px-1 py-0"
-												>
-													{t('credential.permissionReviewer.builtIn')}
-												</Badge>
-											</SidebarMenuButton>
-										</SidebarMenuItem>
-									</SidebarMenu>
-								</SidebarGroupContent>
-							</SidebarGroup>
-
-							{/* Configured credentials lead — this is what the user actually set up. */}
-							{configuredGroups.length > 0 && (
-								<SidebarGroup>
-									<SidebarGroupLabel>
-										{t('credential.configured')} ({totalConfigured})
-									</SidebarGroupLabel>
-									<SidebarGroupContent className="flex flex-col gap-y-4">
-										{configuredGroups.map(({ type, title, records }) => (
-											<div key={type}>
-												<div className="px-2 pb-1.5 text-xs font-semibold text-foreground/70">
-													{title}
-												</div>
-												<SidebarMenu className="pl-4">
-													{records.map((rec) => {
-														const name =
-															(rec.data.name as string | undefined) ??
-															rec.id;
-														return (
-															<SidebarMenuItem key={rec.id}>
-																<SidebarMenuButton
-																	isActive={selectedId === rec.id}
-																	onClick={() =>
-																		setSelectedId(rec.id)
-																	}
-																>
-																	<span className="min-w-0 flex-1 truncate">
-																		{name}
-																	</span>
-																	{!rec.editable && (
-																		<Badge
-																			variant="secondary"
-																			className="text-[10px] px-1 py-0"
-																			title={t(
-																				'common.readOnlyTooltip',
-																			)}
-																		>
-																			{t('common.readOnly')}
-																		</Badge>
-																	)}
-																</SidebarMenuButton>
-															</SidebarMenuItem>
-														);
-													})}
-												</SidebarMenu>
-											</div>
-										))}
-									</SidebarGroupContent>
-								</SidebarGroup>
-							)}
-
-							{/* Add credential — every provider is an entry point (including
-							    configured ones, to add more under the same provider). */}
-							<SidebarGroup>
-								<SidebarGroupLabel>{t('credential.addProvider')}</SidebarGroupLabel>
-								<SidebarGroupContent>
-									<SidebarMenu>
-										{groupedByType.map(({ type, title }) => (
-											<SidebarMenuItem key={type}>
-												<SidebarMenuButton
-													onClick={() => handleOpenCreate(type)}
-												>
-													<Plus />
-													<span className="min-w-0 flex-1 truncate">
-														{title}
-													</span>
-												</SidebarMenuButton>
-											</SidebarMenuItem>
-										))}
-									</SidebarMenu>
-								</SidebarGroupContent>
-							</SidebarGroup>
-						</>
-					)}
-				</SidebarContent>
-			</Sidebar>
-
-			{/* Right detail */}
-			<main className="flex-1 min-h-0 overflow-hidden">
-				{selectedId === SYSTEM_PERMISSION_REVIEWER_ID ? (
-					<PermissionReviewerPanel credentials={credentials} />
-				) : selectedCredential ? (
-					<DetailPanel
-						key={selectedCredential.id}
-						credential={selectedCredential}
-						schema={selectedSchema}
-						onEdit={() => setEditOpen(true)}
-						onDelete={() => setDeleteOpen(true)}
-					/>
-				) : (
-					<div className="flex h-full items-center justify-center">
-						<Empty className="border-none">
-							<EmptyHeader>
-								<EmptyTitle>{t('credential.selectHint')}</EmptyTitle>
-								<EmptyDescription>
-									{t('credential.selectHintDescription')}
-								</EmptyDescription>
-							</EmptyHeader>
-						</Empty>
+		<div className="flex h-full min-h-0 flex-col bg-muted/25">
+			<header className="flex h-16 shrink-0 items-center justify-between gap-4 border-b bg-background px-5">
+				<div className="min-w-0">
+					<div className="flex items-center gap-2">
+						<KeyRound className="size-5 text-primary" />
+						<h1 className="text-lg font-semibold">{t('common.credential')}</h1>
 					</div>
-				)}
+					<p className="mt-1 truncate text-xs text-muted-foreground">
+						{t('credential.subtitle')}
+					</p>
+				</div>
+				<Button onClick={() => handleOpenCreate()}>
+					<Plus />
+					{t('credential.addProvider')}
+				</Button>
+			</header>
+
+			<main className="flex min-h-0 flex-1 p-4">
+				<div className="grid min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl border bg-background lg:grid-cols-[18rem_minmax(0,1fr)]">
+					<aside className="flex min-h-0 flex-col border-b bg-muted/20 lg:border-r lg:border-b-0">
+						<div className="border-b px-4 py-4">
+							<div className="flex items-center justify-between gap-3">
+								<h2 className="text-sm font-semibold">
+									{t('credential.configured')}
+								</h2>
+								<Badge variant="secondary" className="tabular-nums">
+									{totalConfigured}
+								</Badge>
+							</div>
+							<p className="mt-1 text-xs leading-5 text-muted-foreground">
+								{t('credential.selectHintDescription')}
+							</p>
+						</div>
+
+						<nav className="min-h-0 flex-1 overflow-y-auto p-3">
+							<section>
+								<div className="px-2 pb-2 text-xs font-medium text-muted-foreground">
+									{t('credential.permissionReviewer.systemGroup')}
+								</div>
+								<button
+									type="button"
+									onClick={() => setSelectedId(SYSTEM_PERMISSION_REVIEWER_ID)}
+									className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors active:translate-y-px ${
+										selectedId === SYSTEM_PERMISSION_REVIEWER_ID
+											? 'border-primary/25 bg-primary/8 text-foreground'
+											: 'border-transparent hover:bg-muted/80'
+									}`}
+								>
+									<div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+										<ShieldCheck className="size-4" />
+									</div>
+									<span className="min-w-0 flex-1 truncate text-sm font-medium">
+										{t('credential.permissionReviewer.shortTitle')}
+									</span>
+									<Badge variant="secondary" className="text-xs">
+										{t('credential.permissionReviewer.builtIn')}
+									</Badge>
+								</button>
+							</section>
+
+							<div className="my-3 border-t" />
+
+							{loading ? (
+								<div className="flex flex-col gap-2">
+									{Array.from({ length: 3 }).map((_, i) => (
+										<Skeleton key={i} className="h-12 rounded-lg" />
+									))}
+								</div>
+							) : configuredGroups.length === 0 ? (
+								<div className="rounded-lg border border-dashed px-3 py-8 text-center text-sm text-muted-foreground">
+									{groupedByType.length === 0
+										? t('credential.noProviders')
+										: t('credential.noConfigs')}
+								</div>
+							) : (
+								<div className="flex flex-col gap-4">
+									{configuredGroups.map(({ type, title, records }) => (
+										<section key={type}>
+											<div className="flex items-center justify-between gap-2 px-2 pb-1.5">
+												<span className="truncate text-xs font-medium text-muted-foreground">
+													{title}
+												</span>
+												<span className="text-xs tabular-nums text-muted-foreground">
+													{records.length}
+												</span>
+											</div>
+											<div className="flex flex-col gap-1">
+												{records.map((rec) => {
+													const name =
+														(rec.data.name as string | undefined) ??
+														rec.id;
+													const isActive = selectedId === rec.id;
+													return (
+														<button
+															type="button"
+															key={rec.id}
+															onClick={() => setSelectedId(rec.id)}
+															className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors active:translate-y-px ${
+																isActive
+																	? 'border-primary/25 bg-primary/8 text-foreground'
+																	: 'border-transparent hover:bg-muted/80'
+															}`}
+														>
+															<KeyRound className="size-4 shrink-0 text-muted-foreground" />
+															<span className="min-w-0 flex-1 truncate text-sm font-medium">
+																{name}
+															</span>
+															{!rec.editable && (
+																<Badge
+																	variant="secondary"
+																	className="text-xs"
+																	title={t(
+																		'common.readOnlyTooltip',
+																	)}
+																>
+																	{t('common.readOnly')}
+																</Badge>
+															)}
+														</button>
+													);
+												})}
+											</div>
+										</section>
+									))}
+								</div>
+							)}
+						</nav>
+					</aside>
+
+					<section className="min-h-0 min-w-0 overflow-hidden bg-background">
+						{selectedId === SYSTEM_PERMISSION_REVIEWER_ID ? (
+							<PermissionReviewerPanel credentials={credentials} />
+						) : selectedCredential ? (
+							<DetailPanel
+								key={selectedCredential.id}
+								credential={selectedCredential}
+								schema={selectedSchema}
+								onEdit={() => setEditOpen(true)}
+								onDelete={() => setDeleteOpen(true)}
+							/>
+						) : (
+							<div className="flex h-full items-center justify-center">
+								<Empty className="border-none">
+									<EmptyHeader>
+										<EmptyTitle>{t('credential.selectHint')}</EmptyTitle>
+										<EmptyDescription>
+											{t('credential.selectHintDescription')}
+										</EmptyDescription>
+									</EmptyHeader>
+								</Empty>
+							</div>
+						)}
+					</section>
+				</div>
 			</main>
 
 			{/* Dialogs */}

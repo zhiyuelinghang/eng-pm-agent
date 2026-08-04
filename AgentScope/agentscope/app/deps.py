@@ -20,7 +20,11 @@ from ._service import (
     ResourceAccessService,
     SessionService,
 )
-from ._types import AgentMiddlewareFactory, AgentToolFactory
+from ._types import (
+    AgentMiddlewareFactory,
+    AgentToolCatalogFactory,
+    AgentToolFactory,
+)
 from .message_bus import MessageBus
 from .rag.blob_store import BlobStoreBase
 from .rag.knowledge_base_manager import KnowledgeBaseManagerBase
@@ -268,6 +272,13 @@ async def get_extra_agent_tools(
         :func:`~agentscope.app.create_app`, or ``None`` if not configured.
     """
     return request.app.state.extra_agent_tools
+
+
+async def get_extra_agent_tool_catalog(
+    request: Request,
+) -> AgentToolCatalogFactory | None:
+    """Return assignable application-tool metadata, if configured."""
+    return request.app.state.extra_agent_tool_catalog
 
 
 async def get_knowledge_base_service(

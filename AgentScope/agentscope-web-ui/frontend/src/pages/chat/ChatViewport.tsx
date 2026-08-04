@@ -1,18 +1,19 @@
-import type { PermissionContext } from '@agentscope-ai/agentscope/permission';
 import type { TaskContext } from '@agentscope-ai/agentscope/state';
 import {
 	BookText,
-	ChevronDown,
+	ChevronLeft,
+	ChevronRight,
 	Database,
 	ListTodo,
-	PanelRight,
-	ShieldCheck,
 	Users,
+	Wrench,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { usePanelRef } from 'react-resizable-panels';
 
 import type {
 	AgentCallConfig,
+	AgentToolConfig,
 	AgentView,
 	ChatModelConfig,
 	PermissionMode,
@@ -28,21 +29,15 @@ import { AgentCollaborationPanel } from '@/components/panel/AgentCollaborationPa
 import { KnowledgeBasePanel } from '@/components/panel/KnowledgeBasePanel';
 import { McpPanel } from '@/components/panel/McpPanel';
 import { PanelDock, type PanelDescriptor, type PanelKey } from '@/components/panel/PanelDock.tsx';
-import { PermissionPanel } from '@/components/panel/PermissionPanel';
 import { SkillPanel } from '@/components/panel/SkillPanel';
 import { TaskPanel } from '@/components/panel/TaskPanel';
+import { ToolPanel } from '@/components/panel/ToolPanel';
 import { KnowledgeBaseParametersPopover } from '@/components/popover/KnowledgeBaseParametersPopover';
 import { ModelParametersPopover } from '@/components/popover/ModelParametersPopover';
 import { LlmSelect } from '@/components/select/LlmSelect';
 import { PermissionModeSelect } from '@/components/select/PermissionModeSelect.tsx';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import {
-	DropdownMenu,
-	DropdownMenuCheckboxItem,
-	DropdownMenuContent,
-	DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import {
 	ResizableHandle,
 	ResizablePanel,
@@ -75,6 +70,8 @@ interface ChatViewportProps {
 	agentsLoading?: boolean;
 	/** Persist the current agent's global collaboration configuration. */
 	onUpdateAgentCallConfig: (agentId: string, config: AgentCallConfig) => Promise<void>;
+	/** Persist the current agent's global direct-tool assignment. */
+	onUpdateAgentToolConfig: (agentId: string, config: AgentToolConfig) => Promise<void>;
 	/**
 	 * Optional hook invoked when a team membership change arrives on
 	 * this viewport's SSE stream. The outer page owns the session list
@@ -82,40 +79,6 @@ interface ChatViewportProps {
 	 * passing this callback wires that signal up.
 	 */
 	onTeamUpdated?: () => void;
-}
-
-/** Maximum number of panels stacked in a single dock column. */
-const MAX_PANELS_PER_COLUMN = 2;
-
-/**
- * Insert a panel into the dock layout. Scans columns left to right and
- * appends to the first one with spare room; if every column is full a
- * new rightmost column is created. No-op when the panel is already
- * open.
- *
- * @param layout - The current column/panel arrangement.
- * @param key - The panel to open.
- * @returns A new layout array (the input is never mutated).
- */
-function openPanelInLayout(layout: PanelKey[][], key: PanelKey): PanelKey[][] {
-	if (layout.some((column) => column.includes(key))) return layout;
-	const targetIndex = layout.findIndex((column) => column.length < MAX_PANELS_PER_COLUMN);
-	if (targetIndex === -1) return [...layout, [key]];
-	return layout.map((column, index) => (index === targetIndex ? [...column, key] : column));
-}
-
-/**
- * Remove a panel from the dock layout, dropping its column entirely if
- * it becomes empty.
- *
- * @param layout - The current column/panel arrangement.
- * @param key - The panel to close.
- * @returns A new layout array (the input is never mutated).
- */
-function closePanelInLayout(layout: PanelKey[][], key: PanelKey): PanelKey[][] {
-	return layout
-		.map((column) => column.filter((panelKey) => panelKey !== key))
-		.filter((column) => column.length > 0);
 }
 
 /**
@@ -144,6 +107,7 @@ export function ChatViewport({
 	agents,
 	agentsLoading = false,
 	onUpdateAgentCallConfig,
+	onUpdateAgentToolConfig,
 	onTeamUpdated,
 }: ChatViewportProps) {
 	const { t } = useTranslation();
@@ -174,10 +138,16 @@ export function ChatViewport({
 	const [credentialOpen, setCredentialOpen] = useState(false);
 	const [credentialRefetchTrigger, setCredentialRefetchTrigger] = useState(0);
 	const [tasksContext, setTasksContext] = useState<TaskContext | null>(null);
-	const [permissionContext, setPermissionContext] = useState<PermissionContext | null>(null);
-	// Dock layout: columns laid out left→right, each holding up to 2
-	// panels stacked top→bottom. Open order determines placement.
-	const [panelLayout, setPanelLayout] = useState<PanelKey[][]>([]);
+	const [activePanel, setActivePanel] = useState<PanelKey>('plan');
+	const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
+	const panelDockRef = usePanelRef();
+	const togglePanelDock = useCallback(() => {
+		if (panelDockRef.current?.isCollapsed()) {
+			panelDockRef.current.expand();
+			return;
+		}
+		panelDockRef.current?.collapse();
+	}, [panelDockRef]);
 
 	useEffect(() => {
 		let active = true;
@@ -198,9 +168,6 @@ export function ChatViewport({
 		if (value.tasks_context) {
 			setTasksContext(value.tasks_context as TaskContext);
 		}
-		if (value.permission_context) {
-			setPermissionContext(value.permission_context as PermissionContext);
-		}
 	}, []);
 
 	const { msgs, phase, send, onUserConfirm, onSubagentConfirm, subagentHitl, interrupt } =
@@ -216,7 +183,10 @@ export function ChatViewport({
 		skills,
 		skillsLoading,
 		addSkill,
+		updateSkill,
 		removeSkill,
+		tools,
+		toolsLoading,
 	} = useWorkspace(agentId, sessionId);
 	const { knowledgeBases, loading: knowledgeBasesLoading } = useKnowledgeBases();
 	const { schema: kbMiddlewareSchema } = useKnowledgeBaseMiddlewareSchema();
@@ -229,25 +199,6 @@ export function ChatViewport({
 			? activeAgent.data.model_policy.chat_model_config
 			: null;
 	const effectiveSelectedModel = agentFixedModel ?? selectedModel;
-
-	// Toggle a panel open/closed from the top-bar buttons.
-	const togglePanel = useCallback((key: PanelKey) => {
-		setPanelLayout((layout) =>
-			layout.some((column) => column.includes(key))
-				? closePanelInLayout(layout, key)
-				: openPanelInLayout(layout, key),
-		);
-	}, []);
-
-	// Close a panel (driven by the panel's own close button).
-	const closePanel = useCallback((key: PanelKey) => {
-		setPanelLayout((layout) => closePanelInLayout(layout, key));
-	}, []);
-
-	const isPanelOpen = useCallback(
-		(key: PanelKey) => panelLayout.some((column) => column.includes(key)),
-		[panelLayout],
-	);
 
 	/**
 	 * Persist a knowledge-base attachment change. `null` detaches every
@@ -277,12 +228,12 @@ export function ChatViewport({
 	const panels = useMemo<Record<PanelKey, PanelDescriptor>>(
 		() => ({
 			plan: {
-				title: t('panel.plan.title'),
+				tabLabel: t('panel.plan.title'),
 				icon: <ListTodo className="size-4" />,
 				content: <TaskPanel tasksContext={tasksContext} />,
 			},
 			mcp: {
-				title: 'MCP',
+				tabLabel: 'MCP',
 				icon: <MCPSvg className="size-4" />,
 				content: (
 					<McpPanel
@@ -294,51 +245,33 @@ export function ChatViewport({
 				),
 			},
 			skill: {
-				title: t('panel.skill.title'),
+				tabLabel: t('panel.skill.title'),
 				icon: <BookText className="size-4" />,
 				content: (
 					<SkillPanel
 						skills={skills}
 						loading={skillsLoading}
 						onAdd={addSkill}
+						onUpdate={updateSkill}
 						onRemove={removeSkill}
 					/>
 				),
 			},
-			permission: {
-				title: (
-					<span className="flex items-center gap-x-2">
-						{t('panel.permission.title')}
-						{permissionContext?.mode ? (
-							<Badge variant="outline" className="capitalize">
-								{t('panel.permission.mode', { mode: permissionContext.mode })}
-							</Badge>
-						) : null}
-					</span>
-				),
-				icon: <ShieldCheck className="size-4" />,
-				content: <PermissionPanel permissionContext={permissionContext} />,
-			},
-			knowledge: {
-				title: (
-					<span className="flex items-center gap-x-2">
-						{t('panel.knowledge.title')}
-						{selectedKnowledgeConfig?.knowledge_base_ids.length ? (
-							<Badge variant="outline">
-								{selectedKnowledgeConfig.knowledge_base_ids.length}
-							</Badge>
-						) : null}
-					</span>
-				),
-				icon: <Database className="size-4" />,
-				actions: (
-					<KnowledgeBaseParametersPopover
-						value={selectedKnowledgeConfig}
-						schema={kbMiddlewareSchema}
-						onChange={handleKnowledgeConfigChange}
-						disabled={!sessionId}
+			tool: {
+				tabLabel: t('panel.tool.title'),
+				icon: <Wrench className="size-4" />,
+				content: (
+					<ToolPanel
+						agent={activeAgent}
+						tools={tools}
+						loading={toolsLoading}
+						onSave={onUpdateAgentToolConfig}
 					/>
 				),
+			},
+			knowledge: {
+				tabLabel: t('panel.knowledge.title'),
+				icon: <Database className="size-4" />,
 				content: (
 					<KnowledgeBasePanel
 						knowledgeBases={knowledgeBases}
@@ -346,20 +279,19 @@ export function ChatViewport({
 						value={selectedKnowledgeConfig}
 						onChange={handleKnowledgeConfigChange}
 						disabled={!sessionId}
+						actions={
+							<KnowledgeBaseParametersPopover
+								value={selectedKnowledgeConfig}
+								schema={kbMiddlewareSchema}
+								onChange={handleKnowledgeConfigChange}
+								disabled={!sessionId}
+							/>
+						}
 					/>
 				),
 			},
 			collaboration: {
-				title: (
-					<span className="flex items-center gap-x-2">
-						{t('panel.collaboration.title')}
-						{activeAgent?.data.call_config.scope === 'selected' ? (
-							<Badge variant="outline">
-								{activeAgent.data.call_config.allowed_agent_ids.length}
-							</Badge>
-						) : null}
-					</span>
-				),
+				tabLabel: t('panel.collaboration.title'),
 				icon: <Users className="size-4" />,
 				content: (
 					<AgentCollaborationPanel
@@ -381,8 +313,11 @@ export function ChatViewport({
 			skills,
 			skillsLoading,
 			addSkill,
+			updateSkill,
 			removeSkill,
-			permissionContext,
+			tools,
+			toolsLoading,
+			onUpdateAgentToolConfig,
 			knowledgeBases,
 			knowledgeBasesLoading,
 			selectedKnowledgeConfig,
@@ -477,21 +412,6 @@ export function ChatViewport({
 			| TaskContext
 			| undefined;
 		setTasksContext(tc ?? null);
-	}, [view]);
-
-	// Sync permissionContext from the session snapshot, mirroring the
-	// tasksContext approach above. Real-time updates arrive via the
-	// state_updated event → handleStateUpdated. Clearing to null when
-	// the session is gone avoids leaking stale rules across sessions.
-	useEffect(() => {
-		if (!view) {
-			setPermissionContext(null);
-			return;
-		}
-		const pc = (view.session.state as Record<string, unknown>)?.permission_context as
-			| PermissionContext
-			| undefined;
-		setPermissionContext(pc ?? null);
 	}, [view]);
 
 	// Sync selectedModel + selectedFallbackModel from the session
@@ -667,68 +587,6 @@ export function ChatViewport({
 										autoEnabled={permissionReviewerEnabled === true}
 										onChange={handlePermissionModeChange}
 									/>
-									<DropdownMenu>
-										<DropdownMenuTrigger asChild>
-											<Button
-												variant="ghost"
-												size="sm"
-												className="gap-1 px-2"
-											>
-												<PanelRight />
-												<ChevronDown className="size-3 text-muted-foreground" />
-											</Button>
-										</DropdownMenuTrigger>
-										<DropdownMenuContent align="end" className="w-auto">
-											<DropdownMenuCheckboxItem
-												checked={isPanelOpen('plan')}
-												onCheckedChange={() => togglePanel('plan')}
-												onSelect={(e) => e.preventDefault()}
-											>
-												<ListTodo />
-												{t('panel.plan.title')}
-											</DropdownMenuCheckboxItem>
-											<DropdownMenuCheckboxItem
-												checked={isPanelOpen('mcp')}
-												onCheckedChange={() => togglePanel('mcp')}
-												onSelect={(e) => e.preventDefault()}
-											>
-												<MCPSvg className="size-4" />
-												MCP
-											</DropdownMenuCheckboxItem>
-											<DropdownMenuCheckboxItem
-												checked={isPanelOpen('skill')}
-												onCheckedChange={() => togglePanel('skill')}
-												onSelect={(e) => e.preventDefault()}
-											>
-												<BookText />
-												{t('panel.skill.title')}
-											</DropdownMenuCheckboxItem>
-											<DropdownMenuCheckboxItem
-												checked={isPanelOpen('permission')}
-												onCheckedChange={() => togglePanel('permission')}
-												onSelect={(e) => e.preventDefault()}
-											>
-												<ShieldCheck />
-												{t('panel.permission.title')}
-											</DropdownMenuCheckboxItem>
-											<DropdownMenuCheckboxItem
-												checked={isPanelOpen('knowledge')}
-												onCheckedChange={() => togglePanel('knowledge')}
-												onSelect={(e) => e.preventDefault()}
-											>
-												<Database />
-												{t('panel.knowledge.title')}
-											</DropdownMenuCheckboxItem>
-											<DropdownMenuCheckboxItem
-												checked={isPanelOpen('collaboration')}
-												onCheckedChange={() => togglePanel('collaboration')}
-												onSelect={(e) => e.preventDefault()}
-											>
-												<Users />
-												{t('panel.collaboration.title')}
-											</DropdownMenuCheckboxItem>
-										</DropdownMenuContent>
-									</DropdownMenu>
 								</div>
 							</div>
 							<div className="flex flex-1 justify-center min-h-0 overflow-hidden relative [--chat-content-w:48rem]">
@@ -815,10 +673,31 @@ export function ChatViewport({
 							</div>
 						</div>
 					</ResizablePanel>
-					{panelLayout.length > 0 && (
-						<ResizableHandle withHandle className="bg-transparent" />
-					)}
-					<PanelDock layout={panelLayout} panels={panels} onClosePanel={closePanel} />
+					<ResizableHandle className="bg-transparent">
+						<Button
+							type="button"
+							variant="outline"
+							size="icon-xs"
+							className="absolute top-24 right-0 z-20 size-7 bg-background shadow-sm"
+							onPointerDown={(event) => event.stopPropagation()}
+							onClick={togglePanelDock}
+							aria-label={t(
+								isPanelCollapsed ? 'panel.expandSidebar' : 'panel.collapseSidebar',
+							)}
+							title={t(
+								isPanelCollapsed ? 'panel.expandSidebar' : 'panel.collapseSidebar',
+							)}
+						>
+							{isPanelCollapsed ? <ChevronLeft /> : <ChevronRight />}
+						</Button>
+					</ResizableHandle>
+					<PanelDock
+						activeKey={activePanel}
+						onActiveChange={setActivePanel}
+						panels={panels}
+						panelRef={panelDockRef}
+						onCollapsedChange={setIsPanelCollapsed}
+					/>
 				</ResizablePanelGroup>
 			</main>
 			<CreateCredentialDialog

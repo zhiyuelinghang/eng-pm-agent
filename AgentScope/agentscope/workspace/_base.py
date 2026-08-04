@@ -716,6 +716,67 @@ class WorkspaceBase:
         await backend.delete_path(target_dir)
         logger.info("Removed skill %r at %s", name, target_dir)
 
+    async def update_skill(
+        self,
+        name: str,
+        *,
+        new_name: str,
+        description: str,
+        markdown: str,
+    ) -> None:
+        """Update a skill's front matter and Markdown instructions.
+
+        The shared implementation works for backend-driven workspaces. Local
+        workspaces override it so their ``.skills`` hash/name index stays in
+        sync with the edited file.
+
+        Args:
+            name (`str`):
+                Current agent-facing skill name.
+            new_name (`str`):
+                New agent-facing skill name.
+            description (`str`):
+                New front-matter description.
+            markdown (`str`):
+                New Markdown body for ``SKILL.md``.
+
+        Raises:
+            KeyError:
+                If ``name`` does not exist.
+            ValueError:
+                If a required field is empty or ``new_name`` conflicts with
+                another skill.
+        """
+        import frontmatter as fm
+
+        new_name = new_name.strip()
+        description = description.strip()
+        if not new_name:
+            raise ValueError("Skill name cannot be empty.")
+        if not description:
+            raise ValueError("Skill description cannot be empty.")
+
+        backend = self.get_backend()
+        async with self._skill_lock:
+            skills = await self.list_skills()
+            target = next((skill for skill in skills if skill.name == name), None)
+            if target is None:
+                raise KeyError(f"Skill {name!r} not found.")
+            if new_name != name and any(skill.name == new_name for skill in skills):
+                raise ValueError(f"Skill name {new_name!r} already exists.")
+
+            skill_md_path = backend.join_path(target.dir, "SKILL.md")
+            raw = await backend.read_file(skill_md_path)
+            document = fm.loads(raw.decode("utf-8"))
+            document["name"] = new_name
+            document["description"] = description
+            document.content = markdown
+            await backend.write_file(
+                skill_md_path,
+                fm.dumps(document).encode("utf-8"),
+            )
+            logger.info("Updated skill %r as %r at %s", name, new_name, target.dir)
+
     async def _setup_skills(self) -> None:
         """Copy :attr:`skill_paths` into ``${workdir}/skills`` once.
 

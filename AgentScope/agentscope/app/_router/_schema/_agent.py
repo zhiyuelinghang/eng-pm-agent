@@ -8,6 +8,7 @@ from ....agent import ContextConfig, ReActConfig
 from ...storage import (
     AgentCallConfig,
     AgentModelPolicy,
+    AgentToolConfig,
     InviteConfig,
     PlatformAgentConfig,
     SessionKnowledgeConfig,
@@ -53,6 +54,10 @@ class CreateAgentRequest(BaseModel):
     call_config: AgentCallConfig = Field(
         default_factory=AgentCallConfig,
         description="Controls which existing agents this agent may invite.",
+    )
+    tool_config: AgentToolConfig = Field(
+        default_factory=AgentToolConfig,
+        description="Direct tools assigned to this agent.",
     )
 
 
@@ -107,6 +112,13 @@ class UpdateAgentRequest(BaseModel):
         description=(
             "New agent-call scope and selected-agent whitelist. Pass the "
             "complete object to update; omit to keep the existing settings."
+        ),
+    )
+    tool_config: AgentToolConfig | None = Field(
+        default=None,
+        description=(
+            "Complete direct-tool assignment for this agent. Omit to keep "
+            "the existing assignment."
         ),
     )
 

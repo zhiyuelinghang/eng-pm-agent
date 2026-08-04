@@ -1,7 +1,22 @@
 import { client } from './client';
-import type { AddSkillRequest, MCPClient, MCPClientStatus, Skill } from './types';
+import type {
+	AddSkillRequest,
+	MCPClient,
+	MCPClientStatus,
+	Skill,
+	UpdateSkillRequest,
+	WorkspaceTool,
+} from './types';
 
 export const workspaceApi = {
+	tool: {
+		list: (agentId: string, sessionId: string) =>
+			client.get<WorkspaceTool[]>('/workspace/tool', {
+				agent_id: agentId,
+				session_id: sessionId,
+			}),
+	},
+
 	mcp: {
 		list: (agentId: string, sessionId: string) =>
 			client.get<MCPClientStatus[]>('/workspace/mcp', {
@@ -29,8 +44,14 @@ export const workspaceApi = {
 				session_id: sessionId,
 			}),
 
+		update: (skillName: string, agentId: string, sessionId: string, body: UpdateSkillRequest) =>
+			client.put<void>(`/workspace/skill/${encodeURIComponent(skillName)}`, body, {
+				agent_id: agentId,
+				session_id: sessionId,
+			}),
+
 		remove: (skillName: string, agentId: string, sessionId: string) =>
-			client.delete(`/workspace/skill/${skillName}`, {
+			client.delete(`/workspace/skill/${encodeURIComponent(skillName)}`, {
 				agent_id: agentId,
 				session_id: sessionId,
 			}),
