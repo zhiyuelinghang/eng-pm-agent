@@ -207,6 +207,20 @@ class AgentScopeClient:
     def get_catalog(self) -> dict[str, Any]:
         return self._request("GET", "/agent/platform/catalog")
 
+    def validate_project_initialization(
+        self,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run the active platform validation MCP without an LLM turn."""
+        result = self._request(
+            "POST",
+            "/mcp-registry/platform/project-initialization-validation",
+            json={"payload": payload},
+        )
+        if not isinstance(result, dict):
+            raise AgentScopeGatewayError("项目初始化核验 MCP 返回格式无效。")
+        return result
+
     def create_session(
         self,
         *,

@@ -6,11 +6,11 @@
     "organize-project-personnel",
     "validate-wbs-timeline",
     "extract-project-risks",
-    "map-quality-requirements",
-    "review-project-initialization"
+    "map-quality-requirements"
   ],
   "obsolete_skill_names": [
-    "read-initialization-attachments"
+    "read-initialization-attachments",
+    "review-project-initialization"
   ],
   "global_business_interactions": [
     "dobby_get_project_overview",
@@ -48,7 +48,8 @@
         "dobby_get_project_initialization_draft",
         "dobby_list_project_initialization_sections",
         "dobby_list_project_initialization_attachment_chunks",
-        "dobby_create_project_initialization_draft"
+        "dobby_create_project_initialization_draft",
+        "dobby_finalize_project_initialization_draft"
       ],
       "invitable": false,
       "reasoning": true
@@ -142,23 +143,6 @@
       ],
       "invitable": true,
       "reasoning": false
-    },
-    {
-      "key": "validator",
-      "name": "初始化核验专家",
-      "description": "独立读取完整草稿，核验结构、来源和跨专业一致性。",
-      "skill_name": "review-project-initialization",
-      "sort_order": 960,
-      "initialization_role": "validator",
-      "interaction_keys": [
-        "dobby_get_project_initialization_state",
-        "dobby_get_project_initialization_draft",
-        "dobby_list_project_initialization_sections",
-        "dobby_list_project_initialization_attachment_chunks",
-        "dobby_finalize_project_initialization_draft"
-      ],
-      "invitable": true,
-      "reasoning": true
     }
   ]
 }

@@ -8,7 +8,6 @@ from scripts.provision_initialization_agents import (
     PARSED_ATTACHMENT_READ_INTERACTION,
     SPECIALISTS,
     TEAM_CONFIG_PATH,
-    VALIDATOR,
     WORKERS,
     _model_policy,
     _system_prompt,
@@ -27,7 +26,7 @@ def _database_interaction(key: str) -> dict:
     return next(item for item in payload["interactions"] if item["key"] == key)
 
 
-def test_domain_specialists_are_fast_but_orchestrator_and_validator_reason() -> None:
+def test_domain_specialists_are_fast_but_orchestrator_reasons() -> None:
     template = {
         "mode": "fixed",
         "chat_model_config": {
@@ -51,9 +50,6 @@ def test_domain_specialists_are_fast_but_orchestrator_and_validator_reason() -> 
     assert _model_policy(template, ORCHESTRATOR)["chat_model_config"][
         "parameters"
     ]["thinking_enable"] is True
-    assert _model_policy(template, VALIDATOR)["chat_model_config"][
-        "parameters"
-    ]["thinking_enable"] is True
 
 
 def test_persistent_team_is_declarative_and_has_bounded_assignments() -> None:
@@ -66,10 +62,7 @@ def test_persistent_team_is_declarative_and_has_bounded_assignments() -> None:
         "risks",
         "quality_requirements",
     }
-    assert {spec.name for spec in WORKERS} == {
-        *(spec.name for spec in SPECIALISTS),
-        VALIDATOR.name,
-    }
+    assert WORKERS == SPECIALISTS
     assert ORCHESTRATOR.invitable is False
     assert all(spec.invitable for spec in WORKERS)
     assert "dobby_create_project_initialization_draft" in (
@@ -81,7 +74,11 @@ def test_persistent_team_is_declarative_and_has_bounded_assignments() -> None:
         for spec in WORKERS
     )
     assert "dobby_finalize_project_initialization_draft" in (
-        VALIDATOR.interaction_keys
+        ORCHESTRATOR.interaction_keys
+    )
+    assert not any(
+        spec.initialization_role == "validator"
+        for spec in WORKERS
     )
     assert len(GLOBAL_BUSINESS_INTERACTIONS) == 18
     assert not any("initialization" in key for key in GLOBAL_BUSINESS_INTERACTIONS)
@@ -126,4 +123,6 @@ def test_runtime_guards_wait_for_terminal_worker_completion() -> None:
         "single_partition_json_page"
     )
     assert specialist["runtime_policy"] == {}
-    assert validator["runtime_policy"] == {}
+    assert validator["runtime_policy"] == {
+        "handler": "project_initialization_validation",
+    }

@@ -860,6 +860,7 @@
 			"noParameters": "This tool takes no parameters.",
 			"noToolDescription": "No tool description.",
 			"readOnly": "Read only",
+			"platformManaged": "Platform managed",
 			"noDescription": "No description",
 			"noTools": "This MCP declares no tools",
 			"tools": "{{count}} tools",

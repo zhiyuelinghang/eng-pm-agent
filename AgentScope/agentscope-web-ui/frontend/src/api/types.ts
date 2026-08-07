@@ -778,6 +778,7 @@ export interface ManagedMCPPackage {
 	transport: 'stdio';
 	status: 'ready';
 	tools: ManagedMCPTool[];
+	platform_capabilities: string[];
 	assigned: boolean;
 	active_instances: number;
 	created_at: string;

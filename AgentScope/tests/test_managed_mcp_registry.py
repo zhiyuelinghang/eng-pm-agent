@@ -26,6 +26,7 @@ def _archive(
     *,
     name: str = "project-data",
     version: str = "1.0.0",
+    platform_capabilities: list[str] | None = None,
     extra_members: dict[str, bytes] | None = None,
 ) -> io.BytesIO:
     payload = io.BytesIO()
@@ -38,6 +39,7 @@ def _archive(
         "transport": "stdio",
         "command": "server.exe",
         "args": [],
+        "platform_capabilities": platform_capabilities or [],
     }
     with zipfile.ZipFile(payload, "w") as bundle:
         bundle.writestr("project-mcp/mcp.json", json.dumps(manifest))
@@ -133,6 +135,42 @@ def test_upload_publishes_verified_package_and_persists_index(
             assert persisted is not None
             assert persisted.manifest.version == "1.0.0"
             assert persisted.tools[0].display_name == "列出项目"
+
+    asyncio.run(scenario())
+
+
+def test_platform_capability_is_persisted_and_exposed_in_package_view(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        manager = MCPRegistryManager(tmp_path)
+        async with manager:
+            monkeypatch.setattr(manager, "_probe_package", AsyncMock(return_value=[]))
+            record = await manager.install_archive(
+                _archive(
+                    name="project-initialization-validator",
+                    platform_capabilities=["project_initialization_validation"],
+                ),
+            )
+            views = await manager.list_views()
+
+            assert record.manifest.platform_capabilities == [
+                "project_initialization_validation",
+            ]
+            assert views[0].platform_capabilities == [
+                "project_initialization_validation",
+            ]
+
+        reloaded = MCPRegistryManager(tmp_path)
+        async with reloaded:
+            persisted = await reloaded.get_record(
+                "project-initialization-validator",
+            )
+            assert persisted is not None
+            assert persisted.manifest.platform_capabilities == [
+                "project_initialization_validation",
+            ]
 
     asyncio.run(scenario())
 
@@ -422,6 +460,57 @@ def test_runtime_reuses_within_session_and_isolates_between_sessions(
             await manager.close_session("session-a")
             assert created[0].close_count == 1
             assert created[1].is_connected
+
+    asyncio.run(scenario())
+
+
+def test_platform_runtime_is_reused_and_restarted_after_version_change(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    package_dir = tmp_path / "packages" / "validator" / "1.0.0"
+    package_dir.mkdir(parents=True)
+    (package_dir / "server.exe").write_bytes(b"complete-package")
+    manager = MCPRegistryManager(tmp_path, max_active_instances=2)
+    created: list[_FakeClient] = []
+
+    def _build_client(record, **_kwargs):
+        client = _FakeClient(f"{record.id}-{record.manifest.version}")
+        created.append(client)
+        return client
+
+    monkeypatch.setattr(manager, "_build_client", _build_client)
+
+    async def scenario() -> None:
+        async with manager:
+            manager._records["validator"] = MCPPackageRecord(
+                id="validator",
+                manifest=MCPPackageManifest(
+                    name="validator",
+                    display_name="核验器",
+                    version="1.0.0",
+                    command="server.exe",
+                ),
+                relative_dir="packages/validator/1.0.0",
+            )
+            first = await manager.get_platform_client(
+                "validator",
+                runtime_id="initialization",
+            )
+            repeated = await manager.get_platform_client(
+                "validator",
+                runtime_id="initialization",
+            )
+            assert first is repeated
+
+            manager._records["validator"].manifest.version = "2.0.0"
+            replacement = await manager.get_platform_client(
+                "validator",
+                runtime_id="initialization",
+            )
+            assert replacement is not first
+            assert first.close_count == 1
+            assert len(created) == 2
 
     asyncio.run(scenario())
 

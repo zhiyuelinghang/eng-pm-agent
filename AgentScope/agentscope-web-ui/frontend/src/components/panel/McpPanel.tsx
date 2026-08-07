@@ -52,6 +52,10 @@ function assignedIds(agent: AgentView | null): string[] {
 	return [...(agent?.data.mcp_config?.allowed_mcp_ids ?? [])];
 }
 
+function isPlatformManaged(item: ManagedMCPPackage): boolean {
+	return (item.platform_capabilities ?? []).includes('project_initialization_validation');
+}
+
 interface McpToolParameter {
 	name: string;
 	type: string;
@@ -146,7 +150,9 @@ export function McpPanel({
 
 	useEffect(() => {
 		if (loading) return;
-		const assignableIds = new Set(packages.map((item) => item.id));
+		const assignableIds = new Set(
+			packages.filter((item) => !isPlatformManaged(item)).map((item) => item.id),
+		);
 		setDraftIds((current) => current.filter((id) => assignableIds.has(id)));
 	}, [loading, packages]);
 
@@ -157,11 +163,17 @@ export function McpPanel({
 
 	const persistedIds = useMemo(() => {
 		if (loading) return assignedIds(agent);
-		const assignableIds = new Set(packages.map((item) => item.id));
+		const assignableIds = new Set(
+			packages.filter((item) => !isPlatformManaged(item)).map((item) => item.id),
+		);
 		return assignedIds(agent).filter((id) => assignableIds.has(id));
 	}, [agent, loading, packages]);
 	const persistedSet = useMemo(() => new Set(persistedIds), [persistedIds]);
 	const selectedSet = useMemo(() => new Set(draftIds), [draftIds]);
+	const assignablePackages = useMemo(
+		() => packages.filter((item) => !isPlatformManaged(item)),
+		[packages],
+	);
 	const isDirty = !sameIds(draftIds, persistedIds);
 	const selectedPackage = packages.find((item) => item.id === selectedId) ?? null;
 	const detailSections = selectedPackage
@@ -449,8 +461,9 @@ export function McpPanel({
 						<span className="truncate text-sm font-medium">{t('panel.mcp.catalogTitle')}</span>
 						<span className="shrink-0 text-xs tabular-nums text-muted-foreground">
 							{t('panel.mcp.selectedSummary', {
-								selected: packages.filter((item) => selectedSet.has(item.id)).length,
-								total: packages.length,
+								selected: assignablePackages.filter((item) => selectedSet.has(item.id))
+									.length,
+								total: assignablePackages.length,
 							})}
 						</span>
 					</div>
@@ -495,6 +508,7 @@ export function McpPanel({
 					<div className="h-full overflow-y-auto rounded-lg border bg-background">
 						<div className="divide-y">
 							{filtered.map((item) => {
+								const platformManaged = isPlatformManaged(item);
 								const checked = selectedSet.has(item.id);
 								return (
 									<PanelCatalogRow
@@ -502,14 +516,25 @@ export function McpPanel({
 										title={item.display_name}
 										description={item.description}
 										metadata={<>{item.name} · {t('panel.mcp.tools', { count: item.tools.length })}</>}
-										badge={<Badge variant="outline">v{item.version}</Badge>}
-										selected={checked}
-										checkbox={{
-											checked,
-											disabled: !agent?.editable || submitting,
-											ariaLabel: item.display_name,
-											onChange: (value) => togglePackage(item.id, value),
-										}}
+										badge={
+											<span className="flex items-center gap-1">
+												{platformManaged ? (
+													<Badge>{t('panel.mcp.platformManaged')}</Badge>
+												) : null}
+												<Badge variant="outline">v{item.version}</Badge>
+											</span>
+										}
+										selected={!platformManaged && checked}
+										checkbox={
+											platformManaged
+												? undefined
+												: {
+														checked,
+														disabled: !agent?.editable || submitting,
+														ariaLabel: item.display_name,
+														onChange: (value) => togglePackage(item.id, value),
+													}
+										}
 										onOpen={() => setSelectedId(item.id)}
 										openLabel={item.display_name}
 									/>

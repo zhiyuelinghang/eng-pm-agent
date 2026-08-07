@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from decimal import Decimal
 import re
-from typing import Any, Literal
+from typing import Any
 
 from pypinyin import lazy_pinyin
 from pydantic import BaseModel, ConfigDict, Field
@@ -27,6 +27,7 @@ from .models import (
     WbsPredecessor,
     WbsRiskLink,
 )
+from .initialization_integrity import validate_initialization_integrity
 from .security import hash_password
 
 
@@ -131,9 +132,6 @@ class ApplyInitializationDraftInput(BaseModel):
     )
 
 
-ValidationLevel = Literal["error", "warning"]
-
-
 def suggest_unique_username(
     real_name: str,
     identity_card_no: str,
@@ -154,376 +152,6 @@ def suggest_unique_username(
         candidate = f"{base[:64 - len(suffix)]}{suffix}"
         sequence += 1
     return candidate
-
-
-def _issue(
-    level: ValidationLevel,
-    path: str,
-    message: str,
-) -> dict[str, str]:
-    return {"level": level, "path": path, "message": message}
-
-
-def _duplicates(values: list[Any]) -> set[Any]:
-    seen: set[Any] = set()
-    duplicates: set[Any] = set()
-    for value in values:
-        if value in seen:
-            duplicates.add(value)
-        seen.add(value)
-    return duplicates
-
-
-def _wbs_code_sort_key(value: str) -> tuple[tuple[int, int | str], ...]:
-    """Sort dotted WBS codes by their numeric hierarchy."""
-    return tuple(
-        (0, int(part)) if part.isdigit() else (1, part.casefold())
-        for part in value.split(".")
-    )
-
-
-def validate_initialization_payload(
-    payload: ProjectInitializationPayload,
-) -> list[dict[str, str]]:
-    """Validate cross-record relationships that Pydantic cannot express."""
-    issues: list[dict[str, str]] = []
-    project = payload.project
-    if (
-        project.contract_start_date
-        and project.contract_end_date
-        and project.contract_end_date < project.contract_start_date
-    ):
-        issues.append(
-            _issue(
-                "error",
-                "project.contract_end_date",
-                "合同竣工日期不能早于合同开工日期",
-            ),
-        )
-
-    project_values = project.model_dump()
-    missing_project_fields = [
-        name for name, value in project_values.items() if value in (None, "")
-    ]
-    if missing_project_fields:
-        issues.append(
-            _issue(
-                "warning",
-                "project",
-                "仍有项目基本信息未识别，可继续询问用户或由用户确认部分初始化",
-            ),
-        )
-
-    if not payload.personnel:
-        issues.append(_issue("warning", "personnel", "未识别到项目人员"))
-    if not payload.wbs:
-        issues.append(_issue("warning", "wbs", "未识别到 WBS 数据"))
-    if not payload.risks:
-        issues.append(_issue("warning", "risks", "未识别到风险清单"))
-    if not payload.quality_requirements:
-        issues.append(
-            _issue(
-                "warning",
-                "quality_requirements",
-                "未识别到工序质量指标",
-            ),
-        )
-
-    for serial_no in sorted(_duplicates([item.serial_no for item in payload.personnel])):
-        issues.append(
-            _issue(
-                "error",
-                "personnel",
-                f"人员序号 {serial_no} 重复",
-            ),
-        )
-    personnel_by_card: dict[str, list[PersonnelDraft]] = {}
-    for person in payload.personnel:
-        personnel_by_card.setdefault(person.identity_card_no, []).append(person)
-    for card_no, assignments in sorted(personnel_by_card.items()):
-        if len(assignments) < 2:
-            continue
-        position_names = [item.position_name for item in assignments]
-        for position_name in sorted(_duplicates(position_names)):
-            issues.append(
-                _issue(
-                    "error",
-                    "personnel",
-                    f"身份证号 {card_no} 的岗位「{position_name}」重复",
-                ),
-            )
-        unique_positions = list(dict.fromkeys(position_names))
-        if len(unique_positions) < 2:
-            continue
-        positions = "、".join(unique_positions)
-        issues.append(
-            _issue(
-                "warning",
-                "personnel",
-                (
-                    f"身份证号 {card_no} 对应多个岗位（{positions}）；"
-                    "这些岗位将共用同一个平台账号，请核对是否为本人兼任"
-                ),
-            ),
-        )
-
-    wbs_by_code: dict[str, WbsDraft] = {}
-    for item in payload.wbs:
-        if item.wbs_code in wbs_by_code:
-            issues.append(
-                _issue("error", "wbs", f"WBS 编码 {item.wbs_code} 重复"),
-            )
-        else:
-            wbs_by_code[item.wbs_code] = item
-        if (
-            item.planned_start_at
-            and item.planned_finish_at
-            and item.planned_finish_at < item.planned_start_at
-        ):
-            issues.append(
-                _issue(
-                    "error",
-                    f"wbs.{item.wbs_code}.planned_finish_at",
-                    "计划结束时间不能早于计划开始时间",
-                ),
-            )
-        if item.name.strip() in {"任务名称", "未命名任务", "未命名工序"}:
-            issues.append(
-                _issue(
-                    "warning",
-                    f"wbs.{item.wbs_code}.name",
-                    f"WBS {item.wbs_code} 的名称“{item.name}”疑似占位内容，请核对",
-                ),
-            )
-
-    siblings_by_parent: dict[str | None, list[WbsDraft]] = {}
-    for item in payload.wbs:
-        siblings_by_parent.setdefault(item.parent_wbs_code, []).append(item)
-    for siblings in siblings_by_parent.values():
-        siblings.sort(key=lambda item: _wbs_code_sort_key(item.wbs_code))
-        latest_started_item: WbsDraft | None = None
-        for item in siblings:
-            if item.planned_start_at is None:
-                continue
-            if (
-                latest_started_item is not None
-                and latest_started_item.planned_start_at is not None
-                and item.planned_start_at < latest_started_item.planned_start_at
-            ):
-                issues.append(
-                    _issue(
-                        "warning",
-                        f"wbs.{item.wbs_code}.planned_start_at",
-                        (
-                            f"WBS {item.wbs_code} 的计划开始早于编码在前的"
-                            f"同级 WBS {latest_started_item.wbs_code}；"
-                            "同级 WBS 编码顺序与开始时间顺序冲突，请核对原始计划"
-                        ),
-                    ),
-                )
-            if (
-                latest_started_item is None
-                or latest_started_item.planned_start_at is None
-                or item.planned_start_at >= latest_started_item.planned_start_at
-            ):
-                latest_started_item = item
-
-    for item in payload.wbs:
-        if item.parent_wbs_code:
-            parent = wbs_by_code.get(item.parent_wbs_code)
-            if parent is None:
-                issues.append(
-                    _issue(
-                        "error",
-                        f"wbs.{item.wbs_code}.parent_wbs_code",
-                        f"父级 WBS {item.parent_wbs_code} 不存在",
-                    ),
-                )
-            elif parent.level >= item.level:
-                issues.append(
-                    _issue(
-                        "error",
-                        f"wbs.{item.wbs_code}.level",
-                        "子节点层级必须大于父节点层级",
-                    ),
-                )
-            elif (
-                item.planned_start_at
-                and parent.planned_start_at
-                and item.planned_start_at < parent.planned_start_at
-            ):
-                issues.append(
-                    _issue(
-                        "warning",
-                        f"wbs.{item.wbs_code}.planned_start_at",
-                        (
-                            f"WBS {item.wbs_code} 的计划开始早于父级 "
-                            f"{item.parent_wbs_code}，请核对父级汇总日期"
-                        ),
-                    ),
-                )
-            elif (
-                item.planned_finish_at
-                and parent.planned_finish_at
-                and item.planned_finish_at > parent.planned_finish_at
-            ):
-                issues.append(
-                    _issue(
-                        "warning",
-                        f"wbs.{item.wbs_code}.planned_finish_at",
-                        (
-                            f"WBS {item.wbs_code} 的计划完成晚于父级 "
-                            f"{item.parent_wbs_code}，请核对父级汇总日期"
-                        ),
-                    ),
-                )
-        expected_parent_code = (
-            item.wbs_code.rsplit(".", 1)[0]
-            if "." in item.wbs_code
-            else None
-        )
-        if expected_parent_code != item.parent_wbs_code:
-            issues.append(
-                _issue(
-                    "error",
-                    f"wbs.{item.wbs_code}.parent_wbs_code",
-                    (
-                        f"WBS {item.wbs_code} 按编码应归属 "
-                        f"{expected_parent_code or '根节点'}，"
-                        f"当前上级为 {item.parent_wbs_code or '空'}"
-                    ),
-                ),
-            )
-        expected_level = item.wbs_code.count(".") + 1
-        if item.level != expected_level:
-            issues.append(
-                _issue(
-                    "error",
-                    f"wbs.{item.wbs_code}.level",
-                    (
-                        f"WBS {item.wbs_code} 按编码应为第 {expected_level} 层，"
-                        f"当前为第 {item.level} 层"
-                    ),
-                ),
-            )
-        for predecessor_code in item.predecessor_wbs_codes:
-            if predecessor_code == item.wbs_code:
-                issues.append(
-                    _issue(
-                        "error",
-                        f"wbs.{item.wbs_code}.predecessor_wbs_codes",
-                        "WBS 节点不能把自己设为前任",
-                    ),
-                )
-            elif predecessor_code not in wbs_by_code:
-                issues.append(
-                    _issue(
-                        "error",
-                        f"wbs.{item.wbs_code}.predecessor_wbs_codes",
-                        f"前任 WBS {predecessor_code} 不存在",
-                    ),
-                )
-            else:
-                predecessor = wbs_by_code[predecessor_code]
-                if (
-                    item.planned_start_at
-                    and predecessor.planned_finish_at
-                    and item.planned_start_at < predecessor.planned_finish_at
-                ):
-                    issues.append(
-                        _issue(
-                            "warning",
-                            f"wbs.{item.wbs_code}.planned_start_at",
-                            (
-                                f"WBS {item.wbs_code} 的计划开始早于前任 "
-                                f"{predecessor_code} 的计划完成；如属于搭接施工"
-                                "或开始-开始关系，请人工确认"
-                            ),
-                        ),
-                    )
-
-    parent_by_code = {
-        item.wbs_code: item.parent_wbs_code
-        for item in payload.wbs
-        if item.parent_wbs_code
-    }
-    for code in parent_by_code:
-        visited: set[str] = set()
-        cursor: str | None = code
-        while cursor is not None:
-            if cursor in visited:
-                issues.append(
-                    _issue("error", f"wbs.{code}", "WBS 父子关系存在循环"),
-                )
-                break
-            visited.add(cursor)
-            cursor = parent_by_code.get(cursor)
-
-    predecessor_by_code = {
-        item.wbs_code: tuple(item.predecessor_wbs_codes)
-        for item in payload.wbs
-    }
-    for code in predecessor_by_code:
-        visiting: set[str] = set()
-        visited: set[str] = set()
-
-        def visit_predecessor(current: str) -> bool:
-            if current in visiting:
-                return True
-            if current in visited:
-                return False
-            visiting.add(current)
-            for predecessor in predecessor_by_code.get(current, ()):
-                if predecessor in predecessor_by_code and visit_predecessor(predecessor):
-                    return True
-            visiting.remove(current)
-            visited.add(current)
-            return False
-
-        if visit_predecessor(code):
-            issues.append(
-                _issue(
-                    "error",
-                    f"wbs.{code}.predecessor_wbs_codes",
-                    "WBS 前置关系存在循环",
-                ),
-            )
-
-    for serial_no in sorted(_duplicates([item.serial_no for item in payload.risks])):
-        issues.append(_issue("error", "risks", f"风险序号 {serial_no} 重复"))
-    for item in payload.risks:
-        if (
-            item.risk_window_start_date
-            and item.risk_window_end_date
-            and item.risk_window_end_date < item.risk_window_start_date
-        ):
-            issues.append(
-                _issue(
-                    "error",
-                    f"risks.{item.serial_no}.risk_window_end_date",
-                    "风险窗口结束日期不能早于开始日期",
-                ),
-            )
-
-    quality_codes = [item.wbs_code for item in payload.quality_requirements]
-    for code in sorted(_duplicates(quality_codes)):
-        issues.append(
-            _issue(
-                "error",
-                "quality_requirements",
-                f"WBS {code} 存在多条质量指标记录",
-            ),
-        )
-    for item in payload.quality_requirements:
-        if item.wbs_code not in wbs_by_code:
-            issues.append(
-                _issue(
-                    "error",
-                    f"quality_requirements.{item.wbs_code}",
-                    f"关联 WBS {item.wbs_code} 不存在",
-                ),
-            )
-    return issues
 
 
 def draft_status(issues: list[dict[str, str]]) -> str:
@@ -749,7 +377,7 @@ def apply_initialization_draft(
         payload_data[section_row.section] = section_row.payload
     payload = ProjectInitializationPayload.model_validate(payload_data)
     draft.payload = payload.model_dump(mode="json")
-    deterministic_issues = validate_initialization_payload(payload)
+    deterministic_issues = validate_initialization_integrity(payload)
     deterministic_keys = {
         (item["level"], item["path"], item["message"])
         for item in deterministic_issues
@@ -971,14 +599,6 @@ def apply_initialization_draft(
     draft.status = "applied"
     draft.validation_issues = issues
     draft.applied_at = datetime.now(UTC)
-    run.status = "applied"
-    run.progress_percent = 100
-    run.current_step_key = None
-    # ``finished_at`` belongs to the machine-run window and is written when
-    # extraction/validation finishes.  A user may review the draft much later;
-    # applying it must not turn that review delay into agent execution time.
-    if run.finished_at is None:
-        run.finished_at = datetime.now(UTC)
     db.flush()
     return {
         "draft_id": draft.id,

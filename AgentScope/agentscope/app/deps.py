@@ -39,6 +39,12 @@ def _service_request_allowed(request: Request) -> bool:
     path = request.url.path.rstrip("/") or "/"
     if request.method == "GET" and path == "/agent/platform/catalog":
         return True
+    if (
+        request.method == "POST"
+        and path
+        == "/mcp-registry/platform/project-initialization-validation"
+    ):
+        return True
     return path == "/chat" or any(
         path == prefix or path.startswith(f"{prefix}/")
         for prefix in ("/sessions", "/workspace")

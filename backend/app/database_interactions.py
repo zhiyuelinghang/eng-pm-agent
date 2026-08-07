@@ -52,16 +52,13 @@ from .models import (
     DatabaseInteractionAgentAssignment,
     DatabaseInteractionTablePolicy,
     OperationLog,
-    ProjectInitializationDraft,
 )
-from .initialization_draft_queries import compose_initialization_draft_payload
 from .project_initialization import (
     PersonnelDraft,
     ProjectDetailsDraft,
     QualityRequirementDraft,
     RiskDraftItem,
     WbsDraft,
-    validate_initialization_payload,
 )
 
 
@@ -98,7 +95,7 @@ _SENSITIVE_FIELD_PARTS = (
     "storage_path",
 )
 _SYSTEM_MANAGED_FIELDS = frozenset({"created_at", "updated_at"})
-_DECLARATIVE_CATALOG_VERSION = 17
+_DECLARATIVE_CATALOG_VERSION = 18
 _MAX_BATCH_RECORD_IDS = 12
 _MAX_JSON_PAGE_ITEMS = 20
 _MAX_TEXT_PAGE_CHARS = 6000
@@ -956,83 +953,6 @@ def _initialization_section_from_policy(
     return section if section in _INITIALIZATION_SECTION_MODELS else None
 
 
-def _validate_initialization_draft_finalization(
-    db: Session,
-    draft_id: Any,
-    values: dict[str, Any],
-) -> None:
-    """Keep the validator interaction from publishing malformed drafts."""
-    allowed_fields = {"status", "validation_issues"}
-    unknown_fields = sorted(set(values) - allowed_fields)
-    if unknown_fields:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "初始化核验只能写入状态和核验问题："
-                f"{'、'.join(unknown_fields)}"
-            ),
-        )
-    draft_status = values.get("status")
-    if draft_status not in {"ready", "invalid"}:
-        raise HTTPException(
-            status_code=422,
-            detail="初始化核验状态只能是 ready 或 invalid",
-        )
-    issues = values.get("validation_issues", [])
-    if not isinstance(issues, list) or any(
-        not isinstance(item, dict)
-        or item.get("level") not in {"error", "warning"}
-        or not isinstance(item.get("path"), str)
-        or not item["path"].strip()
-        or not isinstance(item.get("message"), str)
-        or not item["message"].strip()
-        for item in issues
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="核验问题必须是包含 level、path、message 的标准数组",
-        )
-    if draft_status == "invalid":
-        return
-    semantic_errors = [
-        item for item in issues if item.get("level") == "error"
-    ]
-    if semantic_errors:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "仍有错误级核验问题，草稿不能标记为 ready",
-                "issues": semantic_errors,
-            },
-        )
-    draft = db.get(ProjectInitializationDraft, draft_id)
-    if draft is None:
-        raise HTTPException(status_code=404, detail="初始化草稿不存在")
-    try:
-        payload = compose_initialization_draft_payload(db, draft)
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "初始化草稿仍包含非标准分区结构，不能标记为 ready",
-                "errors": exc.errors(include_input=False),
-            },
-        ) from exc
-    deterministic_errors = [
-        item
-        for item in validate_initialization_payload(payload)
-        if item.get("level") == "error"
-    ]
-    if deterministic_errors:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "初始化草稿仍有确定性错误，不能标记为 ready",
-                "issues": deterministic_errors,
-            },
-        )
-
-
 def build_table_interaction_schema(
     db: Session,
     policy: DatabaseInteractionTablePolicy,
@@ -1353,6 +1273,35 @@ def _load_declarative_catalog() -> DeclarativeCatalog:
     return catalog
 
 
+def _declared_interaction_schema(
+    db: Session,
+    policy: DatabaseInteractionTablePolicy,
+    seed: DeclarativeInteractionSeed,
+    join_rules: list[dict[str, Any]],
+    context_bindings: list[dict[str, str]],
+) -> dict[str, Any]:
+    if seed.runtime_policy.get("handler") == "project_initialization_validation":
+        return {
+            "type": "object",
+            "properties": {
+                "record_id": {
+                    "type": "integer",
+                    "description": "需要核验的初始化草稿 ID。",
+                },
+            },
+            "required": ["record_id"],
+            "additionalProperties": False,
+        }
+    return build_table_interaction_schema(
+        db,
+        policy,
+        seed.table_operation,
+        join_rules,
+        context_bindings,
+        seed.fixed_values,
+    )
+
+
 def _seed_join_rules(
     seed: DeclarativeInteractionSeed,
     policies_by_table: dict[str, DatabaseInteractionTablePolicy],
@@ -1573,13 +1522,12 @@ def bootstrap_declarative_catalog(db: Session) -> int:
                 runtime_policy=dict(seed.runtime_policy),
                 allowed_conversation_types=seed.allowed_conversation_types,
                 access_mode=seed.access_mode,
-                input_schema=build_table_interaction_schema(
+                input_schema=_declared_interaction_schema(
                     db,
                     policy,
-                    seed.table_operation,
+                    seed,
                     normalized_seed_joins,
                     normalized_seed_bindings,
-                    seed.fixed_values,
                 ),
                 read_only=seed.table_operation == "read",
                 requires_confirmation=seed.requires_confirmation,
@@ -1614,13 +1562,12 @@ def bootstrap_declarative_catalog(db: Session) -> int:
             row.runtime_policy = dict(seed.runtime_policy)
             row.allowed_conversation_types = seed.allowed_conversation_types
             row.access_mode = seed.access_mode
-            row.input_schema = build_table_interaction_schema(
+            row.input_schema = _declared_interaction_schema(
                 db,
                 policy,
-                seed.table_operation,
+                seed,
                 normalized_seed_joins,
                 normalized_seed_bindings,
-                seed.fixed_values,
             )
             row.read_only = seed.table_operation == "read"
             row.requires_confirmation = seed.requires_confirmation
@@ -1652,13 +1599,12 @@ def bootstrap_declarative_catalog(db: Session) -> int:
                 row.access_mode = "workflow"
                 seed_rule_changed = True
             if seed_rule_changed:
-                row.input_schema = build_table_interaction_schema(
+                row.input_schema = _declared_interaction_schema(
                     db,
                     policy,
-                    row.table_operation,
+                    seed,
                     row.join_rules or [],
                     row.context_bindings or [],
-                    row.fixed_values or {},
                 )
                 changed += 1
         migrated_rows[seed.key] = row
@@ -2642,15 +2588,6 @@ def execute_table_interaction(
                             status_code=409,
                             detail="记录已被其他任务修改，请重新读取",
                         )
-                if (
-                    interaction.key
-                    == "dobby_finalize_project_initialization_draft"
-                ):
-                    _validate_initialization_draft_finalization(
-                        db,
-                        arguments["record_id"],
-                        values,
-                    )
                 update_values = {
                     **fixed_values,
                     **values,

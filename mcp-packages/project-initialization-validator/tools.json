@@ -1,0 +1,24 @@
+[
+  {
+    "name": "validate_project_initialization",
+    "title": "核验项目初始化草稿",
+    "description": "对平台已经结构化入库的项目初始化草稿执行确定性规则核验，返回稳定的规则编号、问题等级、字段路径和中文说明。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "draft": {
+          "type": "object",
+          "description": "平台组装后的标准项目初始化草稿，包含 project、personnel、wbs、risks、quality_requirements 五个分区。"
+        }
+      },
+      "required": ["draft"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  }
+]

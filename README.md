@@ -125,9 +125,10 @@ AgentScope Web UI 是智能体管理端，工程管理平台是业务使用端�
 动作是 `TaskCreate`；随后读取已有草稿、判断实际分区、邀请持久化专项智能体，并将
 计划、模型调用、工具调用和团队协作过程原样流式展示。知识库不是固定步骤。
 
-专项智能体通过各自被分配的数据库交互写入隔离的草稿分区，核验智能体完成结构与
-跨分区检查并标记 `ready`/`invalid`。无论模型如何协作，用户在草稿页确认前都不会
-写入正式项目表。平台不再用固定表格映射或确定性快速入库替代 AI 理解。
+专项智能体通过各自被分配的数据库交互写入隔离的草稿分区；全部分区完成后，初始化
+主智能体只提交草稿编号，由平台自动调用版本化核验 MCP，直接检查结构化草稿并标记
+`ready`/`invalid`。核验不再产生额外模型轮次。无论模型如何协作，用户在草稿页确认前
+都不会写入正式项目表。平台不再用固定表格映射或确定性快速入库替代 AI 理解。
 
 初始化团队结构和能力分配声明在
 `AgentScope/project-initialization-team.json`；实际业务流程只写在各智能体已分配的
@@ -138,13 +139,25 @@ AgentScope Web UI 是智能体管理端，工程管理平台是业务使用端�
 .\python-3.13.14\python.exe .\scripts\provision_initialization_agents.py
 ```
 
-该命令会创建或校准一个初始化主智能体、五个专项智能体和一个核验智能体，配置固定
-邀请白名单、技能与草稿区数据库交互。它们使用全局主智能体的模型配置作为模板。
+该命令会创建或校准一个初始化主智能体和五个专项智能体，配置固定邀请白名单、技能
+与草稿区数据库交互，并清理旧核验智能体。它们使用全局主智能体的模型配置作为模板。
 默认保留管理端已经编辑过的同名技能；只有明确要用仓库版本覆盖平台内容时，才执行：
 
 ```powershell
 .\python-3.13.14\python.exe .\scripts\provision_initialization_agents.py --replace-skills
 ```
+
+项目初始化核验规则位于
+`mcp-packages/project-initialization-validator`。修改规则并提高 `mcp.json` 版本后，构建
+并在 AgentScope 管理端重新上传同名包即可立即切换，不需要修改初始化智能体：
+
+```powershell
+.\python-3.13.14\python.exe .\scripts\build_project_initialization_validator_mcp_package.py
+.\python-3.13.14\python.exe .\scripts\smoke_test_project_initialization_validator_mcp_package.py
+```
+
+生成文件为
+`data/agentscope/test-packages/project-initialization-validator-mcp-windows.zip`。
 
 AgentScope 管理员登录时不需要填写服务器地址。开发环境由 Web UI 将
 同源路径 `/agentscope-api` 自动代理到本机 AgentScope API；外网部署时

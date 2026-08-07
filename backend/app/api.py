@@ -25,6 +25,13 @@ from .config import get_settings
 from .db import SessionLocal, get_db
 from .models import (AgentConversation, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectInitializationDraft, ProjectInitializationFile, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectSettings, ProjectStatusSnapshot,
                       QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsPredecessor, WbsRiskLink)
+from .initialization_integrity import validate_initialization_integrity
+from .initialization_validation import (
+    InitializationValidationError,
+    latest_initialization_validation_run,
+    run_project_initialization_validation,
+    validation_run_view,
+)
 from .initialization_draft_queries import (
     compose_initialization_draft_payload,
     initialization_draft_workflow_summary,
@@ -43,7 +50,6 @@ from .project_initialization import (
     apply_initialization_draft,
     build_initialization_state,
     suggest_unique_username,
-    validate_initialization_payload,
 )
 from .schemas import (AttachmentUpdate, DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
                       LoginRequest, MemberInput, PasswordChangeInput, ProfileUpdate, ProjectInput, RiskInput, TaskFlowGenerateInput, TaskInput, TaskTransitionInput,
@@ -2363,7 +2369,7 @@ def _initialization_draft_review(
     payload_model = compose_initialization_draft_payload(db, draft)
     payload = payload_model.model_dump(mode="json")
     workflow = initialization_draft_workflow_summary(db, draft)
-    deterministic_issues = validate_initialization_payload(payload_model)
+    deterministic_issues = validate_initialization_integrity(payload_model)
     deterministic_keys = {
         (item.get("level"), item.get("path"), item.get("message"))
         for item in deterministic_issues
@@ -2386,8 +2392,15 @@ def _initialization_draft_review(
     data["payload"] = payload
     data["workflow"] = workflow
     data["validation_issues"] = current_issues
+    latest_validation = latest_initialization_validation_run(db, draft.id)
+    data["validation"] = validation_run_view(latest_validation)
     if draft.status == "building":
-        data["status"] = "collecting"
+        data["status"] = (
+            "reviewing"
+            if latest_validation is not None
+            and latest_validation.status == "running"
+            else "collecting"
+        )
     elif draft.status not in {"applied", "rejected"}:
         data["status"] = (
             "invalid"
@@ -2540,6 +2553,34 @@ def apply_project_initialization_draft(
         },
         "项目初始化数据已确认入库",
     )
+
+
+@router.post("/projects/{project_id}/initialization-drafts/{draft_id}/validate")
+def validate_project_initialization_draft(
+    project_id: int,
+    draft_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+) -> dict[str, Any]:
+    project = project_for_user_or_403(db, project_id, user)
+    draft = db.get(ProjectInitializationDraft, draft_id)
+    if draft is None or draft.project_id != project_id:
+        raise HTTPException(status_code=404, detail="初始化草稿不存在")
+    try:
+        result = run_project_initialization_validation(db, draft)
+        audit(
+            db,
+            user,
+            "重新核验项目初始化草稿",
+            f"使用版本化 MCP 重新核验初始化草稿第 {draft.revision} 版",
+            project.id,
+            "project_initialization_draft",
+            draft.id,
+        )
+        db.commit()
+    except InitializationValidationError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return ok(result, "项目初始化草稿核验完成")
 
 
 @router.get("/projects/{project_id}/settings")

@@ -153,6 +153,10 @@
                   <template v-if="materialAgentDraft.workflow.pending_sections.length">，等待：{{ initializationSectionLabels(materialAgentDraft.workflow.pending_sections) }}</template>
                 </span>
                 <span v-else>{{ materialAgentDraft.validation_issues.length ? initializationDraftIssueSummary : '结构校验已通过，确认前不会写入项目' }}</span>
+                <small v-if="materialAgentDraft.validation?.status === 'completed'">
+                  核验规则 {{ materialAgentDraft.validation.package_version ? `v${materialAgentDraft.validation.package_version}` : '' }}
+                  · {{ formatValidationDuration(materialAgentDraft.validation.duration_ms) }}
+                </small>
                 <small v-if="materialAgentDraft.source_files.length">来源：{{ materialAgentDraft.source_files.join('、') }}</small>
                 <small v-else>来源：本次问答</small>
               </footer>
@@ -625,10 +629,13 @@
         <section class="setup-modal initialization-review-modal" role="dialog" aria-modal="true" aria-labelledby="initialization-review-title">
           <header class="setup-modal-head">
             <div><h2 id="initialization-review-title" :title="configProjectName">{{ configProjectName }} · 初始化草稿核对</h2></div>
-            <button type="button" class="modal-close" :disabled="initializationDraftApplying" aria-label="关闭核对窗口" @click="closeInitializationDraftReview"><n-icon :size="17"><X /></n-icon></button>
+            <button type="button" class="modal-close" :disabled="initializationDraftApplying || initializationDraftValidating" aria-label="关闭核对窗口" @click="closeInitializationDraftReview"><n-icon :size="17"><X /></n-icon></button>
           </header>
 
           <div class="initialization-review-body">
+            <p v-if="materialAgentDraft.validation?.status === 'failed'" class="material-agent-error">
+              最近一次规则核验失败：{{ materialAgentDraft.validation.error || '核验服务暂时不可用' }}
+            </p>
             <section v-if="draftProjectFields.length" class="initialization-review-section initialization-project-section">
               <header class="initialization-project-head">
                 <div><h3>工程基本信息</h3><p>核对从项目资料中识别的合同信息与参建单位。</p></div>
@@ -961,9 +968,16 @@
             <span v-if="materialAgentDraft.status === 'applied'">该版本已经写入正式项目数据。</span>
             <span v-else-if="!isPlatformAdmin">只有平台管理员可以确认正式入库。</span>
             <span v-else-if="materialAgentDraft.status === 'collecting'">专业智能体仍在整理草稿，全部相关分区完成后将自动进入统一核验。</span>
-            <span v-else-if="materialAgentDraft.status === 'reviewing'">核验智能体正在进行跨专业检查，核验完成后才可确认入库。</span>
+            <span v-else-if="materialAgentDraft.status === 'reviewing'">平台正在运行版本化核验规则，完成后才可确认入库。</span>
             <span v-else>确认后将以该草稿整体写入项目基础数据。</span>
-            <button type="button" class="modal-secondary" :disabled="initializationDraftApplying" @click="closeInitializationDraftReview">关闭</button>
+            <button
+              v-if="materialAgentDraft.status !== 'applied' && materialAgentDraft.status !== 'rejected' && isPlatformAdmin"
+              type="button"
+              class="modal-secondary"
+              :disabled="initializationDraftApplying || initializationDraftValidating"
+              @click="revalidateInitializationDraft"
+            >{{ initializationDraftValidating ? '正在核验…' : '重新核验' }}</button>
+            <button type="button" class="modal-secondary" :disabled="initializationDraftApplying || initializationDraftValidating" @click="closeInitializationDraftReview">关闭</button>
             <button v-if="materialAgentDraft.status !== 'applied' && isPlatformAdmin" type="button" class="primary" :disabled="!canApplyInitializationDraft" @click="applyInitializationDraft">{{ initializationDraftApplying ? '正在入库…' : '确认并写入项目' }}</button>
           </footer>
         </section>
@@ -1032,6 +1046,7 @@ type ApiInitializationFile = {
   file_size: number
 }
 type InitializationDraftIssue = {
+  rule_id?: string
   level: 'error' | 'warning'
   path: string
   message: string
@@ -1112,6 +1127,18 @@ type ApiInitializationDraft = {
     quality_requirements: InitializationDraftQuality[]
   }
   validation_issues: InitializationDraftIssue[]
+  validation?: {
+    id: number
+    status: 'running' | 'completed' | 'failed'
+    result_status?: 'ready' | 'invalid' | null
+    package_id?: string | null
+    package_version?: string | null
+    ruleset_version?: string | null
+    duration_ms?: number | null
+    error?: string | null
+    started_at?: string | null
+    finished_at?: string | null
+  } | null
   source_files: string[]
   workflow?: {
     stage: 'collecting' | 'reviewing' | 'completed'
@@ -1405,6 +1432,7 @@ const initializationIssueGroupsExpanded = reactive<Record<InitializationDraftIss
   other: true,
 })
 const initializationDraftApplying = ref(false)
+const initializationDraftValidating = ref(false)
 const initializationDraftAllowPartial = ref(false)
 const initializationCredentialForms = ref<InitializationCredentialForm[]>([])
 const activeProjectConnectorKey = ref<ProjectConnectorKey>('wecom')
@@ -2013,6 +2041,7 @@ const canApplyInitializationDraft = computed(() => {
     || !isPlatformAdmin.value
     || draft.status !== 'ready'
     || initializationDraftApplying.value
+    || initializationDraftValidating.value
     || draftHasErrors.value
     || (draftHasWarnings.value && !initializationDraftAllowPartial.value)
   ) return false
@@ -2695,7 +2724,7 @@ function initializationSectionLabels(sections: string[]) {
 function initializationDraftStageHint(draft: ApiInitializationDraft) {
   if (draft.status === 'applied') return '已写入项目'
   if (draft.status === 'collecting') return '专家处理中'
-  if (draft.status === 'reviewing') return '等待核验专家'
+  if (draft.status === 'reviewing') return '规则核验中'
   return '等待平台确认'
 }
 
@@ -2704,6 +2733,12 @@ function initializationDraftCollapsedLabel(draft: ApiInitializationDraft) {
   if (draft.status === 'collecting') return '初始化草稿正在整理'
   if (draft.status === 'reviewing') return '初始化草稿等待核验'
   return '有待确认草稿'
+}
+
+function formatValidationDuration(durationMs?: number | null) {
+  if (durationMs === null || durationMs === undefined) return '耗时未知'
+  if (durationMs < 1000) return `${durationMs} 毫秒`
+  return `${(durationMs / 1000).toFixed(durationMs < 10_000 ? 1 : 0)} 秒`
 }
 
 function formatInitializationDate(value?: string | null) {
@@ -2789,7 +2824,9 @@ function openInitializationDraftReview() {
 }
 
 function closeInitializationDraftReview() {
-  if (!initializationDraftApplying.value) initializationDraftReviewOpen.value = false
+  if (!initializationDraftApplying.value && !initializationDraftValidating.value) {
+    initializationDraftReviewOpen.value = false
+  }
 }
 
 function initializationApplyError(error: any) {
@@ -2827,6 +2864,27 @@ async function applyInitializationDraft() {
     message.error(initializationApplyError(error))
   } finally {
     initializationDraftApplying.value = false
+  }
+}
+
+async function revalidateInitializationDraft() {
+  const draft = materialAgentDraft.value
+  if (!draft || initializationDraftValidating.value) return
+  initializationDraftValidating.value = true
+  materialAgentDraft.value = { ...draft, status: 'reviewing' }
+  try {
+    await api.post(
+      `/projects/${configProjectId.value}/initialization-drafts/${draft.id}/validate`,
+      {},
+      { timeout: 120_000 },
+    )
+    await loadInitializationDraft()
+    message.success('项目初始化草稿核验完成。')
+  } catch (error: any) {
+    await loadInitializationDraft()
+    message.error(initializationApplyError(error))
+  } finally {
+    initializationDraftValidating.value = false
   }
 }
 

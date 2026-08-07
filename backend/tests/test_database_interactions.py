@@ -1175,35 +1175,9 @@ def test_initialization_section_rejects_nested_or_translated_payload(
     assert error.value.detail["message"] == "初始化草稿分区字段不符合标准结构"
 
 
-def test_initialization_finalizer_cannot_publish_deterministically_invalid_draft(
+def test_initialization_finalizer_submits_only_draft_id(
     db: Session,
 ) -> None:
-    context = _context(db, conversation_type="initialization")
-    draft = ProjectInitializationDraft(
-        project_id=context.project.id,
-        conversation_id=context.conversation.id,
-        created_by_user_id=context.user.id,
-        status="building",
-        payload={},
-    )
-    db.add(draft)
-    db.flush()
-    invalid_wbs = _valid_wbs_payload()
-    invalid_wbs[0]["wbs_code"] = "1.1"
-    invalid_wbs[0]["level"] = 2
-    db.add(
-        ProjectInitializationDraftSection(
-            draft_id=draft.id,
-            project_id=context.project.id,
-            conversation_id=context.conversation.id,
-            section="wbs",
-            writer_agent_id="wbs-specialist",
-            payload=invalid_wbs,
-            source_files=[],
-            extraction_notes=[],
-        ),
-    )
-    db.commit()
     bootstrap_declarative_catalog(db)
     interaction = db.scalar(
         select(DatabaseInteraction).where(
@@ -1211,42 +1185,22 @@ def test_initialization_finalizer_cannot_publish_deterministically_invalid_draft
             == "dobby_finalize_project_initialization_draft",
         ),
     )
+
     assert interaction is not None
-    finalizer_values_schema = interaction.input_schema["properties"]["values"]
-    assert set(finalizer_values_schema["required"]) == {
-        "status",
-        "validation_issues",
+    assert interaction.runtime_policy == {
+        "handler": "project_initialization_validation",
     }
-    issue_schema = finalizer_values_schema["properties"]["validation_issues"][
-        "items"
-    ]
-    assert issue_schema["required"] == ["level", "path", "message"]
-    assert issue_schema["additionalProperties"] is False
-    update_agent_assignments(db, "validator", [interaction.id])
-    row, policy = resolve_assigned_interaction(
-        db,
-        "validator",
-        interaction.key,
-    )
-    assert policy is not None
-
-    with pytest.raises(HTTPException) as error:
-        execute_table_interaction(
-            db,
-            context,
-            row,
-            policy,
-            {
-                "record_id": draft.id,
-                "values": {"status": "ready", "validation_issues": []},
+    assert interaction.input_schema == {
+        "type": "object",
+        "properties": {
+            "record_id": {
+                "type": "integer",
+                "description": "需要核验的初始化草稿 ID。",
             },
-            actor_agent_id="validator",
-        )
-
-    assert error.value.status_code == 422
-    assert error.value.detail["message"] == (
-        "初始化草稿仍有确定性错误，不能标记为 ready"
-    )
+        },
+        "required": ["record_id"],
+        "additionalProperties": False,
+    }
 
 
 def test_unassigned_interaction_is_rejected(db: Session) -> None:

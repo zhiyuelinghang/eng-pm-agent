@@ -860,6 +860,7 @@
 			"noParameters": "此工具无需传入参数。",
 			"noToolDescription": "暂无工具说明。",
 			"readOnly": "只读",
+			"platformManaged": "平台自动调用",
 			"noDescription": "暂无简介",
 			"noTools": "该 MCP 未声明工具",
 			"tools": "{{count}} 个工具",

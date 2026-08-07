@@ -1,13 +1,105 @@
+import importlib
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
+
+from backend.app.db import Base
 from backend.app.initialization_draft_queries import (
     compose_initialization_draft_payload,
 )
-from backend.app.project_initialization import (
-    ProjectInitializationPayload,
-    suggest_unique_username,
-    validate_initialization_payload,
+from backend.app.models import (
+    AgentConversation,
+    Project,
+    ProjectInitializationDraft,
+    User,
 )
+from backend.app.project_initialization import (
+    ApplyInitializationDraftInput,
+    ProjectInitializationPayload,
+    apply_initialization_draft,
+    suggest_unique_username,
+)
+
+
+VALIDATOR_ROOT = (
+    Path(__file__).resolve().parents[2]
+    / "mcp-packages"
+    / "project-initialization-validator"
+)
+sys.path.insert(0, str(VALIDATOR_ROOT))
+try:
+    initialization_validator = importlib.import_module(
+        "initialization_validator",
+    )
+finally:
+    sys.path.remove(str(VALIDATOR_ROOT))
+
+
+def validate_initialization_payload(
+    payload: ProjectInitializationPayload,
+) -> list[dict[str, str]]:
+    result = initialization_validator.validate_project_initialization(
+        payload.model_dump(mode="json"),
+    )
+    return result["validation_issues"]
+
+
+def test_ready_draft_can_be_applied_without_legacy_run_state() -> None:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        project = Project(name="草稿入库测试项目")
+        user = User(
+            username="apply-admin",
+            password_hash="test",
+            role="admin",
+            real_name="测试管理员",
+            identity_card_no="APPLY_TEST_ADMIN",
+        )
+        db.add_all([project, user])
+        db.flush()
+        conversation = AgentConversation(
+            project_id=project.id,
+            user_id=user.id,
+            agent_id="initializer",
+            agent_name="初始化助手",
+            conversation_type="initialization",
+            title="初始化",
+        )
+        db.add(conversation)
+        db.flush()
+        draft = ProjectInitializationDraft(
+            project_id=project.id,
+            conversation_id=conversation.id,
+            created_by_user_id=user.id,
+            status="ready",
+            payload={
+                "project": {
+                    "engineering_type_description": "测试工程",
+                },
+            },
+        )
+        db.add(draft)
+        db.flush()
+
+        result = apply_initialization_draft(
+            db,
+            draft,
+            ApplyInitializationDraftInput(allow_partial=True),
+        )
+
+        assert result["status"] == "applied"
+        assert draft.status == "applied"
+        assert draft.applied_at is not None
+        assert project.engineering_type_description == "测试工程"
 
 
 def test_review_composes_sections_and_ignores_legacy_draft_payload() -> None:

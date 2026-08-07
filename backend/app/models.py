@@ -631,6 +631,60 @@ class ProjectInitializationDraftSection(TimestampMixin, Base):
     extraction_notes: Mapped[list[str]] = mapped_column(JSON, default=list)
 
 
+class ProjectInitializationValidationRun(TimestampMixin, Base):
+    """One direct execution of the versioned initialization validator MCP."""
+
+    __tablename__ = "project_initialization_validation_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('running', 'completed', 'failed')",
+            name="ck_project_initialization_validation_runs_status",
+        ),
+        CheckConstraint(
+            "result_status IS NULL OR result_status IN ('ready', 'invalid')",
+            name="ck_project_initialization_validation_runs_result_status",
+        ),
+        Index(
+            "ix_project_initialization_validation_runs_draft",
+            "draft_id",
+            "created_at",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    draft_id: Mapped[int] = mapped_column(
+        ForeignKey("project_initialization_drafts.id", ondelete="CASCADE"),
+        index=True,
+    )
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+        index=True,
+    )
+    draft_revision: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), default="running", index=True)
+    result_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    package_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    package_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ruleset_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    validation_issues: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON,
+        default=list,
+    )
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
 class ProjectInitializationFile(TimestampMixin, Base):
     """Raw file available only to one project-initialization conversation."""
 

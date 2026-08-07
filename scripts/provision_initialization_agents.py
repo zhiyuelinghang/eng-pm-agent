@@ -56,7 +56,6 @@ def _load_team_manifest(path: Path = TEAM_CONFIG_PATH) -> dict[str, Any]:
         "wbs",
         "risks",
         "quality_requirements",
-        "validator",
     }
     roles = {
         str(item.get("initialization_role") or "")
@@ -109,8 +108,7 @@ SPECIALISTS = tuple(
     if spec.initialization_role
     in {"project", "personnel", "wbs", "risks", "quality_requirements"}
 )
-VALIDATOR = _AGENT_BY_ROLE["validator"]
-WORKERS = (*SPECIALISTS, VALIDATOR)
+WORKERS = SPECIALISTS
 PARSED_ATTACHMENT_READ_INTERACTION = next(
     key
     for key in ORCHESTRATOR.interaction_keys
@@ -444,6 +442,27 @@ def provision(base_url: str, *, replace_skills: bool = False) -> None:
         if not template_id:
             raise RuntimeError("请先在平台设置中配置全局主智能体。")
         agents = _request(client, "GET", "/agent/", token=token).get("agents") or []
+        obsolete_validator_ids = [
+            str(agent["id"])
+            for agent in agents
+            if agent.get("data", {}).get("platform_config", {}).get(
+                "initialization_role",
+            ) == "validator"
+        ]
+        for agent_id in obsolete_validator_ids:
+            _request(
+                client,
+                "DELETE",
+                f"/agent/{agent_id}",
+                token=token,
+            )
+            print(f"已移除旧核验智能体：{agent_id[:8]}")
+        if obsolete_validator_ids:
+            agents = [
+                agent
+                for agent in agents
+                if str(agent.get("id")) not in obsolete_validator_ids
+            ]
         template = next((item for item in agents if item.get("id") == template_id), None)
         if template is None:
             raise RuntimeError("平台设置指向的全局主智能体不存在。")

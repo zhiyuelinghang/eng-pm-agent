@@ -52,6 +52,7 @@ class MCPPackageManifest(BaseModel):
     platform_capabilities: list[
         Literal[
             "dobby_database_interactions",
+            "project_initialization_validation",
         ]
     ] = Field(
         default_factory=list,
@@ -95,11 +96,13 @@ class MCPPackageManifest(BaseModel):
         values: list[
             Literal[
                 "dobby_database_interactions",
+                "project_initialization_validation",
             ]
         ],
     ) -> list[
         Literal[
             "dobby_database_interactions",
+            "project_initialization_validation",
         ]
     ]:
         return list(dict.fromkeys(values))
@@ -137,6 +140,7 @@ class MCPPackageView(BaseModel):
     transport: Literal["stdio"] = "stdio"
     status: Literal["ready"] = "ready"
     tools: list[MCPPackageTool] = Field(default_factory=list)
+    platform_capabilities: list[str] = Field(default_factory=list)
     assigned: bool = False
     active_instances: int = 0
     created_at: datetime
@@ -159,6 +163,7 @@ class MCPPackageView(BaseModel):
             version=manifest.version,
             description=manifest.description,
             tools=record.tools,
+            platform_capabilities=list(manifest.platform_capabilities),
             assigned=assigned,
             active_instances=active_instances,
             created_at=record.created_at,

@@ -12,7 +12,7 @@ description: 先规划，再组织持久化专项智能体把任意格式资料�
 ## 强制顺序
 
 1. 本轮第一个业务工具调用必须是 `TaskCreate`，计划至少覆盖资料理解、实际涉及
-   的业务分区、统一核验和等待用户确认。解析器的前置执行不计入此顺序。
+   的业务分区、规则核验和等待用户确认。解析器的前置执行不计入此顺序。
 2. 按 manifest 顺序，对每个文件的第一个 chunk 读取首个文本页，以正文判断实际
    分区，不要在主智能体中重复读取全部附件。调用
    `dobby_list_project_initialization_attachment_chunks` 时显式指定 fields，并使用
@@ -33,10 +33,11 @@ description: 先规划，再组织持久化专项智能体把任意格式资料�
    落入草稿；这里只读取轻量清单，必须显式传入
    `fields=["id","section","revision","source_files","extraction_notes"]`，不得
    一次读取全部 payload。随后用 `TaskUpdate` 更新真实进度。
-6. 所需分区全部提交后邀请“初始化核验专家”，任务说明必须同时带上本轮 manifest 的
-   `file_id/chunk_id` 映射，供其在出现矛盾时回看原文。收到核验专家的持久化完成通知后，
-   立即调用 `dobby_get_project_initialization_draft` 重新读取最终状态和问题；该通知
-   已经代表核验结果落库，不要等待核验专家再发一次 `TeamSay`。草稿状态为 `ready`
+6. 所需分区全部提交后，直接调用
+   `dobby_finalize_project_initialization_draft(record_id=draft_id)`。该调用只提交草稿
+   ID；平台会组装已持久化分区并直接运行当前版本的核验 MCP，禁止你重新读取完整
+   payload、归纳问题或自行填写 ready/invalid。调用完成后立即调用
+   `dobby_get_project_initialization_draft` 读取最终状态和问题。草稿状态为 `ready`
    或 `invalid` 后，更新核验任务与最终汇总任务为完成，结束团队并向用户说明“核对
    草稿”；用户确认才会写正式业务表。
 

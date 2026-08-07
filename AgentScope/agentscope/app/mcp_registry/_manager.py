@@ -231,6 +231,29 @@ class MCPRegistryManager:
             if record.id in self.system_tool_package_ids
         ]
 
+    async def get_platform_client(
+        self,
+        package_id: str,
+        *,
+        runtime_id: str,
+    ) -> MCPClient:
+        """Return a reusable MCP client owned by a trusted platform flow.
+
+        Platform runtimes are deliberately separate from agent sessions. They
+        can execute only through narrow service routes that select both the
+        package capability and tool name; this method does not expose a
+        general-purpose MCP execution gateway.
+        """
+        record = await self.get_record(package_id)
+        if record is None:
+            raise MCPPackageError(f"MCP package {package_id!r} is not installed.")
+        return await self._get_or_start_client(
+            record,
+            user_id="platform-service",
+            agent_id="platform-service",
+            session_id=f"platform-{runtime_id}",
+        )
+
     def is_system_tool_package(self, package_id: str) -> bool:
         """Whether ``package_id`` is managed as a fixed global capability."""
         return package_id in self.system_tool_package_ids

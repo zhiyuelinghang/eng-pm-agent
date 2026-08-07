@@ -31,6 +31,11 @@ from .database_interactions import (
     update_interaction,
     update_table_policy,
 )
+from .initialization_validation import (
+    InitializationValidationError,
+    run_project_initialization_validation,
+)
+from .models import OperationLog, ProjectInitializationDraft
 from .db import get_db
 
 
@@ -207,6 +212,49 @@ def execute_interaction(
             status_code=status.HTTP_409_CONFLICT,
             detail="该数据库交互尚未完成结构化规则迁移",
         )
+    if (
+        interaction.runtime_policy or {}
+    ).get("handler") == "project_initialization_validation":
+        record_id = payload.arguments.get("record_id")
+        if not isinstance(record_id, int) or isinstance(record_id, bool):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="必须提供有效的初始化草稿 ID",
+            )
+        if set(payload.arguments) != {"record_id"}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="初始化核验只接受草稿 ID",
+            )
+        draft = db.get(ProjectInitializationDraft, record_id)
+        if (
+            draft is None
+            or draft.project_id != context.project.id
+            or draft.conversation_id != context.conversation.id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="初始化草稿不存在或不属于当前会话",
+            )
+        try:
+            result = run_project_initialization_validation(db, draft)
+        except InitializationValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+        db.add(
+            OperationLog(
+                project_id=context.project.id,
+                operator_id=context.user.id,
+                action="agent_initialization_validation",
+                detail="初始化主智能体触发版本化 MCP 核验草稿",
+                target_type="project_initialization_drafts",
+                target_id=draft.id,
+            ),
+        )
+        db.commit()
+        return ok(result, "项目初始化草稿核验完成")
     data, message = execute_table_interaction(
         db,
         context,
