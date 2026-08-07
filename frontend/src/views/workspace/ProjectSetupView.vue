@@ -26,7 +26,7 @@
       </nav>
 
       <section v-if="activeWorkspaceTab === 'agent'" class="material-agent-workspace">
-        <div class="material-agent-chat" :class="{ 'has-draft': materialAgentDraft }">
+        <div class="material-agent-chat">
           <div
             ref="materialAgentViewport"
             class="material-agent-messages"
@@ -59,7 +59,7 @@
                   v-if="item.role === 'assistant'"
                   :content="item.content"
                   :runtime-trace="item.runtimeTrace"
-                  :show-plan="false"
+                  :show-plan="true"
                   @confirm="confirmMaterialAgentToolCall"
                 />
                 <p v-else>{{ item.content }}</p>
@@ -94,7 +94,7 @@
           </div>
           <p v-if="materialAgentError" class="material-agent-error">{{ materialAgentError }}</p>
           <section
-            v-if="materialAgentDraft"
+            v-if="materialAgentDraftDockVisible && materialAgentDraft"
             class="initialization-draft-dock"
             :class="[`status-${materialAgentDraft.status}`, { collapsed: initializationDraftCollapsed }]"
             aria-label="项目初始化草稿"
@@ -162,66 +162,10 @@
               </footer>
             </div>
           </section>
-          <section
-            v-if="materialAgentExecutionPlan"
-            class="material-agent-plan-dock"
-            :class="{
-              collapsed: materialAgentPlanCollapsed,
-              completed: materialAgentPlanCompleted,
-              interrupted: materialAgentExecutionPlan.status === 'interrupted',
-            }"
-            aria-label="当前执行计划"
-          >
-            <button
-              v-if="materialAgentPlanCollapsed"
-              type="button"
-              class="material-agent-plan-collapsed"
-              aria-controls="material-agent-plan-content"
-              aria-expanded="false"
-              @click="materialAgentPlanCollapsed = false"
-            >
-              <span class="material-agent-plan-dot" aria-hidden="true"></span>
-              <strong>执行计划</strong>
-              <span>{{ materialAgentPlanCompletedCount }}/{{ materialAgentExecutionPlan.tasks.length }}</span>
-              <em>{{ materialAgentPlanCurrentLabel }}</em>
-              <n-icon :size="16" aria-hidden="true"><ChevronUp /></n-icon>
-            </button>
-            <div v-else id="material-agent-plan-content" class="material-agent-plan-content">
-              <header>
-                <div>
-                  <span class="material-agent-plan-dot" aria-hidden="true"></span>
-                  <strong>执行计划</strong>
-                  <em>{{ materialAgentPlanStatusLabel }}</em>
-                </div>
-                <button
-                  type="button"
-                  aria-controls="material-agent-plan-content"
-                  aria-expanded="true"
-                  @click="materialAgentPlanCollapsed = true"
-                >
-                  <n-icon :size="15" aria-hidden="true"><ChevronDown /></n-icon>
-                  <span>收起</span>
-                </button>
-              </header>
-              <div class="material-agent-plan-progress" aria-hidden="true">
-                <i :style="{ width: `${materialAgentPlanProgress}%` }"></i>
-              </div>
-              <ul>
-                <li
-                  v-for="task in materialAgentExecutionPlan.tasks"
-                  :key="String(task.id)"
-                  :class="task.state"
-                >
-                  <i aria-hidden="true"></i>
-                  <span>{{ task.subject }}</span>
-                  <small>
-                    <span v-if="task.owner">{{ task.owner }} · </span>
-                    {{ materialAgentTaskStateLabel(task.state) }}
-                  </small>
-                </li>
-              </ul>
-            </div>
-          </section>
+          <AgentRuntimeDock
+            v-if="materialAgentActiveRuntimeTrace"
+            :runtime-trace="materialAgentActiveRuntimeTrace"
+          />
           <form class="material-agent-composer" @submit.prevent="sendMaterialAgentMessage">
             <input ref="materialAgentFileInput" class="visually-hidden" type="file" multiple accept=".xls,.xlsx,.csv,.docx,.pptx,.pdf,.txt,.md,.png,.jpg,.jpeg,.bmp,.webp,.tif,.tiff" @change="selectMaterialAgentFiles">
             <div v-if="materialAgentFiles.length" class="material-agent-file-tray">
@@ -998,6 +942,7 @@ import {
   streamAgentConversationMessage,
 } from '@/api/agentStream'
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
+import AgentRuntimeDock from '@/components/agent/AgentRuntimeDock.vue'
 import { useAppStore, type ProjectConfigScope } from '@/stores/app'
 import type { DirConfig, Member, MemberPosition, PlatformFieldMapping, QualityMetric, RemindRule, RiskLevel, RiskSource, WbsItem } from '@/types'
 import {
@@ -1005,7 +950,6 @@ import {
   createEmptyRuntimeTrace,
   runtimeTraceFromExtraData,
   type AgentRuntimeTrace,
-  type AgentTask,
   type AgentToolCallBlock,
   type ApiAgentMessage,
 } from '@/types/agentRuntime'
@@ -1302,7 +1246,6 @@ const materialAgentConversationId = ref<number | null>(null)
 const materialAgentConversationStatus = ref('')
 const materialAgentPreparation = ref<MaterialAgentPreparation | null>(null)
 const materialAgentStreamingTrace = shallowRef<AgentRuntimeTrace | null>(null)
-const materialAgentPlanCollapsed = ref(false)
 let materialAgentStreamAbortController: AbortController | null = null
 let materialAgentConfirmAbortController: AbortController | null = null
 let materialAgentReconcileSequence = 0
@@ -1313,6 +1256,12 @@ const activeMaterialAgentStatuses = new Set([
   'interrupting',
   'awaiting_permission',
   'awaiting_external_result',
+])
+const activeCollaborationWorkStatuses = new Set([
+  'idle',
+  'queued',
+  'running',
+  'waiting',
 ])
 const materialAgentPreparationProgress = computed(() => {
   const preparation = materialAgentPreparation.value
@@ -1342,76 +1291,46 @@ const materialAgentPreparationDetail = computed(() => {
   }
   return '你的消息已经进入对话，正在准备本次初始化任务。'
 })
-const materialAgentExecutionPlan = computed(() => {
-  if (materialAgentStreamingTrace.value) {
-    const tasks = materialAgentStreamingTrace.value.tasksContext?.tasks || []
-    return tasks.length
-      ? { tasks, status: materialAgentStreamingTrace.value.status }
-      : null
-  }
-  const latestAssistant = [...materialAgentMessages.value]
-    .reverse()
-    .find(item => item.role === 'assistant')
-  const tasks = latestAssistant?.runtimeTrace?.tasksContext?.tasks || []
-  return tasks.length
-    ? {
-        tasks,
-        status: latestAssistant?.runtimeTrace?.status || 'completed',
-      }
-    : null
-})
-const materialAgentPlanCompletedCount = computed(() => (
-  materialAgentExecutionPlan.value?.tasks.filter(
-    task => task.state === 'completed' || task.state === 'skipped',
-  ).length || 0
-))
-const materialAgentPlanCompleted = computed(() => {
-  const plan = materialAgentExecutionPlan.value
-  return Boolean(
-    plan?.tasks.length
-    && materialAgentPlanCompletedCount.value === plan.tasks.length,
-  )
-})
-const materialAgentPlanProgress = computed(() => {
-  const total = materialAgentExecutionPlan.value?.tasks.length || 0
-  return total
-    ? Math.round(materialAgentPlanCompletedCount.value * 100 / total)
-    : 0
-})
-const materialAgentPlanCurrentLabel = computed(() => {
-  const plan = materialAgentExecutionPlan.value
-  if (!plan) return ''
-  const current = plan.tasks.find(task => task.state === 'in_progress')
-  if (current) return current.subject
-  if (materialAgentPlanCompleted.value) return '全部完成'
-  if (plan.status === 'interrupted') return '已停止'
-  return plan.tasks.find(
-    task => task.state !== 'completed' && task.state !== 'skipped',
-  )?.subject || ''
-})
-const materialAgentPlanStatusLabel = computed(() => {
-  const plan = materialAgentExecutionPlan.value
-  if (!plan) return ''
-  if (materialAgentPlanCompleted.value) return '已完成'
-  if (plan.status === 'interrupted') return '已停止'
-  if (plan.status === 'error') return '异常结束'
-  if (plan.tasks.some(
-    task => task.id === 'await_confirmation' && task.state === 'in_progress',
-  )) return '等待确认'
-  if (activeMaterialAgentStatuses.has(plan.status)) return '执行中'
-  return '待继续'
-})
-
-function materialAgentTaskStateLabel(state: AgentTask['state']) {
-  return ({
-    pending: '待处理',
-    in_progress: '进行中',
-    completed: '已完成',
-    skipped: '已跳过',
-    failed: '执行失败',
-  } as Record<string, string>)[state] || state
-}
 const materialAgentDraft = ref<ApiInitializationDraft | null>(null)
+const materialAgentActiveRuntimeTrace = computed<AgentRuntimeTrace | null>(() => {
+  if (
+    materialAgentDraft.value
+    && ['ready', 'invalid'].includes(materialAgentDraft.value.status)
+  ) {
+    return null
+  }
+  const latestAssistantTrace = [...materialAgentMessages.value]
+    .reverse()
+    .find(item => item.role === 'assistant' && item.runtimeTrace)
+    ?.runtimeTrace || null
+  const trace = materialAgentStreamingTrace.value || latestAssistantTrace
+  return trace && materialAgentTraceHasActiveRuntime(trace) ? trace : null
+})
+const materialAgentDraftDockVisible = computed(() => Boolean(
+  materialAgentDraft.value
+  && !['applied', 'rejected'].includes(materialAgentDraft.value.status)
+  && !materialAgentActiveRuntimeTrace.value
+))
+
+function materialAgentTraceHasActiveRuntime(trace: AgentRuntimeTrace) {
+  if (!activeMaterialAgentStatuses.has(trace.status)) return false
+  const hasActivePlan = (trace.tasksContext?.tasks || []).some(
+    task => task.state === 'pending' || task.state === 'in_progress',
+  )
+  const hasActiveCollaboration = trace.collaborations.some(member => {
+    const status = member.work_status === 'reported'
+      ? 'completed'
+      : (
+          ['idle', 'queued'].includes(member.work_status)
+          && member.current_activity?.state === 'running'
+            ? 'running'
+            : member.work_status
+        )
+    return activeCollaborationWorkStatuses.has(status)
+  })
+  return hasActivePlan || hasActiveCollaboration
+}
+
 const initializationDraftCollapsed = ref(false)
 const initializationDraftReviewOpen = ref(false)
 const collapsedInitializationWbsCodes = ref<Set<string>>(new Set())
@@ -2480,7 +2399,6 @@ watch(configProjectId, projectId => {
   materialAgentPreparation.value = null
   materialAgentStreamingTrace.value = null
   materialAgentFollowOutput.value = true
-  materialAgentPlanCollapsed.value = false
   materialAgentDraft.value = null
   initializationDraftCollapsed.value = false
   initializationDraftReviewOpen.value = false
@@ -2501,19 +2419,6 @@ watch(configProjectId, projectId => {
   void loadMaterialAgentConversation(projectId)
   void loadInitializationDraft(projectId)
 }, { immediate: true })
-
-watch(
-  () => (
-    materialAgentExecutionPlan.value?.tasks
-      .map(task => String(task.id))
-      .join('|') || ''
-  ),
-  (signature, previousSignature) => {
-    if (signature && signature !== previousSignature) {
-      materialAgentPlanCollapsed.value = false
-    }
-  },
-)
 
 watch(() => store.projectSetupRefreshVersion, () => {
   if (!configProjectId.value) return
@@ -3555,6 +3460,7 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .project-config-scroll > .manual-config-workspace { flex:1 1 auto; min-height:0; }
 .project-config-scroll > .material-agent-workspace { display:grid; flex:1 1 auto; min-height:0; grid-template-rows:auto auto minmax(0,1fr); gap:10px; padding:14px 18px; }.material-agent-head { min-height:0; }.material-agent-head h2 { margin-bottom:3px; font-size:16px; }.material-agent-head p { max-width:none; font-size:12px; line-height:1.45; }.agent-context-summary { gap:0; overflow:hidden; border:1px solid #e0ebe8; border-radius:7px; background:#f8fbfa; }.agent-context-summary article { display:flex; align-items:baseline; gap:7px; min-width:0; padding:9px 13px; border:0; border-right:1px solid #e0ebe8; border-radius:0; background:transparent; }.agent-context-summary article:last-child { border-right:0; }.agent-context-summary span { flex:0 1 auto; overflow:hidden; color:#69847f; font-size: 12px; text-overflow:ellipsis; white-space:nowrap; }.agent-context-summary strong { flex:0 0 auto; margin:0; color:#1b4943; font-size:19px; font-variant-numeric:tabular-nums; }.agent-context-summary small { overflow:hidden; color:#7b918c; font-size: 12px; text-overflow:ellipsis; white-space:nowrap; }.material-agent-chat { min-height:0; height:100%; grid-template-rows:minmax(200px,1fr) auto auto; }.material-agent-chat.has-draft { grid-template-rows:minmax(200px,1fr) auto auto auto; }
 .project-config-scroll > .material-agent-workspace { grid-template-rows:minmax(0,1fr); gap:0; }
+.material-agent-chat { grid-template-rows:minmax(200px,1fr); grid-auto-rows:auto; }
 .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); white-space:nowrap; }
 .material-agent-messages.empty { place-content:center; }
 .material-agent-history-loading { display:grid; place-items:center; gap:7px; margin:auto; padding:24px; color:#5f7873; text-align:center; }
@@ -3632,43 +3538,6 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .initialization-draft-collapsed:hover { color:#174f47; background:#edf6f3; }
 .initialization-draft-collapsed strong { flex:1 1 auto; font-size:12px; font-weight:800; }
 .initialization-draft-collapsed .n-icon { flex:0 0 auto; color:#67807a; }
-.material-agent-plan-dock { position:relative; z-index:2; min-width:0; border-top:1px solid #d8e5e2; background:#f8fbfa; box-shadow:inset 3px 0 #32877a; }
-.material-agent-plan-dock.completed { box-shadow:inset 3px 0 #4c8a68; }
-.material-agent-plan-dock.interrupted { box-shadow:inset 3px 0 #b7792e; }
-.material-agent-plan-dock.collapsed { box-shadow:none; }
-.material-agent-plan-content { display:grid; gap:8px; padding:10px 13px 10px 16px; }
-.material-agent-plan-content > header { display:flex; min-width:0; align-items:center; justify-content:space-between; gap:14px; }
-.material-agent-plan-content > header > div { display:flex; min-width:0; align-items:center; gap:8px; }
-.material-agent-plan-content > header strong { color:#254f49; font-size:13px; }
-.material-agent-plan-content > header em { border-radius:999px; padding:3px 7px; color:#287267; background:#e3f1ed; font-size:12px; font-style:normal; font-weight:750; }
-.material-agent-plan-dock.completed .material-agent-plan-content > header em { color:#347153; background:#e6f2e9; }
-.material-agent-plan-dock.interrupted .material-agent-plan-content > header em { color:#895a1f; background:#fff1dc; }
-.material-agent-plan-content > header button { display:inline-flex; min-height:30px; align-items:center; gap:4px; border:0; border-radius:5px; padding:5px 8px; color:#657d78; background:transparent; font:inherit; font-size:12px; font-weight:700; cursor:pointer; }
-.material-agent-plan-content > header button:hover { color:#275c54; background:#e7f1ee; }
-.material-agent-plan-dot { display:block; flex:0 0 auto; width:7px; height:7px; border-radius:50%; background:#238b7b; box-shadow:0 0 0 3px rgba(35,139,123,.11); }
-.material-agent-plan-dock.completed .material-agent-plan-dot { background:#4c8a68; box-shadow:0 0 0 3px rgba(76,138,104,.11); }
-.material-agent-plan-dock.interrupted .material-agent-plan-dot { background:#b7792e; box-shadow:0 0 0 3px rgba(183,121,46,.11); }
-.material-agent-plan-progress { height:4px; overflow:hidden; border-radius:999px; background:#dfeae7; }
-.material-agent-plan-progress i { display:block; height:100%; border-radius:inherit; background:#238b7b; transition:width .2s ease; }
-.material-agent-plan-content ul { display:grid; max-height:142px; gap:4px; margin:0; padding:0; overflow-y:auto; list-style:none; }
-.material-agent-plan-content li { display:grid; min-width:0; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px; border-radius:5px; padding:5px 7px; color:#5f7772; background:rgba(255,255,255,.68); font-size:12px; line-height:1.45; }
-.material-agent-plan-content li > i { width:8px; height:8px; border:2px solid #9bb5af; border-radius:50%; }
-.material-agent-plan-content li.in_progress > i { border-color:#238b7b; border-top-color:transparent; animation:material-agent-history-spin .8s linear infinite; }
-.material-agent-plan-content li.completed > i { border-color:#4c8a68; background:#4c8a68; box-shadow:inset 0 0 0 2px #fff; }
-.material-agent-plan-content li.skipped > i { border-color:#91a49f; background:#91a49f; box-shadow:inset 0 0 0 2px #fff; }
-.material-agent-plan-content li.failed > i { border-color:#c85829; background:#c85829; box-shadow:inset 0 0 0 2px #fff; }
-.material-agent-plan-content li > span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.material-agent-plan-content li > small { color:#81928e; font-size:12px; white-space:nowrap; }
-.material-agent-plan-content li.completed > span { color:#83948f; text-decoration:line-through; }
-.material-agent-plan-content li.skipped > span { color:#83948f; text-decoration:line-through; }
-.material-agent-plan-content li.failed > span,.material-agent-plan-content li.failed > small { color:#a34420; }
-.material-agent-plan-collapsed { display:grid; width:100%; min-height:40px; grid-template-columns:auto auto auto minmax(0,1fr) auto; align-items:center; gap:9px; border:0; padding:0 14px 0 16px; color:#2d5b54; background:#f8fbfa; font:inherit; text-align:left; cursor:pointer; }
-.material-agent-plan-collapsed:hover { color:#174f47; background:#eef6f3; }
-.material-agent-plan-collapsed strong { font-size:12px; }
-.material-agent-plan-collapsed > span:not(.material-agent-plan-dot) { color:#68807b; font-size:12px; font-variant-numeric:tabular-nums; }
-.material-agent-plan-collapsed em { overflow:hidden; color:#6e817d; font-size:12px; font-style:normal; text-overflow:ellipsis; white-space:nowrap; }
-.material-agent-plan-collapsed .n-icon { color:#67807a; }
-.material-agent-plan-content > header button:focus-visible,.material-agent-plan-collapsed:focus-visible { outline:2px solid rgba(15,118,110,.26); outline-offset:-2px; }
 .initialization-review-backdrop { z-index:36; }.initialization-review-modal { display:grid; width:min(100%,1380px); max-height:calc(100dvh - 48px); grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; padding:0; font-size:12px; }
 .initialization-review-modal > .setup-modal-head { margin:0; padding:18px 20px 14px; border-bottom:1px solid var(--border-default); }
 .initialization-review-body { display:flex; min-height:0; flex-direction:column; gap:13px; overflow-y:auto; padding:16px 20px; background:#fbfcfc; }

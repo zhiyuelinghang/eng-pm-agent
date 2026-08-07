@@ -1,26 +1,29 @@
 <template>
   <div class="agent-message-content">
-    <section v-if="showPlan && runtimeTrace?.tasksContext?.tasks?.length" class="agent-plan">
-      <header>
+    <details v-if="showPlan && runtimeTrace?.tasksContext?.tasks?.length" class="agent-plan">
+      <summary>
         <span><n-icon :size="15"><ListCheck /></n-icon>执行计划</span>
         <strong>{{ completedTasks }}/{{ runtimeTrace.tasksContext.tasks.length }}</strong>
-      </header>
-      <div class="agent-plan-track"><i :style="{ width: `${taskProgress}%` }"></i></div>
-      <ul>
-        <li
-          v-for="task in runtimeTrace.tasksContext.tasks"
-          :key="String(task.id)"
-          :class="task.state"
-        >
-          <n-icon :size="14">
-            <CircleCheck v-if="task.state === 'completed'" />
-            <Loader v-else-if="task.state === 'in_progress'" class="spin" />
-            <Circle v-else />
-          </n-icon>
-          <span>{{ task.subject }}</span>
-        </li>
-      </ul>
-    </section>
+        <n-icon class="agent-plan-chevron" :size="15" aria-hidden="true"><ChevronRight /></n-icon>
+      </summary>
+      <div class="agent-plan-body">
+        <div class="agent-plan-track"><i :style="{ width: `${taskProgress}%` }"></i></div>
+        <ul>
+          <li
+            v-for="task in runtimeTrace.tasksContext.tasks"
+            :key="String(task.id)"
+            :class="task.state"
+          >
+            <n-icon :size="14">
+              <CircleCheck v-if="['completed', 'skipped'].includes(task.state)" />
+              <Loader v-else-if="task.state === 'in_progress'" class="spin" />
+              <Circle v-else />
+            </n-icon>
+            <span>{{ task.subject }}</span>
+          </li>
+        </ul>
+      </div>
+    </details>
 
     <section v-if="runtimeTrace?.subagentHitl.length && isTraceActive" class="agent-subagent-hitl">
       <header>
@@ -47,7 +50,7 @@
           <summary>
             <span class="agent-tool-icon"><n-icon :size="15"><Tool /></n-icon></span>
             <span class="agent-tool-title">
-              <strong>{{ toolLabel(toolCall.name) }}</strong>
+              <strong>{{ agentToolLabel(toolCall.name) }}</strong>
               <small>{{ toolCall.name }}</small>
             </span>
             <em class="state-asking">等待确认</em>
@@ -148,7 +151,7 @@
                     <ol v-if="member.activities.length">
                       <li v-for="(activity, index) in member.activities" :key="`${activity.created_at}-${index}`">
                         <i :class="activity.state"></i>
-                        <span>{{ collaborationActivityLabel(activity) }}</span>
+                        <span>{{ agentCollaborationActivityLabel(activity) }}</span>
                         <time>{{ shortTime(activity.created_at) }}</time>
                       </li>
                     </ol>
@@ -182,7 +185,7 @@
             <summary>
               <span class="agent-tool-icon"><n-icon :size="15"><Tool /></n-icon></span>
               <span class="agent-tool-title">
-                <strong>{{ toolLabel(block.name) }}</strong>
+                <strong>{{ agentToolLabel(block.name) }}</strong>
                 <small>{{ block.name }}</small>
               </span>
               <em :class="`state-${toolState(block, runtimeMessage)}`">
@@ -305,6 +308,10 @@ import type {
   AgentToolCallBlock,
   AgentToolResultBlock,
 } from '@/types/agentRuntime'
+import {
+  agentCollaborationActivityLabel,
+  agentToolLabel,
+} from '@/utils/agentRuntimeLabels'
 
 type CollaborationCardMember = {
   callId: string
@@ -364,7 +371,9 @@ onBeforeUnmount(() => {
 })
 
 const completedTasks = computed(() =>
-  props.runtimeTrace?.tasksContext?.tasks.filter(task => task.state === 'completed').length || 0,
+  props.runtimeTrace?.tasksContext?.tasks.filter(
+    task => ['completed', 'skipped'].includes(task.state),
+  ).length || 0,
 )
 const taskProgress = computed(() => {
   const total = props.runtimeTrace?.tasksContext?.tasks.length || 0
@@ -488,11 +497,12 @@ function collaborationMembers(message: AgentRuntimeMessage): CollaborationCardMe
     const metadata = inviteMetadata(message, call.id)
     const progress = collaborationProgress(message, call, input.target)
     const status = collaborationMemberStatus(message, call, progress)
-    const active = ['idle', 'queued', 'running', 'inviting'].includes(status)
+    const active = ['idle', 'queued', 'running', 'waiting', 'inviting'].includes(status)
     const statusLabels: Record<string, string> = {
       idle: '等待启动',
       queued: '排队中',
       running: '执行中',
+      waiting: '等待中',
       inviting: '邀请中',
       reported: '已反馈',
       completed: '已完成',
@@ -511,7 +521,7 @@ function collaborationMembers(message: AgentRuntimeMessage): CollaborationCardMe
       statusLabel: statusLabels[status] || status,
       active,
       currentLabel: progress?.current_activity
-        ? collaborationActivityLabel(progress.current_activity)
+        ? agentCollaborationActivityLabel(progress.current_activity)
         : active
           ? '正在建立协作会话'
           : statusLabels[status] || status,
@@ -586,15 +596,6 @@ function toggleCollaborationMember(message: AgentRuntimeMessage, callId: string)
   }
 }
 
-function collaborationActivityLabel(activity: AgentCollaborationActivity) {
-  if (!activity.tool_name) return activity.label
-  const action = toolLabel(activity.tool_name)
-  if (activity.state === 'running') return `${action}执行中`
-  if (activity.state === 'success') return `${action}已完成`
-  if (activity.state === 'error') return `${action}失败`
-  return action
-}
-
 function collaborationMemberElapsed(member: CollaborationCardMember) {
   const rawStart = member.startedAt || member.assignedAt
   if (!rawStart) return ''
@@ -643,49 +644,6 @@ function toolStateLabel(call: AgentToolCallBlock, message: AgentRuntimeMessage) 
     interrupted: '已中断',
     finished: '已结束',
   } as Record<string, string>)[state] || state
-}
-
-function toolLabel(name: string) {
-  const labels: Record<string, string> = {
-    AgentInvite: '邀请协同智能体',
-    AgentCreate: '创建协同智能体',
-    TeamCreate: '创建智能体团队',
-    TeamSay: '发送团队消息',
-    TeamDelete: '结束智能体团队',
-    TaskCreate: '创建执行计划',
-    TaskUpdate: '更新执行进度',
-    TaskList: '读取执行计划',
-    Bash: '执行命令',
-    Read: '读取文件',
-    Write: '写入文件',
-    Edit: '修改文件',
-    Grep: '检索内容',
-    Glob: '查找文件',
-  }
-  if (labels[name]) return labels[name]
-  const databaseLabels: Array<[RegExp, string]> = [
-    [/get_project_initialization_state/i, '读取初始化状态'],
-    [/list_project_initialization_attachment_chunks/i, '读取附件解析分块'],
-    [/get_project_initialization_draft/i, '读取初始化草稿'],
-    [/list_project_initialization_sections/i, '读取草稿分区'],
-    [/create_project_initialization_draft/i, '创建初始化草稿'],
-    [/finalize_project_initialization_draft/i, '核验初始化草稿'],
-    [/create_initialization_project_section/i, '提交工程信息草稿'],
-    [/update_initialization_project_section/i, '更新工程信息草稿'],
-    [/create_initialization_personnel_section/i, '提交人员岗位草稿'],
-    [/update_initialization_personnel_section/i, '更新人员岗位草稿'],
-    [/create_initialization_wbs_section/i, '提交 WBS 进度草稿'],
-    [/update_initialization_wbs_section/i, '更新 WBS 进度草稿'],
-    [/create_initialization_risks_section/i, '提交风险源草稿'],
-    [/update_initialization_risks_section/i, '更新风险源草稿'],
-    [/create_initialization_quality_section/i, '提交质量指标草稿'],
-    [/update_initialization_quality_section/i, '更新质量指标草稿'],
-  ]
-  const databaseLabel = databaseLabels.find(([pattern]) => pattern.test(name))
-  if (databaseLabel) return databaseLabel[1]
-  if (/knowledge|retriev|search/i.test(name)) return '检索知识库'
-  if (name.startsWith('mcp__')) return '调用 MCP 工具'
-  return '调用工具'
 }
 
 function formatJson(value: string) {
@@ -802,12 +760,17 @@ function formatNumber(value: number) {
 .agent-markdown :deep(a) { color:#0b766b; text-decoration:underline; text-underline-offset:2px; }
 .agent-runtime-message { display:grid; gap:10px; min-width:0; }
 .agent-runtime-message + .agent-runtime-message { margin-top:4px; border-top:1px dashed #d9e6e2; padding-top:12px; }
-.agent-plan { display:grid; gap:8px; border:1px solid #d8e7e3; border-radius:8px; padding:11px 12px; background:#f6faf9; }
-.agent-plan header { display:flex; align-items:center; justify-content:space-between; color:#315c56; font-size:12px; }
-.agent-plan header span { display:flex; align-items:center; gap:6px; font-weight:800; }.agent-plan header strong { font-size:12px; }
+.agent-plan { overflow:hidden; border:1px solid #d8e7e3; border-radius:8px; background:#f6faf9; }
+.agent-plan summary { display:grid; min-height:40px; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:8px; padding:8px 11px; color:#315c56; font-size:12px; list-style:none; cursor:pointer; transition:background .16s ease,color .16s ease; }
+.agent-plan summary::-webkit-details-marker { display:none; }
+.agent-plan summary:hover { color:#174f47; background:#edf6f3; }
+.agent-plan summary:focus-visible { outline:2px solid rgba(15,118,110,.26); outline-offset:-2px; }
+.agent-plan summary span { display:flex; min-width:0; align-items:center; gap:6px; font-weight:800; }.agent-plan summary strong { font-size:12px; font-variant-numeric:tabular-nums; }
+.agent-plan-chevron { color:#68807b; transition:transform .16s ease; }.agent-plan[open] .agent-plan-chevron { transform:rotate(90deg); }
+.agent-plan-body { display:grid; gap:8px; border-top:1px solid #dfe9e6; padding:9px 11px 10px; }
 .agent-plan-track { height:4px; overflow:hidden; border-radius:99px; background:#dce9e6; }.agent-plan-track i { display:block; height:100%; border-radius:inherit; background:#0e8b79; transition:width .2s; }
 .agent-plan ul { display:grid; gap:5px; max-height:150px; margin:0; padding:0; overflow:auto; list-style:none; }
-.agent-plan li { display:flex; align-items:flex-start; gap:7px; color:#647d78; font-size:12px; line-height:1.45; }.agent-plan li.completed { opacity:.65; }.agent-plan li.completed span { text-decoration:line-through; }
+.agent-plan li { display:flex; align-items:flex-start; gap:7px; color:#647d78; font-size:12px; line-height:1.45; }.agent-plan li.completed,.agent-plan li.skipped { opacity:.65; }.agent-plan li.completed span,.agent-plan li.skipped span { text-decoration:line-through; }
 .agent-subagent-hitl { display:grid; gap:9px; border:1px solid #e6c77e; border-radius:9px; padding:10px; background:#fffaf0; }
 .agent-subagent-hitl>header { display:flex; align-items:flex-start; gap:8px; color:#875c13; }.agent-subagent-hitl>header>div { display:grid; gap:2px; }.agent-subagent-hitl>header strong { font-size:12px; }.agent-subagent-hitl>header span { color:#967743; font-size:12px; line-height:1.45; }
 .agent-subagent-hitl>article { display:grid; gap:6px; }.agent-subagent-name { display:flex; align-items:center; gap:7px; color:#654b20; }.agent-subagent-name span { font-size:12px; font-weight:800; }.agent-subagent-name small { border-radius:999px; padding:2px 6px; color:#886a35; background:#f8ebcf; font-size:12px; }
