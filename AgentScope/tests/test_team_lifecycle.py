@@ -1,11 +1,13 @@
 """Regression tests for durable asynchronous team lifecycle state."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
 from agentscope.app._team_lifecycle import (
+    add_and_assign_team_member,
     assign_team_member,
     mark_team_leader_completed,
     mark_team_leader_running,
@@ -22,6 +24,17 @@ class _Bus:
     async def acquire_lock(self, _key: str, *, ttl_secs: int = 600):
         del ttl_secs
         yield
+
+
+class _LockedBus:
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def acquire_lock(self, _key: str, *, ttl_secs: int = 600):
+        del ttl_secs
+        async with self.lock:
+            yield
 
 
 class _Storage:
@@ -70,6 +83,51 @@ class TeamLifecycleTest(IsolatedAsyncioTestCase):
         member = self.storage.team.data.members[0]
         self.assertEqual(member.work_status, "queued")
         self.assertTrue(team_work_is_pending(self.storage.team))
+
+    async def test_parallel_member_additions_keep_the_complete_roster(
+        self,
+    ) -> None:
+        empty_team = self.team.model_copy(deep=True)
+        empty_team.data.members = []
+        empty_team.data.member_ids = []
+        storage = _Storage(empty_team)
+        bus = _LockedBus()
+        first = TeamMember(
+            owner_id="default",
+            agent_id="first-agent",
+            session_id="first-session",
+            role="invited",
+        )
+        second = TeamMember(
+            owner_id="default",
+            agent_id="second-agent",
+            session_id="second-session",
+            role="invited",
+        )
+
+        revisions = await asyncio.gather(
+            add_and_assign_team_member(
+                storage,
+                bus,
+                user_id="default",
+                team_id="team-1",
+                member=first,
+            ),
+            add_and_assign_team_member(
+                storage,
+                bus,
+                user_id="default",
+                team_id="team-1",
+                member=second,
+            ),
+        )
+
+        self.assertEqual(set(revisions), {1, 2})
+        self.assertEqual(
+            {member.agent_id for member in storage.team.data.members},
+            {"first-agent", "second-agent"},
+        )
+        self.assertTrue(team_work_is_pending(storage.team))
 
     async def test_team_finishes_only_after_worker_and_leader_settle(self) -> None:
         revision = await assign_team_member(

@@ -11,7 +11,7 @@ from pydantic import Field
 from ._team_tool_base import _TeamToolBase
 from .._platform_permissions import apply_platform_tool_allow_rules
 from .._types import SubAgentTemplate
-from .._team_lifecycle import assign_team_member
+from .._team_lifecycle import add_and_assign_team_member
 from ..message_bus import MessageBusKeys
 from .._bus_ops import enqueue_run_trigger
 from ..storage import AgentData, AgentRecord, SessionConfig, TeamMember
@@ -521,45 +521,31 @@ optional):
                 state=worker_state,
                 source=leader_session.source,
             )
-            await self._storage.set_session_team_id(
-                self._user_id,
-                worker_session.id,
-                team.id,
-            )
-
-            # 3. Append worker to the team roster. Write both the
-            #    legacy ``member_ids`` (for backwards-compatible
-            #    readers) and the new ``members`` entry with
-            #    ``role="created"`` — the two must stay in sync so
-            #    ``ensure_team_members`` and any legacy reader agree
-            #    on membership. ``members`` above was materialised via
-            #    the same helper, so it includes any prior migration.
-            team.data.member_ids = [
-                *team.data.member_ids,
-                worker_agent.id,
-            ]
-            team.data.members = [
-                *members,
-                TeamMember(
+            # 3. Append the worker and record its first assignment under one
+            #    lifecycle lock. Parallel AgentCreate calls must not overwrite
+            #    each other's whole-team roster snapshots.
+            assigned_revision = await add_and_assign_team_member(
+                self._storage,
+                self._message_bus,
+                user_id=self._user_id,
+                team_id=team.id,
+                member=TeamMember(
                     owner_id=self._user_id,
                     agent_id=worker_agent.id,
                     session_id=worker_session.id,
                     role="created",
                 ),
-            ]
-            await self._storage.upsert_team(self._user_id, team)
-            assigned_revision = await assign_team_member(
-                self._storage,
-                self._message_bus,
-                user_id=self._user_id,
-                team_id=team.id,
-                member_session_id=worker_session.id,
             )
             if assigned_revision is None:
                 raise RuntimeError(
-                    "created member disappeared before its initial "
+                    "team membership changed before the initial created "
                     "assignment could be recorded",
                 )
+            await self._storage.set_session_team_id(
+                self._user_id,
+                worker_session.id,
+                team.id,
+            )
 
             # 4. Deliver the initial task to the worker's inbox + wakeup.
             hint = HintBlock(

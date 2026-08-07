@@ -331,6 +331,20 @@ def _find_managed_agent(
     return matches[0] if matches else None
 
 
+def _initialization_react_config(
+    current: dict[str, Any] | None,
+    template: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Keep administrator settings while reserving enough tool iterations."""
+    config = dict(current or template or {})
+    config["max_iters"] = max(int(config.get("max_iters") or 0), 80)
+    config["structured_output_grace_iters"] = max(
+        int(config.get("structured_output_grace_iters") or 0),
+        5,
+    )
+    return config
+
+
 def _upsert_agent(
     client: httpx.Client,
     *,
@@ -354,6 +368,10 @@ def _upsert_agent(
     )
     payload = {
         "system_prompt": _system_prompt(spec),
+        "react_config": _initialization_react_config(
+            data.get("react_config"),
+            template_data.get("react_config"),
+        ),
         "model_policy": _model_policy(template_policy, spec),
         "platform_config": _platform_config(data.get("platform_config"), spec),
         "invite_config": invite,
@@ -385,7 +403,6 @@ def _upsert_agent(
                 "name": spec.name,
                 **payload,
                 "context_config": template_data.get("context_config") or {},
-                "react_config": template_data.get("react_config") or {},
             },
         )
         agent_id = str(created["agent_id"])

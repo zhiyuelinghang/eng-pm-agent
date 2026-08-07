@@ -25,6 +25,24 @@ MemberTerminalStatus = Literal[
 ]
 
 
+def _prepare_member_assignment(
+    team: "TeamRecord",
+    member: "TeamMember",
+) -> int:
+    """Advance one member to a fresh queued assignment in memory."""
+    team.data.work_revision += 1
+    member.work_revision = team.data.work_revision
+    if member.active_revision <= member.settled_revision:
+        member.active_revision = 0
+        member.work_status = "queued"
+        member.started_at = None
+    member.assigned_at = datetime.now(UTC)
+    member.settled_at = None
+    member.last_reply_id = None
+    member.last_error = None
+    return member.work_revision
+
+
 def team_work_is_pending(team: "TeamRecord") -> bool:
     """Return whether a team still owes member work or a leader summary."""
     if any(
@@ -65,18 +83,53 @@ async def assign_team_member(
         )
         if member is None:
             return None
-        team.data.work_revision += 1
-        member.work_revision = team.data.work_revision
-        if member.active_revision <= member.settled_revision:
-            member.active_revision = 0
-            member.work_status = "queued"
-            member.started_at = None
-        member.assigned_at = datetime.now(UTC)
-        member.settled_at = None
-        member.last_reply_id = None
-        member.last_error = None
+        revision = _prepare_member_assignment(team, member)
         await storage.upsert_team(user_id, team)
-        return member.work_revision
+        return revision
+
+
+async def add_and_assign_team_member(
+    storage: "StorageBase",
+    message_bus: "MessageBus",
+    *,
+    user_id: str,
+    team_id: str,
+    member: "TeamMember",
+) -> int | None:
+    """Atomically append a new member and record its first assignment.
+
+    Several ``AgentInvite`` calls can run in parallel in one model turn.  A
+    stale read followed by a whole-team upsert would otherwise let the last
+    invite overwrite members appended by the other calls.  Membership and
+    the first work revision therefore share the team lifecycle lock.
+    """
+    async with message_bus.acquire_lock(
+        MessageBusKeys.team_lifecycle_lock(team_id),
+        ttl_secs=30,
+    ):
+        team = await storage.get_team(user_id, team_id)
+        if team is None:
+            return None
+        members = await _ensure_team_members(storage, user_id, team)
+        if any(
+            item.agent_id == member.agent_id
+            or item.session_id == member.session_id
+            for item in members
+        ):
+            return None
+
+        assigned = member.model_copy(deep=True)
+        revision = _prepare_member_assignment(team, assigned)
+        team.data.members = [*members, assigned]
+        if assigned.role == "created" and assigned.agent_id not in (
+            team.data.member_ids
+        ):
+            team.data.member_ids = [
+                *team.data.member_ids,
+                assigned.agent_id,
+            ]
+        await storage.upsert_team(user_id, team)
+        return revision
 
 
 async def mark_team_member_running(

@@ -45,6 +45,7 @@ from .._service import (
     PermissionReviewService,
     ResourceAccessService,
     ChatService,
+    CollaborationProgressProjector,
     SessionService,
     SessionProjection,
     SubagentHitlProjector,
@@ -999,6 +1000,23 @@ async def stream_session_events(
                 ensure_ascii=False,
             )
 
+            yield f"data: {data}\n\n"
+
+        # 1c. Replay the durable, safe progress snapshot for every team
+        #     member. Unlike the HITL feed this is observational, so no
+        #     reconciliation or user action is required on reconnect.
+        for payload in await projection.list(
+            session_id,
+            CollaborationProgressProjector.KIND,
+        ):
+            custom = CustomEvent(
+                name=CollaborationProgressProjector.EVT_UPDATE,
+                value=payload,
+            )
+            data = json.dumps(
+                custom.model_dump(mode="json"),
+                ensure_ascii=False,
+            )
             yield f"data: {data}\n\n"
 
         # 2. Live subscribe via a background feeder task that pushes

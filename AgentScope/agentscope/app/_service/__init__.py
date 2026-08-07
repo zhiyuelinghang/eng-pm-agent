@@ -35,7 +35,7 @@ from ._model import get_model, resolve_effective_chat_model_config
 from ._tts_model import get_tts_model
 from ._session import SessionService, SessionStatus
 from ._session_projection import SessionProjection
-from ._projectors import SubagentHitlProjector
+from ._projectors import CollaborationProgressProjector, SubagentHitlProjector
 from ._toolkit import get_toolkit
 
 __all__ = [
@@ -58,6 +58,7 @@ __all__ = [
     "SessionService",
     "SessionStatus",
     "SessionProjection",
+    "CollaborationProgressProjector",
     "SubagentHitlProjector",
     "ModelDiscoveryError",
     "build_credential_embedding_model_catalog",

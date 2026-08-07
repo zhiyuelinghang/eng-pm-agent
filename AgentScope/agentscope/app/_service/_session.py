@@ -53,7 +53,7 @@ from ..mcp_registry import MCPRegistryManager
 from ..storage import StorageBase
 from ..storage._utils import _ensure_team_members
 from ._session_projection import SessionProjection
-from ._projectors import SubagentHitlProjector
+from ._projectors import CollaborationProgressProjector, SubagentHitlProjector
 from ..._logging import logger
 from ...message import ToolCallState
 
@@ -375,9 +375,9 @@ class SessionService:
         )
         all_sids = [session_id, *worker_sids]
 
-        # Clean leader-side subagent HITL projections before storage
+        # Clean leader-side team projections before storage
         # cascades remove the records we need to resolve roles from.
-        await self._purge_subagent_hitl(user_id, agent_id, session_id)
+        await self._purge_team_projections(user_id, agent_id, session_id)
 
         await self._cancel_runs(all_sids)
         if self._mcp_registry_manager is not None:
@@ -638,14 +638,13 @@ class SessionService:
             MessageBusKeys.bg_tasks(session_id),
         )
 
-    async def _purge_subagent_hitl(
+    async def _purge_team_projections(
         self,
         user_id: str,
         agent_id: str,
         session_id: str,
     ) -> None:
-        """Clean leader-side subagent HITL projections for a session
-        about to be deleted (design §3.7).
+        """Clean leader-side team projections for a deleted session.
 
         Two cases, resolved from the session's role:
 
@@ -656,9 +655,8 @@ class SessionService:
           hash, leaving sibling members' cards intact.
 
         Must run before storage cascades remove the team / session
-        records this resolution depends on. Failures are swallowed — a
-        stale projection is self-healed by reconcile-on-read and must
-        not block the delete cascade.
+        records this resolution depends on. Failures are swallowed so
+        presentation cleanup can never block the delete cascade.
 
         Args:
             user_id (`str`):
@@ -678,16 +676,28 @@ class SessionService:
                 # Not in a team — also clear any hash that may have been
                 # created with this session as a (future) leader key.
                 await SubagentHitlProjector.purge(self._projection, session_id)
+                await CollaborationProgressProjector.purge(
+                    self._projection,
+                    session_id,
+                )
                 return
 
             team = await self._storage.get_team(user_id, session.team_id)
             if team is None:
                 await SubagentHitlProjector.purge(self._projection, session_id)
+                await CollaborationProgressProjector.purge(
+                    self._projection,
+                    session_id,
+                )
                 return
 
             if team.session_id == session_id:
                 # Leader session — drop the whole projection store.
                 await SubagentHitlProjector.purge(self._projection, session_id)
+                await CollaborationProgressProjector.purge(
+                    self._projection,
+                    session_id,
+                )
             else:
                 # Worker session — drop only its entries from the
                 # leader's store.
@@ -696,9 +706,14 @@ class SessionService:
                     team.session_id,
                     session_id,
                 )
+                await CollaborationProgressProjector.drop_worker(
+                    self._projection,
+                    team.session_id,
+                    session_id,
+                )
         except Exception as e:  # pylint: disable=broad-except
             logger.warning(
-                "Failed to purge subagent HITL projection for session "
+                "Failed to purge team projections for session "
                 "%s: %s",
                 session_id,
                 str(e),

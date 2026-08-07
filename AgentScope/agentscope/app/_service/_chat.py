@@ -48,7 +48,7 @@ from ._model import get_model, resolve_effective_chat_model_config
 from ._tts_model import get_tts_model
 from ._toolkit import get_toolkit
 from ._session_projection import SessionProjection
-from ._projectors import SubagentHitlProjector
+from ._projectors import CollaborationProgressProjector, SubagentHitlProjector
 from ._permission_review import (
     PermissionReviewerMiddleware,
     PermissionReviewService,
@@ -187,6 +187,7 @@ class ChatService:
         self._projection = SessionProjection(message_bus)
         self._projectors: list[EventProjector] = [
             SubagentHitlProjector(storage),
+            CollaborationProgressProjector(storage),
             *(extra_projectors or []),
         ]
 

@@ -81,6 +81,33 @@ export type AgentTasksContext = {
   tasks: AgentTask[]
 }
 
+export type AgentCollaborationActivity = {
+  kind: 'started' | 'analysis' | 'tool' | 'waiting' | 'finished' | string
+  label: string
+  state: 'running' | 'waiting' | 'success' | 'error' | 'completed' | 'failed' | 'interrupted' | string
+  reply_id?: string | null
+  tool_call_id?: string | null
+  tool_name?: string | null
+  created_at: string
+}
+
+export type AgentCollaborationMember = {
+  team_id: string
+  team_name: string
+  worker_session_id: string
+  worker_agent_id: string
+  worker_agent_name: string
+  work_revision: number
+  work_status: 'idle' | 'queued' | 'running' | 'reported' | 'completed' | 'failed' | 'interrupted' | string
+  assigned_at?: string | null
+  started_at?: string | null
+  settled_at?: string | null
+  reply_id?: string | null
+  current_activity?: AgentCollaborationActivity | null
+  activities: AgentCollaborationActivity[]
+  updated_at: string
+}
+
 export type AgentSubagentHitlEntry = {
   worker_session_id: string
   worker_agent_id: string
@@ -99,6 +126,7 @@ export type AgentRuntimeTrace = {
   modelNames: string[]
   tasksContext: AgentTasksContext | null
   teamUpdateCount: number
+  collaborations: AgentCollaborationMember[]
   subagentHitl: AgentSubagentHitlEntry[]
   status: string
   turnStartedAt: string | null
@@ -186,6 +214,13 @@ function cloneRuntimeTraceForUpdate(
           })),
         }
       : null,
+    collaborations: (current.collaborations || []).map(member => ({
+      ...member,
+      current_activity: member.current_activity
+        ? { ...member.current_activity }
+        : member.current_activity,
+      activities: member.activities.map(activity => ({ ...activity })),
+    })),
     subagentHitl: current.subagentHitl.map(entry => ({
       ...entry,
       event: {
@@ -208,6 +243,7 @@ export function createEmptyRuntimeTrace(
     modelNames: [],
     tasksContext: null,
     teamUpdateCount: 0,
+    collaborations: [],
     subagentHitl: [],
     status,
     turnStartedAt,
@@ -247,6 +283,9 @@ export function runtimeTraceFromExtraData(
   const subagentHitl = Array.isArray(summary.subagent_hitl)
     ? summary.subagent_hitl as AgentSubagentHitlEntry[]
     : []
+  const collaborations = Array.isArray(summary.collaborations)
+    ? summary.collaborations as AgentCollaborationMember[]
+    : []
   const messages = clone(collection)
   for (const message of messages) {
     if (message.platform_collaboration_status === 'continued') {
@@ -283,6 +322,7 @@ export function runtimeTraceFromExtraData(
     modelNames,
     tasksContext,
     teamUpdateCount: Number(summary.team_update_count) || 0,
+    collaborations: clone(collaborations),
     subagentHitl: clone(subagentHitl),
     status: runtimeStatus,
     turnStartedAt: summaryStartedAt || firstMessageStartedAt,
@@ -348,6 +388,17 @@ function applyAgentRuntimeEventMutable(
       trace.tasksContext = event.value.tasks_context as AgentTasksContext
     } else if (event.name === 'team_updated') {
       trace.teamUpdateCount += 1
+    } else if (event.name === 'collaboration_member_updated' && event.value) {
+      const member = event.value as AgentCollaborationMember
+      const workerSessionId = String(member.worker_session_id || '')
+      if (workerSessionId) {
+        trace.collaborations = [
+          ...trace.collaborations.filter(
+            item => item.worker_session_id !== workerSessionId,
+          ),
+          clone(member),
+        ]
+      }
     } else if (event.name === 'subagent_require_user_confirm' && event.value) {
       const entry = event.value as AgentSubagentHitlEntry
       const key = `${entry.worker_session_id}:${entry.reply_id}`

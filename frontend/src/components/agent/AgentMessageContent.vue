@@ -78,8 +78,89 @@
         class="agent-runtime-message"
       >
         <template v-for="block in runtimeMessage.content" :key="block.id">
+          <section
+            v-if="isFirstInviteCall(runtimeMessage, block)"
+            class="agent-collaboration"
+            :class="{ active: collaborationBatchActive(runtimeMessage) }"
+          >
+            <header>
+              <span class="agent-collaboration-icon">
+                <n-icon :size="17"><Users /></n-icon>
+              </span>
+              <div class="agent-collaboration-heading">
+                <strong>{{ collaborationBatchTitle(runtimeMessage) }}</strong>
+                <span>{{ collaborationBatchSummary(runtimeMessage) }}</span>
+              </div>
+              <span
+                class="agent-collaboration-state"
+                :class="{ running: collaborationBatchActive(runtimeMessage) }"
+              >
+                <i v-if="collaborationBatchActive(runtimeMessage)" class="spin-dot"></i>
+                {{ collaborationBatchStatus(runtimeMessage) }}
+              </span>
+              <button
+                type="button"
+                class="agent-collaboration-toggle"
+                :aria-label="isCollaborationBatchOpen(runtimeMessage) ? '收起协同详情' : '展开协同详情'"
+                @click="toggleCollaborationBatch(runtimeMessage)"
+              >
+                <n-icon :size="16" :class="{ open: isCollaborationBatchOpen(runtimeMessage) }"><ChevronRight /></n-icon>
+              </button>
+            </header>
+
+            <div v-if="isCollaborationBatchOpen(runtimeMessage)" class="agent-collaboration-members">
+              <article
+                v-for="member in collaborationMembers(runtimeMessage)"
+                :key="member.callId"
+                :class="`state-${member.status}`"
+              >
+                <button
+                  type="button"
+                  class="agent-collaboration-member"
+                  @click="toggleCollaborationMember(runtimeMessage, member.callId)"
+                >
+                  <span class="agent-collaboration-avatar">{{ member.name.slice(0, 1) }}</span>
+                  <span class="agent-collaboration-member-main">
+                    <strong>{{ member.name }}</strong>
+                    <small>{{ member.currentLabel }}</small>
+                  </span>
+                  <span class="agent-collaboration-member-state" :class="member.status">
+                    <n-icon :size="14">
+                      <Loader v-if="member.active" class="spin" />
+                      <AlertTriangle v-else-if="member.status === 'failed' || member.status === 'interrupted'" />
+                      <CircleCheck v-else />
+                    </n-icon>
+                    {{ member.statusLabel }}
+                  </span>
+                  <span class="agent-collaboration-elapsed">{{ collaborationMemberElapsed(member) }}</span>
+                  <n-icon
+                    :size="15"
+                    class="agent-collaboration-chevron"
+                    :class="{ open: isCollaborationMemberOpen(runtimeMessage, member.callId) }"
+                  ><ChevronRight /></n-icon>
+                </button>
+                <div
+                  v-if="isCollaborationMemberOpen(runtimeMessage, member.callId)"
+                  class="agent-collaboration-detail"
+                >
+                  <section>
+                    <span>工作记录</span>
+                    <ol v-if="member.activities.length">
+                      <li v-for="(activity, index) in member.activities" :key="`${activity.created_at}-${index}`">
+                        <i :class="activity.state"></i>
+                        <span>{{ collaborationActivityLabel(activity) }}</span>
+                        <time>{{ shortTime(activity.created_at) }}</time>
+                      </li>
+                    </ol>
+                    <p v-else>智能体正在启动，暂时没有工作记录。</p>
+                  </section>
+                </div>
+              </article>
+            </div>
+          </section>
+
           <div
-            v-if="block.type === 'text' && block.text"
+            v-else-if="block.type === 'text' && block.text"
             class="agent-markdown"
             v-html="renderMarkdown(block.text)"
           ></div>
@@ -94,7 +175,7 @@
           </details>
 
           <details
-            v-else-if="block.type === 'tool_call'"
+            v-else-if="block.type === 'tool_call' && block.name !== 'AgentInvite'"
             class="agent-tool"
             :open="block.state === 'asking' || block.state === 'pending' || block.state === 'allowed'"
           >
@@ -215,12 +296,28 @@ import {
 } from '@vicons/tabler'
 import MarkdownIt from 'markdown-it'
 import type {
+  AgentCollaborationActivity,
+  AgentCollaborationMember,
+  AgentContentBlock,
   AgentDataBlock,
   AgentRuntimeMessage,
   AgentRuntimeTrace,
   AgentToolCallBlock,
   AgentToolResultBlock,
 } from '@/types/agentRuntime'
+
+type CollaborationCardMember = {
+  callId: string
+  name: string
+  status: string
+  statusLabel: string
+  active: boolean
+  currentLabel: string
+  assignedAt?: string | null
+  startedAt?: string | null
+  settledAt?: string | null
+  activities: AgentCollaborationActivity[]
+}
 
 const props = withDefaults(defineProps<{
   content?: string
@@ -256,6 +353,8 @@ const markdownCache = new Map<string, string>()
 const markdownCacheLimit = 256
 
 const now = ref(Date.now())
+const collaborationBatchOpen = ref<Record<string, boolean>>({})
+const collaborationMemberOpen = ref<Record<string, boolean>>({})
 let clock: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
   clock = setInterval(() => { now.value = Date.now() }, 1000)
@@ -299,6 +398,223 @@ function toolResult(message: AgentRuntimeMessage, id: string) {
   return message.content.find(
     (block): block is AgentToolResultBlock => block.type === 'tool_result' && block.id === id,
   )
+}
+
+function inviteCalls(message: AgentRuntimeMessage) {
+  return message.content.filter(
+    (block): block is AgentToolCallBlock => (
+      block.type === 'tool_call' && block.name === 'AgentInvite'
+    ),
+  )
+}
+
+function isFirstInviteCall(message: AgentRuntimeMessage, block: AgentContentBlock) {
+  return block.type === 'tool_call'
+    && block.name === 'AgentInvite'
+    && inviteCalls(message)[0]?.id === block.id
+}
+
+function parsedInviteInput(call: AgentToolCallBlock) {
+  try {
+    const value = JSON.parse(call.input || '{}') as Record<string, unknown>
+    return {
+      target: String(value.target || ''),
+    }
+  } catch {
+    return { target: '' }
+  }
+}
+
+function inviteMetadata(message: AgentRuntimeMessage, callId: string) {
+  const result = toolResult(message, callId)
+  const metadata = result?.metadata?.collaboration_member
+  return metadata && typeof metadata === 'object'
+    ? metadata as Record<string, unknown>
+    : null
+}
+
+function collaborationProgress(
+  message: AgentRuntimeMessage,
+  call: AgentToolCallBlock,
+  target: string,
+) {
+  const metadata = inviteMetadata(message, call.id)
+  const workerSessionId = String(metadata?.worker_session_id || '')
+  if (workerSessionId) {
+    const exact = props.runtimeTrace?.collaborations?.find(
+      member => member.worker_session_id === workerSessionId,
+    )
+    if (exact) return exact
+  }
+  const result = toolResult(message, call.id)
+  if (
+    result?.state === 'error'
+    || result?.state === 'denied'
+    || result?.state === 'interrupted'
+  ) {
+    return null
+  }
+  const targetName = target.split('@')[0]?.trim()
+  return props.runtimeTrace?.collaborations?.find(
+    member => member.worker_agent_name === targetName,
+  ) || null
+}
+
+function collaborationMemberStatus(
+  message: AgentRuntimeMessage,
+  call: AgentToolCallBlock,
+  progress: AgentCollaborationMember | null,
+) {
+  if (progress) {
+    if (progress.work_status === 'reported') return 'completed'
+    if (
+      ['idle', 'queued'].includes(progress.work_status)
+      && progress.current_activity?.state === 'running'
+    ) {
+      return 'running'
+    }
+    return progress.work_status
+  }
+  const result = toolResult(message, call.id)
+  if (result?.state === 'error' || result?.state === 'denied') return 'failed'
+  if (result?.state === 'interrupted') return 'interrupted'
+  if (result?.state === 'success') return 'queued'
+  return 'inviting'
+}
+
+function collaborationMembers(message: AgentRuntimeMessage): CollaborationCardMember[] {
+  return inviteCalls(message).map(call => {
+    const input = parsedInviteInput(call)
+    const metadata = inviteMetadata(message, call.id)
+    const progress = collaborationProgress(message, call, input.target)
+    const status = collaborationMemberStatus(message, call, progress)
+    const active = ['idle', 'queued', 'running', 'inviting'].includes(status)
+    const statusLabels: Record<string, string> = {
+      idle: '等待启动',
+      queued: '排队中',
+      running: '执行中',
+      inviting: '邀请中',
+      reported: '已反馈',
+      completed: '已完成',
+      failed: '失败',
+      interrupted: '已中断',
+    }
+    return {
+      callId: call.id,
+      name: String(
+        progress?.worker_agent_name
+        || metadata?.worker_agent_name
+        || input.target.split('@')[0]
+        || '协同智能体',
+      ),
+      status,
+      statusLabel: statusLabels[status] || status,
+      active,
+      currentLabel: progress?.current_activity
+        ? collaborationActivityLabel(progress.current_activity)
+        : active
+          ? '正在建立协作会话'
+          : statusLabels[status] || status,
+      assignedAt: progress?.assigned_at || String(metadata?.assigned_at || '') || null,
+      startedAt: progress?.started_at,
+      settledAt: progress?.settled_at,
+      activities: progress?.activities || [],
+    }
+  })
+}
+
+function collaborationBatchKey(message: AgentRuntimeMessage) {
+  return `collaboration:${message.id}`
+}
+
+function collaborationBatchActive(message: AgentRuntimeMessage) {
+  return collaborationMembers(message).some(member => member.active)
+}
+
+function collaborationBatchTitle(message: AgentRuntimeMessage) {
+  const members = collaborationMembers(message)
+  return collaborationBatchActive(message)
+    ? `${members.length} 个协同智能体正在处理`
+    : `${members.length} 个协同智能体已结束工作`
+}
+
+function collaborationBatchSummary(message: AgentRuntimeMessage) {
+  const members = collaborationMembers(message)
+  const completed = members.filter(member => member.status === 'completed').length
+  const failed = members.filter(member => ['failed', 'interrupted'].includes(member.status)).length
+  const parts = [`${completed}/${members.length} 已完成`]
+  if (failed) parts.push(`${failed} 个异常`)
+  return parts.join(' · ')
+}
+
+function collaborationBatchStatus(message: AgentRuntimeMessage) {
+  if (collaborationBatchActive(message)) return '协同中'
+  return collaborationMembers(message).some(
+    member => ['failed', 'interrupted'].includes(member.status),
+  ) ? '部分异常' : '已完成'
+}
+
+function isCollaborationBatchOpen(message: AgentRuntimeMessage) {
+  const key = collaborationBatchKey(message)
+  if (Object.prototype.hasOwnProperty.call(collaborationBatchOpen.value, key)) {
+    return collaborationBatchOpen.value[key]
+  }
+  return collaborationBatchActive(message)
+}
+
+function toggleCollaborationBatch(message: AgentRuntimeMessage) {
+  const key = collaborationBatchKey(message)
+  collaborationBatchOpen.value = {
+    ...collaborationBatchOpen.value,
+    [key]: !isCollaborationBatchOpen(message),
+  }
+}
+
+function collaborationMemberKey(message: AgentRuntimeMessage, callId: string) {
+  return `${collaborationBatchKey(message)}:${callId}`
+}
+
+function isCollaborationMemberOpen(message: AgentRuntimeMessage, callId: string) {
+  return Boolean(collaborationMemberOpen.value[collaborationMemberKey(message, callId)])
+}
+
+function toggleCollaborationMember(message: AgentRuntimeMessage, callId: string) {
+  const key = collaborationMemberKey(message, callId)
+  collaborationMemberOpen.value = {
+    ...collaborationMemberOpen.value,
+    [key]: !collaborationMemberOpen.value[key],
+  }
+}
+
+function collaborationActivityLabel(activity: AgentCollaborationActivity) {
+  if (!activity.tool_name) return activity.label
+  const action = toolLabel(activity.tool_name)
+  if (activity.state === 'running') return `${action}执行中`
+  if (activity.state === 'success') return `${action}已完成`
+  if (activity.state === 'error') return `${action}失败`
+  return action
+}
+
+function collaborationMemberElapsed(member: CollaborationCardMember) {
+  const rawStart = member.startedAt || member.assignedAt
+  if (!rawStart) return ''
+  const start = Date.parse(rawStart)
+  const end = member.settledAt ? Date.parse(member.settledAt) : now.value
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return ''
+  const seconds = Math.max(0, Math.round((end - start) / 1000))
+  if (seconds < 60) return `${seconds}s`
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+}
+
+function shortTime(value: string) {
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(parsed)
 }
 
 function toolState(call: AgentToolCallBlock, message: AgentRuntimeMessage) {
@@ -347,6 +663,26 @@ function toolLabel(name: string) {
     Glob: '查找文件',
   }
   if (labels[name]) return labels[name]
+  const databaseLabels: Array<[RegExp, string]> = [
+    [/get_project_initialization_state/i, '读取初始化状态'],
+    [/list_project_initialization_attachment_chunks/i, '读取附件解析分块'],
+    [/get_project_initialization_draft/i, '读取初始化草稿'],
+    [/list_project_initialization_sections/i, '读取草稿分区'],
+    [/create_project_initialization_draft/i, '创建初始化草稿'],
+    [/finalize_project_initialization_draft/i, '核验初始化草稿'],
+    [/create_initialization_project_section/i, '提交工程信息草稿'],
+    [/update_initialization_project_section/i, '更新工程信息草稿'],
+    [/create_initialization_personnel_section/i, '提交人员岗位草稿'],
+    [/update_initialization_personnel_section/i, '更新人员岗位草稿'],
+    [/create_initialization_wbs_section/i, '提交 WBS 进度草稿'],
+    [/update_initialization_wbs_section/i, '更新 WBS 进度草稿'],
+    [/create_initialization_risks_section/i, '提交风险源草稿'],
+    [/update_initialization_risks_section/i, '更新风险源草稿'],
+    [/create_initialization_quality_section/i, '提交质量指标草稿'],
+    [/update_initialization_quality_section/i, '更新质量指标草稿'],
+  ]
+  const databaseLabel = databaseLabels.find(([pattern]) => pattern.test(name))
+  if (databaseLabel) return databaseLabel[1]
   if (/knowledge|retriev|search/i.test(name)) return '检索知识库'
   if (name.startsWith('mcp__')) return '调用 MCP 工具'
   return '调用工具'
@@ -475,6 +811,23 @@ function formatNumber(value: number) {
 .agent-subagent-hitl { display:grid; gap:9px; border:1px solid #e6c77e; border-radius:9px; padding:10px; background:#fffaf0; }
 .agent-subagent-hitl>header { display:flex; align-items:flex-start; gap:8px; color:#875c13; }.agent-subagent-hitl>header>div { display:grid; gap:2px; }.agent-subagent-hitl>header strong { font-size:12px; }.agent-subagent-hitl>header span { color:#967743; font-size:12px; line-height:1.45; }
 .agent-subagent-hitl>article { display:grid; gap:6px; }.agent-subagent-name { display:flex; align-items:center; gap:7px; color:#654b20; }.agent-subagent-name span { font-size:12px; font-weight:800; }.agent-subagent-name small { border-radius:999px; padding:2px 6px; color:#886a35; background:#f8ebcf; font-size:12px; }
+.agent-collaboration { overflow:hidden; border:1px solid #d6e5e1; border-radius:9px; background:#f8fbfa; }
+.agent-collaboration.active { border-color:#9fcfc4; box-shadow:0 0 0 1px rgba(18,132,115,.05); }
+.agent-collaboration>header { display:grid; grid-template-columns:32px minmax(0,1fr) auto 28px; align-items:center; gap:9px; padding:10px 11px; }
+.agent-collaboration-icon { display:grid; width:32px; height:32px; place-items:center; border-radius:8px; color:#0f7568; background:#e3f3ef; }
+.agent-collaboration-heading { display:grid; min-width:0; gap:2px; }.agent-collaboration-heading strong { color:#254e48; font-size:13px; }.agent-collaboration-heading span { color:#718681; font-size:12px; }
+.agent-collaboration-state { display:flex; align-items:center; gap:5px; border-radius:999px; padding:3px 8px; color:#4e6e68; background:#eaf1ef; font-size:12px; white-space:nowrap; }.agent-collaboration-state.running { color:#087563; background:#e2f4ef; }
+.agent-collaboration-toggle { display:grid; width:28px; height:28px; place-items:center; border:0; border-radius:6px; color:#718580; background:transparent; cursor:pointer; }.agent-collaboration-toggle:hover { color:#215d54; background:#eaf3f1; }.agent-collaboration-toggle svg { transition:transform .16s; }.agent-collaboration-toggle svg.open { transform:rotate(90deg); }
+.agent-collaboration-members { border-top:1px solid #dfe9e7; background:#fff; }
+.agent-collaboration-members>article+article { border-top:1px solid #e5ecea; }
+.agent-collaboration-member { display:grid; width:100%; grid-template-columns:28px minmax(0,1fr) auto 48px 16px; align-items:center; gap:8px; border:0; padding:9px 11px; color:inherit; background:transparent; text-align:left; cursor:pointer; }.agent-collaboration-member:hover { background:#f6faf9; }
+.agent-collaboration-avatar { display:grid; width:28px; height:28px; place-items:center; border-radius:50%; color:#176d62; background:#e5f2ef; font-size:12px; font-weight:800; }
+.agent-collaboration-member-main { display:grid; min-width:0; gap:2px; }.agent-collaboration-member-main strong { overflow:hidden; color:#294e48; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }.agent-collaboration-member-main small { overflow:hidden; color:#788d88; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.agent-collaboration-member-state { display:flex; align-items:center; gap:4px; color:#55736d; font-size:12px; white-space:nowrap; }.agent-collaboration-member-state.running,.agent-collaboration-member-state.queued,.agent-collaboration-member-state.inviting { color:#0c7b69; }.agent-collaboration-member-state.failed,.agent-collaboration-member-state.interrupted { color:#a44a31; }
+.agent-collaboration-elapsed { color:#879792; font-size:12px; font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+.agent-collaboration-chevron { color:#84948f; transition:transform .16s; }.agent-collaboration-chevron.open { transform:rotate(90deg); }
+.agent-collaboration-detail { border-top:1px solid #e6eeec; padding:10px 12px 12px 47px; background:#f8fbfa; }.agent-collaboration-detail>section { min-width:0; }.agent-collaboration-detail>section>span { display:block; margin-bottom:6px; color:#607a74; font-size:12px; font-weight:800; }.agent-collaboration-detail p { margin:0; color:#536c67; font-size:12px; line-height:1.6; }
+.agent-collaboration-detail ol { display:grid; gap:6px; max-height:220px; margin:0; padding:0; overflow:auto; list-style:none; }.agent-collaboration-detail li { display:grid; grid-template-columns:7px minmax(0,1fr) auto; align-items:center; gap:7px; color:#5f7772; font-size:12px; }.agent-collaboration-detail li>i { width:7px; height:7px; border-radius:50%; background:#8fa29e; }.agent-collaboration-detail li>i.running { background:#17a080; box-shadow:0 0 0 3px rgba(23,160,128,.1); }.agent-collaboration-detail li>i.success,.agent-collaboration-detail li>i.completed { background:#16806d; }.agent-collaboration-detail li>i.error,.agent-collaboration-detail li>i.failed,.agent-collaboration-detail li>i.interrupted { background:#c45e40; }.agent-collaboration-detail time { color:#91a09c; font-size:12px; font-variant-numeric:tabular-nums; }
 .agent-thinking,.agent-tool,.agent-hint { overflow:hidden; border:1px solid #dbe7e4; border-radius:8px; background:#f8fbfa; }
 .agent-thinking summary,.agent-hint summary { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:9px 11px; color:#54706b; font-size:12px; cursor:pointer; list-style:none; }
 .agent-thinking summary::-webkit-details-marker,.agent-tool summary::-webkit-details-marker,.agent-hint summary::-webkit-details-marker { display:none; }

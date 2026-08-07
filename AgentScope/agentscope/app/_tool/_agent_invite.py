@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from pydantic import Field
@@ -25,7 +26,7 @@ from pydantic import Field
 from ._constants import HANDLE_LEN
 from ._team_tool_base import _TeamToolBase
 from .._platform_permissions import apply_platform_tool_allow_rules
-from .._team_lifecycle import assign_team_member
+from .._team_lifecycle import add_and_assign_team_member
 from ..message_bus import MessageBusKeys
 from .._bus_ops import enqueue_run_trigger
 from ..storage import SessionConfig, TeamMember
@@ -511,34 +512,28 @@ class AgentInvite(_TeamToolBase):
                 state=worker_state,
                 source=leader_session.source,
             )
-            await self._storage.set_session_team_id(
-                self._user_id,
-                borrowed.id,
-                team.id,
-            )
-
-            team.data.members = [
-                *existing_members,
-                TeamMember(
+            assigned_revision = await add_and_assign_team_member(
+                self._storage,
+                self._message_bus,
+                user_id=self._user_id,
+                team_id=team.id,
+                member=TeamMember(
                     owner_id=self._user_id,
                     agent_id=invited.id,
                     session_id=borrowed.id,
                     role="invited",
                 ),
-            ]
-            await self._storage.upsert_team(self._user_id, team)
-            assigned_revision = await assign_team_member(
-                self._storage,
-                self._message_bus,
-                user_id=self._user_id,
-                team_id=team.id,
-                member_session_id=borrowed.id,
             )
             if assigned_revision is None:
                 raise RuntimeError(
-                    "invited member disappeared before its initial "
+                    "team membership changed before the initial invited "
                     "assignment could be recorded",
                 )
+            await self._storage.set_session_team_id(
+                self._user_id,
+                borrowed.id,
+                team.id,
+            )
 
             hint = HintBlock(
                 hint=(
@@ -581,6 +576,17 @@ class AgentInvite(_TeamToolBase):
                         ),
                     ),
                 ],
+                metadata={
+                    "collaboration_member": {
+                        "team_id": team.id,
+                        "team_name": team.data.name,
+                        "worker_agent_id": invited.id,
+                        "worker_agent_name": invited.data.name,
+                        "worker_session_id": borrowed.id,
+                        "work_revision": assigned_revision,
+                        "assigned_at": datetime.now(UTC).isoformat(),
+                    },
+                },
             )
         except Exception as e:  # pylint: disable=broad-except
             return ToolChunk(

@@ -6,8 +6,10 @@ session via the shared
 :class:`~agentscope.app._service._session_projection.SessionProjection`
 primitive. See :class:`~agentscope.app._types.EventProjector`.
 """
+from ._collaboration_progress import CollaborationProgressProjector
 from ._subagent_hitl import SubagentHitlProjector
 
 __all__ = [
+    "CollaborationProgressProjector",
     "SubagentHitlProjector",
 ]

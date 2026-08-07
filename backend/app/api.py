@@ -1010,6 +1010,23 @@ def _sse_frame(event: str, data: Any) -> str:
     )
 
 
+def _upsert_collaboration_member(
+    trace_summary: dict[str, Any],
+    value: dict[str, Any],
+) -> None:
+    """Keep the newest durable progress projection for one team member."""
+    worker_session_id = str(value.get("worker_session_id") or "")
+    if not worker_session_id:
+        return
+    current = list(trace_summary.get("collaborations") or [])
+    trace_summary["collaborations"] = [
+        entry
+        for entry in current
+        if str(entry.get("worker_session_id") or "") != worker_session_id
+    ]
+    trace_summary["collaborations"].append(value)
+
+
 async def _annotate_collaboration_event(
     client: AgentScopeClient,
     *,
@@ -1716,6 +1733,7 @@ def stream_agent_conversation_message(
             "model_names": [],
             "tasks_context": None,
             "team_update_count": 0,
+            "collaborations": [],
             "subagent_hitl": [],
             "turn_started_at": user_message["created_at"],
             "turn_finished_at": None,
@@ -1795,6 +1813,17 @@ def stream_agent_conversation_message(
                                 == "team_updated"
                             ):
                                 trace_summary["team_update_count"] += 1
+                            elif (
+                                event_type == "CUSTOM"
+                                and runtime_event.get("name")
+                                == "collaboration_member_updated"
+                            ):
+                                value = runtime_event.get("value") or {}
+                                if isinstance(value, dict):
+                                    _upsert_collaboration_member(
+                                        trace_summary,
+                                        value,
+                                    )
                             elif (
                                 event_type == "CUSTOM"
                                 and runtime_event.get("name")
@@ -2031,6 +2060,7 @@ def stream_agent_conversation_tool_confirmation(
             "model_names": [],
             "tasks_context": None,
             "team_update_count": 0,
+            "collaborations": [],
             "subagent_hitl": [],
         }
         try:
@@ -2118,6 +2148,17 @@ def stream_agent_conversation_tool_confirmation(
                                 == "team_updated"
                             ):
                                 trace_summary["team_update_count"] += 1
+                            elif (
+                                event_type == "CUSTOM"
+                                and runtime_event.get("name")
+                                == "collaboration_member_updated"
+                            ):
+                                value = runtime_event.get("value") or {}
+                                if isinstance(value, dict):
+                                    _upsert_collaboration_member(
+                                        trace_summary,
+                                        value,
+                                    )
                             elif (
                                 event_type == "CUSTOM"
                                 and runtime_event.get("name")

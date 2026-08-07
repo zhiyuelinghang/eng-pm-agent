@@ -35,9 +35,11 @@ description: 独立读取完整初始化草稿，执行结构与跨分区核验�
 
 如果 notes 与 payload 看似矛盾，或某条语义问题必须回看原文才能定级，使用主智能体
 任务中提供的 `file_id/chunk_id` 调用
-`dobby_list_project_initialization_attachment_chunks` 读取对应原文后再下结论；不得仅因
-自己尚未读取原文就标记 error。来源映射缺失可记 warning，但不能把能够通过解析分块
-直接核实的内容写成“无法判定”。
+`dobby_list_project_initialization_attachment_chunks` 读取对应原文后再下结论。每次
+必须显式指定 `record_id=chunk_id`、`limit=1`、`text_field="content"`、
+`text_offset=0`、`text_limit=6000`；若 `_text_page.has_more=true`，按
+`next_offset` 继续读取。不得仅因自己尚未读取原文就标记 error。来源映射缺失可记
+warning，但不能把能够通过解析分块直接核实的内容写成“无法判定”。
 
 不要重写专家分区，也不要在完成调用里重复提交庞大的合并 payload；平台查看与确认
 时会从已持久化分区组合完整草稿。把确定性和语义问题写入

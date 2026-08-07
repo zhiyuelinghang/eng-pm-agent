@@ -909,6 +909,37 @@ class AgentScopeClientTest(TestCase):
             payload["runtime_trace"]["turn_finished_at"],
             "2026-07-31T10:00:12+08:00",
         )
+
+    def test_runtime_payload_keeps_collaboration_progress(self) -> None:
+        message = {
+            "id": "reply-1",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "完成"}],
+            "created_at": "2026-07-31T10:00:01+08:00",
+            "finished_at": "2026-07-31T10:00:03+08:00",
+        }
+        collaboration = {
+            "worker_session_id": "worker-1",
+            "worker_agent_name": "WBS 与进度专家",
+            "work_status": "completed",
+            "activities": [],
+        }
+
+        payload = _agent_reply_extra_data(
+            AgentScopeReply(
+                status="completed",
+                content="完成",
+                message_id="reply-1",
+                raw_message=message,
+                raw_messages=[message],
+            ),
+            {"collaborations": [collaboration]},
+        )
+
+        self.assertEqual(
+            payload["runtime_trace"]["collaborations"],
+            [collaboration],
+        )
         self.assertEqual(
             _sse_frame("agent_event", {"type": "TEXT_BLOCK_DELTA", "delta": "中"}),
             'event: agent_event\ndata: {"type":"TEXT_BLOCK_DELTA","delta":"中"}\n\n',
