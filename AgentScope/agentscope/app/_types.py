@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Shared type aliases for the agentscope app layer."""
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -31,6 +31,7 @@ class AgentToolDescriptor(BaseModel):
     name: str
     display_name: str | None = None
     description: str | None = None
+    category: Literal["database", "workspace", "general"] = "general"
     input_schema: dict = Field(default_factory=dict)
     read_only: bool = False
 

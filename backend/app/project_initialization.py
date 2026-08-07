@@ -8,14 +8,14 @@ import re
 from typing import Any, Literal
 
 from pypinyin import lazy_pinyin
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from .models import (
     Project,
     ProjectInitializationDraft,
-    ProjectInitializationDraftWorkflow,
+    ProjectInitializationDraftSection,
     ProjectMember,
     ProjectMemberPosition,
     ProjectPosition,
@@ -28,11 +28,6 @@ from .models import (
     WbsRiskLink,
 )
 from .security import hash_password
-
-
-INITIALIZATION_ARTIFACT_BATCH_LIMIT = 20
-INITIALIZATION_ARTIFACT_MAX_BYTES = 64 * 1024
-INITIALIZATION_ARTIFACT_ERROR_LIMIT = 5
 
 
 class StrictInitializationModel(BaseModel):
@@ -102,15 +97,6 @@ class RiskDraftItem(StrictInitializationModel):
     risk_window_end_date: date | None = None
     summary: str | None = Field(default=None, max_length=20000)
 
-    @model_validator(mode="before")
-    @classmethod
-    def discard_legacy_wbs_relation(cls, value: Any) -> Any:
-        """Accept saved legacy drafts without carrying their obsolete WBS relation forward."""
-        if isinstance(value, dict) and "related_wbs_code" in value:
-            value = dict(value)
-            value.pop("related_wbs_code", None)
-        return value
-
 
 class QualityRequirementDraft(StrictInitializationModel):
     wbs_code: str = Field(min_length=1, max_length=128)
@@ -129,162 +115,6 @@ class ProjectInitializationPayload(StrictInitializationModel):
         default_factory=list,
         max_length=10000,
     )
-
-
-InitializationDraftSection = Literal[
-    "project",
-    "personnel",
-    "wbs",
-    "risks",
-    "quality_requirements",
-    "validation_issues",
-]
-
-WritableInitializationDraftSection = Literal[
-    "project",
-    "personnel",
-    "wbs",
-    "risks",
-    "quality_requirements",
-]
-
-InitializationAgentRole = Literal[
-    "orchestrator",
-    "project",
-    "personnel",
-    "wbs",
-    "risks",
-    "quality_requirements",
-    "validator",
-]
-
-
-InitializationArtifactFormat = Literal["json", "markdown"]
-
-
-class ReadInitializationDraftArgs(BaseModel):
-    section: InitializationDraftSection
-    start: int = Field(default=1, ge=1)
-    limit: int = Field(default=100, ge=1, le=500)
-
-
-class BeginInitializationNormalizationArgs(BaseModel):
-    source_file_ids: list[int] = Field(default_factory=list, max_length=100)
-
-    @model_validator(mode="after")
-    def normalize_source_file_ids(
-        self,
-    ) -> "BeginInitializationNormalizationArgs":
-        self.source_file_ids = list(dict.fromkeys(self.source_file_ids))
-        return self
-
-
-class WriteInitializationArtifactArgs(BaseModel):
-    normalization_id: int = Field(gt=0)
-    section: WritableInitializationDraftSection
-    artifact_format: InitializationArtifactFormat
-    part_index: int = Field(default=1, gt=0, le=1000)
-    file_name: str = Field(min_length=1, max_length=300)
-    json_data: Any | None = None
-    markdown_content: str | None = Field(
-        default=None,
-        max_length=INITIALIZATION_ARTIFACT_MAX_BYTES,
-    )
-    source_file_ids: list[int] = Field(default_factory=list, max_length=100)
-    source_locations: list[str] = Field(default_factory=list, max_length=1000)
-
-    @model_validator(mode="after")
-    def validate_content(self) -> "WriteInitializationArtifactArgs":
-        self.source_file_ids = list(dict.fromkeys(self.source_file_ids))
-        self.source_locations = [
-            item.strip()
-            for item in self.source_locations
-            if item.strip()
-        ]
-        if self.artifact_format == "json":
-            if self.json_data is None:
-                raise ValueError("JSON 标准资料必须提供 json_data")
-            if self.markdown_content is not None:
-                raise ValueError("JSON 标准资料不能同时提供 markdown_content")
-        else:
-            if not (self.markdown_content or "").strip():
-                raise ValueError("Markdown 标准资料不能为空")
-            if self.json_data is not None:
-                raise ValueError("Markdown 标准资料不能同时提供 json_data")
-            self.markdown_content = self.markdown_content.strip()
-        return self
-
-
-class FinalizeInitializationNormalizationArgs(BaseModel):
-    normalization_id: int = Field(gt=0)
-    expected_sections: list[WritableInitializationDraftSection] = Field(
-        min_length=1,
-        max_length=5,
-    )
-
-    @model_validator(mode="after")
-    def normalize_expected_sections(
-        self,
-    ) -> "FinalizeInitializationNormalizationArgs":
-        self.expected_sections = list(dict.fromkeys(self.expected_sections))
-        return self
-
-
-class ReadInitializationArtifactArgs(BaseModel):
-    normalization_id: int = Field(gt=0)
-    section: WritableInitializationDraftSection
-    artifact_format: InitializationArtifactFormat | None = None
-    part_index: int | None = Field(default=None, gt=0, le=1000)
-    start: int = Field(default=1, ge=1)
-    limit: int = Field(default=100, ge=1, le=500)
-
-    @model_validator(mode="after")
-    def require_format_for_part(self) -> "ReadInitializationArtifactArgs":
-        if self.part_index is not None and self.artifact_format is None:
-            raise ValueError("读取指定分片时必须提供 artifact_format")
-        return self
-
-
-class BeginInitializationDraftArgs(BaseModel):
-    normalization_id: int = Field(gt=0)
-    expected_sections: list[WritableInitializationDraftSection] = Field(
-        min_length=1,
-        max_length=5,
-    )
-    source_files: list[str] = Field(default_factory=list, max_length=100)
-
-    @model_validator(mode="after")
-    def normalize_expected_sections(self) -> "BeginInitializationDraftArgs":
-        self.expected_sections = list(dict.fromkeys(self.expected_sections))
-        return self
-
-
-class WriteInitializationDraftSectionArgs(BaseModel):
-    draft_id: int = Field(gt=0)
-    data: Any
-    source_files: list[str] = Field(default_factory=list, max_length=100)
-    extraction_notes: list[str] = Field(default_factory=list, max_length=200)
-
-
-class ImportInitializationArtifactArgs(BaseModel):
-    draft_id: int = Field(gt=0)
-    normalization_id: int = Field(gt=0)
-    extraction_notes: list[str] = Field(default_factory=list, max_length=200)
-
-
-class InitializationSemanticIssue(BaseModel):
-    level: Literal["error", "warning"]
-    path: str = Field(min_length=1, max_length=300)
-    message: str = Field(min_length=1, max_length=2000)
-
-
-class FinalizeInitializationDraftArgs(BaseModel):
-    draft_id: int = Field(gt=0)
-    semantic_issues: list[InitializationSemanticIssue] = Field(
-        default_factory=list,
-        max_length=500,
-    )
-    review_summary: str | None = Field(default=None, max_length=10000)
 
 
 class PersonnelCredentialInput(BaseModel):
@@ -908,10 +738,17 @@ def apply_initialization_draft(
     """Replace initialization sections atomically inside the caller transaction."""
     if draft.status == "applied":
         raise InitializationApplyError("该初始化草稿已经入库")
-    workflow = db.get(ProjectInitializationDraftWorkflow, draft.id)
-    if workflow is not None and workflow.stage != "completed":
-        raise InitializationApplyError("初始化专项整理或统一核验尚未完成")
-    payload = ProjectInitializationPayload.model_validate(draft.payload)
+    if draft.status == "building":
+        raise InitializationApplyError("初始化智能体尚未完成草稿整理")
+    payload_data = dict(draft.payload or {})
+    for section_row in db.scalars(
+        select(ProjectInitializationDraftSection)
+        .where(ProjectInitializationDraftSection.draft_id == draft.id)
+        .order_by(ProjectInitializationDraftSection.id),
+    ).all():
+        payload_data[section_row.section] = section_row.payload
+    payload = ProjectInitializationPayload.model_validate(payload_data)
+    draft.payload = payload.model_dump(mode="json")
     deterministic_issues = validate_initialization_payload(payload)
     deterministic_keys = {
         (item["level"], item["path"], item["message"])
@@ -1134,6 +971,14 @@ def apply_initialization_draft(
     draft.status = "applied"
     draft.validation_issues = issues
     draft.applied_at = datetime.now(UTC)
+    run.status = "applied"
+    run.progress_percent = 100
+    run.current_step_key = None
+    # ``finished_at`` belongs to the machine-run window and is written when
+    # extraction/validation finishes.  A user may review the draft much later;
+    # applying it must not turn that review delay into agent execution time.
+    if run.finished_at is None:
+        run.finished_at = datetime.now(UTC)
     db.flush()
     return {
         "draft_id": draft.id,

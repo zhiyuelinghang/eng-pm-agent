@@ -1,8 +1,8 @@
-"""Deterministic, bounded parsers for Dobby initialization attachments.
+"""Deterministic fallback parsers bundled inside the attachment parser MCP.
 
-The platform only stores and authorizes raw files.  This module runs inside
-AgentScope and turns those files into structured JSON that an initialization
-agent can reason over without falling back to a shell.
+The MCP tries the configured MinerU service first for the open-source input
+formats.  These bounded local parsers preserve the existing offline behavior
+when MinerU is unavailable or rejects a document.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from typing import Any, Literal
 
 OCRMode = Literal["auto", "always", "never"]
 
-SUPPORTED_INITIALIZATION_FILE_SUFFIXES = frozenset(
+SUPPORTED_ATTACHMENT_SUFFIXES = frozenset(
     {
         ".txt",
         ".md",
@@ -32,6 +32,8 @@ SUPPORTED_INITIALIZATION_FILE_SUFFIXES = frozenset(
         ".jpeg",
         ".bmp",
         ".webp",
+        ".gif",
+        ".jp2",
         ".tif",
         ".tiff",
     },
@@ -44,6 +46,8 @@ _IMAGE_SUFFIXES = frozenset(
         ".jpeg",
         ".bmp",
         ".webp",
+        ".gif",
+        ".jp2",
         ".tif",
         ".tiff",
     },
@@ -618,7 +622,7 @@ def _parse_pdf(
     }
 
 
-def parse_initialization_file(
+def parse_attachment_content(
     content: bytes,
     suffix: str,
     sheet_name: str | None,
@@ -626,7 +630,7 @@ def parse_initialization_file(
     limit: int,
     ocr_mode: str = "auto",
 ) -> dict[str, Any]:
-    """Parse a bounded portion of one supported initialization file."""
+    """Parse a bounded portion of one supported attachment."""
     normalized_suffix = suffix.strip().lower()
     normalized_ocr_mode = _normalize_ocr_mode(ocr_mode)
     normalized_start = max(1, int(start))
@@ -730,5 +734,5 @@ def parse_initialization_file(
             },
         }
     raise ValueError(
-        f"不支持的初始化附件格式：{normalized_suffix or '未知'}",
+        f"不支持的附件格式：{normalized_suffix or '未知'}",
     )

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "name": "attachment-parser",
+  "display_name": "附件解析",
+  "version": "2.0.0",
+  "description": "平台固定附件解析能力：统一处理平台传入的附件内容，开源 MinerU 格式优先使用解析服务，失败时由包内本地解析器降级。",
+  "transport": "stdio",
+  "command": "runtime/python.exe",
+  "args": ["server.py"],
+  "env": {
+    "MINERU_FILE_PARSE_URL": "https://mgwzs689.xiaomy.net/file_parse",
+    "MINERU_BACKEND": "hybrid-engine",
+    "MINERU_TIMEOUT_SECONDS": "180"
+  },
+  "platform_capabilities": [],
+  "startup_timeout": 30,
+  "execution_timeout": 240
+}

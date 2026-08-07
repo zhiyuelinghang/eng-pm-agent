@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from .._manager import BackgroundTaskManager, SchedulerManager
 from ..message_bus import MessageBus
+from ..mcp_registry import MCPRegistryManager
 from .._tool import (
     AgentCreate,
     AgentInvite,
@@ -46,21 +47,6 @@ def _filter_globally_disabled_tools(tools: list[Any]) -> list[Any]:
     ]
 
 
-def _filter_agent_assigned_tools(
-    tools: list[Any],
-    allowed_tool_names: list[str] | None,
-) -> list[Any]:
-    """Keep only direct tools assigned in the agent configuration."""
-    if allowed_tool_names is None:
-        return tools
-    allowed = set(allowed_tool_names)
-    return [
-        tool
-        for tool in tools
-        if str(getattr(tool, "name", "")) in allowed
-    ]
-
-
 async def get_toolkit(
     *,
     storage: StorageBase,
@@ -76,6 +62,7 @@ async def get_toolkit(
     resource_access_service: ResourceAccessService,
     extra_factory: AgentToolFactory | None = None,
     sub_agent_templates: dict[str, SubAgentTemplate] | None = None,
+    mcp_registry_manager: MCPRegistryManager | None = None,
 ) -> Toolkit:
     """Assemble the complete :class:`Toolkit` for one chat turn.
 
@@ -158,11 +145,10 @@ optional):
     tool_groups = []
 
     # The general tools running in the workspace
-    allowed_tool_names = agent_record.data.tool_config.allowed_tool_names
-    tools = _filter_agent_assigned_tools(
-        await workspace.list_tools(),
-        allowed_tool_names,
-    )
+    # Workspace/system tools are platform capabilities, not per-agent
+    # assignments. Every agent receives the same catalogue; only the global
+    # safety policy below may remove a tool for the whole platform.
+    tools = await workspace.list_tools()
 
     # Planning tools — always on.
     tools += [TaskCreate(), TaskList(), TaskGet(), TaskUpdate()]
@@ -225,13 +211,22 @@ time or interval"
     if team_role == "worker":
         tools.append(TeamSay(**team_tool_kwargs, role="worker"))
     else:
-        from ._platform_settings import get_project_initializer_agent_id
+        from ._platform_settings import (
+            get_global_main_agent_id,
+            get_project_initializer_agent_id,
+        )
 
+        global_main_agent_id = await get_global_main_agent_id(
+            storage,
+            user_id,
+            legacy_record=agent_record,
+        )
         project_initializer_agent_id = (
             await get_project_initializer_agent_id(storage, user_id)
         )
+        caller_is_global_main = global_main_agent_id == agent_record.id
         tools.append(TeamCreate(**team_tool_kwargs))
-        if project_initializer_agent_id != agent_record.id:
+        if agent_record.id != project_initializer_agent_id:
             tools.append(
                 AgentCreate(
                     **team_tool_kwargs,
@@ -257,14 +252,6 @@ time or interval"
             user_id,
             ResourceKind.AGENT,
         )
-        from ._platform_settings import get_global_main_agent_id
-
-        global_main_agent_id = await get_global_main_agent_id(
-            storage,
-            user_id,
-            legacy_record=agent_record,
-        )
-        caller_is_global_main = global_main_agent_id == agent_record.id
         invitable_pool = [
             view
             for view in visible_agents
@@ -295,13 +282,10 @@ time or interval"
 
     # Caller-supplied extras.
     if extra_factory is not None:
-        tools += _filter_agent_assigned_tools(
-            await extra_factory(
-                user_id,
-                agent_record.id,
-                session_record.id,
-            ),
-            allowed_tool_names,
+        tools += await extra_factory(
+            user_id,
+            agent_record.id,
+            session_record.id,
         )
 
     # Tools from middleware
@@ -315,9 +299,42 @@ time or interval"
     # back.  Revisit only together with the planned isolated code sandbox.
     tools = _filter_globally_disabled_tools(tools)
 
+    workspace_mcps = await workspace.list_mcps()
+    platform_session_id = session_record.id
+    platform_agent_id = agent_record.id
+    initialization_role = agent_record.data.platform_config.initialization_role
+    if session_record.team_id is not None:
+        team = await storage.get_team(user_id, session_record.team_id)
+        if team is not None and team.session_id != session_record.id:
+            leader_session = await storage.get_session(
+                user_id,
+                "",
+                team.session_id,
+            )
+            if leader_session is not None:
+                platform_session_id = leader_session.id
+                platform_agent_id = leader_session.agent_id
+    managed_mcps = (
+        await mcp_registry_manager.get_session_clients(
+            user_id=user_id,
+            agent_id=agent_record.id,
+            session_id=session_record.id,
+            package_ids=agent_record.data.mcp_config.allowed_mcp_ids,
+            platform_agent_id=platform_agent_id,
+            platform_session_id=platform_session_id,
+            initialization_role=initialization_role,
+        )
+        if mcp_registry_manager is not None
+        else []
+    )
+    managed_names = {client.name for client in managed_mcps}
+    resolved_mcps = [
+        client for client in workspace_mcps if client.name not in managed_names
+    ] + managed_mcps
+
     return Toolkit(
         tools=tools,
         skills_or_loaders=await workspace.list_skills(),
-        mcps=await workspace.list_mcps(),
+        mcps=resolved_mcps,
         tool_groups=tool_groups,
     )

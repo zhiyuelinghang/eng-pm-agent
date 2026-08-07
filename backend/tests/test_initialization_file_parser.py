@@ -1,4 +1,5 @@
 import io
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -8,18 +9,31 @@ from PIL import Image, ImageDraw, ImageFont
 from pptx import Presentation
 from pptx.util import Inches
 
-from scripts.dobby_agent_tools import _parse_initialization_file
-from scripts import initialization_file_parser
+
+PARSER_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "mcp-packages"
+    / "attachment-parser"
+    / "local_parser.py"
+)
+PARSER_SPEC = importlib.util.spec_from_file_location(
+    "initialization_attachment_local_parser",
+    PARSER_PATH,
+)
+assert PARSER_SPEC is not None and PARSER_SPEC.loader is not None
+initialization_file_parser = importlib.util.module_from_spec(PARSER_SPEC)
+PARSER_SPEC.loader.exec_module(initialization_file_parser)
+_parse_attachment_content = initialization_file_parser.parse_attachment_content
 
 
 SAMPLES = (
     (
-        "原型/工程基本信息/1.工程描述/工程描述.txt",
+        "原型/工程基本信息/1、工程描述.txt",
         "txt",
         "total_lines",
     ),
     (
-        "原型/工程基本信息/2.工序划分、计划、里程碑/总进度计划（WBS）.xlsx",
+        "原型/工程基本信息/2、总进度计划（WBS）.xlsx",
         "xlsx",
         "total_rows",
     ),
@@ -29,7 +43,7 @@ SAMPLES = (
         "total_rows",
     ),
     (
-        "原型/工程基本信息/4.风险源/工程风险清单.xlsx",
+        "原型/工程基本信息/4、工程风险清单.xlsx",
         "xlsx",
         "total_rows",
     ),
@@ -48,7 +62,7 @@ def test_project_initialization_samples_can_be_parsed(
     count_key: str,
 ) -> None:
     path = Path(relative_path)
-    result = _parse_initialization_file(
+    result = _parse_attachment_content(
         path.read_bytes(),
         path.suffix.lower(),
         None,
@@ -62,9 +76,9 @@ def test_project_initialization_samples_can_be_parsed(
 
 def test_wbs_excel_keeps_zero_progress_distinct_from_empty_cells() -> None:
     path = Path(
-        "原型/工程基本信息/2.工序划分、计划、里程碑/总进度计划（WBS）.xlsx",
+        "原型/工程基本信息/2、总进度计划（WBS）.xlsx",
     )
-    result = _parse_initialization_file(
+    result = _parse_attachment_content(
         path.read_bytes(),
         path.suffix.lower(),
         None,
@@ -90,7 +104,7 @@ def test_xlsx_returns_merge_formula_and_zero_metadata() -> None:
     buffer = io.BytesIO()
     workbook.save(buffer)
 
-    result = _parse_initialization_file(
+    result = _parse_attachment_content(
         buffer.getvalue(),
         ".xlsx",
         "工程",
@@ -122,7 +136,7 @@ def test_docx_blocks_keep_paragraph_and_table_order() -> None:
     buffer = io.BytesIO()
     document.save(buffer)
 
-    result = _parse_initialization_file(
+    result = _parse_attachment_content(
         buffer.getvalue(),
         ".docx",
         None,
@@ -160,7 +174,7 @@ def test_pptx_returns_slide_text_and_tables() -> None:
     buffer = io.BytesIO()
     presentation.save(buffer)
 
-    result = _parse_initialization_file(
+    result = _parse_attachment_content(
         buffer.getvalue(),
         ".pptx",
         None,
@@ -199,7 +213,7 @@ def test_scanned_pdf_uses_ocr_in_auto_mode(monkeypatch) -> None:
         fake_ocr,
     )
 
-    result = _parse_initialization_file(
+    result = _parse_attachment_content(
         buffer.getvalue(),
         ".pdf",
         None,
@@ -220,7 +234,7 @@ def test_image_attachment_can_be_ocr_recognized() -> None:
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
 
-    result = _parse_initialization_file(
+    result = _parse_attachment_content(
         buffer.getvalue(),
         ".png",
         None,

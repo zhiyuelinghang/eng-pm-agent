@@ -1,6 +1,5 @@
 import asyncio
 import hashlib
-import io
 import json
 import re
 import shutil
@@ -26,9 +25,16 @@ from .config import get_settings
 from .db import SessionLocal, get_db
 from .models import (AgentConversation, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectInitializationDraft, ProjectInitializationFile, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectSettings, ProjectStatusSnapshot,
                       QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsPredecessor, WbsRiskLink)
-from .agent_tool_gateway import (
+from .initialization_draft_queries import (
     compose_initialization_draft_payload,
     initialization_draft_workflow_summary,
+)
+from .initialization_attachment_store import (
+    InitializationAttachmentParseError,
+    initialization_attachment_manifest,
+    initialization_attachment_summary,
+    store_failed_initialization_attachment,
+    store_parsed_initialization_attachment,
 )
 from .project_initialization import (
     ApplyInitializationDraftInput,
@@ -44,6 +50,10 @@ from .schemas import (AttachmentUpdate, DailyReportInput, DailyReportUpdate, Dra
                       WbsInput, WbsRiskLinkInput, OperationLogInput, PlatformFieldMappingInput, ProjectSettingsInput,
                        AgentConversationConfirmInput, AgentConversationInput, AgentConversationMessageInput, CollaborationMessageInput, CollaborationSessionInput, DocumentFolderInput, ProjectChangeInput, ProjectInformationDispositionInput, QualityMetricInput, TaskNoteInput, TaskReassignInput, TaskStepUpdate)
 from .security import create_access_token, decode_access_token, hash_password, verify_password
+from .system_attachment_parser import (
+    SystemAttachmentParserError,
+    parse_uploaded_attachment,
+)
 
 
 router = APIRouter(prefix="/api")
@@ -287,6 +297,7 @@ def _public_agent_catalog_item(item: dict[str, Any] | None) -> dict[str, Any] | 
             "sort_order",
             "permission_mode",
             "knowledge_config",
+            "initialization_role",
         )
     }
 
@@ -355,6 +366,7 @@ def _platform_session_context(
         "conversation_type": conversation.conversation_type,
         "agent_name": conversation.agent_name,
         "session_role": "primary",
+        "auto_allowed_tool_names": [],
     }
 
 
@@ -394,8 +406,9 @@ INITIALIZATION_FILE_MAX_BYTES = 30 * 1024 * 1024
 
 def _public_initialization_file(
     row: ProjectInitializationFile,
+    db: Session | None = None,
 ) -> dict[str, Any]:
-    return {
+    result = {
         "id": row.id,
         "project_id": row.project_id,
         "conversation_id": row.conversation_id,
@@ -406,6 +419,11 @@ def _public_initialization_file(
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
+    if db is not None:
+        result["attachment_preprocessing"] = (
+            initialization_attachment_summary(db, row)
+        )
+    return result
 
 
 def _initialization_files_for_message(
@@ -437,110 +455,91 @@ def _initialization_files_for_message(
     return [by_id[file_id] for file_id in unique_ids]
 
 
-def _initialization_file_context(
+def _initialization_attachment_manifest_context(
+    db: Session,
     files: list[ProjectInitializationFile],
 ) -> str:
+    """Inject only bounded parsed-data references into the leader context."""
     if not files:
         return ""
-    items = [
+    try:
+        manifest = initialization_attachment_manifest(db, files)
+    except InitializationAttachmentParseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return (
+        "\n<parsed-attachment-manifest>\n"
+        + json.dumps(manifest, ensure_ascii=False)
+        + "\n</parsed-attachment-manifest>"
+    )
+
+
+def _initialization_file_refs(
+    files: list[ProjectInitializationFile],
+) -> list[dict[str, Any]]:
+    return [
         {
-            "file_id": item.id,
-            "file_name": item.file_name,
+            "id": item.id,
+            "name": item.file_name,
+            "size": item.file_size,
             "content_type": item.content_type,
-            "file_size": item.file_size,
         }
         for item in files
     ]
-    return (
-        "\n<initialization-files>\n"
-        "以下附件只在本项目初始化会话中可用。必须调用 "
-        "dobby_read_project_initialization_file 按 file_id 读取，"
-        "不得根据文件名猜测内容：\n"
-        f"{json.dumps(items, ensure_ascii=False)}\n"
-        "</initialization-files>"
-    )
 
 
 def _initialization_agent_instruction(
     conversation: AgentConversation,
 ) -> str:
+    """Describe the AI-led workflow without prescribing file templates."""
     if conversation.conversation_type != "initialization":
         return ""
     return (
         "\n<project-initialization-role>\n"
-        "你是当前项目的专用初始化主智能体。项目名称已经由用户创建，不得"
-        "修改。你的职责是先把用户问答和任意格式附件整理成平台标准资料，"
-        "再交给对应专项智能体批量写入待确认草稿。你写入的 artifact 只是"
-        "标准化中间资料，不是业务草稿，更不是正式业务入库。\n"
-        "不可打乱的执行顺序：\n"
-        "一、先调用 dobby_get_project_initialization_state。若已有待核对"
-        "草稿，按需调用 dobby_get_project_initialization_draft 读取相关旧"
-        "分区；增量资料必须与旧分区合并为完整结果。\n"
-        "二、任何需要更新草稿的任务，都先调用 "
-        "dobby_begin_project_initialization_normalization 建立标准化批次。"
-        "只有你可以调用原始附件工具。附件可能是 XLS/XLSX、CSV、TXT、"
-        "Markdown、DOCX、PPTX、PDF、图片或其他已支持格式，也可能在一份"
-        "文件的不同工作表、页面或段落中混合多个业务分区。不得按扩展名、"
-        "文件名或固定模板猜测，必须读取实际内容。\n"
-        "三、简单明确的内容直接整理；复杂内容按工程信息、人员、WBS、风险"
-        "源、质量指标拆分。通过 dobby_write_project_initialization_artifact "
-        "写标准资料：待入草稿的结构化数据必须写成符合平台字段规范的 JSON；"
-        "叙述、证据和补充说明可以写 Markdown。除工程信息外，每个结构化"
-        "分区必须先用 part_index=1 只提交 1 条代表性记录；必须等待工具返回"
-        " probe_accepted，失败时只修正这一条，严禁预先生成或发送其余批次。"
-        "试写成功后，剩余记录从 part_index=2 开始按连续编号分片，每批最多"
-        " 20 条且不超过 64KB。只能使用工具参数中声明的标准字段名，禁止"
-        "自造字段别名。每份标准资料只能属于一个业务分区，并保留附件 ID、"
-        "工作表、行号、页码或段落等来源。\n"
-        "四、调用 dobby_finalize_project_initialization_normalization。只有"
-        "返回 ready 才代表标准化完成。此前严禁调用 TaskCreate、TeamCreate、"
-        "AgentInvite 或 dobby_begin_project_initialization_draft，也不得把"
-        "原始附件交给任何专项智能体。\n"
-        "五、标准化 ready 后再判断任务复杂度。简单问答、读取明确字段、解释"
-        "结果且不更新草稿的单步任务不为形式创建计划。只要本轮需要写入或"
-        "更新任一草稿分区，就必须把该分区交给对应专项智能体；即使只有一个"
-        "分区也不得由你代写。多个分区、批量数据、跨表关联、统一核验或多"
-        "智能体协同时，使用 TaskCreate/TaskUpdate 建立并维护简洁计划。已有"
-        "同一任务的未完成计划时继续使用，不重复创建；状态必须跟随真实"
-        "进展。\n"
-        "六、使用 ready 的 normalization_id 调用 "
-        "dobby_begin_project_initialization_draft，只填写本轮实际涉及的"
-        " expected_sections。随后必须创建临时团队，通过 AgentInvite 邀请"
-        "已持久化配置的工程信息专家、人员与岗位专家、WBS 与进度专家、"
-        "风险源专家、质量指标专家。禁止使用 AgentCreate 临时创建专家，也"
-        "不要邀请无关成员。只邀请 expected_sections 对应的专家；标准化"
-        "完成后不得继续由主智能体处理草稿分区。\n"
-        "七、给专项专家的任务只提供 normalization_id、draft_id、业务分区"
-        "和核对要求。专家只能读取标准 JSON/Markdown，并优先调用 "
-        "dobby_import_project_initialization_artifact 批量导入；不得读取原始"
-        "附件。读取具体分片时必须明确 artifact_format；不得在工具参数或"
-        "团队消息中重新生成、复制整批 JSON。所有"
-        "必需分区完成后，再邀请初始化核验专家读取草稿做跨分区统一核验；"
-        "核验成功前不得结束团队。\n"
-        "数据规则：\n"
-        "1. 只使用用户明确提供、附件实际包含、正式业务工具、旧草稿或标准"
-        "资料工具返回的信息；缺失值使用 null 或空数组，不得用常识补造。\n"
-        "2. 数值 0 是真实值，必须原样保留；只有原始空值才是 null。\n"
-        "3. WBS 编码表示层级和同级自然顺序，但不自动表示前置依赖。上级"
-        "只能由点分编码的直接前缀确定，根节点上级为 null，层级等于编码"
-        "段数。不得写“顶级 WBS”“未提供”等替代空值。前置编码只能来自"
-        "原文或用户明确说明，没有时传空数组。\n"
-        "4. 质量指标通过 WBS 编码关联；风险源不关联 WBS，只保留风险清单"
-        "中的相关工序文字和风险起止日期。标准化时检查 WBS 父子编码、明确"
-        "前置关系和质量指标关联编码是否存在；同一上级下按 WBS 编码自然顺序"
-        "排列的工序，其计划开始时间不得倒退。发现时间线、父子关系、前置"
-        "日期、关联或占位内容异常时，必须保留原值并形成核对说明，不得"
-        "自行修正、补造依赖或揣摩原因。\n"
-        "5. 人员以身份证号识别自然人。同一身份证号在同一项目承担多个岗位"
-        "时保留多条任职记录，共用一个平台账号，不得误判为重复人员。\n"
-        "6. 标准资料、专项导入和核验都只产生待确认草稿，不写正式业务表。"
-        "用户在 Dobby 平台核对并确认后才正式入库；人员账号由平台自动生成"
-        "或复用，智能体不得生成登录凭证。\n"
-        "完成规则：只有 expected_sections 全部出现在草稿 workflow 的 "
-        "completed_sections，且核验专家完成最终核验，才算本轮完成。成员"
-        "回复结束、TeamSay 已发送、工具调用成功或正在等待专家都不等于整轮"
-        "完成。核验存在错误或警告时，必须概括问题并明确提示用户点击"
-        "“核对草稿”查看和处理。\n"
+        "你是当前项目的专用初始化主智能体。平台会在模型收到消息前使用固定"
+        "附件解析能力，并把结果持久化为会话级临时分块。消息中的 "
+        "<parsed-attachment-manifest> 只有文件与 chunk_id 清单，不包含正文。"
+        "你必须在创建计划后调用 "
+        "dobby_list_project_initialization_attachment_chunks，按 chunk_id 分页读取"
+        "实际解析内容，不得根据文件名猜测，不得假定文件模板，也不得绕过 AI "
+        "直接映射入库。"
+        "解析失败的附件必须明确告知用户。\n"
+        "执行规则：\n"
+        "1. 对任何可能新增或更新初始化草稿的请求，你在本轮看到消息后的第一"
+        "个业务工具调用必须是 TaskCreate，先建立包含资料理解、分区整理、跨"
+        "分区核验和等待用户确认的执行计划。附件解析属于模型前置系统步骤，"
+        "不计入该顺序。创建计划前不得调用数据库交互、MCP、TeamCreate 或"
+        "AgentInvite；后续用 TaskUpdate 反映真实进度。\n"
+        "2. 创建计划后，先对每个文件读取第一个 chunk 的首个文本页，以资料正文"
+        "识别实际分区，再读取初始化状态及已有草稿；不要为了分工在主智能体中"
+        "重复读取全部正文。读取 content 必须显式指定 fields，并使用 "
+        "record_id=chunk_id、limit=1、text_field=content、text_offset=0、"
+        "text_limit<=6000；需要完整理解某个分块时，根据返回的 "
+        "_text_page.has_more/next_offset 继续读取到末页。不得无边界读取。"
+        "若本轮需要写草稿，"
+        "由你通过受控数据库交互创建 building 草稿；正式项目表在用户点击确认"
+        "前不得写入。\n"
+        "3. 根据实际资料涉及的分区创建临时团队，只邀请已配置的工程信息、"
+        "人员与岗位、WBS 与进度、风险源、质量指标专项智能体；不要邀请无关"
+        "成员，不得用 AgentCreate 临时生成替代专家。AgentInvite 的 prompt 只"
+        "允许传 draft_id、目标分区、相关 file_id/chunk_id、来源文件名和核对"
+        "要求；严禁复制解析正文。专项智能体使用同一受控读取交互按相关"
+        " chunk_id 逐个分页取得完整证据。主智能体不得代替专家提交专项分区。\n"
+        "4. 专项智能体必须使用各自被分配的数据库交互写入或更新草稿分区。"
+        "持久化写入成功就是专项任务完成边界，平台会自动通知你继续，不要等待"
+        "第二次 TeamSay。所有实际涉及的分区完成后，邀请初始化核验专家按分区"
+        "逐一读取完整草稿并做跨分区核验；只有核验专家可以把草稿最终标记为"
+        "ready 或 invalid。收到核验结果已持久化的通知后，必须立即重新读取"
+        "草稿状态，完成计划中的核验与最终汇总任务并提示用户核对，不要等待"
+        "核验专家再次汇报。\n"
+        "5. 知识库不是初始化固定步骤；只有用户任务确实需要且当前智能体已配"
+        "置相关知识时才使用。MCP 也只按实际需要调用。\n"
+        "6. 只使用用户明确提供、附件实际解析结果、已有草稿或受控能力返回的"
+        "信息。缺失值保留 null 或空数组，数值 0 必须保留，不得凭常识补造。"
+        "WBS 层级可由点分编码确定，但前置依赖只能来自资料或用户明确说明；"
+        "人员按身份证号识别，同一人员的多个岗位保留多条任职。发现冲突要保"
+        "留证据并形成核对问题，不得擅自修正。\n"
+        "7. 整轮完成的条件是计划真实完成、相关专家均提交、核验完成且草稿可"
+        "供用户核对。工具成功、成员回复或 TeamSay 本身都不等于整轮完成。\n"
         "</project-initialization-role>"
     )
 
@@ -570,7 +569,12 @@ def _build_agent_project_context(
         .limit(30),
     ).all()
     documents = db.execute(
-        select(Attachment, AttachmentText.content)
+        select(
+            Attachment,
+            AttachmentText.content,
+            AttachmentText.parse_status,
+            AttachmentText.parse_error,
+        )
         .outerjoin(
             AttachmentText,
             AttachmentText.attachment_id == Attachment.id,
@@ -580,11 +584,15 @@ def _build_agent_project_context(
         .limit(12),
     ).all()
     document_summaries: list[str] = []
-    for attachment, extracted_text in documents:
+    for attachment, extracted_text, parse_status, parse_error in documents:
         summary = f"{attachment.file_name}（{attachment.category}）"
         compact_text = " ".join((extracted_text or "").split())
-        if compact_text:
+        if parse_status == "ready" and compact_text:
             summary += f"：{compact_text[:1200]}"
+        elif parse_status == "failed":
+            summary += f"：[附件解析失败：{parse_error or '未知原因'}]"
+        elif parse_status == "legacy":
+            summary += "：[历史资料尚未经过统一附件解析]"
         document_summaries.append(summary)
     return (
         "<platform-context>\n"
@@ -647,20 +655,91 @@ def _agent_reply_extra_data(
     runtime_messages = reply.raw_messages or (
         [reply.raw_message] if reply.raw_message else []
     )
-    persisted_trace = None
-    if reply.raw_message:
-        metadata = reply.raw_message.get("metadata") or {}
-        if isinstance(metadata, dict):
-            persisted_trace = metadata.get("platform_runtime_trace")
     result: dict[str, Any] = {
         "status": reply.status,
         "agentscope_message": reply.raw_message,
         "agentscope_messages": runtime_messages,
     }
-    resolved_trace = trace_summary or persisted_trace
+    resolved_trace = _resolved_runtime_trace(reply, trace_summary)
     if isinstance(resolved_trace, dict):
         result["runtime_trace"] = resolved_trace
     return result
+
+
+_ACTIVE_AGENT_REPLY_STATUSES = frozenset(
+    {
+        "creating",
+        "running",
+        "interrupting",
+        "awaiting_permission",
+        "awaiting_external_result",
+    },
+)
+
+
+def _resolved_runtime_trace(
+    reply: AgentScopeReply,
+    trace_summary: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Merge runtime metadata and attach one stable clock to the whole turn."""
+    runtime_messages = reply.raw_messages or (
+        [reply.raw_message] if reply.raw_message else []
+    )
+    persisted_traces: list[dict[str, Any]] = []
+    for message in runtime_messages:
+        metadata = message.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            continue
+        candidate = metadata.get("platform_runtime_trace")
+        if isinstance(candidate, dict):
+            persisted_traces.append(candidate)
+
+    if not trace_summary and not persisted_traces:
+        resolved: dict[str, Any] = {}
+    else:
+        resolved = {}
+        for persisted in persisted_traces:
+            resolved.update(persisted)
+        if trace_summary:
+            resolved.update(trace_summary)
+
+    started_at = (
+        (trace_summary or {}).get("turn_started_at")
+        or next(
+            (
+                persisted.get("turn_started_at")
+                for persisted in persisted_traces
+                if persisted.get("turn_started_at")
+            ),
+            None,
+        )
+        or next(
+            (
+                message.get("created_at")
+                for message in runtime_messages
+                if message.get("created_at")
+            ),
+            None,
+        )
+    )
+    if started_at:
+        resolved["turn_started_at"] = str(started_at)
+
+    if reply.status in _ACTIVE_AGENT_REPLY_STATUSES:
+        resolved["turn_finished_at"] = None
+    else:
+        finished_at = next(
+            (
+                message.get("finished_at")
+                for message in reversed(runtime_messages)
+                if message.get("finished_at")
+            ),
+            None,
+        )
+        if started_at and finished_at:
+            resolved["turn_finished_at"] = str(finished_at)
+
+    return resolved or None
 
 
 def _message_text(message: dict[str, Any]) -> str:
@@ -691,31 +770,9 @@ def _initialization_files_from_agentscope_message(
         if isinstance(metadata, dict)
         else None
     )
-    if isinstance(stored, list):
-        return [item for item in stored if isinstance(item, dict)]
-    raw = _tagged_content(_message_text(message), "initialization-files")
-    if not raw:
+    if not isinstance(stored, list):
         return []
-    matched = re.search(r"(\[[\s\S]*\])", raw)
-    if not matched:
-        return []
-    try:
-        parsed = json.loads(matched.group(1))
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, list):
-        return []
-    return [
-        {
-            "id": item.get("file_id"),
-            "name": item.get("file_name"),
-            "size": item.get("file_size") or 0,
-        }
-        for item in parsed
-        if isinstance(item, dict)
-        and item.get("file_id") is not None
-        and item.get("file_name")
-    ]
+    return [item for item in stored if isinstance(item, dict)]
 
 
 def _project_agentscope_user_message(
@@ -743,6 +800,11 @@ def _project_agentscope_user_message(
         "extra_data": {
             "initialization_files": (
                 _initialization_files_from_agentscope_message(message)
+            ),
+            "attachment_preprocessing": (
+                metadata.get("attachment_preprocessing")
+                if isinstance(metadata, dict)
+                else None
             ),
         },
         "created_at": str(
@@ -801,6 +863,7 @@ def _finalize_agent_reply(
             ),
             reply.raw_message,
         )
+        resolved_trace = _resolved_runtime_trace(reply, trace_summary)
         if final_message and reply.message_id:
             collaboration_statuses = {
                 str(message["id"]): str(
@@ -817,8 +880,8 @@ def _finalize_agent_reply(
                 metadata_update["platform_collaboration_statuses"] = (
                     collaboration_statuses
                 )
-            if trace_summary:
-                metadata_update["platform_runtime_trace"] = trace_summary
+            if resolved_trace:
+                metadata_update["platform_runtime_trace"] = resolved_trace
             updated = client.update_message_metadata(
                 conversation.agentscope_session_id,
                 conversation.agent_id,
@@ -839,7 +902,7 @@ def _finalize_agent_reply(
         return _project_agentscope_reply(
             conversation.id,
             reply,
-            trace_summary,
+            resolved_trace,
         )
 
 
@@ -1100,6 +1163,10 @@ def get_agent_catalog(
         _public_agent_catalog_item(item)
         for item in catalog.get("business_agents", [])
     ]
+    initialization_workers = [
+        _public_agent_catalog_item(item)
+        for item in catalog.get("initialization_workers", [])
+    ]
     return ok(
         {
             "global_main": _public_agent_catalog_item(
@@ -1108,6 +1175,7 @@ def get_agent_catalog(
             "project_initializer": _public_agent_catalog_item(
                 catalog.get("project_initializer"),
             ),
+            "initialization_workers": initialization_workers,
             "business_agents": business_agents,
             "total": len(business_agents),
         },
@@ -1284,7 +1352,7 @@ def list_project_initialization_files(
         )
         .order_by(ProjectInitializationFile.created_at),
     ).all()
-    return ok([serialize(row) for row in rows])
+    return ok([_public_initialization_file(row, db) for row in rows])
 
 
 @router.post(
@@ -1327,7 +1395,7 @@ def upload_project_initialization_file(
     )
     if duplicate is not None:
         return ok(
-            _public_initialization_file(duplicate),
+            _public_initialization_file(duplicate, db),
             "相同初始化附件已存在",
         )
 
@@ -1355,6 +1423,17 @@ def upload_project_initialization_file(
     )
     db.add(row)
     db.flush()
+    try:
+        parsed = parse_uploaded_attachment(
+            content,
+            file_name=safe_name,
+            media_type=file.content_type,
+        )
+        store_parsed_initialization_attachment(db, row, parsed)
+        response_message = "初始化附件已上传并完成解析"
+    except SystemAttachmentParserError as exc:
+        store_failed_initialization_attachment(db, row, str(exc))
+        response_message = "初始化附件已上传，但解析失败"
     audit(
         db,
         user,
@@ -1366,7 +1445,7 @@ def upload_project_initialization_file(
     )
     db.commit()
     db.refresh(row)
-    return ok(_public_initialization_file(row), "初始化附件已上传")
+    return ok(_public_initialization_file(row, db), response_message)
 
 
 @router.delete("/project-initialization-files/{file_id}")
@@ -1497,18 +1576,14 @@ def create_agent_conversation_message(
         conversation,
         payload.initialization_file_ids,
     )
-    initialization_file_refs = [
-        {
-            "id": item.id,
-            "name": item.file_name,
-            "size": item.file_size,
-        }
-        for item in initialization_files
-    ]
+    attachment_manifest = _initialization_attachment_manifest_context(
+        db,
+        initialization_files,
+    )
     injected_content = (
         _build_agent_project_context(db, project, user)
         + _initialization_agent_instruction(conversation)
-        + _initialization_file_context(initialization_files)
+        + attachment_manifest
         + "\n<user-request>\n"
         + payload.content
         + "\n</user-request>"
@@ -1523,7 +1598,9 @@ def create_agent_conversation_message(
         "platform_project_name": project.name,
         "conversation_id": conversation.id,
         "platform_display_content": payload.content,
-        "platform_initialization_files": initialization_file_refs,
+        "platform_initialization_files": _initialization_file_refs(
+            initialization_files,
+        ),
     }
     user_message = _project_agentscope_user_message(
         conversation.id,
@@ -1568,6 +1645,7 @@ def create_agent_conversation_message(
     assistant = _finalize_agent_reply(
         conversation.id,
         reply,
+        {"turn_started_at": user_message["created_at"]},
     )
     if assistant is None:
         raise HTTPException(status_code=409, detail="平台智能体会话已被删除")
@@ -1631,22 +1709,18 @@ def stream_agent_conversation_message(
         conversation,
         payload.initialization_file_ids,
     )
+    attachment_manifest = _initialization_attachment_manifest_context(
+        db,
+        initialization_files,
+    )
     injected_content = (
         _build_agent_project_context(db, project, user)
         + _initialization_agent_instruction(conversation)
-        + _initialization_file_context(initialization_files)
+        + attachment_manifest
         + "\n<user-request>\n"
         + payload.content
         + "\n</user-request>"
     )
-    initialization_file_refs = [
-        {
-            "id": item.id,
-            "name": item.file_name,
-            "size": item.file_size,
-        }
-        for item in initialization_files
-    ]
     user_message_id = uuid4().hex
     agent_id = conversation.agent_id
     session_id = conversation.agentscope_session_id
@@ -1660,7 +1734,9 @@ def stream_agent_conversation_message(
         "platform_project_name": project.name,
         "conversation_id": conversation.id,
         "platform_display_content": payload.content,
-        "platform_initialization_files": initialization_file_refs,
+        "platform_initialization_files": _initialization_file_refs(
+            initialization_files,
+        ),
     }
     user_message = _project_agentscope_user_message(
         conversation.id,
@@ -1700,6 +1776,8 @@ def stream_agent_conversation_message(
             "tasks_context": None,
             "team_update_count": 0,
             "subagent_hitl": [],
+            "turn_started_at": user_message["created_at"],
+            "turn_finished_at": None,
         }
         try:
             async with client.event_stream(session_id, agent_id) as events:
@@ -2303,28 +2381,31 @@ def _initialization_draft_review(
     payload_model = compose_initialization_draft_payload(db, draft)
     payload = payload_model.model_dump(mode="json")
     workflow = initialization_draft_workflow_summary(db, draft)
-    semantic_issues = (
-        list(workflow.get("semantic_issues") or [])
-        if workflow
-        else []
-    )
+    deterministic_issues = validate_initialization_payload(payload_model)
+    deterministic_keys = {
+        (item.get("level"), item.get("path"), item.get("message"))
+        for item in deterministic_issues
+    }
+    semantic_issues = [
+        item
+        for item in (draft.validation_issues or [])
+        if (
+            item.get("level"),
+            item.get("path"),
+            item.get("message"),
+        )
+        not in deterministic_keys
+    ]
     current_issues = (
         []
-        if workflow and workflow["stage"] != "completed"
-        else [
-            *validate_initialization_payload(payload_model),
-            *semantic_issues,
-        ]
+        if draft.status == "building"
+        else [*deterministic_issues, *semantic_issues]
     )
     data["payload"] = payload
     data["workflow"] = workflow
     data["validation_issues"] = current_issues
-    if (
-        draft.status not in {"applied", "rejected"}
-        and workflow
-        and workflow["stage"] != "completed"
-    ):
-        data["status"] = workflow["stage"]
+    if draft.status == "building":
+        data["status"] = "collecting"
     elif draft.status not in {"applied", "rejected"}:
         data["status"] = (
             "invalid"
@@ -3514,15 +3595,30 @@ def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str
     daily_reports = db.scalars(select(DailyReport).where(DailyReport.project_id == project_id).order_by(DailyReport.updated_at.desc()).limit(20)).all()
     field_mappings = db.scalars(select(PlatformFieldMapping).where(PlatformFieldMapping.project_id == project_id).order_by(PlatformFieldMapping.platform_name, PlatformFieldMapping.target_field).limit(30)).all()
     materials = db.execute(
-        select(Attachment.file_name, Attachment.category, AttachmentText.content)
+        select(
+            Attachment.file_name,
+            Attachment.category,
+            AttachmentText.content,
+            AttachmentText.parse_status,
+            AttachmentText.parse_error,
+        )
         .outerjoin(AttachmentText, AttachmentText.attachment_id == Attachment.id)
         .where(Attachment.project_id == project_id)
         .order_by(Attachment.created_at.desc())
         .limit(12)
     ).all()
     material_context = "；".join(
-        f"{file_name}（{category}）" + (f"：{(text or '')[:360]}" if text else "")
-        for file_name, category, text in materials
+        f"{file_name}（{category}）"
+        + (
+            f"：{(content or '')[:360]}"
+            if parse_status == "ready" and content
+            else f"：[附件解析失败：{parse_error or '未知原因'}]"
+            if parse_status == "failed"
+            else "：[历史资料尚未经过统一附件解析]"
+            if parse_status == "legacy"
+            else ""
+        )
+        for file_name, category, content, parse_status, parse_error in materials
     ) or "暂无已入库资料"
     project_context = (
         f"项目：{project.project_name}；所属单位：{project.owner_unit or '未填写'}；说明：{(project.description or '未填写')[:360]}\n"
@@ -3553,134 +3649,6 @@ def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str
     if focus:
         return f"已基于当前项目的 {len(materials)} 份已入库资料和待办记录生成建议：优先处理「{focus.title}」，状态为{focus.status}，截止日期{focus.due_at or '未设置'}。请核对资料类别、明确对应 WBS/风险项，再补齐缺少材料后提交复核。", related
     return f"当前项目已入库 {len(materials)} 份资料，暂无未闭环任务。可先让智能体核对资料类别与资料缺口，再补充 WBS、风险源或质量指标。", []
-
-
-@router.post("/projects/{project_id}/material-assistant")
-def material_assistant_reply(project_id: int, payload: CollaborationMessageInput, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    project = project_or_404(db, project_id)
-    members = db.scalars(
-        select(ProjectMember).where(ProjectMember.project_id == project_id),
-    ).all()
-    wbs_items = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id).order_by(WbsItem.code).limit(50)).all()
-    risk_sources = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id).order_by(RiskSource.updated_at.desc()).limit(50)).all()
-    quality_metrics = db.scalars(select(QualityMetric).where(QualityMetric.project_id == project_id).order_by(QualityMetric.updated_at.desc()).limit(50)).all()
-
-    attachment_ids = list(dict.fromkeys(payload.attachment_ids))
-    attachment_rows: list[tuple[Attachment, str | None]] = []
-    if attachment_ids:
-        selected_rows = db.execute(
-            select(Attachment, AttachmentText.content)
-            .outerjoin(AttachmentText, AttachmentText.attachment_id == Attachment.id)
-            .where(
-                Attachment.project_id == project_id,
-                Attachment.id.in_(attachment_ids),
-            )
-        ).all()
-        row_by_id = {attachment.id: (attachment, content) for attachment, content in selected_rows}
-        if any(attachment_id not in row_by_id for attachment_id in attachment_ids):
-            raise HTTPException(status_code=422, detail="附件不存在或不属于当前项目")
-        attachment_rows = [row_by_id[attachment_id] for attachment_id in attachment_ids]
-
-    project_fields = [
-        ("工程类型说明", project.engineering_type_description),
-        ("合同开工日期", project.contract_start_date),
-        ("合同竣工日期", project.contract_end_date),
-        ("合同工期", project.contract_duration_days),
-        ("合同金额", project.contract_amount_wan_yuan),
-        ("建设单位", project.construction_unit_name),
-        ("总包单位", project.general_contractor_unit_name),
-        ("监理单位", project.supervision_unit_name),
-        ("设计单位", project.design_unit_name),
-        ("勘察单位", project.survey_unit_name),
-    ]
-    missing = [label for label, value in project_fields if value is None or value == ""]
-    if not members: missing.append("项目成员与岗位")
-    if not wbs_items: missing.append("WBS 工序基线")
-    if not risk_sources: missing.append("风险源")
-    if not quality_metrics: missing.append("质量指标")
-
-    setup_context = (
-        f"项目名称：{project.name}\n"
-        + "项目基本信息："
-        + "；".join(f"{label}：{value if value is not None and value != '' else '未填写'}" for label, value in project_fields)
-        + "\n"
-        f"项目成员：{len(members)} 人；WBS 工序：{len(wbs_items)} 项；风险源：{len(risk_sources)} 项；"
-        f"质量指标：{len(quality_metrics)} 项\n"
-        "当前缺失项：" + ("、".join(missing) if missing else "无")
-    )
-    attachment_context_parts: list[str] = []
-    remaining_chars = 50000
-    for attachment, extracted_text in attachment_rows:
-        clean_text = (extracted_text or "").strip()
-        text_limit = min(12000, remaining_chars)
-        excerpt = clean_text[:text_limit] if text_limit > 0 else ""
-        remaining_chars -= len(excerpt)
-        attachment_context_parts.append(
-            f"附件：{attachment.file_name}（{attachment.category}）\n"
-            + (excerpt if excerpt else "[未提取到可读文本]")
-        )
-    attachment_context = "\n\n".join(attachment_context_parts) or "本轮未上传附件"
-
-    settings = get_settings()
-    if settings.ai_api_key:
-        prompt = (
-            "你是工程项目初始化助手。你的目标是通过用户问答和本轮上传附件，补全项目基本信息、项目人员、"
-            "WBS、风险源以及工序质量指标。项目名称已经创建，除非用户明确要求，否则不要建议修改项目名称。"
-            "只能提取附件和用户请求中明确存在的事实；无法确定、存在冲突或缺少依据的内容必须标记为待确认，严禁编造。"
-            "不得声称已经把识别结果写入数据库，必须先输出待核对结果，等待用户确认。"
-            "请按“已识别信息、待确认信息、建议下一步”组织简洁回答。"
-            f"\n\n用户请求：{payload.content}\n\n当前项目数据：\n{setup_context}\n\n本轮附件内容：\n{attachment_context}"
-        )
-        try:
-            response = httpx.post(f"{settings.ai_base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {settings.ai_api_key}"}, json={"model": settings.ai_model, "messages": [{"role": "system", "content": "从问答和附件中提取工程项目初始化数据，先核对，确认后才能入库。"}, {"role": "user", "content": prompt}]}, timeout=30)
-            response.raise_for_status()
-            answer = response.json()["choices"][0]["message"]["content"]
-            return ok({
-                "content": answer,
-                "attachments": [
-                    {"id": attachment.id, "name": attachment.file_name, "extracted": bool((text or "").strip())}
-                    for attachment, text in attachment_rows
-                ],
-            }, "Dobby 已生成项目初始化核对结果")
-        except (httpx.HTTPError, KeyError, IndexError, TypeError):
-            pass
-
-    attachment_names = "、".join(attachment.file_name for attachment, _ in attachment_rows)
-    readable_count = sum(1 for _, text in attachment_rows if (text or "").strip())
-    if missing:
-        answer = (
-            (f"已接收本轮附件：{attachment_names}；其中 {readable_count} 份已提取到可读内容。" if attachment_rows else "")
-            + f"当前项目仍待完善：{'、'.join(missing)}。"
-            + "请继续说明相关信息；识别结果会先交给你核对，确认后才能写入项目。"
-        )
-    else:
-        answer = (
-            (f"已接收本轮附件：{attachment_names}；其中 {readable_count} 份已提取到可读内容。" if attachment_rows else "")
-            + "当前项目初始化数据已具备，请继续核对人员责任、WBS 编码与日期、风险等级以及工序质量指标是否准确。"
-        )
-    return ok({
-        "content": answer,
-        "attachments": [
-            {"id": attachment.id, "name": attachment.file_name, "extracted": bool((text or "").strip())}
-            for attachment, text in attachment_rows
-        ],
-    }, "Dobby 已生成项目初始化核对结果")
-
-
-def extract_attachment_text(content: bytes, suffix: str) -> str:
-    try:
-        if suffix in {".txt", ".md", ".csv"}:
-            return content.decode("utf-8", errors="ignore")[:200000]
-        if suffix == ".docx":
-            from docx import Document
-            return "\n".join(paragraph.text for paragraph in Document(io.BytesIO(content)).paragraphs)[:200000]
-        if suffix == ".pdf":
-            import pdfplumber
-            with pdfplumber.open(io.BytesIO(content)) as pdf:
-                return "\n".join(page.extract_text() or "" for page in pdf.pages)[:200000]
-    except Exception:
-        return ""
-    return ""
 
 
 @router.get("/projects/{project_id}/collaboration-sessions")
@@ -3797,17 +3765,53 @@ def upload_attachment(project_id: int, file: UploadFile = File(...), category: s
     db.add(row); db.flush()
     if folder_id:
         db.add(DocumentFolderItem(attachment_id=row.id, folder_id=folder_id, project_id=project_id))
-    db.add(AttachmentText(attachment_id=row.id, project_id=project_id, content=extract_attachment_text(content, target.suffix.lower())))
+    try:
+        parsed = parse_uploaded_attachment(
+            content,
+            file_name=safe_name,
+            media_type=file.content_type,
+        )
+        attachment_text = AttachmentText(
+            attachment_id=row.id,
+            project_id=project_id,
+            content=parsed.content,
+            parse_status="ready",
+            parser="+".join(parsed.parsers),
+            parse_details=parsed.details,
+        )
+        response_message = "资料已上传并完成附件解析"
+    except SystemAttachmentParserError as exc:
+        attachment_text = AttachmentText(
+            attachment_id=row.id,
+            project_id=project_id,
+            content="",
+            parse_status="failed",
+            parse_error=str(exc),
+            parse_details={
+                "version": 1,
+                "status": "failed",
+                "file_name": safe_name,
+                "error": str(exc),
+            },
+        )
+        response_message = "资料已上传，但附件解析失败"
+    db.add(attachment_text)
     audit(db, user, "上传资料", f"上传资料「{safe_name}」", project_id, "attachment", row.id); db.commit(); db.refresh(row)
-    return ok(serialize(row), "资料已上传")
+    return ok(
+        {
+            **serialize(row),
+            "attachment_preprocessing": attachment_text.parse_details,
+        },
+        response_message,
+    )
 
 
 @router.get("/projects/{project_id}/attachments")
 def list_attachments(project_id: int, keyword: str | None = None, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    project_or_404(db, project_id); stmt = select(Attachment, DocumentFolderItem.folder_id).outerjoin(DocumentFolderItem, DocumentFolderItem.attachment_id == Attachment.id).where(Attachment.project_id == project_id)
+    project_or_404(db, project_id); stmt = select(Attachment, DocumentFolderItem.folder_id, AttachmentText.parse_details).outerjoin(DocumentFolderItem, DocumentFolderItem.attachment_id == Attachment.id).outerjoin(AttachmentText, AttachmentText.attachment_id == Attachment.id).where(Attachment.project_id == project_id)
     if keyword: stmt = stmt.where(Attachment.file_name.contains(keyword))
     rows = db.execute(stmt.order_by(Attachment.created_at.desc())).all()
-    return ok([{**serialize(attachment), "folder_id": folder_id} for attachment, folder_id in rows])
+    return ok([{**serialize(attachment), "folder_id": folder_id, "attachment_preprocessing": parse_details or {"status": "pending"}} for attachment, folder_id, parse_details in rows])
 
 
 @router.patch("/attachments/{attachment_id}")
@@ -3823,12 +3827,16 @@ def update_attachment(attachment_id: int, payload: AttachmentUpdate, db: Session
 def search_documents(project_id: int, keyword: str, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
     project_or_404(db, project_id)
     if not keyword.strip(): return ok([])
-    rows = db.execute(select(Attachment, AttachmentText.content, DocumentFolderItem.folder_id).outerjoin(AttachmentText, AttachmentText.attachment_id == Attachment.id).outerjoin(DocumentFolderItem, DocumentFolderItem.attachment_id == Attachment.id).where(Attachment.project_id == project_id, (Attachment.file_name.contains(keyword) | AttachmentText.content.contains(keyword))).order_by(Attachment.created_at.desc())).all()
+    rows = db.execute(select(Attachment, AttachmentText.content, AttachmentText.parse_status, AttachmentText.parse_error, DocumentFolderItem.folder_id).outerjoin(AttachmentText, AttachmentText.attachment_id == Attachment.id).outerjoin(DocumentFolderItem, DocumentFolderItem.attachment_id == Attachment.id).where(Attachment.project_id == project_id, (Attachment.file_name.contains(keyword) | ((AttachmentText.parse_status == "ready") & AttachmentText.content.contains(keyword)))).order_by(Attachment.created_at.desc())).all()
     result = []
-    for attachment, content, folder_id in rows:
+    for attachment, content, parse_status, parse_error, folder_id in rows:
         item = serialize(attachment)
         item["folder_id"] = folder_id
-        if content:
+        item["attachment_preprocessing"] = {
+            "status": parse_status or "pending",
+            "error": parse_error,
+        }
+        if parse_status == "ready" and content:
             index = content.lower().find(keyword.lower())
             item["snippet"] = content[max(0, index - 40): index + len(keyword) + 80] if index >= 0 else ""
         result.append(item)
@@ -3846,13 +3854,13 @@ def parse_daily_attachment(attachment_id: int, db: Session = Depends(get_db), us
     if duplicate:
         return ok(serialize(duplicate), "该日报已登记，无需重复创建")
 
-    content = ""
-    path = Path(attachment.storage_path)
-    if path.suffix.lower() in {".txt", ".md", ".csv"}:
-        try:
-            content = path.read_text(encoding="utf-8", errors="ignore")[:10000]
-        except OSError:
-            content = ""
+    attachment_text = db.get(AttachmentText, attachment.id)
+    content = (
+        attachment_text.content[:10000]
+        if attachment_text is not None
+        and attachment_text.parse_status == "ready"
+        else ""
+    )
     if not content:
         content = f"已归档文件「{attachment.file_name}」，请在确认前补充施工内容、进度和风险信息。"
 

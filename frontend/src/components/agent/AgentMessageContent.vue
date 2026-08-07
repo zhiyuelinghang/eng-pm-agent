@@ -175,7 +175,7 @@
               </n-icon>
               {{ messageStatusLabel(runtimeMessage) }}
             </span>
-            <span>{{ elapsed(runtimeMessage) }}</span>
+            <span>{{ elapsedLabel(runtimeMessage) }}</span>
           </div>
           <div v-if="runtimeMessage.model_names?.length || runtimeTrace.modelNames.length || runtimeMessage.usage" class="agent-runtime-metrics">
             <span v-if="runtimeMessage.model_names?.length" class="agent-runtime-model" :title="runtimeMessage.model_names.join('、')">{{ runtimeMessage.model_names.join('、') }}</span>
@@ -414,13 +414,33 @@ function messageStatusLabel(message: AgentRuntimeMessage) {
   return '已完成'
 }
 
+function isLatestRuntimeMessage(message: AgentRuntimeMessage) {
+  const messages = props.runtimeTrace?.messages || []
+  return messages[messages.length - 1]?.id === message.id
+}
+
 function elapsed(message: AgentRuntimeMessage) {
-  const start = Date.parse(message.created_at)
-  const end = message.finished_at ? Date.parse(message.finished_at) : now.value
+  const isLatest = isLatestRuntimeMessage(message)
+  const startedAt = isLatest
+    ? props.runtimeTrace?.turnStartedAt || message.created_at
+    : message.created_at
+  const finishedAt = isLatest
+    ? props.runtimeTrace?.turnFinishedAt || message.finished_at
+    : message.finished_at
+  const start = Date.parse(startedAt)
+  const end = finishedAt ? Date.parse(finishedAt) : now.value
   if (!Number.isFinite(start) || !Number.isFinite(end)) return ''
   const seconds = Math.max(0, Math.round((end - start) / 1000))
   if (seconds < 60) return `${seconds}s`
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+}
+
+function elapsedLabel(message: AgentRuntimeMessage) {
+  const value = elapsed(message)
+  if (!value) return ''
+  return isLatestRuntimeMessage(message)
+    ? `总耗时 ${value}`
+    : value
 }
 
 function formatNumber(value: number) {

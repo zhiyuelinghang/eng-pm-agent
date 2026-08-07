@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 """Workspace router — manage MCP clients and skills on a workspace."""
+import os
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
@@ -8,13 +11,19 @@ from ..deps import (
     get_current_user_id,
     get_extra_agent_tool_catalog,
     get_extra_agent_tools,
+    get_optional_mcp_registry_manager,
     get_storage,
     get_workspace_manager,
 )
 from .._auth import AgentScopePrincipal
 from .._session_access import require_runtime_session_access
-from .._types import AgentToolCatalogFactory, AgentToolFactory
+from .._types import (
+    AgentToolCatalogFactory,
+    AgentToolDescriptor,
+    AgentToolFactory,
+)
 from ..workspace_manager import WorkspaceManagerBase
+from ..mcp_registry import MCPRegistryManager
 from ..storage import StorageBase
 from ...mcp import MCPClient
 from ...skill import Skill
@@ -45,11 +54,12 @@ class ToolInfo(BaseModel):
 
 
 class WorkspaceToolInfo(ToolInfo):
-    """A directly available tool and the layer that contributes it."""
+    """A fixed direct tool and the layer that contributes it."""
 
     source: str
+    category: Literal["database", "workspace", "general"]
     display_name: str | None = None
-    assigned: bool
+    assigned: bool = True
     read_only: bool
     input_schema: dict = Field(default_factory=dict)
 
@@ -59,6 +69,32 @@ class MCPClientStatus(MCPClient):
 
     is_healthy: bool = False
     tools: list[ToolInfo] = Field(default_factory=list)
+
+
+def _default_workspace_tool_catalog() -> list[AgentToolDescriptor]:
+    """Describe built-in workspace tools without creating a chat session.
+
+    System tools are fixed platform capabilities shared by every agent, while
+    the live backend/path belongs to a session workspace. The catalogue
+    therefore comes from the built-in tool classes; a concrete workspace is
+    needed only when a tool is called. Keep this list aligned with
+    :meth:`LocalWorkspace.list_tools` and the platform-wide execution policy.
+    """
+    from ...tool import Bash, Edit, Glob, Grep, Read, Write
+
+    tool_types = [Edit, Glob, Grep, Read, Write]
+    if os.name != "nt":
+        tool_types.insert(0, Bash)
+    return [
+        AgentToolDescriptor(
+            name=tool_type.name,
+            description=tool_type.description,
+            category="workspace",
+            input_schema=tool_type.input_schema,
+            read_only=tool_type.is_read_only,
+        )
+        for tool_type in tool_types
+    ]
 
 
 async def _resolve_workspace(
@@ -94,7 +130,7 @@ async def _resolve_workspace(
 @workspace_router.get("/tool")
 async def list_workspace_tools(
     agent_id: str = Query(...),
-    session_id: str = Query(...),
+    session_id: str | None = Query(default=None),
     user_id: str = Depends(get_current_user_id),
     principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
@@ -103,21 +139,19 @@ async def list_workspace_tools(
     catalog_factory: AgentToolCatalogFactory | None = Depends(
         get_extra_agent_tool_catalog,
     ),
+    mcp_registry_manager: MCPRegistryManager | None = Depends(
+        get_optional_mcp_registry_manager,
+    ),
 ) -> list[WorkspaceToolInfo]:
-    """Return every direct tool assignable to the current agent.
+    """Return the fixed direct-tool catalogue shared by every agent.
 
-    MCP tools and skills are intentionally excluded because the WebUI exposes
-    them in their own neighboring tabs.
+    Assignable MCP tools and skills are excluded because the WebUI exposes
+    them in neighboring tabs. Packages designated as fixed system tools are
+    included here instead: every agent receives them and management clients
+    can inspect but never assign or disable them. Both application and
+    workspace catalogues are available before a management-chat session; a
+    session is required only to bind tools to a live execution backend.
     """
-    workspace = await _resolve_workspace(
-        user_id,
-        agent_id,
-        session_id,
-        storage,
-        workspace_manager,
-        principal,
-    )
-
     agent_record = await storage.get_agent(user_id, agent_id)
     if agent_record is None:
         raise HTTPException(
@@ -125,17 +159,44 @@ async def list_workspace_tools(
             detail=f"Agent {agent_id!r} not found.",
         )
 
+    workspace_tools = _default_workspace_tool_catalog()
+    if session_id is not None:
+        workspace = await _resolve_workspace(
+            user_id,
+            agent_id,
+            session_id,
+            storage,
+            workspace_manager,
+            principal,
+        )
+        workspace_tools = await workspace.list_tools()
+
     if catalog_factory is not None:
         platform_tools = await catalog_factory(user_id, agent_id)
-    elif extra_factory is not None:
+    elif extra_factory is not None and session_id is not None:
         platform_tools = await extra_factory(user_id, agent_id, session_id)
     else:
         platform_tools = []
-    workspace_tools = await workspace.list_tools()
+
+    system_tools: list[AgentToolDescriptor] = []
+    if mcp_registry_manager is not None:
+        for record in await mcp_registry_manager.list_system_tool_records():
+            for tool in record.tools:
+                system_tools.append(
+                    AgentToolDescriptor(
+                        name=tool.name,
+                        display_name=tool.display_name,
+                        description=tool.description,
+                        category="general",
+                        read_only=tool.read_only,
+                        input_schema=tool.input_schema,
+                    ),
+                )
 
     results: list[WorkspaceToolInfo] = []
     seen: set[str] = set()
     for source, tools in (
+        ("platform", system_tools),
         ("platform", platform_tools),
         ("workspace", workspace_tools),
     ):
@@ -148,8 +209,13 @@ async def list_workspace_tools(
                     name=tool.name,
                     description=tool.description,
                     source=source,
+                    category=getattr(
+                        tool,
+                        "category",
+                        "workspace" if source == "workspace" else "general",
+                    ),
                     display_name=getattr(tool, "display_name", None),
-                    assigned=agent_record.data.tool_config.allows(tool.name),
+                    assigned=True,
                     read_only=bool(
                         getattr(
                             tool,

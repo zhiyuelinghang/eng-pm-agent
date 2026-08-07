@@ -1,37 +1,21 @@
 ---
 name: extract-project-risks
-description: 从工程风险清单提取风险要素。风险源专家处理相关工序、风险等级、部位、判定条件和风险窗口时使用。
+description: 整理风险源记录，并写入自己负责的初始化草稿分区。
 ---
 
-# 提取项目风险源
+# 风险源草稿分区
 
-禁止读取原始附件。先调用 `dobby_read_project_initialization_artifact` 读取负责人
-指定标准化批次的 `risks` 分区；读取具体分片时必须使用清单中的
-`artifact_format`。风险源不关联 WBS，不读取草稿 WBS，也不推断 WBS 编码。
+只处理 `section="risks"`：序号、相关工序原文、风险部位、等级、判定条件、风险
+起止日期和摘要。风险源不自动关联 WBS，也不擅自改写风险等级。
 
-## 提取字段
-
-- `serial_no`
-- `related_process_name`
-- `risk_part`
-- `risk_level`
-- `evaluation_condition`
-- `risk_window_start_date`
-- `risk_window_end_date`
-- `summary`
-
-## 提取规则
-
-- `related_process_name` 忠实保留风险清单中的相关工序文字，不转换为 WBS。
-- 风险窗口由 `risk_window_start_date` 和 `risk_window_end_date` 表达；原文缺失时使用 `null`。
-- 序号缺口不等于数据缺失；只报告实际读取到的记录和来源范围。
-- 不判断时间窗口、等级或判定条件是否异常；平台规则和核验
-  智能体统一给出结论。
-
-## 写入与汇报
-
-核对标准 JSON 的风险字段、相关工序、风险窗口和来源后，调用
-`dobby_import_project_initialization_artifact` 批量导入。后端直接读取标准资料，
-不要在工具参数中重新复制风险数组。只有少量记录确需修正时，才使用
-`dobby_write_project_initialization_draft_section` 提交修正后的完整分区。成功后
-用 `TeamSay` 只汇报风险数和需统一核验的摘要。
+邀请任务只包含相关 `file_id/chunk_id`。用解析分块读取交互逐个读取分块，显式指定
+fields，并使用 `record_id=chunk_id`、`limit=1`、`text_field="content"`、
+`text_offset=0`、`text_limit=6000`。每页检查 `_text_page`，用 `next_offset`
+继续读取，直到 `has_more=false`；必须读完所有相关分块，禁止只读第一页。随后再读取
+当前草稿和分区。
+新分区调用 `dobby_create_initialization_risks_section`；已有
+自己提交的分区调用 `dobby_update_initialization_risks_section`。写入完整数组、来源
+和核对说明，不写正式业务表。`payload` 顶层必须直接是风险数组，禁止再包裹
+`risks`、`items`、`data`、`result` 或 `summary`。写入成功就是完成边界，无需再
+调用 `TeamSay`。每条记录的字段名必须逐字使用写入工具 schema 中的英文技术字段，
+禁止中文字段名和 schema 外字段。

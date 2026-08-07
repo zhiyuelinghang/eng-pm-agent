@@ -4,6 +4,7 @@
 from ._agent import (
     AgentCallConfig,
     AgentData,
+    AgentMCPConfig,
     AgentModelPolicy,
     AgentRecord,
     AgentToolConfig,
@@ -39,6 +40,7 @@ from ._user import UserRecord
 
 __all__ = [
     "AgentCallConfig",
+    "AgentMCPConfig",
     "AgentToolConfig",
     "AgentData",
     "AgentModelPolicy",

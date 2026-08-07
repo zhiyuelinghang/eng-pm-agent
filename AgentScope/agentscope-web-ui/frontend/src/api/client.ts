@@ -141,6 +141,27 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 	return res.json() as Promise<T>;
 }
 
+async function uploadRequest<T>(path: string, body: FormData): Promise<T> {
+	const headers: Record<string, string> = {};
+	const token = getAuthToken();
+	if (token) headers.Authorization = `Bearer ${token}`;
+	const res = await fetch(getApiUrl(path), {
+		method: 'POST',
+		headers,
+		body,
+	});
+	if (!res.ok) {
+		const detail = await extractErrorDetail(res);
+		const error = new ApiError(res.status, detail);
+		if (res.status === 401) {
+			clearAuthSession();
+			if (window.location.pathname !== '/setup') window.location.assign('/setup');
+		}
+		throw error;
+	}
+	return res.json() as Promise<T>;
+}
+
 async function streamRequest(
 	path: string,
 	options: RequestOptions & { signal?: AbortSignal } = {},
@@ -175,8 +196,11 @@ async function streamRequest(
 }
 
 export const client = {
-	get: <T>(path: string, params?: Record<string, string>) =>
-		request<T>(path, { method: 'GET', params }),
+	get: <T>(
+		path: string,
+		params?: Record<string, string>,
+		options?: { silent?: boolean },
+	) => request<T>(path, { method: 'GET', params, silent: options?.silent }),
 	post: <T>(
 		path: string,
 		body?: unknown,
@@ -197,6 +221,7 @@ export const client = {
 	) => request<T>(path, { method: 'PATCH', body, params, silent: options?.silent }),
 	delete: <T = void>(path: string, params?: Record<string, string>) =>
 		request<T>(path, { method: 'DELETE', params }),
+	upload: <T>(path: string, body: FormData) => uploadRequest<T>(path, body),
 	stream: (path: string, options?: RequestOptions & { signal?: AbortSignal }) =>
 		streamRequest(path, options),
 };

@@ -4,6 +4,8 @@ export { sessionApi } from './session';
 export { credentialApi } from './credential';
 export { chatApi } from './chat';
 export { workspaceApi } from './workspace';
+export { mcpRegistryApi } from './mcpRegistry';
+export { databaseInteractionApi } from './databaseInteractions';
 export { scheduleApi } from './schedule';
 export { modelApi, ttsModelApi } from './model';
 export { knowledgeBaseApi } from './knowledgeBase';

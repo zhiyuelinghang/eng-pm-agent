@@ -1,38 +1,23 @@
 ---
 name: validate-wbs-timeline
-description: 完整提取阶段式 WBS 树、计划字段及附件明确给出的前置关系。WBS 与进度专家处理进度计划或 Project 导出表时使用。
+description: 整理 WBS、计划与进度，并写入自己负责的初始化草稿分区。
 ---
 
-# 提取 WBS 与进度
+# WBS 与进度草稿分区
 
-禁止读取原始附件。先调用 `dobby_read_project_initialization_artifact` 读取负责人
-指定标准化批次的 `wbs` 分区清单，并使用清单中的 `artifact_format` 按分片
-分页核对必要内容。
+只处理 `section="wbs"`。完整保留编码、名称、日期、工时、进度、状态、优先级、
+成本和来源。`parent_wbs_code` 只能由直接编码前缀确定；前置编码只能来自资料明确
+说明；数值 `0` 不是空值。
 
-## 构建记录
-
-保留附件中每条带 WBS 编码的记录，并提取草稿结构要求的全部原始字段。核心规则：
-
-- `level` 等于点分编码段数。
-- `parent_wbs_code` 只能是直接编码前缀；根节点为 `null`。
-- `sort_order` 按原始行顺序或明确排序字段保留。
-- `progress_percent=0` 必须保留为 `0`；空单元格才是 `null`。
-- 状态、优先级、日期为空时保持 `null`，不得写“未提供”。
-- `predecessor_wbs_codes` 只来自附件明确的前置字段或用户明确说明；禁止依据相邻
-  编码、名称或日期推断。
-- 名称像“任务名称”等占位内容时仍保留记录，同时标记疑似占位。
-
-## 职责边界
-
-- 只提取字段、构造直接父级和保留附件明确给出的前置关系。
-- 不判断编码重复、父级缺失、时间线、依赖、汇总日期或占位内容是否异常。
-- 平台规则统一检查可确定的结构和时间问题；初始化核验专家负责跨专业语义问题。
-- 遇到无法读取的单元格或多个互相冲突的原始值时保留证据，不自行修正。
-
-## 写入与汇报
-
-核对标准 JSON 的编码、层级、0/空值和来源后，调用
-`dobby_import_project_initialization_artifact` 批量导入。后端会直接合并全部
-JSON 分片，不要在工具参数中重新生成或复制完整 WBS。只有少量节点确需修正时，
-才使用 `dobby_write_project_initialization_draft_section` 提交修正后的完整分区。
-成功后用 `TeamSay` 只汇报节点数和需统一核验的摘要。
+邀请任务只包含相关 `file_id/chunk_id`。用解析分块读取交互逐个读取分块，显式指定
+fields，并使用 `record_id=chunk_id`、`limit=1`、`text_field="content"`、
+`text_offset=0`、`text_limit=6000`。每页检查 `_text_page`，用 `next_offset`
+继续读取，直到 `has_more=false`；必须读完所有相关分块，禁止只读第一页。随后再读取
+当前草稿和分区。
+新分区调用 `dobby_create_initialization_wbs_section`；已有
+自己提交的分区调用 `dobby_update_initialization_wbs_section`。写入完整数组、来源
+和时间线/层级核对说明，不写正式业务表。`payload` 顶层必须直接是 WBS 数组，禁止
+再包裹 `wbs`、`tasks`、`items`、`data`、`result` 或 `summary`。数组必须保持扁平，
+每行资料对应一条记录，层级只写入 `parent_wbs_code`，绝不能生成 `children`。每条
+记录的字段名必须逐字使用写入工具 schema 中的英文技术字段，禁止中文字段名和 schema
+外字段。写入成功就是完成边界，无需再调用 `TeamSay`。

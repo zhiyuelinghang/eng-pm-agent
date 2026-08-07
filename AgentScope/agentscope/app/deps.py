@@ -26,6 +26,8 @@ from ._types import (
     AgentToolFactory,
 )
 from .message_bus import MessageBus
+from .mcp_registry import MCPRegistryManager
+from .database_interactions import DatabaseInteractionManager
 from .rag.blob_store import BlobStoreBase
 from .rag.knowledge_base_manager import KnowledgeBaseManagerBase
 from .storage import StorageBase
@@ -242,6 +244,45 @@ async def get_workspace_manager(request: Request) -> WorkspaceManagerBase:
         `WorkspaceManagerBase`: The workspace manager stored in ``app.state``.
     """
     return request.app.state.workspace_manager
+
+
+async def get_mcp_registry_manager(request: Request) -> MCPRegistryManager:
+    """Return the configured platform-level MCP package registry."""
+    manager: MCPRegistryManager | None = getattr(
+        request.app.state,
+        "mcp_registry_manager",
+        None,
+    )
+    if manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Managed MCP package registry is not configured.",
+        )
+    return manager
+
+
+async def get_optional_mcp_registry_manager(
+    request: Request,
+) -> MCPRegistryManager | None:
+    """Return the managed-package registry when the app configured one."""
+    return getattr(request.app.state, "mcp_registry_manager", None)
+
+
+async def get_database_interaction_manager(
+    request: Request,
+) -> DatabaseInteractionManager:
+    """Return the configured Dobby database-interaction proxy."""
+    manager: DatabaseInteractionManager | None = getattr(
+        request.app.state,
+        "database_interaction_manager",
+        None,
+    )
+    if manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="数据库交互管理服务尚未配置。",
+        )
+    return manager
 
 
 async def get_extra_agent_middlewares(

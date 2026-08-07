@@ -37,6 +37,7 @@ from agentscope.app.storage import (
     AgentRecord,
     ChatModelConfig,
     PlatformAgentConfig,
+    PlatformSessionContext,
     PlatformSettingsData,
     PlatformSettingsRecord,
     SessionConfig,
@@ -66,6 +67,7 @@ def _record(
     published: bool = True,
     sort_order: int = 100,
     fixed_model: bool = False,
+    initialization_role: str | None = None,
 ) -> AgentRecord:
     return AgentRecord(
         id=agent_id,
@@ -87,6 +89,7 @@ def _record(
                 enabled=enabled,
                 published=published,
                 sort_order=sort_order,
+                initialization_role=initialization_role,
             ),
         ),
     )
@@ -161,11 +164,12 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             _record("draft", "Draft", published=False),
             _record("internal", "Internal", role="system_internal"),
             _record(
-                "initializer",
-                "Initializer",
+                "wbs-worker",
+                "WBS Worker",
                 role="system_internal",
                 published=False,
                 fixed_model=True,
+                initialization_role="wbs",
             ),
         ]
         access = SimpleNamespace(
@@ -180,7 +184,6 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                     user_id=USER_ID,
                     data=PlatformSettingsData(
                         global_main_agent_id="main",
-                        project_initializer_agent_id="initializer",
                     ),
                 ),
             ),
@@ -196,10 +199,9 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(catalog.global_main.id, "main")
         self.assertTrue(catalog.global_main.model_ready)
-        self.assertEqual(catalog.project_initializer.id, "initializer")
         self.assertEqual(
-            catalog.project_initializer.role,
-            "system_internal",
+            [item.id for item in catalog.initialization_workers],
+            ["wbs-worker"],
         )
         self.assertEqual(
             [item.id for item in catalog.business_agents],
@@ -266,91 +268,6 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             "global_main",
         )
         self.assertEqual(updated["selected"].data.call_config.scope, "all")
-
-    async def test_project_initializer_is_hidden_with_selected_collaboration(
-        self,
-    ) -> None:
-        main = _record(
-            "main",
-            "Main",
-            role="global_main",
-            fixed_model=True,
-        )
-        initializer = _record(
-            "initializer",
-            "Initializer",
-            fixed_model=True,
-        ).model_copy(
-            update={
-                "data": _record(
-                    "initializer",
-                    "Initializer",
-                    fixed_model=True,
-                ).data.model_copy(
-                    update={
-                        "call_config": AgentCallConfig(
-                            scope="selected",
-                            allowed_agent_ids=["specialist"],
-                        ),
-                    },
-                ),
-            },
-        )
-        storage = SimpleNamespace(
-            get_agent=AsyncMock(return_value=initializer),
-            get_platform_settings=AsyncMock(
-                return_value=PlatformSettingsRecord(
-                    user_id=USER_ID,
-                    data=PlatformSettingsData(
-                        global_main_agent_id="main",
-                    ),
-                ),
-            ),
-            list_agents=AsyncMock(return_value=[main, initializer]),
-            upsert_agent=AsyncMock(return_value="agent"),
-            upsert_platform_settings=AsyncMock(
-                return_value=PlatformSettingsRecord(
-                    user_id=USER_ID,
-                    data=PlatformSettingsData(
-                        global_main_agent_id="main",
-                        project_initializer_agent_id="initializer",
-                    ),
-                ),
-            ),
-        )
-
-        response = await update_platform_settings(
-            body=UpdatePlatformSettingsRequest(
-                project_initializer_agent_id="initializer",
-            ),
-            user_id=USER_ID,
-            storage=storage,
-        )
-
-        self.assertEqual(
-            response.project_initializer_agent_id,
-            "initializer",
-        )
-        updated_initializer = next(
-            call.args[1]
-            for call in storage.upsert_agent.await_args_list
-            if call.args[1].id == "initializer"
-        )
-        self.assertEqual(
-            updated_initializer.data.platform_config.role,
-            "system_internal",
-        )
-        self.assertFalse(
-            updated_initializer.data.platform_config.published,
-        )
-        self.assertEqual(
-            updated_initializer.data.call_config.scope,
-            "selected",
-        )
-        self.assertEqual(
-            updated_initializer.data.call_config.allowed_agent_ids,
-            ["specialist"],
-        )
 
     async def test_selecting_main_demotes_the_previous_main(self) -> None:
         old_main = _record("old", "Old", role="global_main")
@@ -444,6 +361,56 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             "credential",
             "credential-fixed-model",
         )
+
+    async def test_platform_session_applies_exact_tool_allow_rules(
+        self,
+    ) -> None:
+        fixed = _record("fixed", "fixed-model", fixed_model=True)
+        access = SimpleNamespace(
+            resolve_agent=AsyncMock(return_value=fixed),
+            get_resource=AsyncMock(return_value=object()),
+        )
+        storage = SimpleNamespace(
+            upsert_session=AsyncMock(
+                return_value=SimpleNamespace(id="session-id"),
+            ),
+        )
+        workspace = SimpleNamespace(
+            assign_workspace_id=lambda **_: "workspace-id",
+        )
+        tool_name = "mcp__sample-package__import"
+
+        await create_session(
+            body=CreateSessionRequest(
+                agent_id="fixed",
+                platform_context=PlatformSessionContext(
+                    user_id="1",
+                    username="admin",
+                    display_name="系统管理员",
+                    project_id="2",
+                    project_name="测试项目",
+                    conversation_id="3",
+                    conversation_title="项目初始化",
+                    conversation_type="initialization",
+                    agent_name="初始化助手",
+                    auto_allowed_tool_names=[tool_name],
+                ),
+            ),
+            user_id=USER_ID,
+            storage=storage,
+            workspace_manager=workspace,
+            access=access,
+            principal=AgentScopePrincipal(
+                kind="service",
+                subject="engineering-platform",
+            ),
+        )
+
+        state = storage.upsert_session.await_args.kwargs["state"]
+        rule = state.permission_context.allow_rules[tool_name][0]
+        self.assertEqual(rule.tool_name, tool_name)
+        self.assertEqual(rule.behavior.value, "allow")
+        self.assertEqual(rule.source, "platformSession")
 
     async def test_fixed_agent_model_is_resynchronised_on_session_update(
         self,

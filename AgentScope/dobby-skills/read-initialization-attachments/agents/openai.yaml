@@ -1,4 +1,0 @@
-interface:
-  display_name: "读取初始化附件"
-  short_description: "可靠读取多种项目附件、表格结构、扫描件与图片OCR内容"
-  default_prompt: "使用 $read-initialization-attachments 完整读取并结构化分析当前项目附件。"

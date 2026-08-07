@@ -1,4 +1,4 @@
 interface:
   display_name: "编排项目初始化"
-  short_description: "按任务复杂度规划协同、交叉校验并维护项目初始化草稿"
-  default_prompt: "使用 $orchestrate-project-initialization 编排本次项目初始化并生成待核对草稿。"
+  short_description: "先制定计划，再组织专项智能体形成待确认草稿"
+  default_prompt: "请按项目初始化编排流程处理本轮资料。"

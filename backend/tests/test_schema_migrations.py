@@ -1,6 +1,7 @@
+import json
 import sqlite3
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, inspect, select
 from sqlalchemy.orm import Session
 
 from backend.app.db import Base
@@ -145,6 +146,13 @@ def test_legacy_sqlite_schema_is_backed_up_and_migrated(tmp_path) -> None:
     upgrade_database_schema(engine, Base.metadata)
     upgrade_database_schema(engine, Base.metadata)
 
+    table_names = set(inspect(engine).get_table_names())
+    assert {
+        "database_interaction_table_policies",
+        "database_interactions",
+        "database_interaction_agent_assignments",
+    } <= table_names
+
     with Session(engine) as db:
         user = db.scalar(select(User).where(User.id == 1))
         project = db.scalar(select(Project).where(Project.id == 1))
@@ -175,4 +183,100 @@ def test_legacy_sqlite_schema_is_backed_up_and_migrated(tmp_path) -> None:
         db.commit()
 
     assert database_path.with_suffix(".db.pre-schema-v2.bak").exists()
+    engine.dispose()
+
+
+def test_existing_database_interactions_receive_join_rules_column(tmp_path) -> None:
+    database_path = tmp_path / "existing-interactions.db"
+    connection = sqlite3.connect(database_path)
+    connection.executescript(
+        """
+        CREATE TABLE database_interactions (
+            id INTEGER PRIMARY KEY,
+            key VARCHAR(128) NOT NULL,
+            display_name VARCHAR(100) NOT NULL
+        );
+        INSERT INTO database_interactions (id, key, display_name)
+        VALUES (1, 'existing_query', '已有查询');
+        """,
+    )
+    connection.commit()
+    connection.close()
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+
+    upgrade_database_schema(engine, Base.metadata)
+    upgrade_database_schema(engine, Base.metadata)
+
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("database_interactions")
+    }
+    assert {
+        "join_rules",
+        "context_bindings",
+        "fixed_values",
+        "allowed_conversation_types",
+        "access_mode",
+    } <= columns
+    with engine.connect() as database:
+        values = database.exec_driver_sql(
+            "SELECT join_rules, context_bindings, fixed_values, "
+            "allowed_conversation_types, access_mode "
+            "FROM database_interactions WHERE id = 1",
+        ).one()
+    assert values.join_rules == "[]"
+    assert values.context_bindings == "[]"
+    assert values.fixed_values == "{}"
+    assert json.loads(values.allowed_conversation_types) == [
+        "general",
+        "business",
+        "initialization",
+    ]
+    assert values.access_mode == "agent"
+    assert database_path.with_suffix(
+        ".db.pre-database-joins.bak",
+    ).exists()
+    engine.dispose()
+
+
+def test_existing_attachment_texts_receive_pipeline_state(tmp_path) -> None:
+    database_path = tmp_path / "existing-attachment-texts.db"
+    connection = sqlite3.connect(database_path)
+    connection.executescript(
+        """
+        CREATE TABLE attachment_texts (
+            attachment_id INTEGER PRIMARY KEY,
+            project_id INTEGER NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            extracted_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+        );
+        INSERT INTO attachment_texts (attachment_id, project_id, content)
+        VALUES (1, 1, '旧版提取内容');
+        """,
+    )
+    connection.commit()
+    connection.close()
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+
+    upgrade_database_schema(engine, Base.metadata)
+    upgrade_database_schema(engine, Base.metadata)
+
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("attachment_texts")
+    }
+    assert {
+        "parse_status",
+        "parser",
+        "parse_error",
+        "parse_details",
+    } <= columns
+    with engine.connect() as database:
+        row = database.exec_driver_sql(
+            "SELECT parse_status, parser, parse_details "
+            "FROM attachment_texts WHERE attachment_id = 1",
+        ).one()
+    assert row.parse_status == "legacy"
+    assert row.parser == "legacy_extractor"
+    assert json.loads(row.parse_details)["status"] == "legacy"
     engine.dispose()

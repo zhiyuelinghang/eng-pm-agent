@@ -117,6 +117,7 @@ class WorkerAutoReportTest(IsolatedAsyncioTestCase):
             "agentscope.app._service._chat.settle_team_member",
             new_callable=AsyncMock,
         ) as settle:
+            settle.return_value = True
             await service._auto_report_worker_reply(
                 user_id="default",
                 session_id="worker-session",
@@ -151,6 +152,7 @@ class WorkerAutoReportTest(IsolatedAsyncioTestCase):
             "agentscope.app._service._chat.settle_team_member",
             new_callable=AsyncMock,
         ) as settle:
+            settle.return_value = True
             await service._auto_report_worker_reply(
                 user_id="default",
                 session_id="worker-session",
@@ -181,6 +183,7 @@ class WorkerAutoReportTest(IsolatedAsyncioTestCase):
             "agentscope.app._service._chat.settle_team_member",
             new_callable=AsyncMock,
         ) as settle:
+            settle.return_value = True
             await service._auto_report_worker_reply(
                 user_id="default",
                 session_id="worker-session",
@@ -193,3 +196,31 @@ class WorkerAutoReportTest(IsolatedAsyncioTestCase):
         self.assertIn("已中断", deliver.await_args.kwargs["content"])
         self.assertEqual(settle.await_args.kwargs["status"], "interrupted")
         self.assertEqual(settle.await_args.kwargs["revision"], 3)
+
+    async def test_already_settled_worker_is_not_reported_twice(self) -> None:
+        service, worker_agent = self._service()
+        reply = AssistantMsg(
+            id="reply-already-settled",
+            name="核验智能体",
+            content=[TextBlock(text="重复的终态消息")],
+            finished_reason=ReplyFinishedReason.COMPLETED,
+        )
+
+        with patch(
+            "agentscope.app._service._chat.deliver_team_message",
+            new_callable=AsyncMock,
+        ) as deliver, patch(
+            "agentscope.app._service._chat.settle_team_member",
+            new_callable=AsyncMock,
+            return_value=False,
+        ) as settle:
+            await service._auto_report_worker_reply(
+                user_id="default",
+                session_id="worker-session",
+                agent_id="worker-agent",
+                agent_record=worker_agent,
+                reply_msg=reply,
+            )
+
+        settle.assert_awaited_once()
+        deliver.assert_not_awaited()

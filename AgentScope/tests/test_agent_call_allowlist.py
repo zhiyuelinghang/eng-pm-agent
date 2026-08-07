@@ -127,6 +127,30 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
         self.assertIn("no longer allowed", result.content[0].text)
         self.assertEqual(storage.get_agent.await_count, 1)
 
+    async def test_invite_rejects_oversized_prompt_before_team_lookup(self) -> None:
+        target = _agent(TARGET_A_ID, "Target A", invitable=True)
+        storage = SimpleNamespace(
+            get_session=AsyncMock(),
+            get_team=AsyncMock(),
+            get_agent=AsyncMock(),
+        )
+        tool = AgentInvite(
+            storage=storage,
+            message_bus=object(),
+            workspace_manager=object(),
+            user_id=USER_ID,
+            session_id="session",
+            agent_id=CALLER_ID,
+            invitable_pool=[target],
+            caller_owner_id=USER_ID,
+        )
+
+        selected = tool.input_schema["properties"]["target"]["enum"][0]
+        result = await tool(target=selected, prompt="资料" * 6_001)
+
+        self.assertIn("prompt 过长", result.content[0].text)
+        self.assertEqual(storage.get_session.await_count, 0)
+
     async def test_global_main_only_sees_explicitly_enabled_targets(
         self,
     ) -> None:
@@ -244,7 +268,7 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
         self.assertIn("no longer invitable", result.content[0].text)
         self.assertEqual(storage.get_agent.await_count, 2)
 
-    async def test_initializer_invites_persistent_selected_agents_only(
+    async def test_initialization_worker_keeps_runtime_capabilities(
         self,
     ) -> None:
         caller = _agent(
@@ -257,6 +281,7 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
             platform_config=PlatformAgentConfig(
                 role="system_internal",
                 published=False,
+                initialization_role="wbs",
             ),
         )
         target = _agent(
@@ -273,7 +298,7 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
         settings = SimpleNamespace(
             data=SimpleNamespace(
                 global_main_agent_id="platform-main",
-                project_initializer_agent_id=CALLER_ID,
+                project_initializer_agent_id="initializer-main",
             ),
         )
         storage = SimpleNamespace(
@@ -307,15 +332,8 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
                 list_resource=AsyncMock(return_value=[caller, target]),
             ),
         )
-        tool_names = {
-            tool.name
-            for group in toolkit.tool_groups
-            for tool in group.tools
-        }
-
-        self.assertIn("TeamCreate", tool_names)
-        self.assertIn("AgentInvite", tool_names)
-        self.assertNotIn("AgentCreate", tool_names)
+        self.assertIsNotNone(await toolkit.get_tool("TaskCreate"))
+        self.assertIsNotNone(await toolkit.get_tool("AgentInvite"))
 
     async def _invite_targets(
         self,

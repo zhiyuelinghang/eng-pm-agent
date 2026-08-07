@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from agentscope.app import AgentScopeAuthConfig, create_app
 from agentscope.app.message_bus import InMemoryMessageBus
+from agentscope.app.mcp_registry import MCPRegistryManager
+from agentscope.app.database_interactions import (
+    DatabaseInteractionGatewayError,
+    DatabaseInteractionManager,
+)
 from agentscope.app.rag.blob_store import LocalBlobStore
 from agentscope.app.rag.knowledge_base_manager import CollectionPerKbManager
 from agentscope.app.storage import (
@@ -34,6 +40,7 @@ from scripts.dobby_agent_tools import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+logger = logging.getLogger(__name__)
 
 
 def _load_project_env() -> None:
@@ -69,6 +76,8 @@ def _required_env(name: str) -> str:
 
 
 _load_project_env()
+
+
 RUNTIME_HOME = Path(
     os.getenv("AGENTSCOPE_RUNTIME_HOME", PROJECT_ROOT / "data" / "agentscope"),
 ).resolve()
@@ -79,6 +88,9 @@ QDRANT_HOME = Path(
 KNOWLEDGE_BLOB_HOME = Path(
     os.getenv("AGENTSCOPE_KNOWLEDGE_BLOB_HOME", RUNTIME_HOME / "knowledge_blobs"),
 ).resolve()
+MCP_REGISTRY_HOME = Path(
+    os.getenv("AGENTSCOPE_MCP_REGISTRY_HOME", RUNTIME_HOME / "mcp_registry"),
+).resolve()
 SQLITE_PATH = Path(
     os.getenv("AGENTSCOPE_SQLITE_PATH", RUNTIME_HOME / "agentscope.db"),
 ).resolve()
@@ -88,6 +100,7 @@ for runtime_path in (
     WORKSPACE_HOME,
     QDRANT_HOME,
     KNOWLEDGE_BLOB_HOME,
+    MCP_REGISTRY_HOME,
     SQLITE_PATH.parent,
 ):
     runtime_path.mkdir(parents=True, exist_ok=True)
@@ -135,6 +148,26 @@ knowledge_base_manager = CollectionPerKbManager(
 )
 
 
+def _database_interaction_api_base() -> str:
+    explicit = os.getenv("DOBBY_INTERNAL_API_BASE_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    gateway = os.getenv(
+        "DOBBY_AGENT_TOOL_BASE_URL",
+        "http://127.0.0.1:38430/api/internal/agent-tools",
+    ).strip().rstrip("/")
+    return gateway.rsplit("/agent-tools", 1)[0]
+
+
+database_interaction_manager = DatabaseInteractionManager(
+    base_url=_database_interaction_api_base(),
+    token=(
+        os.getenv("DOBBY_AGENT_TOOL_TOKEN", "").strip()
+        or _required_env("AGENTSCOPE_SERVICE_TOKEN")
+    ),
+)
+
+
 async def _create_platform_agent_tools(
     user_id: str,
     agent_id: str,
@@ -145,8 +178,11 @@ async def _create_platform_agent_tools(
     platform_agent_id = agent_id
     read_only = False
     initialization_role: str | None = None
+    database_interactions: list[dict[str, Any]] = []
+    legacy_allowed_names: list[str] | None = None
     agent_record = await storage.get_agent(user_id, agent_id)
     if agent_record is not None:
+        legacy_allowed_names = agent_record.data.tool_config.allowed_tool_names
         initialization_role = (
             agent_record.data.platform_config.initialization_role
         )
@@ -162,7 +198,18 @@ async def _create_platform_agent_tools(
             if leader_session is not None:
                 platform_session_id = leader_session.id
                 platform_agent_id = leader_session.agent_id
-                read_only = True
+                # Ordinary borrowed agents remain read-only. Initialization
+                # specialists receive only their explicitly assigned draft
+                # interactions and may therefore write isolated draft rows.
+                read_only = initialization_role is None
+    try:
+        database_interactions = await database_interaction_manager.list_runtime(
+            agent_id=agent_id,
+            session_id=platform_session_id,
+            legacy_allowed_names=legacy_allowed_names,
+        )
+    except DatabaseInteractionGatewayError as exc:
+        logger.warning("Unable to load database interactions: %s", exc)
     return await create_dobby_agent_tools(
         user_id,
         agent_id,
@@ -171,6 +218,7 @@ async def _create_platform_agent_tools(
         platform_agent_id=platform_agent_id,
         read_only=read_only,
         initialization_role=initialization_role,
+        database_interactions=database_interactions,
     )
 
 
@@ -178,19 +226,26 @@ async def _list_platform_agent_tool_catalog(
     user_id: str,
     agent_id: str,
 ):
-    """List every Dobby tool assignable to this agent's persisted role."""
-    agent_record = await storage.get_agent(user_id, agent_id)
-    initialization_role = (
-        agent_record.data.platform_config.initialization_role
-        if agent_record is not None
-        else None
-    )
-    return create_dobby_agent_tool_catalog(initialization_role)
+    """List the global Dobby tool catalogue shared by every agent."""
+    del user_id, agent_id
+    return [
+        item
+        for item in create_dobby_agent_tool_catalog()
+        if item.category != "database"
+    ]
 
 app = create_app(
     storage=storage,
     message_bus=InMemoryMessageBus(),
     workspace_manager=LocalWorkspaceManager(basedir=str(WORKSPACE_HOME)),
+    mcp_registry_manager=MCPRegistryManager(
+        root_dir=MCP_REGISTRY_HOME,
+        idle_ttl=float(os.getenv("AGENTSCOPE_MCP_IDLE_TTL_SECONDS", "3600")),
+        max_active_instances=int(
+            os.getenv("AGENTSCOPE_MCP_MAX_ACTIVE_INSTANCES", "128"),
+        ),
+        system_tool_package_ids={"attachment-parser"},
+    ),
     knowledge_base_manager=knowledge_base_manager,
     knowledge_parsers=[
         TextParser(),
@@ -225,3 +280,4 @@ app = create_app(
         ),
     ],
 )
+app.state.database_interaction_manager = database_interaction_manager

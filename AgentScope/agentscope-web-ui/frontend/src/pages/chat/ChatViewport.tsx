@@ -1,5 +1,6 @@
 import type { TaskContext } from '@agentscope-ai/agentscope/state';
 import {
+	BookOpen,
 	BookText,
 	ChevronLeft,
 	ChevronRight,
@@ -13,7 +14,7 @@ import { usePanelRef } from 'react-resizable-panels';
 
 import type {
 	AgentCallConfig,
-	AgentToolConfig,
+	AgentMCPConfig,
 	AgentView,
 	ChatModelConfig,
 	PermissionMode,
@@ -26,6 +27,7 @@ import { ChatContent } from '@/components/chat/ChatContent.tsx';
 import { SubagentHitlCard } from '@/components/chat/SubagentHitlCard';
 import { CreateCredentialDialog } from '@/components/dialog/CreateCredentialDialog';
 import { AgentCollaborationPanel } from '@/components/panel/AgentCollaborationPanel';
+import { DatabaseInteractionPanel } from '@/components/panel/DatabaseInteractionPanel';
 import { KnowledgeBasePanel } from '@/components/panel/KnowledgeBasePanel';
 import { McpPanel } from '@/components/panel/McpPanel';
 import { PanelDock, type PanelDescriptor, type PanelKey } from '@/components/panel/PanelDock.tsx';
@@ -47,10 +49,31 @@ import { SidebarTrigger } from '@/components/ui/sidebar';
 import { useAvailableModels } from '@/hooks/useAvailableModels';
 import { useKnowledgeBaseMiddlewareSchema } from '@/hooks/useKnowledgeBaseMiddlewareSchema';
 import { useKnowledgeBases } from '@/hooks/useKnowledgeBases';
+import { useMcpRegistry } from '@/hooks/useMcpRegistry';
 import { useMessages } from '@/hooks/useMessages';
 import { useSessions } from '@/hooks/useSessions';
 import { useWorkspace } from '@/hooks/useWorkspace.ts';
 import { useTranslation } from '@/i18n/useI18n';
+
+const ATTACHMENT_PARSER_INPUT_TYPES = [
+	'.txt',
+	'.md',
+	'.csv',
+	'.xls',
+	'.xlsx',
+	'.docx',
+	'.pptx',
+	'.pdf',
+	'.png',
+	'.jpg',
+	'.jpeg',
+	'.jp2',
+	'.webp',
+	'.gif',
+	'.bmp',
+	'.tif',
+	'.tiff',
+];
 
 interface ChatViewportProps {
 	/**
@@ -70,8 +93,8 @@ interface ChatViewportProps {
 	agentsLoading?: boolean;
 	/** Persist the current agent's global collaboration configuration. */
 	onUpdateAgentCallConfig: (agentId: string, config: AgentCallConfig) => Promise<void>;
-	/** Persist the current agent's global direct-tool assignment. */
-	onUpdateAgentToolConfig: (agentId: string, config: AgentToolConfig) => Promise<void>;
+	/** Persist the current agent's global managed-MCP assignment. */
+	onUpdateAgentMCPConfig: (agentId: string, config: AgentMCPConfig) => Promise<void>;
 	/**
 	 * Optional hook invoked when a team membership change arrives on
 	 * this viewport's SSE stream. The outer page owns the session list
@@ -107,7 +130,7 @@ export function ChatViewport({
 	agents,
 	agentsLoading = false,
 	onUpdateAgentCallConfig,
-	onUpdateAgentToolConfig,
+	onUpdateAgentMCPConfig,
 	onTeamUpdated,
 }: ChatViewportProps) {
 	const { t } = useTranslation();
@@ -175,19 +198,16 @@ export function ChatViewport({
 			onTeamUpdated: handleTeamUpdated,
 			onStateUpdated: handleStateUpdated,
 		});
+	const { skills, skillsLoading, addSkill, updateSkill, removeSkill, tools, toolsLoading } =
+		useWorkspace(agentId, sessionId);
 	const {
-		mcps,
+		packages: mcpPackages,
 		loading: mcpsLoading,
-		addMcps,
-		removeMcp,
-		skills,
-		skillsLoading,
-		addSkill,
-		updateSkill,
-		removeSkill,
-		tools,
-		toolsLoading,
-	} = useWorkspace(agentId, sessionId);
+		uploading: mcpUploading,
+		error: mcpError,
+		uploadPackage,
+		removePackage,
+	} = useMcpRegistry(agentId);
 	const { knowledgeBases, loading: knowledgeBasesLoading } = useKnowledgeBases();
 	const { schema: kbMiddlewareSchema } = useKnowledgeBaseMiddlewareSchema();
 	const activeAgent = useMemo(
@@ -230,23 +250,37 @@ export function ChatViewport({
 			plan: {
 				tabLabel: t('panel.plan.title'),
 				icon: <ListTodo className="size-4" />,
+				help: {
+					description: t('panel.plan.description'),
+				},
 				content: <TaskPanel tasksContext={tasksContext} />,
 			},
 			mcp: {
 				tabLabel: 'MCP',
 				icon: <MCPSvg className="size-4" />,
+				help: {
+					description: t('panel.mcp.description'),
+					note: t('panel.mcp.globalNotice'),
+				},
 				content: (
 					<McpPanel
-						mcps={mcps}
+						agent={activeAgent}
+						packages={mcpPackages}
 						loading={mcpsLoading}
-						onAdd={addMcps}
-						onRemove={removeMcp}
+						uploading={mcpUploading}
+						loadError={mcpError}
+						onUpload={uploadPackage}
+						onRemove={removePackage}
+						onSave={onUpdateAgentMCPConfig}
 					/>
 				),
 			},
 			skill: {
 				tabLabel: t('panel.skill.title'),
 				icon: <BookText className="size-4" />,
+				help: {
+					description: t('panel.skill.description'),
+				},
 				content: (
 					<SkillPanel
 						skills={skills}
@@ -260,18 +294,35 @@ export function ChatViewport({
 			tool: {
 				tabLabel: t('panel.tool.title'),
 				icon: <Wrench className="size-4" />,
+				help: {
+					description: t('panel.tool.description'),
+					note: t('panel.tool.globalNotice'),
+				},
 				content: (
 					<ToolPanel
 						agent={activeAgent}
 						tools={tools}
 						loading={toolsLoading}
-						onSave={onUpdateAgentToolConfig}
 					/>
+				),
+			},
+			database: {
+				tabLabel: t('panel.database.title'),
+				icon: <Database className="size-4" />,
+				help: {
+					description: t('panel.database.description'),
+					note: t('panel.database.globalNotice'),
+				},
+				content: (
+					<DatabaseInteractionPanel agent={activeAgent} />
 				),
 			},
 			knowledge: {
 				tabLabel: t('panel.knowledge.title'),
-				icon: <Database className="size-4" />,
+				icon: <BookOpen className="size-4" />,
+				help: {
+					description: t('panel.knowledge.description'),
+				},
 				content: (
 					<KnowledgeBasePanel
 						knowledgeBases={knowledgeBases}
@@ -293,6 +344,10 @@ export function ChatViewport({
 			collaboration: {
 				tabLabel: t('panel.collaboration.title'),
 				icon: <Users className="size-4" />,
+				help: {
+					description: t('panel.collaboration.description'),
+					note: t('panel.collaboration.globalNotice'),
+				},
 				content: (
 					<AgentCollaborationPanel
 						agent={activeAgent}
@@ -306,10 +361,13 @@ export function ChatViewport({
 		[
 			t,
 			tasksContext,
-			mcps,
+			mcpPackages,
 			mcpsLoading,
-			addMcps,
-			removeMcp,
+			mcpUploading,
+			mcpError,
+			uploadPackage,
+			removePackage,
+			onUpdateAgentMCPConfig,
 			skills,
 			skillsLoading,
 			addSkill,
@@ -317,7 +375,6 @@ export function ChatViewport({
 			removeSkill,
 			tools,
 			toolsLoading,
-			onUpdateAgentToolConfig,
 			knowledgeBases,
 			knowledgeBasesLoading,
 			selectedKnowledgeConfig,
@@ -379,7 +436,7 @@ export function ChatViewport({
 	 * @returns The first available `ChatModelConfig`, or `null` when
 	 *   no credentials / models are configured.
 	 */
-	const getFirstAvailableModel = (): ChatModelConfig | null => {
+	const getFirstAvailableModel = useCallback((): ChatModelConfig | null => {
 		const firstType = Object.keys(groups)[0];
 		if (!firstType) return null;
 		const items = groups[firstType];
@@ -395,7 +452,7 @@ export function ChatViewport({
 			model: modelName,
 			parameters: {},
 		};
-	};
+	}, [groups]);
 
 	// Sync tasksContext from the session snapshot. Real-time updates
 	// arrive via the CustomEvent(name="state_updated") → the
@@ -450,7 +507,7 @@ export function ChatViewport({
 		setSelectedFallbackModel(view.session.config.fallback_chat_model_config ?? null);
 		setSelectedTTSModel(view.session.config.tts_model_config ?? null);
 		setSelectedKnowledgeConfig(view.session.config.knowledge_config ?? null);
-	}, [view, groups, sessionId, agentId, agentFixedModel]);
+	}, [view, sessionId, agentId, agentFixedModel, getFirstAvailableModel, refetchSessions]);
 
 	// Sync selectedPermissionMode when the session changes. Same
 	// loading-window guard as above — don't reset the displayed mode
@@ -618,46 +675,15 @@ export function ChatViewport({
 											</div>
 										) : null
 									}
-									allowedInputTypes={(
-										selectedModelCard?.input_types ?? []
-									).filter(
-										(t) =>
-											/^(image|video|audio|text)\/.+/.test(t) ||
-											t === 'application/pdf' ||
-											t.startsWith('application/vnd.') ||
-											t.startsWith('application/msword') ||
-											t.startsWith('application/vnd.openxmlformats'),
-									)}
+									allowedInputTypes={ATTACHMENT_PARSER_INPUT_TYPES}
 									fileProcessor={async (file) => {
-										const filePath = (file as File & { path?: string }).path;
-										if (filePath) {
-											return {
-												id: crypto.randomUUID(),
-												type: 'data' as const,
-												source: {
-													type: 'url' as const,
-													url: `file://${filePath}`,
-													media_type:
-														file.type || 'application/octet-stream',
-												},
-												name: file.name,
-											};
-										}
-										if (file.type === 'text/plain') {
-											const text = await file.text();
-											return {
-												id: crypto.randomUUID(),
-												type: 'text' as const,
-												text: `[File: ${file.name}]\n${text}`,
-											};
-										}
-										const buffer = await file.arrayBuffer();
-										const bytes = new Uint8Array(buffer);
-										let binary = '';
-										for (let i = 0; i < bytes.byteLength; i++) {
-											binary += String.fromCharCode(bytes[i]);
-										}
-										const base64 = btoa(binary);
+										const dataUrl = await new Promise<string>((resolve, reject) => {
+											const reader = new FileReader();
+											reader.onload = () => resolve(String(reader.result));
+											reader.onerror = () => reject(reader.error);
+											reader.readAsDataURL(file);
+										});
+										const base64 = dataUrl.split(',', 2)[1] ?? '';
 										return {
 											id: crypto.randomUUID(),
 											type: 'data' as const,

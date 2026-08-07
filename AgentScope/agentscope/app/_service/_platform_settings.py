@@ -46,4 +46,4 @@ async def get_project_initializer_agent_id(
         settings = None
     if settings is None:
         return None
-    return settings.data.project_initializer_agent_id
+    return getattr(settings.data, "project_initializer_agent_id", None)

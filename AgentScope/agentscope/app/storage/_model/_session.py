@@ -32,6 +32,14 @@ class PlatformSessionContext(BaseModel):
     agent_name: str
     session_role: Literal["primary", "worker"] = "primary"
     root_session_id: str | None = None
+    auto_allowed_tool_names: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+        description=(
+            "Exact runtime tool names the authenticated platform service "
+            "may execute without interactive approval in this session."
+        ),
+    )
 
 
 class ChatModelConfig(BaseModel):

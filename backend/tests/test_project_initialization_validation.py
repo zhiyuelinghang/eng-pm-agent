@@ -1,8 +1,51 @@
+from types import SimpleNamespace
+
+from backend.app.initialization_draft_queries import (
+    compose_initialization_draft_payload,
+)
 from backend.app.project_initialization import (
     ProjectInitializationPayload,
     suggest_unique_username,
     validate_initialization_payload,
 )
+
+
+def test_review_composes_specialist_sections_when_draft_payload_is_empty() -> None:
+    rows = [
+        SimpleNamespace(
+            section="project",
+            payload={"engineering_type_description": "异地扩建项目"},
+        ),
+        SimpleNamespace(
+            section="risks",
+            payload=[
+                {
+                    "serial_no": 1,
+                    "related_process_name": "基坑施工",
+                    "risk_part": "深基坑",
+                    "risk_level": "重大风险",
+                    "evaluation_condition": "开挖深度超过 5 米",
+                },
+            ],
+        ),
+    ]
+
+    class _Rows:
+        def all(self):
+            return rows
+
+    class _Session:
+        def scalars(self, _statement):
+            return _Rows()
+
+    payload = compose_initialization_draft_payload(
+        _Session(),
+        SimpleNamespace(id=7, payload={}),
+    )
+
+    assert payload.project.engineering_type_description == "异地扩建项目"
+    assert len(payload.risks) == 1
+    assert payload.risks[0].risk_part == "深基坑"
 
 
 def _wbs(

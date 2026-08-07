@@ -101,6 +101,8 @@ export type AgentRuntimeTrace = {
   teamUpdateCount: number
   subagentHitl: AgentSubagentHitlEntry[]
   status: string
+  turnStartedAt: string | null
+  turnFinishedAt: string | null
 }
 
 export type AgentRuntimeEvent = {
@@ -197,7 +199,10 @@ function cloneRuntimeTraceForUpdate(
   }
 }
 
-export function createEmptyRuntimeTrace(status = 'running'): AgentRuntimeTrace {
+export function createEmptyRuntimeTrace(
+  status = 'running',
+  turnStartedAt = new Date().toISOString(),
+): AgentRuntimeTrace {
   return {
     messages: [],
     modelNames: [],
@@ -205,6 +210,8 @@ export function createEmptyRuntimeTrace(status = 'running'): AgentRuntimeTrace {
     teamUpdateCount: 0,
     subagentHitl: [],
     status,
+    turnStartedAt,
+    turnFinishedAt: null,
   }
 }
 
@@ -252,13 +259,36 @@ export function runtimeTraceFromExtraData(
   if (modelNames.length && messages.length) {
     messages[messages.length - 1].model_names = modelNames
   }
+  const runtimeStatus = String(extraData.status || 'completed')
+  const activeStatuses = new Set([
+    'creating',
+    'running',
+    'interrupting',
+    'awaiting_permission',
+    'awaiting_external_result',
+  ])
+  const summaryStartedAt = typeof summary.turn_started_at === 'string'
+    ? summary.turn_started_at
+    : null
+  const summaryFinishedAt = typeof summary.turn_finished_at === 'string'
+    ? summary.turn_finished_at
+    : null
+  const firstMessageStartedAt = messages.find(message => message.created_at)?.created_at || null
+  const lastMessageFinishedAt = [...messages]
+    .reverse()
+    .find(message => message.finished_at)
+    ?.finished_at || null
   return {
     messages,
     modelNames,
     tasksContext,
     teamUpdateCount: Number(summary.team_update_count) || 0,
     subagentHitl: clone(subagentHitl),
-    status: String(extraData.status || 'completed'),
+    status: runtimeStatus,
+    turnStartedAt: summaryStartedAt || firstMessageStartedAt,
+    turnFinishedAt: activeStatuses.has(runtimeStatus)
+      ? null
+      : summaryFinishedAt || lastMessageFinishedAt,
   }
 }
 
@@ -292,14 +322,16 @@ function ensureReply(
   if (!replyId) return trace.messages[trace.messages.length - 1] ?? null
   let message = trace.messages.find(item => item.id === replyId)
   if (!message) {
+    const startedAt = String(event.created_at || new Date().toISOString())
     message = {
       id: replyId,
       name: String(event.name || '智能体'),
       role: 'assistant',
       content: [],
-      created_at: String(event.created_at || new Date().toISOString()),
+      created_at: startedAt,
     }
     trace.messages.push(message)
+    trace.turnStartedAt ||= startedAt
   }
   return message
 }
@@ -360,6 +392,8 @@ function applyAgentRuntimeEventMutable(
         created_at: startedAt,
       })
     }
+    trace.turnStartedAt ||= startedAt
+    trace.turnFinishedAt = null
     trace.status = 'running'
     return
   }
@@ -374,9 +408,11 @@ function applyAgentRuntimeEventMutable(
         message.finished_reason = 'waiting_for_collaboration'
         message.platform_collaboration_status = 'waiting'
         message.error = null
+        trace.turnFinishedAt = null
         trace.status = 'running'
       } else {
-        message.finished_at = String(event.created_at || new Date().toISOString())
+        const finishedAt = String(event.created_at || new Date().toISOString())
+        message.finished_at = finishedAt
         message.finished_reason = String(event.finished_reason || 'completed')
         message.platform_collaboration_status = null
         message.error = event.error || null
@@ -385,6 +421,7 @@ function applyAgentRuntimeEventMutable(
           : message.finished_reason === 'interrupted'
             ? 'interrupted'
             : 'completed'
+        trace.turnFinishedAt = finishedAt
       }
       break
     case 'MODEL_CALL_START': {

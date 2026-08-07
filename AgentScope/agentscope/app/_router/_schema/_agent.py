@@ -7,8 +7,8 @@ from pydantic import BaseModel, Field
 from ....agent import ContextConfig, ReActConfig
 from ...storage import (
     AgentCallConfig,
+    AgentMCPConfig,
     AgentModelPolicy,
-    AgentToolConfig,
     InviteConfig,
     PlatformAgentConfig,
     SessionKnowledgeConfig,
@@ -55,9 +55,9 @@ class CreateAgentRequest(BaseModel):
         default_factory=AgentCallConfig,
         description="Controls which existing agents this agent may invite.",
     )
-    tool_config: AgentToolConfig = Field(
-        default_factory=AgentToolConfig,
-        description="Direct tools assigned to this agent.",
+    mcp_config: AgentMCPConfig = Field(
+        default_factory=AgentMCPConfig,
+        description="Managed MCP packages assigned to this agent.",
     )
 
 
@@ -114,10 +114,10 @@ class UpdateAgentRequest(BaseModel):
             "complete object to update; omit to keep the existing settings."
         ),
     )
-    tool_config: AgentToolConfig | None = Field(
+    mcp_config: AgentMCPConfig | None = Field(
         default=None,
         description=(
-            "Complete direct-tool assignment for this agent. Omit to keep "
+            "Complete managed-MCP assignment for this agent. Omit to keep "
             "the existing assignment."
         ),
     )
@@ -145,6 +145,7 @@ class PlatformAgentCatalogItem(BaseModel):
     sort_order: int
     permission_mode: str
     knowledge_config: SessionKnowledgeConfig | None = None
+    initialization_role: str | None = None
 
 
 class PlatformAgentCatalogResponse(BaseModel):
@@ -152,6 +153,9 @@ class PlatformAgentCatalogResponse(BaseModel):
 
     global_main: PlatformAgentCatalogItem | None = None
     project_initializer: PlatformAgentCatalogItem | None = None
+    initialization_workers: list[PlatformAgentCatalogItem] = Field(
+        default_factory=list,
+    )
     business_agents: list[PlatformAgentCatalogItem] = Field(
         default_factory=list,
     )

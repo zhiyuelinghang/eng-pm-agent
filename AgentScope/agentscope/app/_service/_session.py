@@ -49,6 +49,7 @@ import asyncio
 from enum import StrEnum
 
 from ..message_bus import MessageBus, MessageBusKeys
+from ..mcp_registry import MCPRegistryManager
 from ..storage import StorageBase
 from ..storage._utils import _ensure_team_members
 from ._session_projection import SessionProjection
@@ -121,6 +122,7 @@ class SessionService:
         self,
         storage: StorageBase,
         message_bus: MessageBus,
+        mcp_registry_manager: MCPRegistryManager | None = None,
     ) -> None:
         """Bind dependencies.
 
@@ -130,6 +132,7 @@ class SessionService:
         """
         self._storage = storage
         self._bus = message_bus
+        self._mcp_registry_manager = mcp_registry_manager
         self._projection = SessionProjection(message_bus)
 
     # ------------------------------------------------------------------
@@ -147,11 +150,11 @@ class SessionService:
         The status collapses two orthogonal signals into a single
         four-valued enum:
 
-        - cluster liveness comes from the distributed session-run lock
-          on the shared message bus (Redis in production) — the answer
-          is cluster-wide, so any worker in the deployment holding the
-          lease yields ``RUNNING`` regardless of which API replica
-          serves the caller;
+        - cluster liveness comes from the distributed session-run lock and
+          the per-session background-tool registry on the shared message bus
+          (Redis in production) — the answer is cluster-wide, so a live
+          reasoning run or an offloaded tool awaiting continuation yields
+          ``RUNNING`` regardless of which API replica serves the caller;
         - the parked state (``AWAITING_PERMISSION`` /
           ``AWAITING_EXTERNAL_RESULT`` / ``IDLE``) is derived from the
           persisted ``AgentState.context`` tail, and only applies when
@@ -188,6 +191,14 @@ class SessionService:
         # save a storage round-trip.
         if await self._bus.is_locked(
             MessageBusKeys.session_lock(session_id),
+        ):
+            return SessionStatus.RUNNING
+
+        # An offloaded tool remains part of the same logical turn. Reporting
+        # IDLE here would make gateways stop polling and freeze their elapsed
+        # timer before the tool result wakes the agent for continuation.
+        if await self._bus.registry_getall(
+            MessageBusKeys.bg_tasks(session_id),
         ):
             return SessionStatus.RUNNING
 
@@ -369,6 +380,13 @@ class SessionService:
         await self._purge_subagent_hitl(user_id, agent_id, session_id)
 
         await self._cancel_runs(all_sids)
+        if self._mcp_registry_manager is not None:
+            await asyncio.gather(
+                *(
+                    self._mcp_registry_manager.close_session(sid)
+                    for sid in all_sids
+                ),
+            )
         deleted = await self._storage.delete_session(
             user_id,
             agent_id,

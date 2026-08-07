@@ -1,20 +1,24 @@
-import asyncio
-from types import SimpleNamespace
-
-from backend.app.api import _initialization_agent_instruction
-from scripts import dobby_agent_tools
+from backend.app import api
+from scripts.dobby_agent_tools import (
+    _initialization_attachment_chunk_read_error,
+    _initialization_section_read_error,
+    _is_team_completion_interaction,
+    _team_completion_message,
+)
 from scripts.provision_initialization_agents import (
-    MANAGED_INITIALIZATION_AGENTS,
+    GLOBAL_BUSINESS_INTERACTIONS,
+    ORCHESTRATOR,
+    PARSED_ATTACHMENT_READ_INTERACTION,
     SPECIALISTS,
     VALIDATOR,
-    _model_policy_for_initialization_agent,
-    _orchestrator_system_prompt,
+    WORKERS,
+    _model_policy,
     _system_prompt,
 )
 
 
-def test_domain_specialists_disable_thinking_but_validator_keeps_it() -> None:
-    initializer_policy = {
+def test_domain_specialists_are_fast_but_orchestrator_and_validator_reason() -> None:
+    template = {
         "mode": "fixed",
         "chat_model_config": {
             "type": "deepseek_credential",
@@ -28,246 +32,213 @@ def test_domain_specialists_disable_thinking_but_validator_keeps_it() -> None:
         },
     }
 
-    specialist_policy = _model_policy_for_initialization_agent(
-        initializer_policy,
-        SPECIALISTS[0],
-    )
-    specialist_parameters = specialist_policy["chat_model_config"][
+    specialist = _model_policy(template, SPECIALISTS[0])
+    parameters = specialist["chat_model_config"]["parameters"]
+    assert parameters["thinking_enable"] is False
+    assert "reasoning_effort" not in parameters
+    assert parameters["temperature"] == 0.2
+
+    assert _model_policy(template, ORCHESTRATOR)["chat_model_config"][
         "parameters"
-    ]
-    assert specialist_parameters["thinking_enable"] is False
-    assert "reasoning_effort" not in specialist_parameters
-    assert specialist_parameters["temperature"] == 0.2
+    ]["thinking_enable"] is True
+    assert _model_policy(template, VALIDATOR)["chat_model_config"][
+        "parameters"
+    ]["thinking_enable"] is True
 
-    validator_policy = _model_policy_for_initialization_agent(
-        initializer_policy,
-        VALIDATOR,
-    )
-    assert validator_policy["chat_model_config"]["parameters"] == {
-        "thinking_enable": True,
-        "reasoning_effort": "max",
-        "temperature": 0.2,
+
+def test_persistent_team_has_bounded_draft_interactions() -> None:
+    assert {spec.initialization_role for spec in SPECIALISTS} == {
+        "project",
+        "personnel",
+        "wbs",
+        "risks",
+        "quality_requirements",
     }
-    assert initializer_policy["chat_model_config"]["parameters"][
-        "thinking_enable"
-    ] is True
-
-
-class _ContextResponse:
-    status_code = 200
-
-    @staticmethod
-    def json() -> dict:
-        return {
-            "data": {
-                "agent_id": "initializer",
-                "capabilities": {
-                    "read": True,
-                    "write": True,
-                    "admin_write": True,
-                    "initialization_draft": True,
-                },
-            },
-        }
-
-    @staticmethod
-    def raise_for_status() -> None:
-        return None
-
-
-class _ContextClient:
-    def __init__(self, *args, **kwargs) -> None:
-        del args, kwargs
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, traceback) -> None:
-        del exc_type, exc, traceback
-
-    async def get(self, url, *, headers, params):
-        del url, headers
-        assert params["agentscope_session_id"] == "leader-session"
-        return _ContextResponse()
-
-
-def test_persistent_initialization_specialists_have_bounded_prompts() -> None:
-    assert {spec.name for spec in SPECIALISTS} == {
-        "工程信息专家",
-        "人员与岗位专家",
-        "WBS与进度专家",
-        "风险源专家",
-        "质量指标专家",
-    }
-    wbs_prompt = _system_prompt(SPECIALISTS[2])
-    assert "系统内置" in wbs_prompt
-    assert "不得根据相邻编码或日期推断前置关系" in wbs_prompt
-    assert "禁止读取原始附件" in wbs_prompt
-    assert "dobby_read_project_initialization_artifact" in wbs_prompt
-    assert "dobby_import_project_initialization_artifact" in wbs_prompt
-    assert "dobby_write_project_initialization_draft_section" in wbs_prompt
-    assert "artifact_format" in wbs_prompt
-    assert "TeamSay" in wbs_prompt
-    assert {spec.name for spec in MANAGED_INITIALIZATION_AGENTS} == {
+    assert {spec.name for spec in WORKERS} == {
         *(spec.name for spec in SPECIALISTS),
         VALIDATOR.name,
     }
-    validator_prompt = _system_prompt(VALIDATOR)
-    assert "dobby_finalize_project_initialization_draft" in validator_prompt
-    assert "不重新解析原始附件" in validator_prompt
-    orchestrator_prompt = _orchestrator_system_prompt()
-    assert "probe_accepted" in orchestrator_prompt
-    assert "每批最多 20 条" in orchestrator_prompt
-    assert "专项智能体只能读取你整理好的标准资料" in orchestrator_prompt
-    assert "即使只有一个分区也不得" in orchestrator_prompt
-    assert "artifact 只是标准化中间资料" in orchestrator_prompt
-
-
-def test_initializer_uses_plans_and_teams_only_when_the_task_needs_them(
-) -> None:
-    instruction = _initialization_agent_instruction(
-        SimpleNamespace(conversation_type="initialization"),
+    assert ORCHESTRATOR.invitable is False
+    assert all(spec.invitable for spec in WORKERS)
+    assert "dobby_create_project_initialization_draft" in (
+        ORCHESTRATOR.interaction_keys
     )
-
-    assert "简单问答" in instruction
-    assert "不为形式创建计划" in instruction
-    assert "TaskCreate/TaskUpdate" in instruction
-    assert "WBS 与进度专家" in instruction
-    assert "AgentInvite" in instruction
-    assert "禁止使用AgentCreate临时创建专家" in instruction.replace(" ", "")
-    assert "初始化核验专家" in instruction
-    assert "标准化完成以前" in instruction or "此前严禁" in instruction
-    assert "dobby_begin_project_initialization_normalization" in instruction
-    assert "dobby_finalize_project_initialization_normalization" in instruction
-    assert "dobby_import_project_initialization_artifact" in instruction
-    assert "只提交 1 条代表性记录" in instruction
-    assert "probe_accepted" in instruction
-    assert "每批最多 20 条" in instruction
-    assert "即使只有一个分区也不得由你代写" in instruction
-    assert "随后必须创建临时团队" in instruction
-    assert "artifact 只是标准化中间资料" in instruction
-    assert instruction.index(
-        "dobby_finalize_project_initialization_normalization",
-    ) < instruction.index("TaskCreate")
-
-
-def test_internal_worker_only_gets_leader_bound_read_tools(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("AGENTSCOPE_SERVICE_TOKEN", "test-token")
-    monkeypatch.setattr(
-        dobby_agent_tools.httpx,
-        "AsyncClient",
-        _ContextClient,
-    )
-
-    tools = asyncio.run(
-        dobby_agent_tools.create_dobby_agent_tools(
-            "platform",
-            "temporary-worker",
-            "worker-session",
-            platform_session_id="leader-session",
-            platform_agent_id="initializer",
-            read_only=True,
-        ),
-    )
-    names = {tool.name for tool in tools}
-
-    assert {
-        "dobby_get_project_initialization_state",
-        "dobby_get_project_initialization_draft",
-        "dobby_read_project_initialization_artifact",
-    } <= names
-    assert "dobby_read_project_initialization_file" not in names
-    assert "dobby_submit_project_initialization_draft" not in names
-    assert "dobby_update_project_initialization_draft" not in names
-    assert "dobby_update_wbs_progress" not in names
+    assert PARSED_ATTACHMENT_READ_INTERACTION in ORCHESTRATOR.interaction_keys
     assert all(
-        getattr(tool, "_session_id", None) == "leader-session"
-        for tool in tools
+        PARSED_ATTACHMENT_READ_INTERACTION in spec.interaction_keys
+        for spec in SPECIALISTS
+    )
+    assert "dobby_create_initialization_wbs_section" in (
+        SPECIALISTS[2].interaction_keys
+    )
+    assert "dobby_finalize_project_initialization_draft" in (
+        VALIDATOR.interaction_keys
+    )
+    assert "无需再调用 TeamSay" in _system_prompt(SPECIALISTS[2])
+    assert "按 section 过滤逐个读取" in _system_prompt(VALIDATOR)
+    assert "严禁一次读取全部大型 payload" in _system_prompt(VALIDATOR)
+    assert "_json_page.has_more/next_offset" in _system_prompt(VALIDATOR)
+    assert "不要等待核验专家的第二次 TeamSay" in _system_prompt(ORCHESTRATOR)
+    assert len(GLOBAL_BUSINESS_INTERACTIONS) == 18
+    assert not any(
+        "initialization" in key
+        for key in GLOBAL_BUSINESS_INTERACTIONS
     )
 
 
-def test_specialist_gets_only_its_owned_draft_writer(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("AGENTSCOPE_SERVICE_TOKEN", "test-token")
-    monkeypatch.setattr(
-        dobby_agent_tools.httpx,
-        "AsyncClient",
-        _ContextClient,
-    )
-
-    tools = asyncio.run(
-        dobby_agent_tools.create_dobby_agent_tools(
-            "platform",
-            "wbs-specialist",
-            "worker-session",
-            platform_session_id="leader-session",
-            platform_agent_id="initializer",
-            read_only=True,
-            initialization_role="wbs",
-        ),
-    )
-    names = {tool.name for tool in tools}
-
-    assert "dobby_read_project_initialization_artifact" in names
-    assert "dobby_import_project_initialization_artifact" in names
-    assert "dobby_write_project_initialization_draft_section" in names
-    assert "dobby_read_project_initialization_file" not in names
-    assert "dobby_begin_project_initialization_draft" not in names
-    assert "dobby_begin_project_initialization_normalization" not in names
-    assert "dobby_finalize_project_initialization_draft" not in names
-    writer = next(
-        tool
-        for tool in tools
-        if tool.name == "dobby_write_project_initialization_draft_section"
-    )
-    assert writer.input_schema["properties"]["data"]["type"] == "array"
+def test_platform_api_enforces_ai_led_plan_first_initialization() -> None:
+    assert hasattr(api, "_initialization_agent_instruction")
+    conversation = type("Conversation", (), {"conversation_type": "initialization"})()
+    instruction = api._initialization_agent_instruction(conversation)
+    assert "TaskCreate" in instruction
+    assert "第一个业务工具调用" in instruction
+    assert "不得假定文件模板" in instruction
+    assert "知识库不是初始化固定步骤" in instruction
+    assert "<parsed-attachment-manifest>" in instruction
+    assert "严禁复制解析正文" in instruction
+    assert "_text_page.has_more/next_offset" in instruction
+    assert not hasattr(api, "_stream_initialization_message")
 
 
-def test_orchestrator_gets_raw_file_and_normalization_tools(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("AGENTSCOPE_SERVICE_TOKEN", "test-token")
-    monkeypatch.setattr(
-        dobby_agent_tools.httpx,
-        "AsyncClient",
-        _ContextClient,
-    )
+def test_durable_initialization_writes_signal_team_completion() -> None:
+    section_create = {
+        "table_operation": "create",
+        "policy": {
+            "table_name": "project_initialization_draft_sections",
+        },
+    }
+    draft_update = {
+        "table_operation": "update",
+        "policy": {"table_name": "project_initialization_drafts"},
+    }
+    ordinary_read = {
+        "table_operation": "read",
+        "policy": {"table_name": "project_initialization_drafts"},
+    }
 
-    tools = asyncio.run(
-        dobby_agent_tools.create_dobby_agent_tools(
-            "platform",
-            "initializer",
-            "leader-session",
-            initialization_role="orchestrator",
-        ),
+    assert _is_team_completion_interaction(section_create, "wbs")
+    assert _is_team_completion_interaction(
+        section_create,
+        "quality_requirements",
     )
-    names = {tool.name for tool in tools}
+    assert _is_team_completion_interaction(draft_update, "validator")
+    assert not _is_team_completion_interaction(section_create, "orchestrator")
+    assert not _is_team_completion_interaction(ordinary_read, "validator")
 
-    assert "dobby_read_project_initialization_file" in names
-    assert "dobby_begin_project_initialization_normalization" in names
-    assert "dobby_write_project_initialization_artifact" in names
-    assert "dobby_finalize_project_initialization_normalization" in names
-    assert "dobby_begin_project_initialization_draft" in names
-    assert "dobby_import_project_initialization_artifact" not in names
-    assert "dobby_write_project_initialization_draft_section" not in names
-    assert "dobby_create_task" not in names
-    assert "dobby_create_risk" not in names
-    assert "dobby_update_wbs_progress" not in names
-    writer = next(
-        tool
-        for tool in tools
-        if tool.name == "dobby_write_project_initialization_artifact"
-    )
-    schemas = writer.input_schema["properties"]["json_data"]["anyOf"]
-    assert any(schema.get("title") == "WBS 记录数组" for schema in schemas)
-    wbs_schema = next(
-        schema
-        for schema in schemas
-        if schema.get("title") == "WBS 记录数组"
-    )
-    assert wbs_schema["maxItems"] == 20
-    assert "parent_wbs_code" in wbs_schema["items"]["properties"]
-    assert wbs_schema["items"]["additionalProperties"] is False
+
+def test_durable_completion_messages_drive_the_next_workflow_step() -> None:
+    specialist_message = _team_completion_message("wbs")
+    validator_message = _team_completion_message("validator")
+
+    assert specialist_message is not None
+    assert "读取分区状态继续编排" in specialist_message
+    assert "不要等待额外汇报" in specialist_message
+    assert validator_message is not None
+    assert "立即重新读取草稿状态" in validator_message
+    assert "不要等待其他汇报" in validator_message
+    assert _team_completion_message("orchestrator") is None
+
+
+def test_initialization_section_payload_must_be_read_one_section_at_a_time() -> None:
+    assert _initialization_section_read_error({}) is not None
+    assert _initialization_section_read_error(
+        {"fields": ["id", "section", "revision"], "limit": 20},
+    ) is None
+    assert _initialization_section_read_error(
+        {"fields": ["section", "payload"], "limit": 1},
+    ) is not None
+    assert _initialization_section_read_error(
+        {
+            "fields": ["section", "payload"],
+            "filters": {"section": "wbs"},
+            "limit": 5,
+        },
+    ) is not None
+    assert _initialization_section_read_error(
+        {
+            "fields": ["section", "payload", "source_files"],
+            "filters": {"section": "quality_requirements"},
+            "limit": 1,
+            "json_field": "payload",
+            "json_offset": 0,
+            "json_limit": 20,
+        },
+    ) is None
+    assert _initialization_section_read_error(
+        {
+            "fields": ["section", "payload"],
+            "filters": {"section": "wbs"},
+            "limit": 1,
+        },
+    ) is not None
+    assert _initialization_section_read_error(
+        {
+            "fields": ["section", "payload"],
+            "filters": {"section": "project"},
+            "limit": 1,
+        },
+    ) is None
+
+
+def test_parsed_attachment_content_must_use_bounded_manifest_chunk_ids() -> None:
+    assert _initialization_attachment_chunk_read_error({}) is not None
+    assert _initialization_attachment_chunk_read_error(
+        {"fields": ["id", "file_id", "chunk_index"]},
+    ) is None
+    assert _initialization_attachment_chunk_read_error(
+        {"fields": ["id", "content"], "limit": 1},
+    ) is not None
+    assert _initialization_attachment_chunk_read_error(
+        {"fields": ["id", "content"], "record_id": 7, "limit": 2},
+    ) is not None
+    assert _initialization_attachment_chunk_read_error(
+        {"fields": ["id", "content"], "record_id": 7, "limit": 1},
+    ) is not None
+    assert _initialization_attachment_chunk_read_error(
+        {
+            "fields": ["id", "file_id", "chunk_index", "content"],
+            "record_id": 7,
+            "limit": 1,
+            "text_field": "content",
+            "text_offset": 0,
+            "text_limit": 6000,
+        },
+    ) is None
+    assert _initialization_attachment_chunk_read_error(
+        {
+            "fields": ["id", "content"],
+            "record_ids": [7, 8],
+            "limit": 2,
+            "text_field": "content",
+            "text_offset": 0,
+            "text_limit": 6000,
+        },
+    ) is not None
+    assert _initialization_attachment_chunk_read_error(
+        {
+            "fields": ["id", "content"],
+            "record_id": 7,
+            "limit": 1,
+            "text_field": "content",
+            "text_offset": -1,
+            "text_limit": 6000,
+        },
+    ) is not None
+    assert _initialization_attachment_chunk_read_error(
+        {
+            "fields": ["id", "content"],
+            "record_id": 7,
+            "limit": 1,
+            "text_field": "content",
+            "text_offset": 6000,
+            "text_limit": 6001,
+        },
+    ) is not None
+    assert _initialization_attachment_chunk_read_error(
+        {
+            "fields": ["id", "content"],
+            "record_id": 7,
+            "record_ids": [7],
+            "limit": 1,
+        },
+    ) is not None

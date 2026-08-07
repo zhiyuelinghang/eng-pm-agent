@@ -21,6 +21,7 @@ from backend.app.api import (
     _agentscope_platform_messages,
     _agentscope_reply_from_group,
     _catalog_agent_for_conversation,
+    _platform_session_context,
     _project_agentscope_user_message,
     _sse_frame,
     create_agent_conversation,
@@ -63,6 +64,29 @@ class AgentScopeClientTest(TestCase):
         )
         self.assertNotIn("X-User-ID", client.headers)
 
+    def test_platform_sessions_never_auto_allow_initialization_tools(self) -> None:
+        user = SimpleNamespace(id=1, username="admin", real_name="管理员")
+        project = SimpleNamespace(id=2, name="测试项目")
+        conversation = SimpleNamespace(
+            id=3,
+            title="项目初始化",
+            conversation_type="initialization",
+            agent_name="初始化助手",
+        )
+
+        context = _platform_session_context(user, project, conversation)
+
+        names = context["auto_allowed_tool_names"]
+        self.assertEqual(names, [])
+
+        conversation.conversation_type = "business"
+        business_context = _platform_session_context(
+            user,
+            project,
+            conversation,
+        )
+        self.assertEqual(business_context["auto_allowed_tool_names"], [])
+
     def test_agent_conversation_is_private_even_from_platform_admin(
         self,
     ) -> None:
@@ -88,6 +112,7 @@ class AgentScopeClientTest(TestCase):
             user_id=2,
             project_id=5,
             agent_id="initializer",
+            conversation_type="business",
             agentscope_session_id="session-7",
             status="running",
             last_error=None,
@@ -158,15 +183,7 @@ class AgentScopeClientTest(TestCase):
         database = Mock()
         database.scalars.return_value.all.return_value = [conversation]
         user = SimpleNamespace(id=2, role="admin")
-        gateway = Mock()
-        gateway.get_catalog.return_value = {
-            "project_initializer": {"id": "initializer"},
-        }
-
-        with (
-            patch("backend.app.api.project_for_user_or_403"),
-            patch("backend.app.api._agentscope_client", return_value=gateway),
-        ):
+        with patch("backend.app.api.project_for_user_or_403"):
             result = list_agent_conversations(
                 project_id=5,
                 conversation_type="initialization",
@@ -317,6 +334,17 @@ class AgentScopeClientTest(TestCase):
                 content="测试",
                 sender_name="测试用户",
                 metadata={"source": "test"},
+                content_blocks=[
+                    {
+                        "type": "data",
+                        "name": "资料.pdf",
+                        "source": {
+                            "type": "base64",
+                            "data": "ZGF0YQ==",
+                            "media_type": "application/pdf",
+                        },
+                    },
+                ],
             )
 
         self.assertEqual(reply.status, "completed")
@@ -326,6 +354,11 @@ class AgentScopeClientTest(TestCase):
         request_body = client._request.call_args.kwargs["json"]
         self.assertEqual(request_body["input"]["id"], "user-message")
         self.assertEqual(request_body["input"]["metadata"]["source"], "test")
+        self.assertEqual(request_body["input"]["content"][0]["text"], "测试")
+        self.assertEqual(
+            request_body["input"]["content"][1]["name"],
+            "资料.pdf",
+        )
 
     def test_team_state_keeps_idle_queued_member_pending(self) -> None:
         client = _client()
@@ -836,11 +869,15 @@ class AgentScopeClientTest(TestCase):
             "id": "reply-1",
             "role": "assistant",
             "content": [{"type": "text", "text": "准备协同"}],
+            "created_at": "2026-07-31T10:00:01+08:00",
+            "finished_at": "2026-07-31T10:00:03+08:00",
         }
         final = {
             "id": "reply-2",
             "role": "assistant",
             "content": [{"type": "text", "text": "最终结论"}],
+            "created_at": "2026-07-31T10:00:08+08:00",
+            "finished_at": "2026-07-31T10:00:12+08:00",
         }
         payload = _agent_reply_extra_data(
             AgentScopeReply(
@@ -855,6 +892,7 @@ class AgentScopeClientTest(TestCase):
                 "tasks_context": {"tasks": []},
                 "team_update_count": 1,
                 "subagent_hitl": [],
+                "turn_started_at": "2026-07-31T10:00:00+08:00",
             },
         )
 
@@ -862,6 +900,14 @@ class AgentScopeClientTest(TestCase):
         self.assertEqual(
             payload["runtime_trace"]["model_names"],
             ["qwen-plus"],
+        )
+        self.assertEqual(
+            payload["runtime_trace"]["turn_started_at"],
+            "2026-07-31T10:00:00+08:00",
+        )
+        self.assertEqual(
+            payload["runtime_trace"]["turn_finished_at"],
+            "2026-07-31T10:00:12+08:00",
         )
         self.assertEqual(
             _sse_frame("agent_event", {"type": "TEXT_BLOCK_DELTA", "delta": "中"}),
@@ -1026,9 +1072,6 @@ class AgentScopeClientTest(TestCase):
                 ],
                 "metadata": {
                     "platform_display_content": "请分析附件",
-                    "platform_initialization_files": [
-                        {"id": 11, "name": "人员表.xlsx", "size": 1024},
-                    ],
                 },
                 "created_at": "2026-07-31T10:00:00+08:00",
             },
@@ -1036,10 +1079,7 @@ class AgentScopeClientTest(TestCase):
 
         self.assertEqual(projected["id"], "user-1")
         self.assertEqual(projected["content"], "请分析附件")
-        self.assertEqual(
-            projected["extra_data"]["initialization_files"],
-            [{"id": 11, "name": "人员表.xlsx", "size": 1024}],
-        )
+        self.assertEqual(projected["extra_data"]["initialization_files"], [])
 
     def test_agentscope_history_projects_one_platform_turn(self) -> None:
         messages = [

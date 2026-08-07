@@ -21,6 +21,7 @@ from ..deps import (
     get_workspace_manager,
 )
 from .._auth import AgentScopePrincipal
+from .._platform_permissions import apply_platform_tool_allow_rules
 from .._session_access import (
     require_runtime_session_access,
     runtime_session_visible,
@@ -60,6 +61,7 @@ from ..storage import (
 )
 from ...message import ToolCallState
 from ...permission import PermissionMode
+from ...state import AgentState
 from ..storage._utils import _ensure_team_members
 from ...event import CustomEvent
 from ..workspace_manager import WorkspaceManagerBase
@@ -363,6 +365,15 @@ async def create_session(
         )
     )
 
+    session_state = None
+    if body.platform_context is not None:
+        session_state = AgentState(
+            permission_context=apply_platform_tool_allow_rules(
+                AgentState().permission_context,
+                body.platform_context,
+            ),
+        )
+
     session_record = await storage.upsert_session(
         user_id=user_id,
         agent_id=body.agent_id,
@@ -380,6 +391,7 @@ async def create_session(
             if principal.kind == "service"
             else SessionSource.USER
         ),
+        state=session_state,
     )
     return CreateSessionResponse(session_id=session_record.id)
 
@@ -558,6 +570,7 @@ async def update_session(
     )
 
     updated_state = existing.state
+    permission_context = existing.state.permission_context
     if body.permission_mode is not None:
         if body.permission_mode == PermissionMode.AUTO:
             reviewer_config = await permission_review_service.get_config(
@@ -571,13 +584,23 @@ async def update_session(
                         "permission reviewer."
                     ),
                 )
-        updated_ctx = existing.state.permission_context.model_copy(
+        permission_context = permission_context.model_copy(
             update={"mode": body.permission_mode},
         )
 
+    if "platform_context" in body.model_fields_set:
+        permission_context = apply_platform_tool_allow_rules(
+            permission_context,
+            body.platform_context,
+        )
+
+    if (
+        body.permission_mode is not None
+        or "platform_context" in body.model_fields_set
+    ):
         updated_state = existing.state.model_copy(
             update={
-                "permission_context": updated_ctx,
+                "permission_context": permission_context,
             },
         )
 
@@ -690,11 +713,17 @@ async def list_messages(
         before=before,
         **extra,
     )
+    run_locked = await message_bus.is_locked(
+        MessageBusKeys.session_lock(session_id),
+    )
+    background_running = bool(
+        await message_bus.registry_getall(
+            MessageBusKeys.bg_tasks(session_id),
+        ),
+    )
     return ListMessagesResponse(
         messages=messages,
-        is_running=await message_bus.is_locked(
-            MessageBusKeys.session_lock(session_id),
-        ),
+        is_running=run_locked or background_running,
         has_more=has_more,
     )
 

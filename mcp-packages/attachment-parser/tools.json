@@ -1,0 +1,55 @@
+[
+  {
+    "name": "parse_attachment",
+    "title": "解析附件",
+    "description": "解析平台传入的单个附件内容。PDF、图片、DOCX、PPTX、XLSX 优先交给 MinerU；服务不可用或解析失败时自动使用包内本地解析器降级。CSV、TXT、Markdown、XLS 直接使用本地解析器。大文件按 start 和 limit 分段读取。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "file_name": {
+          "type": ["string", "null"],
+          "description": "原始文件名，用于识别聊天上传附件的格式。"
+        },
+        "content_base64": {
+          "type": ["string", "null"],
+          "description": "平台以内存方式传入的附件 Base64 内容。"
+        },
+        "media_type": {
+          "type": ["string", "null"],
+          "description": "附件 MIME 类型；文件名没有扩展名时用于辅助识别格式。"
+        },
+        "sheet_name": {
+          "type": ["string", "null"],
+          "description": "本地降级读取 XLS/XLSX 时指定工作表；不填读取第一张表。"
+        },
+        "start": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1,
+          "description": "MinerU 结果的起始 Markdown 行，或本地解析结果的起始行、页、文档块；均从 1 开始。"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 100,
+          "description": "本次最多返回的 Markdown 行、表格行、页或文档块数量。"
+        },
+        "ocr_mode": {
+          "type": "string",
+          "enum": ["auto", "always", "never"],
+          "default": "auto",
+          "description": "仅用于本地降级解析的 OCR 策略；MinerU 使用服务端识别能力。"
+        }
+      },
+      "required": ["content_base64", "file_name"],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": true
+    }
+  }
+]

@@ -11,7 +11,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { platformAuditApi } from '@/api/platformAudit';
 import type {
-	Msg,
 	PlatformAuditMessagesResponse,
 	PlatformAuditTreeResponse,
 } from '@/api/types';
@@ -27,16 +26,6 @@ import {
 import { useTranslation } from '@/i18n/useI18n';
 import { cn } from '@/lib/utils';
 
-type MessageWithMetadata = Msg & {
-	metadata?: {
-		platform_initialization_files?: Array<{
-			id: number | string;
-			name: string;
-			size: number;
-		}>;
-	};
-};
-
 function formatDateTime(value: string) {
 	return new Intl.DateTimeFormat(undefined, {
 		year: 'numeric',
@@ -45,12 +34,6 @@ function formatDateTime(value: string) {
 		hour: '2-digit',
 		minute: '2-digit',
 	}).format(new Date(value));
-}
-
-function formatFileSize(size: number) {
-	if (size < 1024) return `${size} B`;
-	if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
-	return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export function PlatformAuditPage() {
@@ -377,27 +360,9 @@ export function PlatformAuditPage() {
 						) : transcript ? (
 							transcript.messages.length ? (
 								<div className="mx-auto w-full max-w-4xl">
-									{transcript.messages.map((message) => {
-										const files = (message as MessageWithMetadata).metadata
-											?.platform_initialization_files;
-										return (
-											<div key={message.id}>
-												<MessageBubble message={message} />
-												{message.role === 'user' && files?.length ? (
-													<div className="mb-4 ml-auto flex max-w-[82%] flex-wrap justify-end gap-2 px-2">
-														{files.map((file) => (
-															<span
-																key={file.id}
-																className="rounded-md border bg-muted/45 px-2.5 py-1.5 text-xs text-muted-foreground"
-															>
-																{file.name} · {formatFileSize(file.size)}
-															</span>
-														))}
-													</div>
-												) : null}
-											</div>
-										);
-									})}
+									{transcript.messages.map((message) => (
+										<MessageBubble key={message.id} message={message} />
+									))}
 									{transcript.is_running && (
 										<div className="flex items-center justify-center gap-2 py-3 text-xs text-emerald-700">
 											<Loader2 className="size-4 animate-spin" />

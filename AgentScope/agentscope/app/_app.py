@@ -12,8 +12,10 @@ from ._router import (
     auth_router,
     chat_router,
     credential_router,
+    database_interaction_router,
     knowledge_base_router,
     model_router,
+    mcp_registry_router,
     platform_audit_router,
     tts_model_router,
     schedule_router,
@@ -29,6 +31,7 @@ from ._types import (
 )
 from .message_bus import MessageBus
 from .storage import StorageBase
+from .mcp_registry import MCPRegistryManager
 from ..agent import Agent
 from ..credential import CredentialFactory, CredentialBase
 from ..rag import (
@@ -57,6 +60,7 @@ def create_app(
     knowledge_chunker: ChunkerBase | None = None,
     blob_store: BlobStoreBase | None = None,
     enable_index_worker: bool = True,
+    mcp_registry_manager: MCPRegistryManager | None = None,
     *,
     extra_credentials: list[Type[CredentialBase]] | None = None,
     extra_middlewares: list[FastAPIMiddleware] | None = None,
@@ -153,6 +157,13 @@ def create_app(
             process is expected to consume tasks from the message
             bus.  No effect when ``knowledge_base_manager`` is
             ``None``.
+        mcp_registry_manager (`MCPRegistryManager | None`, optional):
+            Platform-level catalogue for dependency-complete MCP packages.
+            When supplied, the app exposes the managed-MCP endpoints and
+            attaches each agent's assigned packages to its sessions. The
+            manager owns package persistence plus per-session process reuse.
+            When omitted, managed-MCP endpoints return HTTP 503 while the
+            historical workspace MCP mechanism remains available.
         extra_credentials (`list[Type[CredentialBase]] | None`, optional):
             Additional :class:`~agentscope.credential.CredentialBase`
             subclasses to register before the app starts.  Equivalent to
@@ -225,6 +236,7 @@ def create_app(
     app.state.storage = storage
     app.state.message_bus = message_bus
     app.state.workspace_manager = workspace_manager
+    app.state.mcp_registry_manager = mcp_registry_manager
     app.state.knowledge_base_manager = knowledge_base_manager
     app.state.extra_agent_middlewares = extra_agent_middlewares
     app.state.extra_agent_tools = extra_agent_tools
@@ -280,11 +292,13 @@ def create_app(
         agent_router,
         chat_router,
         credential_router,
+        database_interaction_router,
         knowledge_base_router,
         platform_audit_router,
         schedule_router,
         session_router,
         workspace_router,
+        mcp_registry_router,
         model_router,
         tts_model_router,
     ):

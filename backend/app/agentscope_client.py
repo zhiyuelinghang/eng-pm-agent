@@ -467,6 +467,7 @@ class AgentScopeClient:
         sender_name: str,
         metadata: dict[str, Any],
         user_message_id: str | None = None,
+        content_blocks: list[dict[str, Any]] | None = None,
     ) -> AgentScopeReply:
         before = self.list_messages(session_id, agent_id)
         existing_ids = {
@@ -485,7 +486,10 @@ class AgentScopeClient:
                     "id": resolved_user_message_id,
                     "name": sender_name,
                     "role": "user",
-                    "content": [{"type": "text", "text": content}],
+                    "content": [
+                        {"type": "text", "text": content},
+                        *(content_blocks or []),
+                    ],
                     "metadata": metadata,
                 },
             },

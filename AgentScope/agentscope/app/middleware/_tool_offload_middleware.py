@@ -354,6 +354,7 @@ class ToolOffloadMiddleware(MiddlewareBase):  # pylint: disable=abstract-method
                 user_id=self._user_id,
                 session_id=session_id,
                 agent_id=self._agent_id,
+                kind=MessageBusKeys.WAKEUP_KIND_BACKGROUND,
             )
 
         asyncio.create_task(_deliver_when_done())

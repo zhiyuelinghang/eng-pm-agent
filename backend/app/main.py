@@ -6,7 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
 from .api import router
-from .agent_tool_gateway import router as agent_tool_router
+from .agent_context_gateway import router as agent_context_router
+from .database_interaction_router import router as database_interaction_router
+from .database_interactions import bootstrap_declarative_catalog
 from .config import get_settings
 from .db import Base, SessionLocal, engine
 from .models import (Attachment, DailyReport, DocumentFolder, DocumentFolderItem, Project, ProjectChange,
@@ -285,6 +287,8 @@ def seed_prototype_project() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     upgrade_database_schema(engine, Base.metadata)
+    with SessionLocal() as db:
+        bootstrap_declarative_catalog(db)
     seed_admin()
     yield
 
@@ -293,7 +297,8 @@ settings = get_settings()
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origin_list, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.include_router(router)
-app.include_router(agent_tool_router)
+app.include_router(agent_context_router)
+app.include_router(database_interaction_router)
 
 
 @app.get("/health")

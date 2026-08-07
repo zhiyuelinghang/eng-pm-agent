@@ -22,6 +22,9 @@ handled:
 - ``team`` (a durable inter-agent message): also re-queued while busy.
   For a leader, the durable team revision suppresses the retry when the
   current run already consumed and summarized that report.
+- ``background`` (an offloaded tool result): re-queued while busy so a tool
+  finishing during the originating turn's final text/persistence window
+  cannot lose the continuation that consumes its inbox result.
 
 All bus keys live on the :class:`MessageBus` base class (see
 ``enqueue_wakeup`` / ``enqueue_input``, ``dequeue_wakeups``,
@@ -226,14 +229,17 @@ class WakeupDispatcher:
             agent_id (`str`):
                 The agent that owns the session.
             kind (`str`):
-                Trigger kind (``wake`` / ``resume`` / ``team``); see module
-                docstring.
+                Trigger kind (``wake`` / ``resume`` / ``team`` /
+                ``background``); see module docstring.
             raw_input (`dict | None`):
                 Serialised input event for ``resume`` triggers, else
                 ``None``.
         """
         is_resume = kind == MessageBusKeys.WAKEUP_KIND_RESUME
         is_team_wake = kind == MessageBusKeys.WAKEUP_KIND_TEAM
+        is_background_wake = (
+            kind == MessageBusKeys.WAKEUP_KIND_BACKGROUND
+        )
 
         # Parse the resume input early so every downstream path
         # (lock-retry, spawn-retry) receives a typed event object
@@ -272,14 +278,17 @@ class WakeupDispatcher:
                     agent_id,
                     input_msg,
                 )
-            elif is_team_wake:
-                self._schedule_team_wake_retry(
+            elif is_team_wake or is_background_wake:
+                self._schedule_idle_wake_retry(
                     user_id,
                     session_id,
                     agent_id,
+                    kind,
                 )
-            # ``wake`` triggers are safe to drop while running — the
-            # live run drains the inbox itself.
+            # Generic ``wake`` triggers are safe to drop while running — the
+            # live run drains the inbox itself. Background completions are
+            # different: they can arrive after the last reasoning step, so
+            # their continuation must survive until the lock is released.
             return
 
         # Orphan guard: the queue is unaware of session lifecycle. A
@@ -340,11 +349,12 @@ class WakeupDispatcher:
                     agent_id,
                     input_msg,
                 )
-            elif is_team_wake:
-                self._schedule_team_wake_retry(
+            elif is_team_wake or is_background_wake:
+                self._schedule_idle_wake_retry(
                     user_id,
                     session_id,
                     agent_id,
+                    kind,
                 )
             else:
                 logger.debug(
@@ -407,13 +417,14 @@ class WakeupDispatcher:
         self._retry_tasks.add(task)
         task.add_done_callback(self._retry_tasks.discard)
 
-    def _schedule_team_wake_retry(
+    def _schedule_idle_wake_retry(
         self,
         user_id: str,
         session_id: str,
         agent_id: str,
+        kind: str,
     ) -> None:
-        """Re-enqueue a team message after the recipient releases its lock."""
+        """Re-enqueue a durable inbox wake after the run lock is released."""
 
         async def _retry() -> None:
             try:
@@ -423,20 +434,21 @@ class WakeupDispatcher:
                     user_id=user_id,
                     session_id=session_id,
                     agent_id=agent_id,
-                    kind=MessageBusKeys.WAKEUP_KIND_TEAM,
+                    kind=kind,
                 )
             except asyncio.CancelledError:
                 pass
             except Exception:  # pylint: disable=broad-except
                 logger.exception(
-                    "WakeupDispatcher: failed to re-enqueue team trigger "
+                    "WakeupDispatcher: failed to re-enqueue %s trigger "
                     "for session %s.",
+                    kind,
                     session_id,
                 )
 
         task = asyncio.create_task(
             _retry(),
-            name=f"team-wake-retry:{session_id}",
+            name=f"{kind}-wake-retry:{session_id}",
         )
         self._retry_tasks.add(task)
         task.add_done_callback(self._retry_tasks.discard)

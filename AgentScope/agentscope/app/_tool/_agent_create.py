@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from pydantic import Field
 
 from ._team_tool_base import _TeamToolBase
+from .._platform_permissions import apply_platform_tool_allow_rules
 from .._types import SubAgentTemplate
 from .._team_lifecycle import assign_team_member
 from ..message_bus import MessageBusKeys
@@ -483,12 +484,6 @@ optional):
                 template,
                 leader_permission_context,
             )
-            worker_state = AgentState(
-                permission_context=worker_permission_context,
-                tasks_context=template.tasks_context.model_copy(
-                    deep=True,
-                ),
-            )
             worker_platform_context = leader_session.config.platform_context
             if worker_platform_context is not None:
                 worker_platform_context = worker_platform_context.model_copy(
@@ -500,6 +495,15 @@ optional):
                         ),
                     },
                 )
+            worker_state = AgentState(
+                permission_context=apply_platform_tool_allow_rules(
+                    worker_permission_context,
+                    worker_platform_context,
+                ),
+                tasks_context=template.tasks_context.model_copy(
+                    deep=True,
+                ),
+            )
             worker_session = await self._storage.upsert_session(
                 user_id=self._user_id,
                 agent_id=worker_agent.id,

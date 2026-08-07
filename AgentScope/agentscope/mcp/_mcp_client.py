@@ -248,7 +248,11 @@ class MCPClient(BaseModel):
 
             self._is_connected = True
             logger.info("MCP connected: %s", self.name)
-        except Exception:
+        # Cancellation (for example an upload-time startup timeout) must also
+        # unwind a partially opened STDIO process. ``CancelledError`` derives
+        # from ``BaseException`` on supported Python versions, so catching only
+        # ``Exception`` would leak the child process and its pipes.
+        except BaseException:
             await self._stack.aclose()
             self._stack = None
             raise

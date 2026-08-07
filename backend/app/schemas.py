@@ -221,10 +221,7 @@ class AgentConversationInput(BaseModel):
 
 class AgentConversationMessageInput(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
-    initialization_file_ids: list[int] = Field(
-        default_factory=list,
-        max_length=20,
-    )
+    initialization_file_ids: list[int] = Field(default_factory=list)
 
 
 class AgentConversationConfirmInput(BaseModel):

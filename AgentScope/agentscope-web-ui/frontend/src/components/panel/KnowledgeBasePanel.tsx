@@ -3,11 +3,10 @@ import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 
 import type { KnowledgeBaseView, SessionKnowledgeConfig } from '@/api';
+import { PanelCatalogRow } from '@/components/panel/PanelCatalogRow';
 import { PanelEmpty } from '@/components/panel/PanelEmpty';
-import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
+import { PanelSummaryDialog } from '@/components/panel/PanelSummaryDialog';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
-import { Item, ItemContent, ItemDescription, ItemTitle } from '@/components/ui/item';
 import { useTranslation } from '@/i18n/useI18n';
 
 interface KnowledgeBasePanelProps {
@@ -28,7 +27,7 @@ interface KnowledgeBasePanelProps {
 	onChange: (next: SessionKnowledgeConfig | null) => void;
 	/** Disable the entire panel — e.g. when no session is selected. */
 	disabled?: boolean;
-	/** Knowledge-specific controls rendered beside the short description. */
+	/** Knowledge-specific controls rendered beside the search field. */
 	actions?: ReactNode;
 }
 
@@ -37,8 +36,7 @@ interface KnowledgeBasePanelProps {
  * a checkbox list of the user's KBs.
  *
  * Middleware parameter editing is supplied through the compact `actions`
- * slot beside this panel's description, avoiding a second, duplicate panel
- * header while keeping the control outside the scrollable list.
+ * slot beside the search field, keeping controls on one row above the list.
  */
 export function KnowledgeBasePanel({
 	knowledgeBases,
@@ -50,11 +48,14 @@ export function KnowledgeBasePanel({
 }: KnowledgeBasePanelProps) {
 	const { t } = useTranslation();
 	const [search, setSearch] = useState('');
+	const [detailTarget, setDetailTarget] = useState<KnowledgeBaseView | null>(null);
 
 	const selectedIds = useMemo(() => new Set(value?.knowledge_base_ids ?? []), [value]);
 
 	const filtered = search
-		? knowledgeBases.filter((kb) => kb.name.toLowerCase().includes(search.toLowerCase()))
+		? knowledgeBases.filter((kb) =>
+				`${kb.name} ${kb.description}`.toLowerCase().includes(search.toLowerCase()),
+			)
 		: knowledgeBases;
 
 	const toggleKb = (kbId: string, checked: boolean) => {
@@ -73,26 +74,36 @@ export function KnowledgeBasePanel({
 	};
 
 	return (
-		<div className="flex flex-col flex-1 min-h-0 gap-y-2">
-			<div className="flex min-h-8 items-center justify-between gap-2">
-				<span className="text-muted-foreground text-sm">
-					{t('panel.knowledge.description')}
-				</span>
-				{actions ? <div className="shrink-0">{actions}</div> : null}
+		<div className="flex min-h-0 flex-1 flex-col">
+			<div className="flex-none space-y-3 pb-3">
+				<div className="flex items-center justify-between gap-3">
+					<div className="flex min-w-0 items-baseline gap-1.5">
+						<span className="truncate text-sm font-medium">
+							{t('panel.knowledge.catalogTitle')}
+						</span>
+						<span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+							{t('panel.knowledge.selectedSummary', {
+								selected: selectedIds.size,
+								total: knowledgeBases.length,
+							})}
+						</span>
+					</div>
+					{actions ? <div className="shrink-0">{actions}</div> : null}
+				</div>
+				<InputGroup>
+					<InputGroupInput
+						placeholder={t('panel.knowledge.searchPlaceholder')}
+						value={search}
+						onChange={(e) => setSearch(e.target.value)}
+						disabled={disabled}
+					/>
+					<InputGroupAddon align="inline-end">
+						<Search />
+					</InputGroupAddon>
+				</InputGroup>
 			</div>
-			<InputGroup>
-				<InputGroupInput
-					placeholder={t('panel.knowledge.searchPlaceholder')}
-					value={search}
-					onChange={(e) => setSearch(e.target.value)}
-					disabled={disabled}
-				/>
-				<InputGroupAddon align="inline-end">
-					<Search />
-				</InputGroupAddon>
-			</InputGroup>
 
-			<div className="flex flex-col flex-1 min-h-0 gap-y-3 overflow-y-auto">
+			<div className="min-h-0 flex-1 overflow-y-auto rounded-lg border bg-background">
 				{loading ? (
 					<div className="flex flex-1 items-center justify-center">
 						<p className="text-muted-foreground text-sm">{t('panel.loading')}</p>
@@ -110,52 +121,47 @@ export function KnowledgeBasePanel({
 						}
 					/>
 				) : (
-					<div className="flex flex-col gap-y-2">
+					<div className="divide-y">
 						{filtered.map((kb) => {
 							const isSelected = selectedIds.has(kb.id);
-							const inputId = `kb-${kb.id}`;
 							return (
-								<Item
+								<PanelCatalogRow
 									key={kb.id}
-									variant="outline"
-									data-selected={isSelected || undefined}
-								>
-									<Checkbox
-										id={inputId}
-										checked={isSelected}
-										disabled={disabled}
-										onCheckedChange={(checked) => toggleKb(kb.id, !!checked)}
-									/>
-									<ItemContent>
-										<ItemTitle>
-											<label htmlFor={inputId} className="cursor-pointer">
-												{kb.name}
-											</label>
-										</ItemTitle>
-										{kb.description ? (
-											<ItemDescription>{kb.description}</ItemDescription>
-										) : null}
-										<div className="flex flex-wrap gap-1 mt-1">
-											<Badge
-												variant="outline"
-												className="text-[10px] px-1 py-0"
-											>
-												{kb.embedding_model_config.model}
-											</Badge>
-											<Badge
-												variant="outline"
-												className="text-[10px] px-1 py-0"
-											>
-												{kb.embedding_model_config.dimensions}d
-											</Badge>
-										</div>
-									</ItemContent>
-								</Item>
+									title={kb.name}
+									description={kb.description}
+									metadata={<>{kb.embedding_model_config.model} · {kb.embedding_model_config.dimensions}d</>}
+									selected={isSelected}
+									checkbox={{
+										checked: isSelected,
+										disabled,
+										ariaLabel: kb.name,
+										onChange: (checked) => toggleKb(kb.id, checked),
+									}}
+									onOpen={() => setDetailTarget(kb)}
+									openLabel={t('panel.knowledge.viewDetails', { name: kb.name })}
+								/>
 							);
 						})}
 					</div>
 				)}
 			</div>
+
+			<PanelSummaryDialog
+				open={detailTarget !== null}
+				onOpenChange={(open) => {
+					if (!open) setDetailTarget(null);
+				}}
+				title={detailTarget?.name ?? ''}
+				identifier={detailTarget?.id}
+				description={detailTarget?.description}
+			>
+				{detailTarget ? (
+					<p className="text-sm text-muted-foreground">
+						{detailTarget.embedding_model_config.model} ·{' '}
+						{detailTarget.embedding_model_config.dimensions}d
+					</p>
+				) : null}
+			</PanelSummaryDialog>
 		</div>
 	);
 }

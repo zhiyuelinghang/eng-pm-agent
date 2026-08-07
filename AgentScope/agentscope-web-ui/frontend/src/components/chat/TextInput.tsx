@@ -21,6 +21,8 @@ import { cn } from '@/lib/utils';
  * Represents a file that has been selected and processed (or is being processed).
  */
 interface ProcessedFile {
+	/** Stable identity, including when multiple files have the same name. */
+	id: string;
 	/** Original file name for display */
 	name: string;
 	/** Processing status */
@@ -134,6 +136,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 
 		// Whether any file is still being processed (block send until all done)
 		const hasProcessing = files.some((f) => f.status === 'processing');
+		const hasReadyFile = files.some((f) => f.status === 'done' && f.block);
 
 		useImperativeHandle(ref, () => ({
 			focus: () => textareaRef.current?.focus(),
@@ -186,7 +189,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 		};
 
 		const handleSend = () => {
-			if (!value.trim() || disabled || hasProcessing) return;
+			if ((!value.trim() && !hasReadyFile) || disabled || hasProcessing) return;
 
 			const blocks: ContentBlock[] = [];
 
@@ -241,7 +244,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 			return {
 				icon: Send,
 				tooltip: t('textInput.send'),
-				disabled: disabled || !value.trim() || hasProcessing,
+				disabled: disabled || (!value.trim() && !hasReadyFile) || hasProcessing,
 				onClick: handleSend,
 			};
 		})();
@@ -255,6 +258,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 			selected.forEach((file) => {
 				// Insert a placeholder in processing state
 				const placeholder: ProcessedFile = {
+					id: crypto.randomUUID(),
 					name: file.name,
 					status: 'processing',
 					block: null,
@@ -268,7 +272,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 							(prev) =>
 								prev
 									.map((f) =>
-										f.name === file.name && f.status === 'processing'
+										f.id === placeholder.id && f.status === 'processing'
 											? block
 												? { ...f, status: 'done', block }
 												: null
@@ -281,9 +285,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 						// Caller is responsible for error notification (e.g. toast).
 						// Just silently remove the entry here.
 						setFiles((prev) =>
-							prev.filter(
-								(f) => !(f.name === file.name && f.status === 'processing'),
-							),
+							prev.filter((f) => f.id !== placeholder.id),
 						);
 					});
 			});
@@ -299,9 +301,9 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 					{/* File list */}
 					{files.length > 0 && (
 						<div className="flex flex-wrap gap-2">
-							{files.map((file, index) => (
+							{files.map((file) => (
 								<div
-									key={index}
+									key={file.id}
 									className="flex items-center gap-1 rounded bg-muted px-2 py-1 text-sm"
 								>
 									{file.status === 'processing' && (
@@ -310,7 +312,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 									<span className="max-w-[200px] truncate">{file.name}</span>
 									<button
 										onClick={() =>
-											setFiles(files.filter((_, i) => i !== index))
+											setFiles(files.filter((item) => item.id !== file.id))
 										}
 										className="text-muted-foreground hover:text-foreground"
 									>

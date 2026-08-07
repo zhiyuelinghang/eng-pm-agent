@@ -1,12 +1,13 @@
-import { Ban, CircleAlert, Globe, Loader2, RotateCcw, Save, Users } from 'lucide-react';
+import { Ban, CircleAlert, Loader2, RotateCcw, Save, Users } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import type { AgentCallConfig, AgentCallScope, AgentView } from '@/api';
+import { PanelCatalogRow } from '@/components/panel/PanelCatalogRow';
 import { PanelEmpty } from '@/components/panel/PanelEmpty';
+import { PanelSummaryDialog } from '@/components/panel/PanelSummaryDialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
 import { useTranslation } from '@/i18n/useI18n';
 import { formatApiErrorForAlert } from '@/lib/api-error';
 
@@ -57,6 +58,7 @@ export function AgentCollaborationPanel({
 	const [draft, setDraft] = useState<AgentCallConfig>(cloneConfig(agent?.data.call_config));
 	const [submitting, setSubmitting] = useState(false);
 	const [errorMsg, setErrorMsg] = useState('');
+	const [detailTarget, setDetailTarget] = useState<AgentView | null>(null);
 
 	const candidates = useMemo(
 		() =>
@@ -139,13 +141,6 @@ export function AgentCollaborationPanel({
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<div className="flex-none space-y-3 pb-3">
-				<p className="text-muted-foreground text-sm leading-relaxed">
-					{t('panel.collaboration.description')}
-				</p>
-				<div className="bg-muted/50 text-muted-foreground flex items-center gap-2 rounded-md px-2.5 py-2 text-xs">
-					<Globe className="size-3.5 shrink-0" />
-					<span>{t('panel.collaboration.globalNotice')}</span>
-				</div>
 				<div
 					role="radiogroup"
 					aria-label={t('panel.collaboration.scopeLabel')}
@@ -232,39 +227,21 @@ export function AgentCollaborationPanel({
 								<div className="divide-border h-full overflow-y-auto divide-y">
 									{candidates.map((candidate) => {
 										const checked = selectedIds.has(candidate.id);
-										const checkboxId = `collaboration-target-${candidate.id}`;
 										return (
-											<label
+											<PanelCatalogRow
 												key={candidate.id}
-												htmlFor={checkboxId}
-												data-selected={checked || undefined}
-												className={`hover:bg-muted/40 flex items-start gap-3 px-3 py-3 transition-colors data-[selected=true]:bg-primary/[0.04] ${
-													agent.editable && !submitting
-														? 'cursor-pointer'
-														: 'cursor-not-allowed opacity-60'
-												}`}
-											>
-												<Checkbox
-													id={checkboxId}
-													checked={checked}
-													disabled={!agent.editable || submitting}
-													onCheckedChange={(value) =>
-														toggleAgent(candidate.id, value === true)
-													}
-													className="mt-0.5"
-												/>
-												<span className="min-w-0 flex-1">
-													<span className="block truncate text-sm font-medium">
-														{candidate.data.name}
-													</span>
-													<span className="text-muted-foreground mt-1 block text-xs leading-relaxed text-pretty">
-														{
-															candidate.data.invite_config
-																.invite_description
-														}
-													</span>
-												</span>
-											</label>
+												title={candidate.data.name}
+												description={candidate.data.invite_config.invite_description}
+												selected={checked}
+												checkbox={{
+													checked,
+													disabled: !agent.editable || submitting,
+													ariaLabel: t('panel.collaboration.toggleAssignment', { name: candidate.data.name }),
+													onChange: (value) => toggleAgent(candidate.id, value),
+												}}
+												onOpen={() => setDetailTarget(candidate)}
+												openLabel={t('panel.collaboration.viewDetails', { name: candidate.data.name })}
+											/>
 										);
 									})}
 								</div>
@@ -337,6 +314,16 @@ export function AgentCollaborationPanel({
 					</Button>
 				</div>
 			</div>
+
+			<PanelSummaryDialog
+				open={detailTarget !== null}
+				onOpenChange={(open) => {
+					if (!open) setDetailTarget(null);
+				}}
+				title={detailTarget?.data.name ?? ''}
+				identifier={detailTarget?.id}
+				description={detailTarget?.data.invite_config.invite_description}
+			/>
 		</div>
 	);
 }

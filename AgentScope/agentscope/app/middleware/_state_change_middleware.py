@@ -26,12 +26,20 @@ event chain, because ``on_acting`` yields ``ToolChunk | ToolResponse``
 the bus like any other session event.
 """
 import hashlib
-from typing import Any, AsyncGenerator, Callable
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Callable
 
 from ..message_bus import MessageBus
 from .._bus_ops import publish_session_event
+from .._team_lifecycle import settle_team_member
+from .._team_messaging import deliver_team_message
 from ...event import CustomEvent
+from ...message import ToolResultState
 from ...middleware import MiddlewareBase
+from ...tool import ToolResponse
+from ..._logging import logger
+
+if TYPE_CHECKING:
+    from ..storage import StorageBase
 
 _TEAM_TOOL_NAMES = frozenset(
     {"TeamCreate", "AgentCreate", "AgentInvite", "TeamDelete"},
@@ -55,6 +63,9 @@ class StateChangeMiddleware(MiddlewareBase):  # pylint: disable=abstract-method
         self,
         message_bus: MessageBus,
         session_id: str,
+        storage: "StorageBase",
+        user_id: str,
+        agent_id: str,
     ) -> None:
         """Initialise the middleware.
 
@@ -66,6 +77,90 @@ class StateChangeMiddleware(MiddlewareBase):  # pylint: disable=abstract-method
         """
         self._bus = message_bus
         self._session_id = session_id
+        self._storage = storage
+        self._user_id = user_id
+        self._agent_id = agent_id
+
+    async def _report_completed_team_assignment(
+        self,
+        metadata: dict[str, Any],
+        agent: Any,
+    ) -> None:
+        """Settle a worker assignment at its durable completion boundary.
+
+        Some platform tools persist the entire assigned result in one
+        transaction.  Requiring a second model round merely to call TeamSay
+        makes large workers slow and can leave the leader waiting even though
+        the result is already safely stored.  Such tools opt in through
+        ``team_report_on_success`` metadata.  The team lifecycle lock keeps
+        this path idempotent with explicit TeamSay and terminal auto-report.
+        """
+        try:
+            session = await self._storage.get_session(
+                self._user_id,
+                self._agent_id,
+                self._session_id,
+            )
+            if session is None or session.team_id is None:
+                return
+            team = await self._storage.get_team(
+                self._user_id,
+                session.team_id,
+            )
+            if team is None or team.session_id == self._session_id:
+                return
+            newly_settled = await settle_team_member(
+                self._storage,
+                self._bus,
+                user_id=self._user_id,
+                team_id=team.id,
+                member_session_id=self._session_id,
+                status="reported",
+            )
+            if not newly_settled:
+                return
+            leader_session = await self._storage.get_session(
+                self._user_id,
+                "",
+                team.session_id,
+            )
+            if leader_session is None:
+                return
+            sender_record = await self._storage.get_agent(
+                self._user_id,
+                self._agent_id,
+            )
+            sender_name = (
+                sender_record.data.name
+                if sender_record is not None
+                else getattr(agent, "name", self._agent_id)
+            )
+            content = str(
+                metadata.get("team_report_message")
+                or "已完成分配任务，结果已写入平台。",
+            )
+            await deliver_team_message(
+                self._bus,
+                user_id=self._user_id,
+                recipient_session_id=leader_session.id,
+                recipient_agent_id=leader_session.agent_id,
+                sender_name=sender_name,
+                content=content,
+            )
+            logger.info(
+                "Reported durable tool completion from worker session %s "
+                "to leader session %s.",
+                self._session_id,
+                leader_session.id,
+            )
+        except Exception:  # pylint: disable=broad-except
+            # Reporting must never turn a successful durable write into a
+            # failed tool call.  Terminal worker auto-report remains the
+            # fallback if this path encounters an infrastructure error.
+            logger.exception(
+                "Failed to report durable tool completion for session %s.",
+                self._session_id,
+            )
 
     @staticmethod
     def _state_hash(agent: Any) -> str:
@@ -174,8 +269,15 @@ class StateChangeMiddleware(MiddlewareBase):  # pylint: disable=abstract-method
         tool_name = tool_call.name if tool_call else ""
 
         hash_before = self._state_hash(agent)
+        completion_metadata: dict[str, Any] | None = None
 
         async for item in next_handler(**input_kwargs):
+            if (
+                isinstance(item, ToolResponse)
+                and item.state == ToolResultState.SUCCESS
+                and item.metadata.get("team_report_on_success") is True
+            ):
+                completion_metadata = dict(item.metadata)
             yield item
 
         # Check 1: state fields changed?
@@ -193,4 +295,10 @@ class StateChangeMiddleware(MiddlewareBase):  # pylint: disable=abstract-method
                 self._bus,
                 self._session_id,
                 event.model_dump(mode="json"),
+            )
+
+        if completion_metadata is not None:
+            await self._report_completed_team_assignment(
+                completion_metadata,
+                agent,
             )

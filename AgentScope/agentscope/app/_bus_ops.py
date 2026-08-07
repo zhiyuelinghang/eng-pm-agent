@@ -74,7 +74,12 @@ async def enqueue_run_trigger(
     session_id: str,
     agent_id: str,
     *,
-    kind: Literal["wake", "resume", "team"] = MessageBusKeys.WAKEUP_KIND_WAKE,
+    kind: Literal[
+        "wake",
+        "resume",
+        "team",
+        "background",
+    ] = MessageBusKeys.WAKEUP_KIND_WAKE,
     inputs: UserConfirmResultEvent
     | ExternalExecutionResultEvent
     | UserInterruptEvent
@@ -94,6 +99,9 @@ async def enqueue_run_trigger(
     - ``team`` — wake a session for a durable inter-agent message. If the
       recipient is busy, the dispatcher retries after its current turn so a
       late member report cannot be dropped.
+    - ``background`` — continue after an offloaded tool result is placed in
+      the inbox. If the originating reasoning loop is still releasing the
+      session lock, the dispatcher retries instead of losing the result.
 
     The payload is serialised to a plain dict before being pushed to the
     wakeup queue; the ``MessageBus`` transport layer never sees event

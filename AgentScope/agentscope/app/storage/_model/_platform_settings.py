@@ -20,7 +20,7 @@ class PlatformSettingsData(BaseModel):
         default=None,
         description=(
             "The hidden built-in agent used by project-initialization "
-            "conversations. It may submit initialization drafts but cannot "
+            "conversations. It may build initialization drafts but cannot "
             "write formal project data directly."
         ),
     )

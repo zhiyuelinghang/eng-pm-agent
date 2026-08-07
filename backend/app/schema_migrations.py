@@ -8,11 +8,12 @@ bridge migration.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import shutil
 from typing import Any
 
-from sqlalchemy import MetaData
+from sqlalchemy import MetaData, inspect, text
 from sqlalchemy.engine import Engine
 
 
@@ -282,14 +283,143 @@ def _copy_legacy_business_data(engine: Engine) -> None:
             raw_connection.close()
 
 
+def _ensure_database_interaction_join_rules(engine: Engine) -> None:
+    """Add the declarative multi-table relation column to existing installs."""
+    inspector = inspect(engine)
+    if "database_interactions" not in inspector.get_table_names():
+        return
+    columns = {
+        str(column["name"])
+        for column in inspector.get_columns("database_interactions")
+    }
+    if "join_rules" in columns:
+        return
+
+    if engine.dialect.name == "sqlite":
+        database_name = engine.url.database
+        if database_name and database_name != ":memory:":
+            database_path = Path(database_name)
+            if database_path.exists():
+                backup_path = database_path.with_suffix(
+                    database_path.suffix + ".pre-database-joins.bak",
+                )
+                if not backup_path.exists():
+                    shutil.copy2(database_path, backup_path)
+        ddl = (
+            "ALTER TABLE database_interactions "
+            "ADD COLUMN join_rules JSON NOT NULL DEFAULT '[]'"
+        )
+    else:
+        ddl = (
+            "ALTER TABLE database_interactions "
+            "ADD COLUMN join_rules JSON NOT NULL DEFAULT '[]'"
+        )
+    with engine.begin() as connection:
+        connection.execute(text(ddl))
+
+
+def _ensure_database_interaction_runtime_rules(engine: Engine) -> None:
+    """Add declarative caller, conversation and context-binding rules."""
+    table_name = "database_interactions"
+    inspector = inspect(engine)
+    if table_name not in inspector.get_table_names():
+        return
+    columns = {
+        str(column["name"])
+        for column in inspector.get_columns(table_name)
+    }
+    statements: list[str] = []
+    if "context_bindings" not in columns:
+        statements.append(
+            f"ALTER TABLE {table_name} ADD COLUMN "
+            "context_bindings JSON NOT NULL DEFAULT '[]'",
+        )
+    if "fixed_values" not in columns:
+        statements.append(
+            f"ALTER TABLE {table_name} ADD COLUMN "
+            "fixed_values JSON NOT NULL DEFAULT '{}'",
+        )
+    if "allowed_conversation_types" not in columns:
+        statements.append(
+            f"ALTER TABLE {table_name} ADD COLUMN "
+            "allowed_conversation_types JSON NOT NULL "
+            "DEFAULT '[\"general\",\"business\",\"initialization\"]'",
+        )
+    if "access_mode" not in columns:
+        statements.append(
+            f"ALTER TABLE {table_name} ADD COLUMN "
+            "access_mode VARCHAR(16) NOT NULL DEFAULT 'agent'",
+        )
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+
+
+def _ensure_attachment_text_pipeline_fields(engine: Engine) -> None:
+    """Add auditable parser state to document text created by old installs."""
+    table_name = "attachment_texts"
+    inspector = inspect(engine)
+    if table_name not in inspector.get_table_names():
+        return
+    columns = {
+        str(column["name"])
+        for column in inspector.get_columns(table_name)
+    }
+    statements: list[str] = []
+    if "parse_status" not in columns:
+        statements.append(
+            f"ALTER TABLE {table_name} ADD COLUMN "
+            "parse_status VARCHAR(32) NOT NULL DEFAULT 'legacy'",
+        )
+    if "parser" not in columns:
+        statements.append(
+            f"ALTER TABLE {table_name} ADD COLUMN parser VARCHAR(100)",
+        )
+    if "parse_error" not in columns:
+        statements.append(
+            f"ALTER TABLE {table_name} ADD COLUMN parse_error TEXT",
+        )
+    if "parse_details" not in columns:
+        statements.append(
+            f"ALTER TABLE {table_name} ADD COLUMN "
+            "parse_details JSON NOT NULL DEFAULT '{}'",
+        )
+    if not statements:
+        return
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
+        connection.execute(
+            text(
+                f"UPDATE {table_name} SET parser = 'legacy_extractor', "
+                "parse_details = :details "
+                "WHERE parse_status = 'legacy'",
+            ),
+            {
+                "details": json.dumps(
+                    {"version": 0, "status": "legacy"},
+                    ensure_ascii=False,
+                ),
+            },
+        )
+
+
 def upgrade_database_schema(engine: Engine, metadata: MetaData) -> None:
     """Create the current schema and bridge supported legacy SQLite layouts."""
 
     if engine.dialect.name != "sqlite":
         metadata.create_all(bind=engine)
+        _ensure_database_interaction_join_rules(engine)
+        _ensure_database_interaction_runtime_rules(engine)
+        _ensure_attachment_text_pipeline_fields(engine)
         return
 
     legacy_layout = _prepare_legacy_sqlite_schema(engine)
     metadata.create_all(bind=engine)
+    _ensure_database_interaction_join_rules(engine)
+    _ensure_database_interaction_runtime_rules(engine)
+    _ensure_attachment_text_pipeline_fields(engine)
     if legacy_layout:
         _copy_legacy_business_data(engine)

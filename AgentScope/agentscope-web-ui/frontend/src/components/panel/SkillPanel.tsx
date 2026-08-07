@@ -1,15 +1,17 @@
-import { FileX, Pencil, PlusCircle, Search, SearchX, Trash } from 'lucide-react';
+import { FileX, PlusCircle, Search, SearchX } from 'lucide-react';
 import { useState } from 'react';
 
 import type { Skill, UpdateSkillRequest } from '@/api';
 import { AddSkillDialog } from '@/components/dialog/AddSkillDialog.tsx';
 import { DeleteDialog } from '@/components/dialog/DeleteDialog.tsx';
 import { EditSkillDialog } from '@/components/dialog/EditSkillDialog';
+import { SkillDetailDialog } from '@/components/dialog/SkillDetailDialog';
+import { PanelCatalogRow } from '@/components/panel/PanelCatalogRow';
 import { PanelEmpty } from '@/components/panel/PanelEmpty';
 import { Button } from '@/components/ui/button';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
-import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from '@/components/ui/item';
 import { useTranslation } from '@/i18n/useI18n.ts';
+import { getSkillDisplayName } from '@/lib/skill-display';
 
 interface SkillPanelProps {
 	/** The skills equipped in the workspace. */
@@ -56,15 +58,37 @@ export function SkillPanel({
 	const [search, setSearch] = useState('');
 	const [deleteOpen, setDeleteOpen] = useState(false);
 	const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+	const [detailTarget, setDetailTarget] = useState<Skill | null>(null);
 	const [editTarget, setEditTarget] = useState<Skill | null>(null);
 
-	const filtered = search
-		? skills.filter((s) => s.name.toLowerCase().includes(search.toLowerCase()))
+	const normalizedSearch = search.trim().toLowerCase();
+	const filtered = normalizedSearch
+		? skills.filter((skill) =>
+				[getSkillDisplayName(skill), skill.name, skill.description].some((value) =>
+					value.toLowerCase().includes(normalizedSearch),
+				),
+			)
 		: skills;
 
 	return (
-		<div className="flex flex-col flex-1 min-h-0 gap-y-2">
-			<span className="text-muted-foreground text-sm">{t('panel.skill.description')}</span>
+		<div className="flex min-h-0 flex-1 flex-col">
+			<div className="flex-none space-y-3 pb-3">
+				<div className="flex items-center justify-between gap-3">
+					<div className="flex min-w-0 items-baseline gap-1.5">
+						<span className="truncate text-sm font-medium">
+							{t('panel.skill.catalogTitle')}
+						</span>
+						<span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+							{t('panel.skill.countSummary', { count: skills.length })}
+						</span>
+					</div>
+					<AddSkillDialog onAdd={onAdd}>
+						<Button size="xs">
+							<PlusCircle />
+							{t('panel.skill.add')}
+						</Button>
+					</AddSkillDialog>
+				</div>
 			<InputGroup>
 				<InputGroupInput
 					placeholder={t('panel.skill.searchPlaceholder')}
@@ -75,6 +99,7 @@ export function SkillPanel({
 					<Search />
 				</InputGroupAddon>
 			</InputGroup>
+			</div>
 
 			{loading ? (
 				<div className="flex flex-1 items-center justify-center">
@@ -91,50 +116,40 @@ export function SkillPanel({
 					}
 				/>
 			) : (
-				<div className="flex flex-col flex-1 min-h-0 overflow-y-auto gap-y-2">
-					{filtered.map((skill) => (
-						<Item key={skill.name} variant="outline">
-							<ItemContent>
-								<ItemTitle>{skill.name}</ItemTitle>
-								<ItemDescription>{skill.description}</ItemDescription>
-							</ItemContent>
-							<ItemActions>
-								<Button
-									variant="outline"
-									size="icon-sm"
-									onClick={() => setEditTarget(skill)}
-									aria-label={t('panel.skill.editAction', { name: skill.name })}
-									title={t('common.edit')}
-								>
-									<Pencil />
-								</Button>
-								<Button
-									variant="outline"
-									size="icon-sm"
-									onClick={() => {
-										setDeleteTarget(skill.name);
-										setDeleteOpen(true);
-									}}
-									aria-label={t('common.deleteTitle', {
-										entity: t('dialog-mcp-delete.skillEntity'),
-										name: skill.name,
-									})}
-									title={t('common.delete')}
-								>
-									<Trash />
-								</Button>
-							</ItemActions>
-						</Item>
-					))}
+				<div className="min-h-0 flex-1 overflow-y-auto rounded-lg border bg-background">
+					<div className="divide-y">
+					{filtered.map((skill) => {
+						const displayName = getSkillDisplayName(skill);
+						return (
+							<PanelCatalogRow
+								key={skill.name}
+								title={displayName}
+								description={skill.description}
+								onOpen={() => setDetailTarget(skill)}
+								openLabel={t('panel.skill.viewDetails', { name: displayName })}
+							/>
+						);
+					})}
+					</div>
 				</div>
 			)}
 
-			<AddSkillDialog onAdd={onAdd}>
-				<Button variant="default">
-					<PlusCircle />
-					{t('panel.skill.add')}
-				</Button>
-			</AddSkillDialog>
+			<SkillDetailDialog
+				open={detailTarget !== null}
+				onOpenChange={(open) => {
+					if (!open) setDetailTarget(null);
+				}}
+				skill={detailTarget}
+				onEdit={(skill) => {
+					setDetailTarget(null);
+					setEditTarget(skill);
+				}}
+				onDelete={(skill) => {
+					setDetailTarget(null);
+					setDeleteTarget(skill.name);
+					setDeleteOpen(true);
+				}}
+			/>
 
 			<EditSkillDialog
 				open={editTarget !== null}

@@ -1,38 +1,21 @@
 ---
 name: map-quality-requirements
-description: 提取工序质量要求并按 WBS 编码建立确定性关联。质量指标专家处理验收项目、控制指标、检查频次、关联资料及编码无法匹配时使用。
+description: 整理工序质量指标，并写入自己负责的初始化草稿分区。
 ---
 
-# 映射质量指标
+# 质量指标草稿分区
 
-禁止读取原始附件。先调用 `dobby_read_project_initialization_artifact` 读取负责人
-指定标准化批次的 `quality_requirements` 分区；读取具体分片时必须使用清单中
-的 `artifact_format`。草稿 WBS 仅作为编码上下文。
+只处理 `section="quality_requirements"`：WBS 编码、验收项目、控制指标、检查频次
+和关联资料。只保留资料明确给出的编码，不按名称相似度补关联。
 
-## 提取字段
-
-- `wbs_code`
-- `quality_acceptance_item`
-- `control_indicator`
-- `inspection_frequency`
-- `related_documents`
-
-同一 WBS 可对应多条质量要求，不能合并丢失。
-
-## 提取边界
-
-- 只按附件明确的 WBS 编码关联。
-- WBS 编码缺失时保留原值；禁止用名称相似度猜测。
-- 验收项目、控制指标、检查频次或关联资料缺失时保持缺失，不生成通用模板文本。
-- 重复出现的原始记录不得在提取阶段自行删除。
-- 表头合并、跨行内容或 OCR 结果不确定时列出原始行和证据位置。
-- 不判断编码是否存在、记录是否重复或质量内容是否异常；平台规则和核验智能体
-  统一给出结论。
-
-## 写入与汇报
-
-核对标准 JSON 的质量字段、WBS 编码和来源后，调用
-`dobby_import_project_initialization_artifact` 批量导入。后端会直接合并标准
-资料分片，不要在工具参数中重新复制质量数组。只有少量记录确需修正时，才使用
-`dobby_write_project_initialization_draft_section` 提交修正后的完整分区。成功后
-用 `TeamSay` 只汇报指标数和需统一核验的摘要。
+邀请任务只包含相关 `file_id/chunk_id`。用解析分块读取交互逐个读取分块，显式指定
+fields，并使用 `record_id=chunk_id`、`limit=1`、`text_field="content"`、
+`text_offset=0`、`text_limit=6000`。每页检查 `_text_page`，用 `next_offset`
+继续读取，直到 `has_more=false`；必须读完所有相关分块，禁止只读第一页。随后再读取
+当前草稿和分区。
+新分区调用 `dobby_create_initialization_quality_section`；
+已有自己提交的分区调用 `dobby_update_initialization_quality_section`。写入完整数组、
+来源和待核对编码，不写正式业务表。`payload` 顶层必须直接是质量指标数组，禁止再
+包裹 `quality_requirements`、`items`、`data`、`result` 或 `summary`。写入成功就是
+完成边界，无需再调用 `TeamSay`。每条记录的字段名必须逐字使用写入工具 schema
+中的英文技术字段，禁止中文字段名和 schema 外字段。

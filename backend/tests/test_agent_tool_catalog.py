@@ -1,23 +1,14 @@
-"""Regression tests for the assignable Dobby tool catalogue."""
+"""Regression tests for host-side, non-catalogued platform capabilities."""
 
 from scripts.dobby_agent_tools import create_dobby_agent_tool_catalog
 
 
-def test_business_catalog_is_not_bound_to_a_live_session() -> None:
-    catalog = create_dobby_agent_tool_catalog(None)
-    names = {tool.name for tool in catalog}
+def test_host_catalog_contains_no_fixed_business_tools() -> None:
+    catalog = create_dobby_agent_tool_catalog()
 
-    assert "dobby_list_project_items" in names
-    assert "dobby_create_task" in names
-    assert "dobby_update_wbs_progress" in names
-    assert all(tool.display_name for tool in catalog)
+    assert catalog == []
 
 
-def test_initializer_catalog_only_contains_role_relevant_tools() -> None:
-    catalog = create_dobby_agent_tool_catalog("orchestrator")
-    names = {tool.name for tool in catalog}
-
-    assert "dobby_list_project_items" in names
-    assert "dobby_begin_project_initialization_normalization" in names
-    assert "dobby_read_project_initialization_file" in names
-    assert "dobby_create_task" not in names
+def test_host_catalog_does_not_duplicate_database_or_mcp_capabilities() -> None:
+    catalog = create_dobby_agent_tool_catalog()
+    assert catalog == []

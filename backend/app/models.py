@@ -542,123 +542,13 @@ class AgentConversation(TimestampMixin, Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
-class ProjectInitializationNormalization(TimestampMixin, Base):
-    """One source-normalization run completed before specialist delegation."""
-
-    __tablename__ = "project_initialization_normalizations"
-    __table_args__ = (
-        CheckConstraint(
-            "status IN ('collecting', 'ready', 'consumed')",
-            name="ck_project_initialization_normalizations_status",
-        ),
-        Index(
-            "ix_project_initialization_normalizations_conversation",
-            "conversation_id",
-            "created_at",
-        ),
-    )
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    project_id: Mapped[int] = mapped_column(
-        ForeignKey("projects.id", ondelete="CASCADE"),
-        index=True,
-    )
-    conversation_id: Mapped[int] = mapped_column(
-        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
-        index=True,
-    )
-    draft_id: Mapped[int | None] = mapped_column(
-        ForeignKey("project_initialization_drafts.id", ondelete="SET NULL"),
-        nullable=True,
-        index=True,
-    )
-    created_by_agent_id: Mapped[str] = mapped_column(String(128), index=True)
-    status: Mapped[str] = mapped_column(
-        String(32),
-        default="collecting",
-        index=True,
-    )
-    source_file_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
-    source_files: Mapped[list[str]] = mapped_column(JSON, default=list)
-    expected_sections: Mapped[list[str]] = mapped_column(JSON, default=list)
-    validation_issues: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON,
-        default=list,
-    )
-
-
-class ProjectInitializationArtifact(TimestampMixin, Base):
-    """Canonical JSON or Markdown produced before specialist work starts."""
-
-    __tablename__ = "project_initialization_artifacts"
-    __table_args__ = (
-        CheckConstraint(
-            "section IN ("
-            "'project', 'personnel', 'wbs', 'risks', "
-            "'quality_requirements'"
-            ")",
-            name="ck_project_initialization_artifacts_section",
-        ),
-        CheckConstraint(
-            "artifact_format IN ('json', 'markdown')",
-            name="ck_project_initialization_artifacts_format",
-        ),
-        CheckConstraint(
-            "part_index > 0",
-            name="ck_project_initialization_artifacts_part_index",
-        ),
-        UniqueConstraint(
-            "normalization_id",
-            "section",
-            "artifact_format",
-            "part_index",
-            name="uq_project_initialization_artifacts_part",
-        ),
-        Index(
-            "ix_project_initialization_artifacts_section",
-            "normalization_id",
-            "section",
-            "artifact_format",
-            "part_index",
-        ),
-    )
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    normalization_id: Mapped[int] = mapped_column(
-        ForeignKey(
-            "project_initialization_normalizations.id",
-            ondelete="CASCADE",
-        ),
-        index=True,
-    )
-    project_id: Mapped[int] = mapped_column(
-        ForeignKey("projects.id", ondelete="CASCADE"),
-        index=True,
-    )
-    conversation_id: Mapped[int] = mapped_column(
-        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
-        index=True,
-    )
-    section: Mapped[str] = mapped_column(String(40))
-    artifact_format: Mapped[str] = mapped_column(String(20))
-    part_index: Mapped[int] = mapped_column(Integer, default=1)
-    file_name: Mapped[str] = mapped_column(String(300))
-    json_payload: Mapped[Any | None] = mapped_column(JSON, nullable=True)
-    markdown_content: Mapped[str | None] = mapped_column(Text, nullable=True)
-    source_file_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
-    source_locations: Mapped[list[str]] = mapped_column(JSON, default=list)
-    writer_agent_id: Mapped[str] = mapped_column(String(128), index=True)
-    schema_version: Mapped[int] = mapped_column(Integer, default=1)
-    revision: Mapped[int] = mapped_column(Integer, default=1)
-    content_size: Mapped[int] = mapped_column(Integer)
-    content_hash: Mapped[str] = mapped_column(String(64), index=True)
-
-
 class ProjectInitializationDraft(TimestampMixin, Base):
     """Agent-produced project initialization data awaiting human review."""
 
     __tablename__ = "project_initialization_drafts"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('invalid', 'ready', 'applied', 'rejected')",
+            "status IN ('building', 'invalid', 'ready', 'applied', 'rejected')",
             name="ck_project_initialization_drafts_status",
         ),
         Index(
@@ -680,7 +570,7 @@ class ProjectInitializationDraft(TimestampMixin, Base):
         ForeignKey("users.id"),
         index=True,
     )
-    status: Mapped[str] = mapped_column(String(32), default="invalid", index=True)
+    status: Mapped[str] = mapped_column(String(32), default="building", index=True)
     revision: Mapped[int] = mapped_column(Integer, default=1)
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     validation_issues: Mapped[list[dict[str, Any]]] = mapped_column(
@@ -741,38 +631,6 @@ class ProjectInitializationDraftSection(TimestampMixin, Base):
     extraction_notes: Mapped[list[str]] = mapped_column(JSON, default=list)
 
 
-class ProjectInitializationDraftWorkflow(TimestampMixin, Base):
-    """Current collection/review run for one initialization draft."""
-
-    __tablename__ = "project_initialization_draft_workflows"
-    __table_args__ = (
-        CheckConstraint(
-            "stage IN ('collecting', 'reviewing', 'completed')",
-            name="ck_project_initialization_draft_workflows_stage",
-        ),
-    )
-    draft_id: Mapped[int] = mapped_column(
-        ForeignKey("project_initialization_drafts.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    expected_sections: Mapped[list[str]] = mapped_column(JSON, default=list)
-    stage: Mapped[str] = mapped_column(
-        String(32),
-        default="collecting",
-        index=True,
-    )
-    run_revision: Mapped[int] = mapped_column(Integer, default=1)
-    reviewer_agent_id: Mapped[str | None] = mapped_column(
-        String(128),
-        nullable=True,
-    )
-    semantic_issues: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSON,
-        default=list,
-    )
-    review_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-
 class ProjectInitializationFile(TimestampMixin, Base):
     """Raw file available only to one project-initialization conversation."""
 
@@ -802,6 +660,55 @@ class ProjectInitializationFile(TimestampMixin, Base):
     content_type: Mapped[str | None] = mapped_column(String(200), nullable=True)
     file_size: Mapped[int] = mapped_column(Integer)
     file_hash: Mapped[str] = mapped_column(String(64), index=True)
+
+
+class ProjectInitializationAttachmentChunk(TimestampMixin, Base):
+    """Temporary parsed text referenced by initialization agents."""
+
+    __tablename__ = "project_initialization_attachment_chunks"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('ready', 'failed')",
+            name="ck_project_initialization_attachment_chunks_status",
+        ),
+        CheckConstraint(
+            "chunk_index >= 0 AND chunk_count >= 1",
+            name="ck_project_initialization_attachment_chunks_position",
+        ),
+        UniqueConstraint(
+            "file_id",
+            "chunk_index",
+            name="uq_project_initialization_attachment_chunks_position",
+        ),
+        Index(
+            "ix_project_initialization_attachment_chunks_conversation",
+            "conversation_id",
+            "file_id",
+            "chunk_index",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+        index=True,
+    )
+    file_id: Mapped[int] = mapped_column(
+        ForeignKey("project_initialization_files.id", ondelete="CASCADE"),
+        index=True,
+    )
+    file_name: Mapped[str] = mapped_column(String(300))
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    chunk_count: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(24), default="ready", index=True)
+    parser: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    content: Mapped[str] = mapped_column(Text, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parse_details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class MeetingMinute(TimestampMixin, Base):
@@ -873,6 +780,10 @@ class AttachmentText(Base):
     attachment_id: Mapped[int] = mapped_column(ForeignKey("attachments.id", ondelete="CASCADE"), primary_key=True)
     project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     content: Mapped[str] = mapped_column(Text, default="")
+    parse_status: Mapped[str] = mapped_column(String(32), default="ready")
+    parser: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parse_details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     extracted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -886,3 +797,120 @@ class OperationLog(Base):
     target_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     target_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DatabaseInteractionTablePolicy(TimestampMixin, Base):
+    """Platform-owned whitelist for one business database table.
+
+    The policy is deliberately declarative: agents never receive a database
+    connection or submit SQL.  Runtime code resolves the table and columns
+    from SQLAlchemy metadata and applies this whitelist before executing a
+    structured operation.
+    """
+
+    __tablename__ = "database_interaction_table_policies"
+    __table_args__ = (
+        CheckConstraint(
+            "scope_type IN ('project', 'user', 'global_admin')",
+            name="ck_database_interaction_policy_scope_type",
+        ),
+        CheckConstraint(
+            "minimum_role IN ('member', 'admin')",
+            name="ck_database_interaction_policy_minimum_role",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    table_name: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(Text, default="")
+    allowed_operations: Mapped[list[str]] = mapped_column(JSON, default=list)
+    readable_fields: Mapped[list[str]] = mapped_column(JSON, default=list)
+    writable_fields: Mapped[list[str]] = mapped_column(JSON, default=list)
+    filterable_fields: Mapped[list[str]] = mapped_column(JSON, default=list)
+    scope_type: Mapped[str] = mapped_column(String(24), default="project")
+    scope_field: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    minimum_role: Mapped[str] = mapped_column(String(16), default="member")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+
+class DatabaseInteraction(TimestampMixin, Base):
+    """One assignable database capability exposed to an agent."""
+
+    __tablename__ = "database_interactions"
+    __table_args__ = (
+        CheckConstraint(
+            "execution_kind IN ('builtin', 'table')",
+            name="ck_database_interactions_execution_kind",
+        ),
+        CheckConstraint(
+            "table_operation IS NULL OR "
+            "table_operation IN ('read', 'create', 'update', 'delete')",
+            name="ck_database_interactions_table_operation",
+        ),
+        CheckConstraint(
+            "access_mode IN ('agent', 'workflow')",
+            name="ck_database_interactions_access_mode",
+        ),
+        Index("ix_database_interactions_enabled_sort", "enabled", "sort_order"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(Text, default="")
+    execution_kind: Mapped[str] = mapped_column(String(16))
+    builtin_operation: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    table_policy_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "database_interaction_table_policies.id",
+            ondelete="RESTRICT",
+        ),
+        nullable=True,
+        index=True,
+    )
+    table_operation: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    join_rules: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON,
+        default=list,
+    )
+    context_bindings: Mapped[list[dict[str, str]]] = mapped_column(
+        JSON,
+        default=list,
+    )
+    fixed_values: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    allowed_conversation_types: Mapped[list[str]] = mapped_column(
+        JSON,
+        default=lambda: ["general", "business", "initialization"],
+    )
+    access_mode: Mapped[str] = mapped_column(String(16), default="agent")
+    input_schema: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    read_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    requires_confirmation: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    built_in: Mapped[bool] = mapped_column(Boolean, default=False)
+    default_assigned: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class DatabaseInteractionAgentAssignment(TimestampMixin, Base):
+    """Durable assignment state for one AgentScope agent and capability."""
+
+    __tablename__ = "database_interaction_agent_assignments"
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_id",
+            "interaction_id",
+            name="uq_database_interaction_agent_assignment",
+        ),
+        Index(
+            "ix_database_interaction_assignments_agent",
+            "agent_id",
+            "assigned",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(128))
+    interaction_id: Mapped[int] = mapped_column(
+        ForeignKey("database_interactions.id", ondelete="CASCADE"),
+        index=True,
+    )
+    assigned: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -115,22 +115,20 @@ class AgentCallConfig(BaseModel):
 
 
 class AgentToolConfig(BaseModel):
-    """Controls which assignable direct tools belong to an agent.
+    """Legacy direct-tool assignment retained for data compatibility.
 
-    ``None`` preserves the historical behavior for existing agents: every
-    tool contributed by the workspace or the embedding application is
-    available. Once an administrator saves the checklist, the explicit list
-    becomes authoritative for every session of the agent.
+    System/workspace tools are now fixed global capabilities and no longer use
+    this allowlist. The persisted value remains readable only so the database-
+    interaction migration can recover assignments created by older versions.
     """
 
     allowed_tool_names: list[str] | None = Field(
         default=None,
         description=(
-            "Direct tool names assigned to this agent. ``None`` means all "
-            "currently available direct tools; a list is an explicit "
-            "allowlist, including an empty list for no assigned tools."
+            "Deprecated legacy assignment names. Fixed system tools ignore "
+            "this value."
         ),
-        title="Assigned Tools",
+        title="Legacy Tool Assignments",
     )
 
     @field_validator("allowed_tool_names")
@@ -149,10 +147,34 @@ class AgentToolConfig(BaseModel):
         )
 
     def allows(self, tool_name: str) -> bool:
-        """Return whether the direct tool is assigned to this agent."""
-        return (
-            self.allowed_tool_names is None
-            or tool_name in self.allowed_tool_names
+        """Fixed system tools are available to every agent."""
+        del tool_name
+        return True
+
+
+class AgentMCPConfig(BaseModel):
+    """Managed MCP packages assigned to an agent.
+
+    Package artifacts live in the platform registry.  This model stores only
+    stable package ids so every management and engineering-platform session
+    of the agent resolves the same assignment while receiving its own runtime
+    process instances.
+    """
+
+    allowed_mcp_ids: list[str] = Field(
+        default_factory=list,
+        description="Managed MCP package ids assigned to this agent.",
+        title="Assigned MCP Packages",
+    )
+
+    @field_validator("allowed_mcp_ids")
+    @classmethod
+    def _normalise_allowed_mcp_ids(cls, values: list[str]) -> list[str]:
+        """Trim and de-duplicate package ids while preserving order."""
+        return list(
+            dict.fromkeys(
+                value.strip() for value in values if value.strip()
+            ),
         )
 
 
@@ -375,7 +397,15 @@ class AgentData(BaseModel):
     tool_config: SkipJsonSchema[AgentToolConfig] = Field(
         default_factory=AgentToolConfig,
         description=(
-            "Direct-tool assignment maintained by the chat sidebar. Hidden "
+            "Deprecated direct-tool assignment retained only for migration "
+            "of historical database-interaction selections."
+        ),
+    )
+
+    mcp_config: SkipJsonSchema[AgentMCPConfig] = Field(
+        default_factory=AgentMCPConfig,
+        description=(
+            "Managed MCP assignment maintained by the chat sidebar. Hidden "
             "from the schema-driven dialog to avoid duplicate editors."
         ),
     )

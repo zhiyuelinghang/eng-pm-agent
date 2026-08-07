@@ -7,6 +7,7 @@ from ._redis_storage import RedisStorage
 from ._model import (
     AgentCallConfig,
     AgentData,
+    AgentMCPConfig,
     AgentModelPolicy,
     AgentToolConfig,
     PlatformAgentConfig,
@@ -73,6 +74,7 @@ __all__ = [
     "AsyncSQLAlchemyStorage",
     # The ORM models
     "AgentCallConfig",
+    "AgentMCPConfig",
     "AgentToolConfig",
     "AgentModelPolicy",
     "PlatformAgentConfig",

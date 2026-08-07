@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """Agent router — CRUD endpoints for agent configurations."""
 from datetime import datetime
+import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import ValidationError
 
 from ...agent import ContextConfig, ReActConfig
@@ -42,6 +43,9 @@ from ..storage import (
     StorageBase,
 )
 from ...credential import CredentialFactory
+
+
+logger = logging.getLogger(__name__)
 
 agent_router = APIRouter(
     prefix="/agent",
@@ -154,12 +158,7 @@ async def _synchronise_project_initializer_role(
     global_config_id: str,
     selected_agent_id: str | None,
 ) -> None:
-    """Keep the selected initializer hidden with an explicit allowlist.
-
-    Its selected-agent ids are administrator-managed and preserved so the
-    initializer can invite its persistent internal specialists without gaining
-    access to arbitrary agents.
-    """
+    """Keep the selected initializer hidden with an explicit allowlist."""
     if selected_agent_id is None:
         return
     record = await storage.get_agent(global_config_id, selected_agent_id)
@@ -184,9 +183,7 @@ async def _synchronise_project_initializer_role(
                         },
                     ),
                     "call_config": call_config.model_copy(
-                        update={
-                            "scope": "selected",
-                        },
+                        update={"scope": "selected"},
                     ),
                 },
             ),
@@ -278,6 +275,7 @@ def _catalog_item(agent: AgentView) -> PlatformAgentCatalogItem:
         sort_order=config.sort_order,
         permission_mode=getattr(permission_mode, "value", permission_mode),
         knowledge_config=config.knowledge_config,
+        initialization_role=config.initialization_role,
     )
 
 
@@ -533,9 +531,28 @@ async def get_platform_agent_catalog(
         ),
         key=lambda item: (item.sort_order, item.name, item.id),
     )
+    initialization_workers = sorted(
+        (
+            item
+            for item in items
+            if item.id != initializer_id
+            and item.role == "system_internal"
+            and item.enabled
+            and item.initialization_role in {
+                "project",
+                "personnel",
+                "wbs",
+                "risks",
+                "quality_requirements",
+                "validator",
+            }
+        ),
+        key=lambda item: (item.sort_order, item.name, item.id),
+    )
     return PlatformAgentCatalogResponse(
         global_main=selected_item,
         project_initializer=initializer_item,
+        initialization_workers=initialization_workers,
         business_agents=business_agents,
         total=len(business_agents),
     )
@@ -636,7 +653,6 @@ async def update_platform_settings(
                 "different agents."
             ),
         )
-
     settings = await storage.upsert_platform_settings(
         user_id,
         PlatformSettingsData(
@@ -719,7 +735,7 @@ async def create_agent(
             platform_config=body.platform_config,
             invite_config=body.invite_config,
             call_config=body.call_config,
-            tool_config=body.tool_config,
+            mcp_config=body.mcp_config,
         )
     except ValidationError as exc:
         raise HTTPException(
@@ -771,9 +787,6 @@ async def update_agent(
     settings = await _load_platform_settings(storage, owner_id)
     selected_id = settings.data.global_main_agent_id
     is_selected_main = selected_id == agent_id
-    is_selected_initializer = (
-        settings.data.project_initializer_agent_id == agent_id
-    )
     if (
         body.platform_config is not None
         and body.platform_config.role == "global_main"
@@ -854,43 +867,6 @@ async def update_agent(
                 ),
             },
         )
-    if is_selected_initializer:
-        if not updated_data.platform_config.enabled:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Select another project initializer before disabling "
-                    "the current one."
-                ),
-            )
-        if (
-            updated_data.model_policy.mode != "fixed"
-            or updated_data.model_policy.chat_model_config is None
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "The current project initializer must keep a fixed "
-                    "chat model. Select another initializer first."
-                ),
-            )
-        updated_data = updated_data.model_copy(
-            update={
-                "platform_config": (
-                    updated_data.platform_config.model_copy(
-                        update={
-                            "role": "system_internal",
-                            "published": False,
-                        },
-                    )
-                ),
-                "call_config": updated_data.call_config.model_copy(
-                    update={
-                        "scope": "selected",
-                    },
-                ),
-            },
-        )
     if agent_id in updated_data.call_config.allowed_agent_ids:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -914,6 +890,7 @@ async def update_agent(
 )
 async def delete_agent(
     agent_id: str,
+    request: Request = None,  # type: ignore[assignment]
     user_id: str = Depends(get_current_user_id),
     session_service: SessionService = Depends(get_session_service),
     storage: StorageBase = Depends(get_storage),
@@ -951,17 +928,26 @@ async def delete_agent(
                 "current one."
             ),
         )
-    if settings.data.project_initializer_agent_id == agent_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Select another project initializer or clear the assignment "
-                "before deleting the current one."
-            ),
-        )
     deleted = await session_service.delete_agent(owner_id, agent_id)
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Agent '{agent_id}' not found.",
         )
+    database_manager = (
+        getattr(request.app.state, "database_interaction_manager", None)
+        if request is not None
+        else None
+    )
+    if database_manager is not None:
+        try:
+            await database_manager.delete_assignments(agent_id)
+        except Exception as exc:  # pragma: no cover - remote cleanup fallback
+            # The agent is already gone from authoritative AgentScope storage.
+            # Orphaned external assignment rows are inert and can be retried;
+            # do not turn a successful delete into a misleading client error.
+            logger.warning(
+                "Unable to clean database interaction assignments for %s: %s",
+                agent_id,
+                exc,
+            )

@@ -50,6 +50,118 @@ export interface AgentToolConfig {
 	allowed_tool_names: string[] | null;
 }
 
+export interface AgentMCPConfig {
+	/** Stable platform MCP package ids assigned to every session of the agent. */
+	allowed_mcp_ids: string[];
+}
+
+export type DatabaseTableOperation = 'read' | 'create' | 'update' | 'delete';
+export type DatabaseJoinType = 'left' | 'inner';
+export type DatabaseScopeType = 'project' | 'user' | 'global_admin';
+export type DatabaseInteractionAccessMode = 'agent' | 'workflow';
+export type DatabaseConversationType = 'general' | 'business' | 'initialization';
+export type DatabaseContextBindingSource =
+	| 'project_id'
+	| 'conversation_id'
+	| 'user_id'
+	| 'actor_agent_id';
+export type DatabaseContextBindingMode = 'scope' | 'value';
+
+export interface DatabaseTableColumn {
+	name: string;
+	type: string;
+	nullable: boolean;
+	primary_key: boolean;
+	foreign_keys: string[];
+	sensitive: boolean;
+	system_managed: boolean;
+}
+
+export interface DatabaseTableInfo {
+	name: string;
+	columns: DatabaseTableColumn[];
+	recommended_scope_type: DatabaseScopeType;
+	recommended_scope_field: string | null;
+}
+
+export interface DatabaseTablePolicy {
+	id: number;
+	table_name: string;
+	display_name: string;
+	description: string;
+	allowed_operations: DatabaseTableOperation[];
+	readable_fields: string[];
+	writable_fields: string[];
+	filterable_fields: string[];
+	scope_type: DatabaseScopeType;
+	scope_field: string | null;
+	minimum_role: 'member' | 'admin';
+	enabled: boolean;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface DatabaseInteractionJoin {
+	alias: string;
+	source_alias: string;
+	source_field: string;
+	target_policy_id: number;
+	target_field: string;
+	join_type: DatabaseJoinType;
+	readable_fields: string[];
+	filterable_fields: string[];
+	policy: DatabaseTablePolicy | null;
+}
+
+export type DatabaseInteractionJoinRequest = Omit<
+	DatabaseInteractionJoin,
+	'policy'
+>;
+
+export interface DatabaseInteractionContextBinding {
+	field: string;
+	source: DatabaseContextBindingSource;
+	mode: DatabaseContextBindingMode;
+}
+
+export interface DatabaseInteraction {
+	id: number;
+	key: string;
+	display_name: string;
+	description: string;
+	table_policy_id: number;
+	table_operation: DatabaseTableOperation;
+	join_rules: DatabaseInteractionJoin[];
+	context_bindings: DatabaseInteractionContextBinding[];
+	allowed_conversation_types: DatabaseConversationType[];
+	access_mode: DatabaseInteractionAccessMode;
+	input_schema: Record<string, unknown>;
+	read_only: boolean;
+	requires_confirmation: boolean;
+	enabled: boolean;
+	default_assigned: boolean;
+	sort_order: number;
+	assigned: boolean;
+	policy: DatabaseTablePolicy | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface DatabaseTableInteractionRequest {
+	key: string;
+	display_name: string;
+	description: string;
+	table_policy_id: number;
+	table_operation: DatabaseTableOperation;
+	join_rules: DatabaseInteractionJoinRequest[];
+	context_bindings: DatabaseInteractionContextBinding[];
+	allowed_conversation_types: DatabaseConversationType[];
+	access_mode: DatabaseInteractionAccessMode;
+	requires_confirmation: boolean;
+	enabled: boolean;
+	sort_order: number;
+}
+
 export type AgentModelPolicyMode = 'inherit_session' | 'fixed';
 
 export interface AgentModelPolicy {
@@ -84,6 +196,7 @@ export interface AgentData {
 	invite_config: InviteConfig;
 	call_config: AgentCallConfig;
 	tool_config: AgentToolConfig;
+	mcp_config: AgentMCPConfig;
 }
 
 export interface AgentView extends RecordBase {
@@ -105,7 +218,7 @@ export interface CreateAgentRequest {
 	platform_config?: PlatformAgentConfig;
 	invite_config?: InviteConfig;
 	call_config?: AgentCallConfig;
-	tool_config?: AgentToolConfig;
+	mcp_config?: AgentMCPConfig;
 }
 
 export interface CreateAgentResponse {
@@ -121,7 +234,7 @@ export interface UpdateAgentRequest {
 	platform_config?: PlatformAgentConfig;
 	invite_config?: InviteConfig;
 	call_config?: AgentCallConfig;
-	tool_config?: AgentToolConfig;
+	mcp_config?: AgentMCPConfig;
 }
 
 export interface AgentListResponse {
@@ -636,6 +749,7 @@ export interface ToolInfo {
 
 export interface WorkspaceTool extends ToolInfo {
 	source: 'platform' | 'workspace';
+	category: 'database' | 'workspace' | 'general';
 	display_name?: string | null;
 	assigned: boolean;
 	read_only: boolean;
@@ -645,6 +759,29 @@ export interface WorkspaceTool extends ToolInfo {
 export interface MCPClientStatus extends MCPClient {
 	is_healthy: boolean;
 	tools: ToolInfo[];
+}
+
+export interface ManagedMCPTool {
+	name: string;
+	display_name?: string | null;
+	description: string;
+	input_schema: Record<string, unknown>;
+	read_only: boolean;
+}
+
+export interface ManagedMCPPackage {
+	id: string;
+	name: string;
+	display_name: string;
+	version: string;
+	description: string;
+	transport: 'stdio';
+	status: 'ready';
+	tools: ManagedMCPTool[];
+	assigned: boolean;
+	active_instances: number;
+	created_at: string;
+	updated_at: string;
 }
 
 // ─── Skill ────────────────────────────────────────────────────────────────────

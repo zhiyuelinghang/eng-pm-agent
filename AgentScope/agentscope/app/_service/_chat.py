@@ -25,6 +25,7 @@ from .._team_lifecycle import (
 )
 from .._team_messaging import deliver_team_message
 from ..message_bus import MessageBus, MessageBusKeys
+from ..mcp_registry import MCPRegistryManager
 from ..rag.knowledge_base_manager import KnowledgeBaseManagerBase
 from ..storage import StorageBase, AgentRecord, SessionRecord
 from .._manager import BackgroundTaskManager, SchedulerManager
@@ -52,6 +53,7 @@ from ._permission_review import (
     PermissionReviewerMiddleware,
     PermissionReviewService,
 )
+from ._attachment_pipeline import AttachmentPipeline
 
 from ..._logging import logger
 from ...agent import Agent, ModelConfig
@@ -104,6 +106,7 @@ class ChatService:
         custom_agent_cls: type[Agent] | None = None,
         extra_projectors: list[EventProjector] | None = None,
         permission_review_service: PermissionReviewService | None = None,
+        mcp_registry_manager: MCPRegistryManager | None = None,
     ) -> None:
         """Initialize chat service.
 
@@ -179,6 +182,8 @@ class ChatService:
         self._sub_agent_templates = custom_subagent_templates
         self._agent_cls = custom_agent_cls or Agent
         self._permission_review_service = permission_review_service
+        self._mcp_registry_manager = mcp_registry_manager
+        self._attachment_pipeline = AttachmentPipeline()
         self._projection = SessionProjection(message_bus)
         self._projectors: list[EventProjector] = [
             SubagentHitlProjector(storage),
@@ -397,6 +402,9 @@ class ChatService:
             StateChangeMiddleware(
                 message_bus=self._message_bus,
                 session_id=session_id,
+                storage=self._storage,
+                user_id=user_id,
+                agent_id=agent_id,
             ),
             ToolOffloadMiddleware(
                 bg_manager=self._background_task_manager,
@@ -498,6 +506,7 @@ class ChatService:
             resource_access_service=self._access,
             extra_factory=self._extra_agent_tools,
             sub_agent_templates=self._sub_agent_templates,
+            mcp_registry_manager=self._mcp_registry_manager,
         )
 
         # ----------------------------------------------------------------
@@ -625,7 +634,14 @@ class ChatService:
                 if input_msg is None or isinstance(input_msg, (Msg, list)):
                     # Case A: new reply (user message(s), or retrigger with
                     # empty input)
+                    prepared_input_msg = input_msg
                     if isinstance(input_msg, (Msg, list)):
+                        prepared_input_msg = (
+                            await self._attachment_pipeline.prepare(
+                                input_msg,
+                                toolkit,
+                            )
+                        )
                         input_msgs = (
                             [input_msg]
                             if isinstance(input_msg, Msg)
@@ -638,7 +654,9 @@ class ChatService:
                                 msg,
                             )
 
-                    async for event in agent.reply_stream(inputs=input_msg):
+                    async for event in agent.reply_stream(
+                        inputs=prepared_input_msg,
+                    ):
                         # Apply to reply_msg FIRST (sync — never
                         # interrupted), so an interrupt in the awaits below
                         # can't lose this event.
@@ -971,7 +989,7 @@ class ChatService:
                 "文本结果。"
             )
             terminal_status = "completed"
-        await settle_team_member(
+        newly_settled = await settle_team_member(
             self._storage,
             self._message_bus,
             user_id=user_id,
@@ -986,6 +1004,8 @@ class ChatService:
                 else None
             ),
         )
+        if not newly_settled:
+            return
         await deliver_team_message(
             self._message_bus,
             user_id=user_id,

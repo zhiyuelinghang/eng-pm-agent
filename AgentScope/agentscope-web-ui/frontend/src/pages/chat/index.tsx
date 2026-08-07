@@ -187,10 +187,10 @@ const ChatPageInner = () => {
 		[updateAgent],
 	);
 
-	const handleUpdateAgentToolConfig = useCallback(
-		async (agentId: string, toolConfig: Parameters<typeof updateAgent>[1]['tool_config']) => {
-			if (!toolConfig) return;
-			await updateAgent(agentId, { tool_config: toolConfig }, { silent: true });
+	const handleUpdateAgentMCPConfig = useCallback(
+		async (agentId: string, mcpConfig: Parameters<typeof updateAgent>[1]['mcp_config']) => {
+			if (!mcpConfig) return;
+			await updateAgent(agentId, { mcp_config: mcpConfig }, { silent: true });
 		},
 		[updateAgent],
 	);
@@ -387,7 +387,7 @@ const ChatPageInner = () => {
 					agents={agents}
 					agentsLoading={agentsLoading}
 					onUpdateAgentCallConfig={handleUpdateAgentCallConfig}
-					onUpdateAgentToolConfig={handleUpdateAgentToolConfig}
+					onUpdateAgentMCPConfig={handleUpdateAgentMCPConfig}
 					onTeamUpdated={refetchSessions}
 				/>
 			</div>

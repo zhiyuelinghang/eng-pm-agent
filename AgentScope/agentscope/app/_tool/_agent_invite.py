@@ -24,6 +24,7 @@ from pydantic import Field
 
 from ._constants import HANDLE_LEN
 from ._team_tool_base import _TeamToolBase
+from .._platform_permissions import apply_platform_tool_allow_rules
 from .._team_lifecycle import assign_team_member
 from ..message_bus import MessageBusKeys
 from .._bus_ops import enqueue_run_trigger
@@ -34,6 +35,9 @@ from ...permission import PermissionContext
 from ...state import AgentState
 from ...tool import ToolChunk, ParamsBase
 from ..._utils._common import _generate_id
+
+
+_MAX_INVITE_PROMPT_CHARS = 12_000
 
 if TYPE_CHECKING:
     from ..message_bus import MessageBus
@@ -82,6 +86,7 @@ class _AgentInviteParams(ParamsBase):
         ),
     )
     prompt: str = Field(
+        max_length=_MAX_INVITE_PROMPT_CHARS,
         description=(
             "The first task delivered to the invited agent as a user "
             "message. It begins executing immediately upon joining — "
@@ -265,6 +270,11 @@ class AgentInvite(_TeamToolBase):
                 A success message containing the invited agent's
                 display name, or an error chunk on failure.
         """
+        if len(prompt) > _MAX_INVITE_PROMPT_CHARS:
+            return _error(
+                "AgentInvite: prompt 过长。请把大型资料保存到受控存储，"
+                "邀请时只传引用和任务要求。",
+            )
         try:
             invited, resolve_err = _resolve_target(
                 self._pool_by_id,
@@ -444,6 +454,18 @@ class AgentInvite(_TeamToolBase):
                 leader_session.config.fallback_chat_model_config
             )
 
+            worker_platform_context = leader_session.config.platform_context
+            if worker_platform_context is not None:
+                worker_platform_context = worker_platform_context.model_copy(
+                    update={
+                        "session_role": "worker",
+                        "root_session_id": (
+                            worker_platform_context.root_session_id
+                            or leader_session.id
+                        ),
+                    },
+                )
+
             # Permission rules and working directories are NOT inherited from
             # the leader. The invited agent does, however, keep its
             # administrator-selected platform permission mode so platform team
@@ -457,9 +479,16 @@ class AgentInvite(_TeamToolBase):
             # from the invited agent's own primary session — the
             # team-scoped conversation is a separate context; prior
             # "user approved X" state should not silently cross over.
+            # Exact-tool rules declared by the authenticated platform session
+            # are workspace-independent and are re-applied explicitly. This
+            # lets internal orchestration continue in background workers
+            # without copying unrelated user approvals from the leader.
             worker_state = AgentState(
-                permission_context=PermissionContext(
-                    mode=invited.data.platform_config.permission_mode,
+                permission_context=apply_platform_tool_allow_rules(
+                    PermissionContext(
+                        mode=invited.data.platform_config.permission_mode,
+                    ),
+                    worker_platform_context,
                 ),
             )
 
@@ -468,17 +497,6 @@ class AgentInvite(_TeamToolBase):
                 invited.id,
             )
             invited_handle = _display_handle(invited.id)
-            worker_platform_context = leader_session.config.platform_context
-            if worker_platform_context is not None:
-                worker_platform_context = worker_platform_context.model_copy(
-                    update={
-                        "session_role": "worker",
-                        "root_session_id": (
-                            worker_platform_context.root_session_id
-                            or leader_session.id
-                        ),
-                    },
-                )
             borrowed = await self._storage.upsert_session(
                 user_id=self._user_id,
                 agent_id=invited.id,

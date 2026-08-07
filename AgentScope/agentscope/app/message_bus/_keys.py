@@ -43,6 +43,12 @@ class MessageBusKeys:
     busy, the dispatcher re-queues this trigger so a report arriving at the
     end of a leader turn cannot be lost between inbox-drain cycles."""
 
+    WAKEUP_KIND_BACKGROUND: Final = "background"
+    """Trigger kind: continue a session after an offloaded tool finishes.
+    Unlike a generic idle wake-up, this trigger is durable while the session
+    is still finishing its current reasoning loop and must be re-queued until
+    the run lock is released."""
+
     # ------------------------------------------------------------------
     # Cross-session UI projection — a generic per-session Redis-hash
     # store onto which one session can project UI cards owned by another

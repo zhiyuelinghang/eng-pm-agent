@@ -1,48 +1,41 @@
 ---
 name: review-project-initialization
-description: 独立核验已经由各专项智能体写入的项目初始化草稿。初始化核验专家检查跨专业语义一致性，并触发平台确定性规则校验时使用。
+description: 独立读取完整初始化草稿，执行结构与跨分区核验，并完成草稿状态。
 ---
 
-# 核验项目初始化草稿
+# 初始化草稿核验
 
-你是核验者，不是附件提取者。专项数据已经由持久化专家写入各自草稿分区。
+先调用 `dobby_get_project_initialization_draft` 取得草稿 ID、状态和现有问题。分区
+数据必须按以下顺序读取，禁止一次返回所有分区的大型 payload：
 
-## 前置条件
+1. 调用 `dobby_list_project_initialization_sections` 做清单读取，参数必须包含
+   `fields=["id","section","revision","source_files","extraction_notes"]` 和
+   `limit=20`，确认主智能体任务要求的分区均已提交。
+2. `project` 分区是小型对象：使用 `filters={"section":"project"}`，并指定
+   `fields=["id","section","payload","source_files","extraction_notes"]`、
+   `limit=1` 读取一次。
+3. `personnel`、`wbs`、`risks`、`quality_requirements` 的 payload 都是数组，
+   必须逐个分区分页读取。每次指定一个明确的 `section` 筛选，并同时指定
+   `fields=["id","section","payload","source_files","extraction_notes"]`、
+   `limit=1`、`json_field="payload"`、`json_offset=0`、`json_limit=20`。
+   读取后检查 `_json_page`：当 `has_more=true` 时，用返回的 `next_offset`
+   继续读取同一分区，直至 `has_more=false`；不得遗漏、重复或只读第一页。
+4. 如果任何必需分区缺失、某一页返回截断提示、JSON 不完整或分页无法走到
+   `has_more=false`，必须继续读取缺失页；仍无法完整读取时只能标记 `invalid`，
+   问题中明确记录“分区未完整读取”，绝不能标记 `ready`。
 
-1. 调用 `dobby_get_project_initialization_draft` 读取任一相关分区并检查
-   `workflow`。
-2. `pending_sections` 必须为空；否则向负责人报告尚未完成的分区，不得完成核验。
-3. 按需分页读取所有已存在分区。禁止重新解析原始附件，也禁止替专家补录记录。
+完整读取后核验：
 
-## 职责边界
+- 必需分区是否与主智能体任务一致；
+- 工程日期、合同工期与 WBS 时间范围；
+- WBS 编码、直接父级、明确前置关系及质量编码引用；
+- 人员身份证号、一人多岗与职责冲突；
+- 风险窗口、质量要求及跨分区明显矛盾；
+- 每个问题是否保留可核对来源，是否存在无依据补造。
 
-平台规则引擎负责以下确定性规则：
-
-- 必填类型与字段格式；
-- 人员、WBS 编码和记录重复；
-- WBS 父子层级、直接前缀、循环和时间线；
-- 明确前置关系及日期冲突；
-- 质量指标的 WBS 编码存在性；
-- 合同日期、风险窗口等确定性日期规则。
-
-你只补充规则引擎难以可靠判断的语义问题，例如：
-
-- 工程说明与 WBS 总体范围明显矛盾；
-- 同一人员的岗位职责存在明显互斥；
-- 质量内容虽有合法 WBS 编码，但业务含义明显错配；
-- 风险的相关工序文字、等级、部位或窗口在语义上明显矛盾；
-- 跨分区单位、对象或描述明显不一致。
-
-不得用常识改写原值，不得把不确定猜测标成错误。需要用户判断的内容使用
-`warning`，只有确定无法安全入库的语义矛盾才使用 `error`。
-
-## 完成核验
-
-调用 `dobby_finalize_project_initialization_draft`：
-
-- `draft_id` 使用本轮草稿 ID；
-- `semantic_issues` 只包含额外语义问题，没有时传空数组；
-- `review_summary` 简述核验范围和结论。
-
-工具成功后，通过 `TeamSay` 只向负责人报告最终状态、规则问题数、语义问题数和
-是否需要用户进入“核对草稿”。不要复制整份草稿。
+不要重写专家分区，也不要在完成调用里重复提交庞大的合并 payload；平台查看与确认
+时会从已持久化分区组合完整草稿。把确定性和语义问题写入
+`validation_issues`：存在 error 或任何未完整读取的分区时调用
+`dobby_finalize_project_initialization_draft` 标记 `invalid`，否则标记 `ready`。
+完成工具成功后即代表核验结果已持久化，平台会自动通知主智能体继续汇总；不要再调用
+`TeamSay`，也不要等待第二次汇报。用户确认前不得写正式业务表。
