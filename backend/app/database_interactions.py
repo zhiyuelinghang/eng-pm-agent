@@ -98,7 +98,7 @@ _SENSITIVE_FIELD_PARTS = (
     "storage_path",
 )
 _SYSTEM_MANAGED_FIELDS = frozenset({"created_at", "updated_at"})
-_DECLARATIVE_CATALOG_VERSION = 14
+_DECLARATIVE_CATALOG_VERSION = 17
 _MAX_BATCH_RECORD_IDS = 12
 _MAX_JSON_PAGE_ITEMS = 20
 _MAX_TEXT_PAGE_CHARS = 6000
@@ -286,6 +286,7 @@ class DeclarativeInteractionSeed(BaseModel):
         default_factory=list,
     )
     fixed_values: dict[str, Any] = Field(default_factory=dict)
+    runtime_policy: dict[str, Any] = Field(default_factory=dict)
     allowed_conversation_types: list[ConversationType] = Field(
         default_factory=lambda: ["general", "business", "initialization"],
         min_length=1,
@@ -698,6 +699,7 @@ def _interaction_view(
         "table_operation": interaction.table_operation,
         "join_rules": join_rules,
         "context_bindings": list(interaction.context_bindings or []),
+        "runtime_policy": dict(interaction.runtime_policy or {}),
         "allowed_conversation_types": list(
             interaction.allowed_conversation_types or [],
         ),
@@ -905,6 +907,43 @@ def _normalize_initialization_section_payload(
             },
         ) from exc
     return adapter.dump_python(validated, mode="json")
+
+
+def _validate_initialization_section_evidence(values: dict[str, Any]) -> None:
+    """Require every specialist write to retain a usable evidence trail."""
+    source_files = values.get("source_files")
+    valid_source_files = (
+        isinstance(source_files, dict)
+        and bool(source_files)
+    ) or (
+        isinstance(source_files, list)
+        and bool(source_files)
+        and all(
+            (isinstance(item, str) and bool(item.strip()))
+            or (isinstance(item, dict) and bool(item))
+            for item in source_files
+        )
+    )
+    if not valid_source_files:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "初始化草稿分区必须记录非空 source_files，"
+                "并保留 file_id、chunk_id 或来源文件名"
+            ),
+        )
+    extraction_notes = values.get("extraction_notes")
+    if not isinstance(extraction_notes, list) or any(
+        not isinstance(item, str) or not item.strip()
+        for item in extraction_notes
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "初始化草稿分区必须显式提交 extraction_notes 数组；"
+                "没有真实疑点时使用空数组"
+            ),
+        )
 
 
 def _initialization_section_from_policy(
@@ -1163,11 +1202,88 @@ def build_table_interaction_schema(
         writable["payload"] = _initialization_section_payload_schema(
             initialization_section,
         )
+    if initialization_section and "source_files" in writable:
+        writable["source_files"] = {
+            "anyOf": [
+                {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "anyOf": [
+                            {"type": "string", "minLength": 1},
+                            {"type": "object", "minProperties": 1},
+                        ],
+                    },
+                },
+                {"type": "object", "minProperties": 1},
+            ],
+            "description": (
+                "非空来源映射；至少保留 file_id、chunk_id 或来源文件名，"
+                "不得只存在于邀请说明中。"
+            ),
+        }
+    if initialization_section and "extraction_notes" in writable:
+        writable["extraction_notes"] = {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1},
+            "description": (
+                "仅记录从原文实际发现的冲突、缺失或转换；"
+                "没有疑点时传空数组，禁止写通用免责声明。"
+            ),
+        }
+    if (
+        policy.table_name == "project_initialization_drafts"
+        and operation == "update"
+    ):
+        if "status" in writable:
+            writable["status"] = {
+                "type": "string",
+                "enum": ["ready", "invalid"],
+                "description": "存在 error 时为 invalid，否则为 ready。",
+            }
+        if "validation_issues" in writable:
+            writable["validation_issues"] = {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "level": {
+                            "type": "string",
+                            "enum": ["error", "warning"],
+                        },
+                        "path": {"type": "string", "minLength": 1},
+                        "message": {"type": "string", "minLength": 1},
+                    },
+                    "required": ["level", "path", "message"],
+                    "additionalProperties": False,
+                },
+                "description": (
+                    "标准核验问题数组；每项只包含 level、path、message。"
+                ),
+            }
     values_schema: dict[str, Any] = {
         "type": "object",
         "properties": writable,
         "additionalProperties": False,
     }
+    required_value_fields: list[str] = []
+    if initialization_section:
+        required_value_fields = [
+            name
+            for name in ("payload", "source_files", "extraction_notes")
+            if name in writable
+        ]
+    elif (
+        policy.table_name == "project_initialization_drafts"
+        and operation == "update"
+    ):
+        required_value_fields = [
+            name
+            for name in ("status", "validation_issues")
+            if name in writable
+        ]
+    if required_value_fields:
+        values_schema["required"] = required_value_fields
     return_record_schema = {
         "type": "boolean",
         "default": False,
@@ -1181,6 +1297,11 @@ def build_table_interaction_schema(
             and columns[name].default is None
             and columns[name].server_default is None
         ]
+        required = list(
+            dict.fromkeys(
+                [*values_schema.get("required", []), *required],
+            ),
+        )
         if required:
             values_schema["required"] = required
         return {
@@ -1449,6 +1570,7 @@ def bootstrap_declarative_catalog(db: Session) -> int:
                 join_rules=normalized_seed_joins,
                 context_bindings=normalized_seed_bindings,
                 fixed_values=dict(seed.fixed_values),
+                runtime_policy=dict(seed.runtime_policy),
                 allowed_conversation_types=seed.allowed_conversation_types,
                 access_mode=seed.access_mode,
                 input_schema=build_table_interaction_schema(
@@ -1489,6 +1611,7 @@ def bootstrap_declarative_catalog(db: Session) -> int:
             row.join_rules = normalized_seed_joins
             row.context_bindings = normalized_seed_bindings
             row.fixed_values = dict(seed.fixed_values)
+            row.runtime_policy = dict(seed.runtime_policy)
             row.allowed_conversation_types = seed.allowed_conversation_types
             row.access_mode = seed.access_mode
             row.input_schema = build_table_interaction_schema(
@@ -1515,6 +1638,9 @@ def bootstrap_declarative_catalog(db: Session) -> int:
                 seed_rule_changed = True
             if dict(row.fixed_values or {}) != dict(seed.fixed_values):
                 row.fixed_values = dict(seed.fixed_values)
+                seed_rule_changed = True
+            if dict(row.runtime_policy or {}) != dict(seed.runtime_policy):
+                row.runtime_policy = dict(seed.runtime_policy)
                 seed_rule_changed = True
             if row.default_assigned != seed.default_assigned:
                 row.default_assigned = seed.default_assigned
@@ -2442,6 +2568,21 @@ def execute_table_interaction(
                     initialization_section,
                     values["payload"],
                 )
+                _validate_initialization_section_evidence(values)
+            if (
+                interaction.key
+                == "dobby_create_project_initialization_draft"
+            ):
+                # A new draft is a workflow envelope; all business content is
+                # owned by project_initialization_draft_sections.  Do not let
+                # a model reintroduce obsolete payload keys or pre-finalize a
+                # draft while creating it.
+                values = {
+                    **values,
+                    "status": "building",
+                    "payload": {},
+                    "validation_issues": [],
+                }
             validated_values = {**fixed_values, **values}
             _validate_foreign_key_values(
                 db,

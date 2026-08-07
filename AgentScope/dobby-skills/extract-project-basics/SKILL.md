@@ -20,3 +20,8 @@ description: 从主智能体提供的解析证据整理工程基本信息，并�
 对象，禁止再包裹 `project`、`data`、`result` 或 `summary`。写入成功就是完成边界，无需再调用
 `TeamSay`。字段名必须逐字使用写入工具 schema 中的英文技术字段，禁止中文字段名和
 schema 外字段。缺失值用 `null`，同一字段冲突时保留来源，不自行取舍。
+
+`source_files` 必须非空并明确记录本次使用的 `file_id/chunk_id` 与文件名；
+`extraction_notes` 只记录原文中实际存在的冲突、缺失或转换，没有疑点时传空数组。
+提交前逐项对照 payload：已经填入的字段绝不能再写成“原文未提及”或“保留 null”；
+禁止把示例字段、通用免责声明或推测写进 notes。

@@ -129,7 +129,10 @@ AgentScope Web UI 是智能体管理端，工程管理平台是业务使用端�
 跨分区检查并标记 `ready`/`invalid`。无论模型如何协作，用户在草稿页确认前都不会
 写入正式项目表。平台不再用固定表格映射或确定性快速入库替代 AI 理解。
 
-更新初始化职责、技能或数据库交互后，使用项目便携 Python 执行一次幂等配置同步：
+初始化团队结构和能力分配声明在
+`AgentScope/project-initialization-team.json`；实际业务流程只写在各智能体已分配的
+`SKILL.md` 中，工程后端不会再注入一份重复流程。更新团队结构或数据库交互后，使用
+项目便携 Python 执行一次幂等配置同步：
 
 ```powershell
 .\python-3.13.14\python.exe .\scripts\provision_initialization_agents.py
@@ -137,6 +140,11 @@ AgentScope Web UI 是智能体管理端，工程管理平台是业务使用端�
 
 该命令会创建或校准一个初始化主智能体、五个专项智能体和一个核验智能体，配置固定
 邀请白名单、技能与草稿区数据库交互。它们使用全局主智能体的模型配置作为模板。
+默认保留管理端已经编辑过的同名技能；只有明确要用仓库版本覆盖平台内容时，才执行：
+
+```powershell
+.\python-3.13.14\python.exe .\scripts\provision_initialization_agents.py --replace-skills
+```
 
 AgentScope 管理员登录时不需要填写服务器地址。开发环境由 Web UI 将
 同源路径 `/agentscope-api` 自动代理到本机 AgentScope API；外网部署时

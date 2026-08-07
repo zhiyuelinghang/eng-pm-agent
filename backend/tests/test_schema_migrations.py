@@ -215,18 +215,20 @@ def test_existing_database_interactions_receive_join_rules_column(tmp_path) -> N
         "join_rules",
         "context_bindings",
         "fixed_values",
+        "runtime_policy",
         "allowed_conversation_types",
         "access_mode",
     } <= columns
     with engine.connect() as database:
         values = database.exec_driver_sql(
             "SELECT join_rules, context_bindings, fixed_values, "
-            "allowed_conversation_types, access_mode "
+            "runtime_policy, allowed_conversation_types, access_mode "
             "FROM database_interactions WHERE id = 1",
         ).one()
     assert values.join_rules == "[]"
     assert values.context_bindings == "[]"
     assert values.fixed_values == "{}"
+    assert values.runtime_policy == "{}"
     assert json.loads(values.allowed_conversation_types) == [
         "general",
         "business",

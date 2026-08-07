@@ -445,7 +445,6 @@ class MCPRegistryManager:
         session_id: str,
         platform_agent_id: str | None = None,
         platform_session_id: str | None = None,
-        initialization_role: str | None = None,
     ) -> dict[str, str]:
         env = {
             key: os.environ[key]
@@ -457,7 +456,6 @@ class MCPRegistryManager:
         # migration.  A stale uploaded manifest cannot re-enable it.
         env.pop("DOBBY_DATABASE_PATH", None)
         if {
-            "dobby_agent_tools",
             "dobby_database_interactions",
         } & set(manifest.platform_capabilities):
             gateway_url = os.getenv(
@@ -510,8 +508,6 @@ class MCPRegistryManager:
                 "DOBBY_PLATFORM_SESSION_ID": platform_session_id or session_id,
             },
         )
-        if initialization_role:
-            env["DOBBY_INITIALIZATION_ROLE"] = initialization_role
         return env
 
     def _build_client(
@@ -523,7 +519,6 @@ class MCPRegistryManager:
         session_id: str,
         platform_agent_id: str | None = None,
         platform_session_id: str | None = None,
-        initialization_role: str | None = None,
     ) -> MCPClient:
         package_dir = (self.root_dir / record.relative_dir).resolve()
         manifest = record.manifest
@@ -541,7 +536,6 @@ class MCPRegistryManager:
                     session_id=session_id,
                     platform_agent_id=platform_agent_id,
                     platform_session_id=platform_session_id,
-                    initialization_role=initialization_role,
                 ),
                 cwd=package_dir,
             ),
@@ -618,7 +612,6 @@ class MCPRegistryManager:
         package_ids: list[str],
         platform_agent_id: str | None = None,
         platform_session_id: str | None = None,
-        initialization_role: str | None = None,
     ) -> list[MCPClient]:
         """Return session-isolated clients for assigned and system packages.
 
@@ -670,7 +663,6 @@ class MCPRegistryManager:
                     session_id=session_id,
                     platform_agent_id=platform_agent_id,
                     platform_session_id=platform_session_id,
-                    initialization_role=initialization_role,
                 )
                 for record in records.values()
             ),
@@ -686,7 +678,6 @@ class MCPRegistryManager:
         session_id: str,
         platform_agent_id: str | None = None,
         platform_session_id: str | None = None,
-        initialization_role: str | None = None,
     ) -> MCPClient:
         key = (session_id, record.id)
         async with self._runtime_lock:
@@ -725,7 +716,6 @@ class MCPRegistryManager:
                 session_id=session_id,
                 platform_agent_id=platform_agent_id,
                 platform_session_id=platform_session_id,
-                initialization_role=initialization_role,
             )
             try:
                 ready: asyncio.Future[None] = (

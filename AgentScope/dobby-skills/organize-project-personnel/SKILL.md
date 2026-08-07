@@ -20,3 +20,7 @@ description: 整理人员与岗位记录，并写入自己负责的初始化草�
 `personnel`、`items`、`data`、`result` 或 `summary`。写入成功就是完成边界，
 无需再调用 `TeamSay`。每条记录的字段名必须逐字使用写入工具 schema 中的英文技术
 字段，禁止中文字段名和 schema 外字段。
+
+`source_files` 必须非空并明确记录本次使用的 `file_id/chunk_id` 与文件名；
+`extraction_notes` 只记录原文中实际存在的冲突、缺失或转换，没有疑点时传空数组。
+提交前确认 notes 与最终 payload 一致，禁止写通用免责声明或推测。

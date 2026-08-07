@@ -10,7 +10,7 @@ from backend.app.project_initialization import (
 )
 
 
-def test_review_composes_specialist_sections_when_draft_payload_is_empty() -> None:
+def test_review_composes_sections_and_ignores_legacy_draft_payload() -> None:
     rows = [
         SimpleNamespace(
             section="project",
@@ -40,7 +40,13 @@ def test_review_composes_specialist_sections_when_draft_payload_is_empty() -> No
 
     payload = compose_initialization_draft_payload(
         _Session(),
-        SimpleNamespace(id=7, payload={}),
+        SimpleNamespace(
+            id=7,
+            payload={
+                "engineering_info": {"project_name": "旧结构"},
+                "quality_metrics": [{"name": "旧字段"}],
+            },
+        ),
     )
 
     assert payload.project.engineering_type_description == "异地扩建项目"

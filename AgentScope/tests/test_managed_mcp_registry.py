@@ -303,7 +303,7 @@ def test_platform_gateway_context_is_injected_only_when_requested(
             version="1.0.0",
             command="server.exe",
             env={"DOBBY_AGENT_TOOL_TOKEN": "package-token"},
-            platform_capabilities=["dobby_agent_tools"],
+            platform_capabilities=["dobby_database_interactions"],
         ),
         user_id="user",
         agent_id="agent",
@@ -338,8 +338,8 @@ def test_platform_gateway_context_is_injected_only_when_requested(
 
     database_env = manager._runtime_environment(
         MCPPackageManifest(
-            name="database-initialization",
-            display_name="数据库初始化",
+            name="database-business-tool",
+            display_name="数据库业务工具",
             version="1.0.0",
             command="server.exe",
             env={"DOBBY_DATABASE_PATH": "package-cannot-override.db"},
@@ -350,7 +350,6 @@ def test_platform_gateway_context_is_injected_only_when_requested(
         session_id="worker-session",
         platform_agent_id="initialization-orchestrator",
         platform_session_id="platform-session",
-        initialization_role="project",
     )
     assert "DOBBY_DATABASE_PATH" not in database_env
     assert database_env["DOBBY_AGENT_TOOL_BASE_URL"].endswith(
@@ -366,7 +365,6 @@ def test_platform_gateway_context_is_injected_only_when_requested(
         "initialization-orchestrator"
     )
     assert database_env["DOBBY_PLATFORM_SESSION_ID"] == "platform-session"
-    assert database_env["DOBBY_INITIALIZATION_ROLE"] == "project"
 
 
 def test_runtime_reuses_within_session_and_isolates_between_sessions(

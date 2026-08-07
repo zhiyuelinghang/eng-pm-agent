@@ -1005,11 +1005,20 @@ def test_initialization_specialist_section_is_fixed_by_platform(db: Session) -> 
     )
     assert interaction is not None
     assert interaction.fixed_values == {"section": "wbs"}
+    assert interaction.runtime_policy == {}
     values_schema = interaction.input_schema["properties"]["values"]
     assert "section" not in values_schema["properties"]
     payload_schema = values_schema["properties"]["payload"]
     assert payload_schema["type"] == "array"
     assert payload_schema["items"]["additionalProperties"] is False
+    assert set(values_schema["required"]) >= {
+        "payload",
+        "source_files",
+        "extraction_notes",
+    }
+    assert values_schema["properties"]["source_files"]["anyOf"][0][
+        "minItems"
+    ] == 1
     assert set(payload_schema["items"]["properties"]) == set(
         _valid_wbs_payload()[0],
     )
@@ -1021,12 +1030,39 @@ def test_initialization_specialist_section_is_fixed_by_platform(db: Session) -> 
     )
     assert policy is not None
 
+    with pytest.raises(HTTPException) as evidence_error:
+        execute_table_interaction(
+            db,
+            context,
+            row,
+            policy,
+            {"values": {"draft_id": draft.id, "payload": _valid_wbs_payload()}},
+            actor_agent_id="wbs-specialist",
+        )
+    assert evidence_error.value.status_code == 422
+    assert "source_files" in evidence_error.value.detail
+
     result, _ = execute_table_interaction(
         db,
         context,
         row,
         policy,
-        {"values": {"draft_id": draft.id, "payload": _valid_wbs_payload()}},
+        {
+            "values": {
+                "draft_id": draft.id,
+                "payload": _valid_wbs_payload(),
+                "source_files": {
+                    "chunks": [
+                        {
+                            "file_id": 2,
+                            "chunk_id": 7,
+                            "file_name": "总进度计划.xlsx",
+                        },
+                    ],
+                },
+                "extraction_notes": [],
+            },
+        },
         actor_agent_id="wbs-specialist",
     )
 
@@ -1037,6 +1073,61 @@ def test_initialization_specialist_section_is_fixed_by_platform(db: Session) -> 
     assert set(section.payload[0]) == set(_valid_wbs_payload()[0])
     assert section.payload[0]["wbs_code"] == "1"
     assert section.payload[0]["progress_percent"] == "0"
+    assert section.source_files["chunks"][0]["file_id"] == 2
+    assert section.extraction_notes == []
+
+
+def test_initialization_draft_creation_keeps_envelope_canonical(
+    db: Session,
+) -> None:
+    context = _context(db, conversation_type="initialization")
+    bootstrap_declarative_catalog(db)
+    interaction = db.scalar(
+        select(DatabaseInteraction).where(
+            DatabaseInteraction.key
+            == "dobby_create_project_initialization_draft",
+        ),
+    )
+    assert interaction is not None
+    update_agent_assignments(db, "initialization-orchestrator", [interaction.id])
+    row, policy = resolve_assigned_interaction(
+        db,
+        "initialization-orchestrator",
+        interaction.key,
+    )
+    assert policy is not None
+
+    result, _ = execute_table_interaction(
+        db,
+        context,
+        row,
+        policy,
+        {
+            "values": {
+                "status": "ready",
+                "payload": {
+                    "engineering_info": {"project_name": "旧结构"},
+                    "quality_metrics": [{"name": "旧字段"}],
+                },
+                "validation_issues": [
+                    {
+                        "level": "error",
+                        "path": "payload",
+                        "message": "不应由创建动作写入",
+                    },
+                ],
+                "source_files": ["附件.xlsx"],
+            },
+        },
+        actor_agent_id="initialization-orchestrator",
+    )
+
+    draft = db.get(ProjectInitializationDraft, result["record_id"])
+    assert draft is not None
+    assert draft.status == "building"
+    assert draft.payload == {}
+    assert draft.validation_issues == []
+    assert draft.source_files == ["附件.xlsx"]
 
 
 def test_initialization_section_rejects_nested_or_translated_payload(
@@ -1121,6 +1212,16 @@ def test_initialization_finalizer_cannot_publish_deterministically_invalid_draft
         ),
     )
     assert interaction is not None
+    finalizer_values_schema = interaction.input_schema["properties"]["values"]
+    assert set(finalizer_values_schema["required"]) == {
+        "status",
+        "validation_issues",
+    }
+    issue_schema = finalizer_values_schema["properties"]["validation_issues"][
+        "items"
+    ]
+    assert issue_schema["required"] == ["level", "path", "message"]
+    assert issue_schema["additionalProperties"] is False
     update_agent_assignments(db, "validator", [interaction.id])
     row, policy = resolve_assigned_interaction(
         db,

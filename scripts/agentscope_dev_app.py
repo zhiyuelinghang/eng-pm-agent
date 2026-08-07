@@ -16,6 +16,7 @@ from agentscope.app.mcp_registry import MCPRegistryManager
 from agentscope.app.database_interactions import (
     DatabaseInteractionGatewayError,
     DatabaseInteractionManager,
+    create_database_interaction_tools,
 )
 from agentscope.app.rag.blob_store import LocalBlobStore
 from agentscope.app.rag.knowledge_base_manager import CollectionPerKbManager
@@ -33,12 +34,6 @@ from agentscope.rag import (
     TextParser,
     WordParser,
 )
-from scripts.dobby_agent_tools import (
-    create_dobby_agent_tool_catalog,
-    create_dobby_agent_tools,
-)
-
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 logger = logging.getLogger(__name__)
 
@@ -176,16 +171,10 @@ async def _create_platform_agent_tools(
     """Bind an internal worker to its leader's Dobby platform context."""
     platform_session_id = session_id
     platform_agent_id = agent_id
-    read_only = False
-    initialization_role: str | None = None
-    database_interactions: list[dict[str, Any]] = []
     legacy_allowed_names: list[str] | None = None
     agent_record = await storage.get_agent(user_id, agent_id)
     if agent_record is not None:
         legacy_allowed_names = agent_record.data.tool_config.allowed_tool_names
-        initialization_role = (
-            agent_record.data.platform_config.initialization_role
-        )
     session = await storage.get_session(user_id, agent_id, session_id)
     if session is not None and session.team_id is not None:
         team = await storage.get_team(user_id, session.team_id)
@@ -198,41 +187,18 @@ async def _create_platform_agent_tools(
             if leader_session is not None:
                 platform_session_id = leader_session.id
                 platform_agent_id = leader_session.agent_id
-                # Ordinary borrowed agents remain read-only. Initialization
-                # specialists receive only their explicitly assigned draft
-                # interactions and may therefore write isolated draft rows.
-                read_only = initialization_role is None
     try:
-        database_interactions = await database_interaction_manager.list_runtime(
+        return await create_database_interaction_tools(
+            manager=database_interaction_manager,
             agent_id=agent_id,
-            session_id=platform_session_id,
+            session_id=session_id,
+            platform_session_id=platform_session_id,
+            platform_agent_id=platform_agent_id,
             legacy_allowed_names=legacy_allowed_names,
         )
     except DatabaseInteractionGatewayError as exc:
         logger.warning("Unable to load database interactions: %s", exc)
-    return await create_dobby_agent_tools(
-        user_id,
-        agent_id,
-        session_id,
-        platform_session_id=platform_session_id,
-        platform_agent_id=platform_agent_id,
-        read_only=read_only,
-        initialization_role=initialization_role,
-        database_interactions=database_interactions,
-    )
-
-
-async def _list_platform_agent_tool_catalog(
-    user_id: str,
-    agent_id: str,
-):
-    """List the global Dobby tool catalogue shared by every agent."""
-    del user_id, agent_id
-    return [
-        item
-        for item in create_dobby_agent_tool_catalog()
-        if item.category != "database"
-    ]
+        return []
 
 app = create_app(
     storage=storage,
@@ -270,7 +236,6 @@ app = create_app(
         ),
     ),
     extra_agent_tools=_create_platform_agent_tools,
-    extra_agent_tool_catalog=_list_platform_agent_tool_catalog,
     extra_middlewares=[
         Middleware(
             CORSMiddleware,

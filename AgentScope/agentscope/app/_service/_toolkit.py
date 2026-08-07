@@ -302,7 +302,6 @@ time or interval"
     workspace_mcps = await workspace.list_mcps()
     platform_session_id = session_record.id
     platform_agent_id = agent_record.id
-    initialization_role = agent_record.data.platform_config.initialization_role
     if session_record.team_id is not None:
         team = await storage.get_team(user_id, session_record.team_id)
         if team is not None and team.session_id != session_record.id:
@@ -322,7 +321,6 @@ time or interval"
             package_ids=agent_record.data.mcp_config.allowed_mcp_ids,
             platform_agent_id=platform_agent_id,
             platform_session_id=platform_session_id,
-            initialization_role=initialization_role,
         )
         if mcp_registry_manager is not None
         else []

@@ -19,3 +19,7 @@ fields，并使用 `record_id=chunk_id`、`limit=1`、`text_field="content"`、
 `risks`、`items`、`data`、`result` 或 `summary`。写入成功就是完成边界，无需再
 调用 `TeamSay`。每条记录的字段名必须逐字使用写入工具 schema 中的英文技术字段，
 禁止中文字段名和 schema 外字段。
+
+`source_files` 必须非空并明确记录本次使用的 `file_id/chunk_id` 与文件名；
+`extraction_notes` 只记录原文中实际存在的跳号、冲突或日期转换，没有疑点时传空数组。
+证据映射不得只保留在邀请任务中，提交前确认 notes 与最终 payload 一致。

@@ -51,7 +51,6 @@ class MCPPackageManifest(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     platform_capabilities: list[
         Literal[
-            "dobby_agent_tools",
             "dobby_database_interactions",
         ]
     ] = Field(
@@ -95,13 +94,11 @@ class MCPPackageManifest(BaseModel):
         cls,
         values: list[
             Literal[
-                "dobby_agent_tools",
                 "dobby_database_interactions",
             ]
         ],
     ) -> list[
         Literal[
-            "dobby_agent_tools",
             "dobby_database_interactions",
         ]
     ]:

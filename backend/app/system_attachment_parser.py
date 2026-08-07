@@ -68,30 +68,6 @@ def _load_runtime() -> ModuleType:
         return module
 
 
-@lru_cache(maxsize=1)
-def _load_local_parser() -> ModuleType:
-    """Load the bundled deterministic parser used for structured imports."""
-    parser_path = _PACKAGE_ROOT / "local_parser.py"
-    if not parser_path.is_file():
-        raise SystemAttachmentParserError("平台固定附件解析工具源码不存在")
-    with _LOAD_LOCK:
-        module_name = "_dobby_system_attachment_local_parser"
-        existing = sys.modules.get(module_name)
-        if isinstance(existing, ModuleType):
-            return existing
-        spec = importlib.util.spec_from_file_location(module_name, parser_path)
-        if spec is None or spec.loader is None:
-            raise SystemAttachmentParserError("无法加载平台结构化附件解析器")
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        try:
-            spec.loader.exec_module(module)
-        except Exception:
-            sys.modules.pop(module_name, None)
-            raise
-        return module
-
-
 def _render_payload(payload: dict[str, Any]) -> str:
     markdown = payload.get("markdown")
     if isinstance(markdown, str):
@@ -214,72 +190,3 @@ def parse_uploaded_attachment(
             "fallback_reasons": fallback_reasons,
         },
     )
-
-
-def parse_structured_attachment_segments(
-    content: bytes,
-    *,
-    file_name: str,
-) -> list[dict[str, Any]]:
-    """Return complete deterministic segments without any model-side paging.
-
-    MinerU remains the primary document parser.  This second representation
-    preserves spreadsheet rows, document blocks and page metadata so the
-    platform can import known schemas directly instead of asking an agent to
-    copy large tables through repeated tool calls.
-    """
-    parser = _load_local_parser()
-    suffix = Path(file_name).suffix.lower()
-    queue: list[str | None] = [None]
-    seen_sheets: set[str | None] = set()
-    segments: list[dict[str, Any]] = []
-    while queue:
-        sheet_name = queue.pop(0)
-        if sheet_name in seen_sheets:
-            continue
-        seen_sheets.add(sheet_name)
-        start = 1
-        seen_starts: set[int] = set()
-        while True:
-            if start in seen_starts:
-                raise SystemAttachmentParserError(
-                    "结构化附件分页位置重复，已停止异常循环",
-                )
-            seen_starts.add(start)
-            try:
-                payload = parser.parse_attachment_content(
-                    content,
-                    suffix,
-                    sheet_name,
-                    start,
-                    _PAGE_LIMIT,
-                    "auto",
-                )
-            except Exception as exc:
-                detail = str(exc).strip() or exc.__class__.__name__
-                raise SystemAttachmentParserError(detail) from exc
-            if not isinstance(payload, dict):
-                raise SystemAttachmentParserError(
-                    "平台结构化附件解析器返回了无效结果",
-                )
-            segments.append(payload)
-            if sheet_name is None:
-                current_sheet = payload.get("sheet_name")
-                sheet_names = payload.get("sheet_names")
-                if isinstance(sheet_names, list):
-                    for candidate in sheet_names:
-                        if (
-                            isinstance(candidate, str)
-                            and candidate != current_sheet
-                        ):
-                            queue.append(candidate)
-            raw_next = payload.get("next_start")
-            if raw_next is None:
-                break
-            next_start = int(raw_next)
-            if next_start <= start:
-                raise SystemAttachmentParserError(
-                    "结构化附件分页位置没有向后推进",
-                )
-            start = next_start
-    return segments

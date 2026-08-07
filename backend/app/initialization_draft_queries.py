@@ -35,8 +35,13 @@ def compose_initialization_draft_payload(
     draft: ProjectInitializationDraft,
 ) -> ProjectInitializationPayload:
     """Compose the persisted draft from specialist-owned sections."""
-    base = ProjectInitializationPayload.model_validate(draft.payload or {})
-    data = base.model_dump(mode="python")
+    # The outer draft is only the workflow envelope.  Specialist-owned rows
+    # are the source of truth for business data, so stale or model-invented
+    # keys in the envelope must never make the review endpoint unreadable.
+    # Starting from the canonical empty model also prevents legacy field
+    # names such as ``engineering_info`` / ``quality_metrics`` from leaking
+    # back into the section-based architecture.
+    data = ProjectInitializationPayload().model_dump(mode="python")
     for row in _section_rows(db, draft.id):
         if row.section in _DRAFT_SECTIONS:
             data[row.section] = row.payload

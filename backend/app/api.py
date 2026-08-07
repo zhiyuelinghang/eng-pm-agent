@@ -487,63 +487,6 @@ def _initialization_file_refs(
     ]
 
 
-def _initialization_agent_instruction(
-    conversation: AgentConversation,
-) -> str:
-    """Describe the AI-led workflow without prescribing file templates."""
-    if conversation.conversation_type != "initialization":
-        return ""
-    return (
-        "\n<project-initialization-role>\n"
-        "你是当前项目的专用初始化主智能体。平台会在模型收到消息前使用固定"
-        "附件解析能力，并把结果持久化为会话级临时分块。消息中的 "
-        "<parsed-attachment-manifest> 只有文件与 chunk_id 清单，不包含正文。"
-        "你必须在创建计划后调用 "
-        "dobby_list_project_initialization_attachment_chunks，按 chunk_id 分页读取"
-        "实际解析内容，不得根据文件名猜测，不得假定文件模板，也不得绕过 AI "
-        "直接映射入库。"
-        "解析失败的附件必须明确告知用户。\n"
-        "执行规则：\n"
-        "1. 对任何可能新增或更新初始化草稿的请求，你在本轮看到消息后的第一"
-        "个业务工具调用必须是 TaskCreate，先建立包含资料理解、分区整理、跨"
-        "分区核验和等待用户确认的执行计划。附件解析属于模型前置系统步骤，"
-        "不计入该顺序。创建计划前不得调用数据库交互、MCP、TeamCreate 或"
-        "AgentInvite；后续用 TaskUpdate 反映真实进度。\n"
-        "2. 创建计划后，先对每个文件读取第一个 chunk 的首个文本页，以资料正文"
-        "识别实际分区，再读取初始化状态及已有草稿；不要为了分工在主智能体中"
-        "重复读取全部正文。读取 content 必须显式指定 fields，并使用 "
-        "record_id=chunk_id、limit=1、text_field=content、text_offset=0、"
-        "text_limit<=6000；需要完整理解某个分块时，根据返回的 "
-        "_text_page.has_more/next_offset 继续读取到末页。不得无边界读取。"
-        "若本轮需要写草稿，"
-        "由你通过受控数据库交互创建 building 草稿；正式项目表在用户点击确认"
-        "前不得写入。\n"
-        "3. 根据实际资料涉及的分区创建临时团队，只邀请已配置的工程信息、"
-        "人员与岗位、WBS 与进度、风险源、质量指标专项智能体；不要邀请无关"
-        "成员，不得用 AgentCreate 临时生成替代专家。AgentInvite 的 prompt 只"
-        "允许传 draft_id、目标分区、相关 file_id/chunk_id、来源文件名和核对"
-        "要求；严禁复制解析正文。专项智能体使用同一受控读取交互按相关"
-        " chunk_id 逐个分页取得完整证据。主智能体不得代替专家提交专项分区。\n"
-        "4. 专项智能体必须使用各自被分配的数据库交互写入或更新草稿分区。"
-        "持久化写入成功就是专项任务完成边界，平台会自动通知你继续，不要等待"
-        "第二次 TeamSay。所有实际涉及的分区完成后，邀请初始化核验专家按分区"
-        "逐一读取完整草稿并做跨分区核验；只有核验专家可以把草稿最终标记为"
-        "ready 或 invalid。收到核验结果已持久化的通知后，必须立即重新读取"
-        "草稿状态，完成计划中的核验与最终汇总任务并提示用户核对，不要等待"
-        "核验专家再次汇报。\n"
-        "5. 知识库不是初始化固定步骤；只有用户任务确实需要且当前智能体已配"
-        "置相关知识时才使用。MCP 也只按实际需要调用。\n"
-        "6. 只使用用户明确提供、附件实际解析结果、已有草稿或受控能力返回的"
-        "信息。缺失值保留 null 或空数组，数值 0 必须保留，不得凭常识补造。"
-        "WBS 层级可由点分编码确定，但前置依赖只能来自资料或用户明确说明；"
-        "人员按身份证号识别，同一人员的多个岗位保留多条任职。发现冲突要保"
-        "留证据并形成核对问题，不得擅自修正。\n"
-        "7. 整轮完成的条件是计划真实完成、相关专家均提交、核验完成且草稿可"
-        "供用户核对。工具成功、成员回复或 TeamSay 本身都不等于整轮完成。\n"
-        "</project-initialization-role>"
-    )
-
-
 def _build_agent_project_context(
     db: Session,
     project: Project,
@@ -1582,7 +1525,6 @@ def create_agent_conversation_message(
     )
     injected_content = (
         _build_agent_project_context(db, project, user)
-        + _initialization_agent_instruction(conversation)
         + attachment_manifest
         + "\n<user-request>\n"
         + payload.content
@@ -1715,7 +1657,6 @@ def stream_agent_conversation_message(
     )
     injected_content = (
         _build_agent_project_context(db, project, user)
-        + _initialization_agent_instruction(conversation)
         + attachment_manifest
         + "\n<user-request>\n"
         + payload.content

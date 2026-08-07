@@ -37,15 +37,21 @@ class DatabaseInteractionManager:
         path: str,
         *,
         payload: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
         expect_data: bool = True,
+        unwrap_data: bool = True,
+        timeout: float | None = None,
     ) -> Any:
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout if timeout is not None else self._timeout,
+            ) as client:
                 response = await client.request(
                     method,
                     f"{self._base_url}{path}",
                     headers={"Authorization": f"Bearer {self._token}"},
                     json=payload,
+                    params=params,
                 )
         except httpx.HTTPError as exc:
             raise DatabaseInteractionGatewayError(
@@ -64,7 +70,20 @@ class DatabaseInteractionManager:
         if not expect_data or response.status_code == 204:
             return None
         body = response.json()
-        return body.get("data", body)
+        return body.get("data", body) if unwrap_data else body
+
+    async def resolve_context(self, session_id: str) -> dict[str, Any] | None:
+        """Resolve the trusted engineering-platform context for a session."""
+        try:
+            return await self._request(
+                "GET",
+                "/agent-tools/context",
+                params={"agentscope_session_id": session_id},
+            )
+        except DatabaseInteractionGatewayError as exc:
+            if exc.status_code in {403, 404}:
+                return None
+            raise
 
     async def list_catalog(
         self,
@@ -96,6 +115,37 @@ class DatabaseInteractionManager:
                 "legacy_allowed_names": legacy_allowed_names,
             },
         )
+
+    async def execute_interaction(
+        self,
+        *,
+        session_id: str,
+        actor_agent_id: str,
+        platform_agent_id: str,
+        interaction_key: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Execute one assigned interaction through the trusted gateway."""
+        result = await self._request(
+            "POST",
+            "/database-interactions/execute",
+            payload={
+                "agentscope_session_id": session_id,
+                "actor_agent_id": actor_agent_id,
+                "platform_agent_id": platform_agent_id,
+                "interaction_key": interaction_key,
+                "access_mode": "agent",
+                "arguments": arguments,
+            },
+            unwrap_data=False,
+            timeout=max(self._timeout, 60.0),
+        )
+        if not isinstance(result, dict):
+            raise DatabaseInteractionGatewayError(
+                502,
+                "工程平台数据库交互返回了无效结果。",
+            )
+        return result
 
     async def update_assignments(
         self,

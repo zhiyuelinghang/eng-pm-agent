@@ -275,9 +275,10 @@ class PlatformAgentConfig(BaseModel):
     ] = Field(
         default=None,
         description=(
-            "Internal project-initialization role used to grant one bounded "
-            "draft capability. Hidden from the schema-driven management form "
-            "and maintained by Dobby's provisioning command."
+            "Internal project-initialization team label used for catalogue "
+            "grouping. Capabilities are granted only by explicit database "
+            "interaction assignments. Hidden from the schema-driven "
+            "management form and maintained by Dobby's provisioning command."
         ),
     )
 

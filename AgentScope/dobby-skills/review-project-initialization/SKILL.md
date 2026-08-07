@@ -33,9 +33,18 @@ description: 独立读取完整初始化草稿，执行结构与跨分区核验�
 - 风险窗口、质量要求及跨分区明显矛盾；
 - 每个问题是否保留可核对来源，是否存在无依据补造。
 
+如果 notes 与 payload 看似矛盾，或某条语义问题必须回看原文才能定级，使用主智能体
+任务中提供的 `file_id/chunk_id` 调用
+`dobby_list_project_initialization_attachment_chunks` 读取对应原文后再下结论；不得仅因
+自己尚未读取原文就标记 error。来源映射缺失可记 warning，但不能把能够通过解析分块
+直接核实的内容写成“无法判定”。
+
 不要重写专家分区，也不要在完成调用里重复提交庞大的合并 payload；平台查看与确认
 时会从已持久化分区组合完整草稿。把确定性和语义问题写入
 `validation_issues`：存在 error 或任何未完整读取的分区时调用
 `dobby_finalize_project_initialization_draft` 标记 `invalid`，否则标记 `ready`。
+完成调用中的 `validation_issues` 必须是标准数组，每一项只能包含
+`level`（`error`/`warning`）、非空 `path` 和非空 `message`，例如：
+`{"status":"invalid","validation_issues":[{"level":"error","path":"project.contract_start_date","message":"合同开始日期缺失"}]}`。
 完成工具成功后即代表核验结果已持久化，平台会自动通知主智能体继续汇总；不要再调用
 `TeamSay`，也不要等待第二次汇报。用户确认前不得写正式业务表。

@@ -23,8 +23,6 @@ call :REQUIRE_FILE "AgentScope\agentscope-web-ui\package.json"
 if errorlevel 1 goto FAILED
 call :REQUIRE_FILE "scripts\agentscope_dev_app.py"
 if errorlevel 1 goto FAILED
-call :REQUIRE_FILE "scripts\dobby_agent_tools.py"
-if errorlevel 1 goto FAILED
 call :REQUIRE_FILE "scripts\dobby_web_gateway.py"
 if errorlevel 1 goto FAILED
 call :REQUIRE_FILE "python-3.13.14\python.exe"

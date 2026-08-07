@@ -52,8 +52,8 @@ def test_catalog_uses_backend_owned_declarative_catalog(monkeypatch) -> None:
         async def __aexit__(self, *_args) -> None:
             return None
 
-        async def request(self, method, url, headers, json=None):
-            del headers
+        async def request(self, method, url, headers, json=None, params=None):
+            del headers, params
             calls.append((method, url, json))
             return _Response(
                 200,
@@ -102,3 +102,95 @@ def test_gateway_error_keeps_backend_status_and_detail(monkeypatch) -> None:
 
     assert error.value.status_code == 409
     assert error.value.detail == "白名单仍被交互引用"
+
+
+def test_runtime_context_and_execution_use_the_shared_gateway(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    class _Client:
+        def __init__(self, **kwargs) -> None:
+            self.timeout = kwargs["timeout"]
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def request(
+            self,
+            method,
+            url,
+            headers,
+            json=None,
+            params=None,
+        ):
+            del headers
+            calls.append(
+                {
+                    "method": method,
+                    "url": url,
+                    "json": json,
+                    "params": params,
+                    "timeout": self.timeout,
+                },
+            )
+            if url.endswith("/agent-tools/context"):
+                return _Response(
+                    200,
+                    {"success": True, "data": {"agent_id": "main-agent"}},
+                )
+            return _Response(
+                200,
+                {"success": True, "data": {"id": 17}},
+            )
+
+    monkeypatch.setattr(manager_module.httpx, "AsyncClient", _Client)
+    manager = DatabaseInteractionManager(
+        base_url="http://platform/api/internal",
+        token="service-token",
+        timeout=10.0,
+    )
+
+    context = asyncio.run(manager.resolve_context("platform-session"))
+    result = asyncio.run(
+        manager.execute_interaction(
+            session_id="platform-session",
+            actor_agent_id="worker-agent",
+            platform_agent_id="main-agent",
+            interaction_key="submit_section",
+            arguments={"payload": {"name": "工程"}},
+        ),
+    )
+
+    assert context == {"agent_id": "main-agent"}
+    assert result == {"success": True, "data": {"id": 17}}
+    assert calls[0]["params"] == {
+        "agentscope_session_id": "platform-session",
+    }
+    assert calls[1]["json"]["actor_agent_id"] == "worker-agent"
+    assert calls[1]["json"]["platform_agent_id"] == "main-agent"
+    assert calls[1]["timeout"] == 60.0
+
+
+def test_missing_runtime_context_is_not_a_gateway_failure(monkeypatch) -> None:
+    class _Client:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args) -> None:
+            return None
+
+        async def request(self, *_args, **_kwargs):
+            return _Response(404, {"detail": "会话不存在"})
+
+    monkeypatch.setattr(manager_module.httpx, "AsyncClient", _Client)
+    manager = DatabaseInteractionManager(
+        base_url="http://platform/api/internal",
+        token="service-token",
+    )
+
+    assert asyncio.run(manager.resolve_context("missing-session")) is None

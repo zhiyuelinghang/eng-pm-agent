@@ -877,6 +877,7 @@ class DatabaseInteraction(TimestampMixin, Base):
         default=list,
     )
     fixed_values: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    runtime_policy: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     allowed_conversation_types: Mapped[list[str]] = mapped_column(
         JSON,
         default=lambda: ["general", "business", "initialization"],

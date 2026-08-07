@@ -8,6 +8,7 @@ Specialists can write only their assigned initialization-draft interactions.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,258 +20,102 @@ import httpx
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SKILL_SOURCE_ROOT = PROJECT_ROOT / "AgentScope" / "dobby-skills"
-MANAGED_SKILL_NAMES = frozenset(
-    {
-        "orchestrate-project-initialization",
-        "extract-project-basics",
-        "organize-project-personnel",
-        "validate-wbs-timeline",
-        "extract-project-risks",
-        "map-quality-requirements",
-        "review-project-initialization",
-    },
-)
-OBSOLETE_SKILL_NAMES = frozenset({"read-initialization-attachments"})
-
-COMMON_READ_INTERACTIONS = (
-    "dobby_get_project_initialization_state",
-    "dobby_get_project_initialization_draft",
-    "dobby_list_project_initialization_sections",
-)
-PARSED_ATTACHMENT_READ_INTERACTION = (
-    "dobby_list_project_initialization_attachment_chunks"
-)
-SPECIALIST_READ_INTERACTIONS = (
-    *COMMON_READ_INTERACTIONS,
-    PARSED_ATTACHMENT_READ_INTERACTION,
-)
-
-GLOBAL_BUSINESS_INTERACTIONS = (
-    "dobby_get_project_overview",
-    "dobby_list_project_tasks",
-    "dobby_list_project_wbs",
-    "dobby_list_project_risks",
-    "dobby_list_project_information",
-    "dobby_list_project_changes",
-    "dobby_list_project_notifications",
-    "dobby_search_documents",
-    "dobby_list_daily_reports",
-    "dobby_list_project_personnel",
-    "dobby_list_project_quality_requirements",
-    "dobby_create_task",
-    "dobby_update_task",
-    "dobby_dispose_information",
-    "dobby_create_project_change",
-    "dobby_update_document_category",
-    "dobby_create_risk",
-    "dobby_update_wbs_progress",
-)
-
-UNASSIGNED_SYSTEM_AGENT_NAMES = frozenset({"数据迁移验证助手"})
+TEAM_CONFIG_PATH = PROJECT_ROOT / "AgentScope" / "project-initialization-team.json"
 
 
 @dataclass(frozen=True)
 class InitializationAgentSpec:
     """One persistent member of the initialization collaboration team."""
 
+    key: str
     name: str
     description: str
-    instructions: str
     skill_name: str
     sort_order: int
     initialization_role: str
     interaction_keys: tuple[str, ...]
     invitable: bool = True
+    reasoning: bool = False
 
 
-ORCHESTRATOR = InitializationAgentSpec(
-    name="Dobby 项目初始化助手",
-    description=(
-        "理解任意格式的项目资料，先制定执行计划，再组织专项智能体形成"
-        "待用户核对的初始化草稿。"
-    ),
-    instructions=(
-        "附件在模型执行前已由平台固定解析器转换为会话级临时分块，消息只"
-        "提供 file_id/chunk_id 清单。先用 TaskCreate 建立计划，再读取每个"
-        "文件首个 chunk 的首个文本页识别实际分区，不要在主智能体中重复读取"
-        "全部正文。读取 content 使用 record_id、limit=1、text_field=content、"
-        "text_offset 和 text_limit<=6000；需要完整内容时按 _text_page 读到"
-        "末页。随后读取已有草稿、创建 building 草稿，并按实际"
-        "内容邀请对应专项智能体。不得假定附件模板，不得直接写正式项目表，"
-        "不得用 AgentCreate 替代已配置专家。AgentInvite 只能传 draft_id、"
-        "分区、相关 file_id/chunk_id、文件名和核对要求，严禁复制解析正文。"
-        "禁止扫描工作区，禁止建立旧式标准化批次。所有"
-        "分区完成后必须邀请核验专家。专项专家完成后只用显式 fields 读取"
-        "不含 payload 的轻量分区清单。收到核验"
-        "结果已持久化的通知后，立即重新读取草稿状态，完成核验和最终汇总任务"
-        "并提示用户核对；不要等待"
-        "核验专家的第二次 TeamSay。最后等待用户在工程平台确认。知识库不是"
-        "固定步骤。"
-    ),
-    skill_name="orchestrate-project-initialization",
-    sort_order=900,
-    initialization_role="orchestrator",
-    interaction_keys=(
-        *COMMON_READ_INTERACTIONS,
-        PARSED_ATTACHMENT_READ_INTERACTION,
-        "dobby_create_project_initialization_draft",
-    ),
-    invitable=False,
+def _load_team_manifest(path: Path = TEAM_CONFIG_PATH) -> dict[str, Any]:
+    """Load and validate the declarative platform initialization team."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"无法读取项目初始化团队配置：{path}") from exc
+    if payload.get("schema_version") != 1:
+        raise RuntimeError("项目初始化团队配置版本不受支持。")
+    agents = payload.get("agents")
+    if not isinstance(agents, list) or not agents:
+        raise RuntimeError("项目初始化团队配置缺少智能体。")
+    required_roles = {
+        "orchestrator",
+        "project",
+        "personnel",
+        "wbs",
+        "risks",
+        "quality_requirements",
+        "validator",
+    }
+    roles = {
+        str(item.get("initialization_role") or "")
+        for item in agents
+        if isinstance(item, dict)
+    }
+    if roles != required_roles:
+        raise RuntimeError("项目初始化团队配置的角色集合不完整。")
+    return payload
+
+
+def _agent_spec(payload: dict[str, Any]) -> InitializationAgentSpec:
+    interaction_keys = payload.get("interaction_keys")
+    if not isinstance(interaction_keys, list) or not interaction_keys:
+        raise RuntimeError(
+            f"智能体“{payload.get('name') or payload.get('key')}”没有数据库交互分配。",
+        )
+    return InitializationAgentSpec(
+        key=str(payload["key"]),
+        name=str(payload["name"]),
+        description=str(payload["description"]),
+        skill_name=str(payload["skill_name"]),
+        sort_order=int(payload["sort_order"]),
+        initialization_role=str(payload["initialization_role"]),
+        interaction_keys=tuple(str(key) for key in interaction_keys),
+        invitable=bool(payload.get("invitable", True)),
+        reasoning=bool(payload.get("reasoning", False)),
+    )
+
+
+_TEAM_MANIFEST = _load_team_manifest()
+MANAGED_SKILL_NAMES = frozenset(
+    str(name) for name in _TEAM_MANIFEST["managed_skill_names"]
 )
-
-SPECIALISTS = (
-    InitializationAgentSpec(
-        name="工程信息专家",
-        description="从解析资料中整理工程描述、日期、工期、金额及参建单位。",
-        instructions=(
-            "只处理 project 分区。邀请任务只提供解析分块引用；逐个使用 "
-            "record_id=chunk_id、limit=1、text_field=content、text_offset 和 "
-            "text_limit<=6000 分页读取全部相关分块，按每页返回的 _text_page "
-            "读到 has_more=false，禁止只读第一页。整理"
-            "平台字段，"
-            "保留来源与冲突，不做无依据推断。使用分配的数据库交互创建或"
-            "更新 section=project 的草稿分区；成功写入就是本任务完成边界，"
-            "payload 顶层必须直接是工程信息对象，禁止再包裹 project、data、"
-            "result 或 summary；字段名必须逐字使用工具 schema 中的英文技术"
-            "字段，禁止中文字段名和 schema 外字段。"
-            "无需再调用 TeamSay。"
-        ),
-        skill_name="extract-project-basics",
-        sort_order=910,
-        initialization_role="project",
-        interaction_keys=(
-            *SPECIALIST_READ_INTERACTIONS,
-            "dobby_create_initialization_project_section",
-            "dobby_update_initialization_project_section",
-        ),
-    ),
-    InitializationAgentSpec(
-        name="人员与岗位专家",
-        description="整理人员、身份证号、岗位、证书、职责及一人多岗关系。",
-        instructions=(
-            "只处理 personnel 分区。邀请任务只提供解析分块引用；逐个使用 "
-            "record_id=chunk_id、limit=1、text_field=content、text_offset 和 "
-            "text_limit<=6000 分页读取全部相关分块，按每页返回的 _text_page "
-            "读到 has_more=false，禁止只读第一页。以"
-            "身份证号识别自然人，同一人的多个岗位"
-            "保留多条任职，不生成账号密码。使用分配的数据库交互创建或更新"
-            " section=personnel 的草稿分区；成功写入就是本任务完成边界，"
-            "payload 顶层必须直接是人员数组，禁止再包裹 personnel、items、"
-            "data、result 或 summary；每条记录的字段名必须逐字使用工具 "
-            "schema 中的英文技术字段，禁止中文字段名和 schema 外字段。"
-            "无需再调用 TeamSay。"
-        ),
-        skill_name="organize-project-personnel",
-        sort_order=920,
-        initialization_role="personnel",
-        interaction_keys=(
-            *SPECIALIST_READ_INTERACTIONS,
-            "dobby_create_initialization_personnel_section",
-            "dobby_update_initialization_personnel_section",
-        ),
-    ),
-    InitializationAgentSpec(
-        name="WBS与进度专家",
-        description="整理 WBS 层级、计划日期、进度、状态和明确前置关系。",
-        instructions=(
-            "只处理 wbs 分区。邀请任务只提供解析分块引用；逐个使用 "
-            "record_id=chunk_id、limit=1、text_field=content、text_offset 和 "
-            "text_limit<=6000 分页读取全部相关分块，按每页返回的 _text_page "
-            "读到 has_more=false，禁止只读第一页。编码仅"
-            "确定层级和同级顺序，前置依赖只能来自"
-            "资料明确内容；保留数值 0。使用分配的数据库交互创建或更新 "
-            "section=wbs 的草稿分区；成功写入就是本任务完成边界。payload "
-            "顶层必须直接是 WBS 数组，禁止再包裹 wbs、tasks、items、data、"
-            "result 或 summary；数组必须保持扁平，每行一条记录，层级只写 "
-            "parent_wbs_code，禁止 children。每条记录字段名必须逐字使用工具 "
-            "schema 中的英文技术字段。无需再调用"
-            " TeamSay。"
-        ),
-        skill_name="validate-wbs-timeline",
-        sort_order=930,
-        initialization_role="wbs",
-        interaction_keys=(
-            *SPECIALIST_READ_INTERACTIONS,
-            "dobby_create_initialization_wbs_section",
-            "dobby_update_initialization_wbs_section",
-        ),
-    ),
-    InitializationAgentSpec(
-        name="风险源专家",
-        description="整理相关工序、风险部位、等级、判定条件和风险窗口。",
-        instructions=(
-            "只处理 risks 分区。邀请任务只提供解析分块引用；逐个使用 "
-            "record_id=chunk_id、limit=1、text_field=content、text_offset 和 "
-            "text_limit<=6000 分页读取全部相关分块，按每页返回的 _text_page "
-            "读到 has_more=false，禁止只读第一页。相关工序"
-            "忠实保留资料原文，不擅自关联 WBS。"
-            "使用分配的数据库交互创建或更新 section=risks 的草稿分区，"
-            "成功写入就是本任务完成边界。payload 顶层必须直接是风险数组，"
-            "禁止再包裹 risks、items、data、result 或 summary；每条记录字段名"
-            "必须逐字使用工具 schema 中的英文技术字段。无需再调用 "
-            "TeamSay。"
-        ),
-        skill_name="extract-project-risks",
-        sort_order=940,
-        initialization_role="risks",
-        interaction_keys=(
-            *SPECIALIST_READ_INTERACTIONS,
-            "dobby_create_initialization_risks_section",
-            "dobby_update_initialization_risks_section",
-        ),
-    ),
-    InitializationAgentSpec(
-        name="质量指标专家",
-        description="按 WBS 编码整理验收项目、控制指标、检查频次和资料要求。",
-        instructions=(
-            "只处理 quality_requirements 分区。邀请任务只提供解析分块引用；"
-            "逐个使用 record_id=chunk_id、limit=1、text_field=content、"
-            "text_offset 和 text_limit<=6000 分页读取全部相关分块，按每页"
-            "返回的 _text_page 读到 has_more=false，禁止只读第一页。"
-            "仅保留资料明确给出的 WBS "
-            "编码，不按名称相似度补关联。使用分配的数据库交互创建或更新 "
-            "section=quality_requirements 的草稿分区；成功写入就是本任务完成"
-            "边界。payload 顶层必须直接是质量指标数组，禁止再包裹 "
-            "quality_requirements、items、data、result 或 summary；每条记录字段"
-            "名必须逐字使用工具 schema 中的英文技术字段。无需再调用 "
-            "TeamSay。"
-        ),
-        skill_name="map-quality-requirements",
-        sort_order=950,
-        initialization_role="quality_requirements",
-        interaction_keys=(
-            *SPECIALIST_READ_INTERACTIONS,
-            "dobby_create_initialization_quality_section",
-            "dobby_update_initialization_quality_section",
-        ),
-    ),
+OBSOLETE_SKILL_NAMES = frozenset(
+    str(name) for name in _TEAM_MANIFEST["obsolete_skill_names"]
 )
-
-VALIDATOR = InitializationAgentSpec(
-    name="初始化核验专家",
-    description="独立读取完整草稿，核验结构、来源和跨专业一致性。",
-    instructions=(
-        "先读取草稿和轻量分区清单，再按 section 过滤逐个读取每个必需分区。"
-        "project 对象可直接读取；personnel、wbs、risks、quality_requirements "
-        "的数组 payload 必须使用 json_field=payload、json_offset 和 "
-        "json_limit<=20 分页，并根据 _json_page.has_more/next_offset 读到末页；"
-        "严禁一次读取全部大型 payload 或只读第一页。核验工程日期与 WBS、"
-        "人员职责、质量编码、风险窗口和跨分区矛盾。任何分区缺失、结果被截断"
-        "或无法完整核验都必须标记 invalid，绝不能标记 ready。不得重写专项"
-        "分区，也不要重复提交合并 payload；把问题写入 validation_issues，有"
-        "错误时标记 invalid，否则标记 ready。完成写入后无需 TeamSay，平台会"
-        "自动通知主智能体继续。"
-    ),
-    skill_name="review-project-initialization",
-    sort_order=960,
-    initialization_role="validator",
-    interaction_keys=(
-        *COMMON_READ_INTERACTIONS,
-        "dobby_finalize_project_initialization_draft",
-    ),
+GLOBAL_BUSINESS_INTERACTIONS = tuple(
+    str(key) for key in _TEAM_MANIFEST["global_business_interactions"]
 )
-
+UNASSIGNED_SYSTEM_AGENT_NAMES = frozenset(
+    str(name) for name in _TEAM_MANIFEST["unassigned_system_agent_names"]
+)
+_AGENT_SPECS = tuple(_agent_spec(item) for item in _TEAM_MANIFEST["agents"])
+_AGENT_BY_ROLE = {spec.initialization_role: spec for spec in _AGENT_SPECS}
+ORCHESTRATOR = _AGENT_BY_ROLE["orchestrator"]
+SPECIALISTS = tuple(
+    spec
+    for spec in _AGENT_SPECS
+    if spec.initialization_role
+    in {"project", "personnel", "wbs", "risks", "quality_requirements"}
+)
+VALIDATOR = _AGENT_BY_ROLE["validator"]
 WORKERS = (*SPECIALISTS, VALIDATOR)
+PARSED_ATTACHMENT_READ_INTERACTION = next(
+    key
+    for key in ORCHESTRATOR.interaction_keys
+    if key.endswith("_attachment_chunks")
+)
 
 
 def _load_project_env() -> None:
@@ -320,7 +165,9 @@ def _request(
 def _system_prompt(spec: InitializationAgentSpec) -> str:
     return (
         f"你是 Dobby 的持久化项目初始化智能体“{spec.name}”。"
-        f"{spec.instructions} "
+        f"处理项目初始化任务前，必须先通过 Skill 能力读取并严格遵循已分配技能"
+        f"“{spec.skill_name}”。技能内容是业务流程的唯一说明，不能跳过或用本地"
+        "固定流程替代。"
         "只使用当前会话、技能和明确分配给你的能力；缺失值保留 null 或空数组，"
         "不得编造。所有结果仅进入待用户确认的初始化草稿。"
     )
@@ -358,7 +205,7 @@ def _model_policy(
     # DeepSeek V4 supports a 384k completion.  Keep this explicit in every
     # managed initialization agent instead of relying on the provider default.
     parameters["max_tokens"] = 384000
-    if spec.initialization_role not in {"orchestrator", "validator"}:
+    if not spec.reasoning:
         parameters["thinking_enable"] = False
         parameters.pop("reasoning_effort", None)
     chat_config["parameters"] = parameters
@@ -372,6 +219,7 @@ def _sync_agent_skills(
     token: str,
     agent_id: str,
     skill_names: tuple[str, ...],
+    replace_existing: bool = False,
 ) -> None:
     session = _request(
         client,
@@ -392,6 +240,8 @@ def _sync_agent_skills(
         token=token,
         params=query,
     )
+    desired = set(skill_names)
+    preserved: set[str] = set()
     for skill in existing:
         name = str(skill.get("name") or "")
         managed = next(
@@ -402,7 +252,12 @@ def _sync_agent_skills(
             ),
             None,
         )
-        if managed is not None:
+        should_delete = managed is not None and (
+            managed in OBSOLETE_SKILL_NAMES
+            or managed not in desired
+            or replace_existing
+        )
+        if should_delete:
             _request(
                 client,
                 "DELETE",
@@ -410,7 +265,11 @@ def _sync_agent_skills(
                 token=token,
                 params=query,
             )
+        elif managed in desired:
+            preserved.add(managed)
     for skill_name in skill_names:
+        if skill_name in preserved:
+            continue
         skill_path = (SKILL_SOURCE_ROOT / skill_name).resolve()
         if not (skill_path / "SKILL.md").is_file():
             raise RuntimeError(f"缺少初始化技能源文件：{skill_path / 'SKILL.md'}")
@@ -482,6 +341,7 @@ def _upsert_agent(
     spec: InitializationAgentSpec,
     preferred_id: str | None = None,
     allowed_agent_ids: list[str] | None = None,
+    replace_skills: bool = False,
 ) -> str:
     existing = _find_managed_agent(agents, spec, preferred_id)
     data = existing.get("data", {}) if existing else {}
@@ -535,6 +395,7 @@ def _upsert_agent(
         token=token,
         agent_id=agent_id,
         skill_names=(spec.skill_name,),
+        replace_existing=replace_skills,
     )
     _assign_database_interactions(
         client,
@@ -545,7 +406,7 @@ def _upsert_agent(
     return agent_id
 
 
-def provision(base_url: str) -> None:
+def provision(base_url: str, *, replace_skills: bool = False) -> None:
     """Create or refresh the persistent AI-led initialization team."""
     username = _required_env("AGENTSCOPE_ADMIN_USERNAME")
     password = _required_env("AGENTSCOPE_ADMIN_PASSWORD")
@@ -599,6 +460,7 @@ def provision(base_url: str) -> None:
                 template_data=template_data,
                 template_policy=template_policy,
                 spec=spec,
+                replace_skills=replace_skills,
             )
             for spec in WORKERS
         ]
@@ -611,6 +473,7 @@ def provision(base_url: str) -> None:
             spec=ORCHESTRATOR,
             preferred_id=settings.get("project_initializer_agent_id"),
             allowed_agent_ids=worker_ids,
+            replace_skills=replace_skills,
         )
         _request(
             client,
@@ -633,8 +496,13 @@ def main() -> None:
         default=os.getenv("AGENTSCOPE_BASE_URL", "http://127.0.0.1:18642"),
         help="AgentScope API 地址。",
     )
+    parser.add_argument(
+        "--replace-skills",
+        action="store_true",
+        help="用仓库内技能覆盖平台已存在的同名技能；默认保留管理端修改。",
+    )
     args = parser.parse_args()
-    provision(args.base_url)
+    provision(args.base_url, replace_skills=args.replace_skills)
 
 
 if __name__ == "__main__":

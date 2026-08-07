@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "managed_skill_names": [
+    "orchestrate-project-initialization",
+    "extract-project-basics",
+    "organize-project-personnel",
+    "validate-wbs-timeline",
+    "extract-project-risks",
+    "map-quality-requirements",
+    "review-project-initialization"
+  ],
+  "obsolete_skill_names": [
+    "read-initialization-attachments"
+  ],
+  "global_business_interactions": [
+    "dobby_get_project_overview",
+    "dobby_list_project_tasks",
+    "dobby_list_project_wbs",
+    "dobby_list_project_risks",
+    "dobby_list_project_information",
+    "dobby_list_project_changes",
+    "dobby_list_project_notifications",
+    "dobby_search_documents",
+    "dobby_list_daily_reports",
+    "dobby_list_project_personnel",
+    "dobby_list_project_quality_requirements",
+    "dobby_create_task",
+    "dobby_update_task",
+    "dobby_dispose_information",
+    "dobby_create_project_change",
+    "dobby_update_document_category",
+    "dobby_create_risk",
+    "dobby_update_wbs_progress"
+  ],
+  "unassigned_system_agent_names": [
+    "数据迁移验证助手"
+  ],
+  "agents": [
+    {
+      "key": "orchestrator",
+      "name": "Dobby 项目初始化助手",
+      "description": "理解任意格式的项目资料，先制定执行计划，再组织专项智能体形成待用户核对的初始化草稿。",
+      "skill_name": "orchestrate-project-initialization",
+      "sort_order": 900,
+      "initialization_role": "orchestrator",
+      "interaction_keys": [
+        "dobby_get_project_initialization_state",
+        "dobby_get_project_initialization_draft",
+        "dobby_list_project_initialization_sections",
+        "dobby_list_project_initialization_attachment_chunks",
+        "dobby_create_project_initialization_draft"
+      ],
+      "invitable": false,
+      "reasoning": true
+    },
+    {
+      "key": "project",
+      "name": "工程信息专家",
+      "description": "从解析资料中整理工程描述、日期、工期、金额及参建单位。",
+      "skill_name": "extract-project-basics",
+      "sort_order": 910,
+      "initialization_role": "project",
+      "interaction_keys": [
+        "dobby_get_project_initialization_state",
+        "dobby_get_project_initialization_draft",
+        "dobby_list_project_initialization_sections",
+        "dobby_list_project_initialization_attachment_chunks",
+        "dobby_create_initialization_project_section",
+        "dobby_update_initialization_project_section"
+      ],
+      "invitable": true,
+      "reasoning": false
+    },
+    {
+      "key": "personnel",
+      "name": "人员与岗位专家",
+      "description": "整理人员、身份证号、岗位、证书、职责及一人多岗关系。",
+      "skill_name": "organize-project-personnel",
+      "sort_order": 920,
+      "initialization_role": "personnel",
+      "interaction_keys": [
+        "dobby_get_project_initialization_state",
+        "dobby_get_project_initialization_draft",
+        "dobby_list_project_initialization_sections",
+        "dobby_list_project_initialization_attachment_chunks",
+        "dobby_create_initialization_personnel_section",
+        "dobby_update_initialization_personnel_section"
+      ],
+      "invitable": true,
+      "reasoning": false
+    },
+    {
+      "key": "wbs",
+      "name": "WBS与进度专家",
+      "description": "整理 WBS 层级、计划日期、进度、状态和明确前置关系。",
+      "skill_name": "validate-wbs-timeline",
+      "sort_order": 930,
+      "initialization_role": "wbs",
+      "interaction_keys": [
+        "dobby_get_project_initialization_state",
+        "dobby_get_project_initialization_draft",
+        "dobby_list_project_initialization_sections",
+        "dobby_list_project_initialization_attachment_chunks",
+        "dobby_create_initialization_wbs_section",
+        "dobby_update_initialization_wbs_section"
+      ],
+      "invitable": true,
+      "reasoning": false
+    },
+    {
+      "key": "risks",
+      "name": "风险源专家",
+      "description": "整理相关工序、风险部位、等级、判定条件和风险窗口。",
+      "skill_name": "extract-project-risks",
+      "sort_order": 940,
+      "initialization_role": "risks",
+      "interaction_keys": [
+        "dobby_get_project_initialization_state",
+        "dobby_get_project_initialization_draft",
+        "dobby_list_project_initialization_sections",
+        "dobby_list_project_initialization_attachment_chunks",
+        "dobby_create_initialization_risks_section",
+        "dobby_update_initialization_risks_section"
+      ],
+      "invitable": true,
+      "reasoning": false
+    },
+    {
+      "key": "quality_requirements",
+      "name": "质量指标专家",
+      "description": "按 WBS 编码整理验收项目、控制指标、检查频次和资料要求。",
+      "skill_name": "map-quality-requirements",
+      "sort_order": 950,
+      "initialization_role": "quality_requirements",
+      "interaction_keys": [
+        "dobby_get_project_initialization_state",
+        "dobby_get_project_initialization_draft",
+        "dobby_list_project_initialization_sections",
+        "dobby_list_project_initialization_attachment_chunks",
+        "dobby_create_initialization_quality_section",
+        "dobby_update_initialization_quality_section"
+      ],
+      "invitable": true,
+      "reasoning": false
+    },
+    {
+      "key": "validator",
+      "name": "初始化核验专家",
+      "description": "独立读取完整草稿，核验结构、来源和跨专业一致性。",
+      "skill_name": "review-project-initialization",
+      "sort_order": 960,
+      "initialization_role": "validator",
+      "interaction_keys": [
+        "dobby_get_project_initialization_state",
+        "dobby_get_project_initialization_draft",
+        "dobby_list_project_initialization_sections",
+        "dobby_list_project_initialization_attachment_chunks",
+        "dobby_finalize_project_initialization_draft"
+      ],
+      "invitable": true,
+      "reasoning": true
+    }
+  ]
+}

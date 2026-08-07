@@ -83,7 +83,7 @@ def test_skill_sync_uses_one_unique_workspace_per_agent(
     ]
 
 
-def test_skill_sync_removes_only_managed_skill_copies(
+def test_skill_sync_preserves_platform_edits_and_removes_only_obsolete_skills(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -133,9 +133,61 @@ def test_skill_sync_removes_only_managed_skill_copies(
     ]
     assert deleted == [
         "/workspace/skill/read-initialization-attachments%20%281%29",
-        "/workspace/skill/extract-project-basics%20%282%29",
     ]
     assert all("管理员手工技能" not in path for path in deleted)
+    added = [
+        path
+        for method, path in calls
+        if method == "POST" and path == "/workspace/skill"
+    ]
+    assert added == []
+
+
+def test_skill_sync_can_explicitly_replace_repository_managed_skill(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_skill(tmp_path, "extract-project-basics")
+    monkeypatch.setattr(
+        provision_initialization_agents,
+        "SKILL_SOURCE_ROOT",
+        tmp_path,
+    )
+    calls: list[tuple[str, str]] = []
+
+    def fake_request(
+        client: object,
+        method: str,
+        path: str,
+        **kwargs: Any,
+    ) -> Any:
+        del client, kwargs
+        calls.append((method, path))
+        if method == "POST" and path == "/sessions/":
+            return {"session_id": "session-a"}
+        if method == "GET" and path == "/workspace/skill":
+            return [{"name": "extract-project-basics"}]
+        return {}
+
+    monkeypatch.setattr(
+        provision_initialization_agents,
+        "_request",
+        fake_request,
+    )
+
+    provision_initialization_agents._sync_agent_skills(
+        object(),
+        token="token",
+        agent_id="agent-a",
+        skill_names=("extract-project-basics",),
+        replace_existing=True,
+    )
+
+    assert (
+        "DELETE",
+        "/workspace/skill/extract-project-basics",
+    ) in calls
+    assert ("POST", "/workspace/skill") in calls
 
 
 def test_provision_clears_legacy_initialization_mcp_assignment(

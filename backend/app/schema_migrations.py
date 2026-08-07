@@ -339,6 +339,11 @@ def _ensure_database_interaction_runtime_rules(engine: Engine) -> None:
             f"ALTER TABLE {table_name} ADD COLUMN "
             "fixed_values JSON NOT NULL DEFAULT '{}'",
         )
+    if "runtime_policy" not in columns:
+        statements.append(
+            f"ALTER TABLE {table_name} ADD COLUMN "
+            "runtime_policy JSON NOT NULL DEFAULT '{}'",
+        )
     if "allowed_conversation_types" not in columns:
         statements.append(
             f"ALTER TABLE {table_name} ADD COLUMN "
