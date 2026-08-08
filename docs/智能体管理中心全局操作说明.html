@@ -1,0 +1,1752 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Dobby 智能体管理中心｜全局操作说明</title>
+  <style>
+    :root {
+      --ink: #17211d;
+      --ink-soft: #52615a;
+      --ink-faint: #75817b;
+      --paper: #f5f7f5;
+      --surface: #ffffff;
+      --line: #dfe6e2;
+      --line-strong: #cbd6d0;
+      --brand: #d95824;
+      --brand-dark: #a93612;
+      --brand-soft: #fff1e9;
+      --green: #0f7a62;
+      --green-soft: #e7f6f1;
+      --blue: #2b63c6;
+      --blue-soft: #edf3ff;
+      --amber: #a66a08;
+      --amber-soft: #fff7e5;
+      --red: #b52b2b;
+      --red-soft: #fff0f0;
+      --shadow: 0 18px 50px rgba(35, 52, 44, 0.10);
+      --radius-lg: 22px;
+      --radius-md: 14px;
+      --radius-sm: 10px;
+      --sidebar: 286px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 90% 0%, rgba(217, 88, 36, 0.10), transparent 28rem),
+        linear-gradient(180deg, #f8faf8 0, var(--paper) 28rem);
+      font: 16px/1.72 "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif;
+    }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    button, input, select, textarea { font: inherit; }
+    code {
+      padding: 2px 6px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      color: #80330f;
+      background: #fff8f4;
+      font-size: 13px;
+    }
+    pre {
+      overflow-x: auto;
+      margin: 14px 0;
+      padding: 17px 18px;
+      border: 1px solid #29433a;
+      border-radius: 12px;
+      color: #e7f4ee;
+      background: #14271f;
+      font: 13px/1.65 Consolas, "SFMono-Regular", monospace;
+      white-space: pre;
+    }
+    pre code {
+      padding: 0;
+      border: 0;
+      color: inherit;
+      background: transparent;
+      font-size: inherit;
+    }
+    strong { color: #12201a; }
+    img { display: block; max-width: 100%; }
+
+    .layout { min-height: 100vh; }
+    .sidebar {
+      position: fixed;
+      inset: 0 auto 0 0;
+      z-index: 20;
+      width: var(--sidebar);
+      overflow-y: auto;
+      padding: 28px 22px 36px;
+      color: #eef6f2;
+      background: #11251f;
+      border-right: 1px solid rgba(255,255,255,0.08);
+    }
+    .brand {
+      display: flex;
+      gap: 13px;
+      align-items: center;
+      margin-bottom: 24px;
+    }
+    .brand-mark {
+      display: grid;
+      width: 43px;
+      height: 43px;
+      place-items: center;
+      border-radius: 13px;
+      color: #fff;
+      background: linear-gradient(145deg, #ef7140, var(--brand));
+      box-shadow: 0 10px 24px rgba(217, 88, 36, 0.35);
+      font-weight: 800;
+    }
+    .brand-name { font-size: 17px; font-weight: 800; letter-spacing: 0.02em; }
+    .brand-sub { color: #a9bbb3; font-size: 12px; }
+    .sidebar-note {
+      margin: 0 0 20px;
+      padding: 13px 14px;
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 12px;
+      color: #c9d7d1;
+      background: rgba(255,255,255,0.04);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .toc-title {
+      margin: 22px 10px 8px;
+      color: #7f978d;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+    }
+    .toc { display: grid; gap: 3px; }
+    .toc a {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      min-height: 38px;
+      padding: 7px 10px;
+      border-radius: 9px;
+      color: #d7e3de;
+      font-size: 14px;
+      transition: 160ms ease;
+    }
+    .toc a:hover {
+      color: #fff;
+      background: rgba(255,255,255,0.08);
+      text-decoration: none;
+    }
+    .toc-num {
+      min-width: 24px;
+      color: #81988e;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .sidebar-footer {
+      margin-top: 26px;
+      padding-top: 18px;
+      border-top: 1px solid rgba(255,255,255,0.10);
+      color: #8fa49b;
+      font-size: 12px;
+    }
+
+    main.content {
+      margin-left: var(--sidebar);
+      padding: 48px clamp(28px, 5vw, 82px) 90px;
+    }
+    .content-inner { max-width: 1160px; margin: 0 auto; }
+    section, header { scroll-margin-top: 22px; }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      padding: clamp(34px, 5vw, 66px);
+      border: 1px solid #e6d7ce;
+      border-radius: 28px;
+      background: linear-gradient(135deg, #fff 0%, #fff8f3 65%, #ffede3 100%);
+      box-shadow: var(--shadow);
+    }
+    .hero::after {
+      position: absolute;
+      width: 260px;
+      height: 260px;
+      right: -90px;
+      bottom: -120px;
+      border: 44px solid rgba(217, 88, 36, 0.08);
+      border-radius: 50%;
+      content: "";
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      color: var(--brand-dark);
+      background: var(--brand-soft);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+    }
+    .hero h1 {
+      max-width: 820px;
+      margin: 20px 0 12px;
+      font-size: clamp(34px, 5vw, 58px);
+      line-height: 1.12;
+      letter-spacing: -0.035em;
+    }
+    .hero-lead {
+      max-width: 780px;
+      margin: 0;
+      color: var(--ink-soft);
+      font-size: clamp(17px, 2vw, 20px);
+    }
+    .hero-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 24px;
+      margin-top: 28px;
+      color: var(--ink-faint);
+      font-size: 13px;
+    }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+    .button {
+      display: inline-flex;
+      min-height: 42px;
+      align-items: center;
+      justify-content: center;
+      padding: 9px 16px;
+      border: 1px solid var(--line-strong);
+      border-radius: 10px;
+      color: var(--ink);
+      background: #fff;
+      font-size: 14px;
+      font-weight: 800;
+    }
+    .button:hover { text-decoration: none; transform: translateY(-1px); }
+    .button.primary { border-color: var(--brand); color: #fff; background: var(--brand); }
+
+    .section { margin-top: 70px; }
+    .section-head { max-width: 850px; margin-bottom: 24px; }
+    .section-kicker {
+      margin: 0 0 4px;
+      color: var(--brand);
+      font-size: 13px;
+      font-weight: 900;
+      letter-spacing: 0.10em;
+      text-transform: uppercase;
+    }
+    h2 { margin: 0 0 10px; font-size: clamp(27px, 3vw, 38px); line-height: 1.24; }
+    h3 { margin: 30px 0 10px; font-size: 21px; line-height: 1.35; }
+    h4 { margin: 22px 0 8px; font-size: 17px; }
+    .section-desc { margin: 0; color: var(--ink-soft); font-size: 17px; }
+    p { margin: 9px 0; }
+
+    .quick-grid,
+    .card-grid,
+    .role-grid,
+    .ability-grid,
+    .trouble-grid {
+      display: grid;
+      gap: 16px;
+    }
+    .quick-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .quick-step,
+    .card,
+    .role-card,
+    .ability-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+    }
+    .quick-step { position: relative; padding: 18px 16px; }
+    .quick-step::after {
+      position: absolute;
+      top: 34px;
+      right: -12px;
+      z-index: 2;
+      color: #a8b4ae;
+      content: "→";
+      font-weight: 900;
+    }
+    .quick-step:last-child::after { display: none; }
+    .quick-no {
+      display: grid;
+      width: 30px;
+      height: 30px;
+      margin-bottom: 12px;
+      place-items: center;
+      border-radius: 9px;
+      color: #fff;
+      background: var(--brand);
+      font-size: 13px;
+      font-weight: 900;
+    }
+    .quick-step strong { display: block; font-size: 15px; }
+    .quick-step span { display: block; margin-top: 5px; color: var(--ink-soft); font-size: 13px; line-height: 1.55; }
+
+    .callout {
+      display: grid;
+      grid-template-columns: 30px 1fr;
+      gap: 12px;
+      margin: 20px 0;
+      padding: 16px 18px;
+      border: 1px solid #cfe1d9;
+      border-radius: 13px;
+      background: var(--green-soft);
+    }
+    .callout.warn { border-color: #edd7a9; background: var(--amber-soft); }
+    .callout.danger { border-color: #efcaca; background: var(--red-soft); }
+    .callout.info { border-color: #cbdafa; background: var(--blue-soft); }
+    .callout-icon { font-size: 19px; line-height: 1.45; }
+    .callout-title { margin: 0 0 2px; font-weight: 900; }
+    .callout p { margin: 0; color: var(--ink-soft); font-size: 14px; }
+
+    .figure {
+      margin: 26px 0 34px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-lg);
+      background: #e9eeeb;
+      box-shadow: 0 14px 36px rgba(35, 52, 44, 0.09);
+    }
+    .figure img { width: 100%; height: auto; background: #fff; }
+    .figure figcaption {
+      padding: 12px 16px;
+      color: var(--ink-soft);
+      background: #fff;
+      border-top: 1px solid var(--line);
+      font-size: 13px;
+    }
+
+    .workspace-map {
+      display: grid;
+      grid-template-columns: 0.68fr 1.05fr 2.8fr 1.3fr;
+      gap: 8px;
+      margin: 22px 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #e9eeeb;
+    }
+    .workspace-zone {
+      min-height: 128px;
+      padding: 15px 12px;
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 4px 14px rgba(35,52,44,0.06);
+    }
+    .workspace-zone strong { display: block; margin-bottom: 8px; }
+    .workspace-zone span { color: var(--ink-soft); font-size: 13px; }
+
+    .role-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .role-card { padding: 20px; }
+    .role-card .tag { margin-bottom: 10px; }
+    .role-card h3 { margin: 0 0 6px; font-size: 18px; }
+    .role-card p { color: var(--ink-soft); font-size: 14px; }
+
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 25px;
+      padding: 3px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--ink-soft);
+      background: #f8faf9;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+    .tag.green { border-color: #bee0d4; color: var(--green); background: var(--green-soft); }
+    .tag.orange { border-color: #f1cdbd; color: var(--brand-dark); background: var(--brand-soft); }
+    .tag.blue { border-color: #cbdafa; color: var(--blue); background: var(--blue-soft); }
+    .tag.red { border-color: #efcaca; color: var(--red); background: var(--red-soft); }
+
+    .steps { display: grid; gap: 14px; margin-top: 18px; }
+    .step {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 15px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      background: #fff;
+    }
+    .step-index {
+      display: grid;
+      width: 38px;
+      height: 38px;
+      place-items: center;
+      border-radius: 11px;
+      color: #fff;
+      background: #1a352c;
+      font-size: 14px;
+      font-weight: 900;
+    }
+    .step h3 { margin: 1px 0 5px; font-size: 18px; }
+    .step p { color: var(--ink-soft); font-size: 14px; }
+    .step ul { margin: 8px 0 0; padding-left: 20px; color: var(--ink-soft); font-size: 14px; }
+
+    .table-wrap {
+      overflow-x: auto;
+      margin: 18px 0 26px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+    }
+    table { width: 100%; min-width: 720px; border-collapse: collapse; }
+    th, td { padding: 13px 15px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 14px; }
+    th { color: #32413b; background: #f4f7f5; font-weight: 900; }
+    tr:last-child td { border-bottom: 0; }
+    td p { margin: 0; color: var(--ink-soft); }
+
+    .ability-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ability-card { position: relative; padding: 22px; overflow: hidden; }
+    .ability-card::before {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 4px;
+      background: var(--green);
+      content: "";
+    }
+    .ability-card.fixed::before { background: var(--brand); }
+    .ability-card h3 { margin: 0 0 7px; font-size: 19px; }
+    .ability-card p { color: var(--ink-soft); font-size: 14px; }
+    .ability-card ul { margin: 10px 0 0; padding-left: 20px; color: var(--ink-soft); font-size: 14px; }
+
+    .two-col { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr); gap: 22px; align-items: start; }
+    .card { padding: 22px; }
+    .card h3 { margin-top: 0; }
+    .checklist { list-style: none; margin: 12px 0 0; padding: 0; }
+    .checklist li { position: relative; margin: 8px 0; padding-left: 28px; color: var(--ink-soft); font-size: 14px; }
+    .checklist li::before {
+      position: absolute;
+      left: 0;
+      top: 2px;
+      display: grid;
+      width: 18px;
+      height: 18px;
+      place-items: center;
+      border-radius: 5px;
+      color: #fff;
+      background: var(--green);
+      content: "✓";
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 8px;
+      margin: 20px 0;
+    }
+    .flow-item {
+      position: relative;
+      padding: 15px 10px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      text-align: center;
+      background: #fff;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .flow-item::after {
+      position: absolute;
+      top: 50%;
+      right: -9px;
+      z-index: 2;
+      color: var(--brand);
+      transform: translateY(-50%);
+      content: "›";
+      font-size: 20px;
+      font-weight: 900;
+    }
+    .flow-item:last-child::after { display: none; }
+
+    .layer-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 20px 0 28px;
+    }
+    .layer-card {
+      position: relative;
+      min-height: 168px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+    }
+    .layer-card::after {
+      position: absolute;
+      top: 50%;
+      right: -12px;
+      z-index: 2;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--brand);
+      content: "›";
+      text-align: center;
+      font-size: 18px;
+      font-weight: 900;
+      line-height: 21px;
+      transform: translateY(-50%);
+    }
+    .layer-card:last-child::after { display: none; }
+    .layer-index {
+      display: inline-flex;
+      min-height: 25px;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      color: var(--brand-dark);
+      background: var(--brand-soft);
+      font-size: 12px;
+      font-weight: 900;
+    }
+    .layer-card h3 { margin: 12px 0 6px; font-size: 17px; }
+    .layer-card p { color: var(--ink-soft); font-size: 13px; line-height: 1.6; }
+
+    .path-compare {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      margin: 20px 0 28px;
+    }
+    .path-card {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+    }
+    .path-card header {
+      padding: 17px 19px;
+      border-bottom: 1px solid var(--line);
+      background: #f5f8f6;
+    }
+    .path-card.recommended header { background: var(--green-soft); }
+    .path-card h3 { margin: 0 0 4px; font-size: 18px; }
+    .path-card header p { margin: 0; color: var(--ink-soft); font-size: 13px; }
+    .path-body { padding: 18px 19px; }
+    .mini-flow {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      align-items: center;
+      margin: 10px 0 14px;
+    }
+    .mini-flow span {
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fafcfb;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .mini-flow b { color: var(--brand); font-size: 16px; }
+    .path-body ul { margin: 10px 0 0; padding-left: 20px; color: var(--ink-soft); font-size: 14px; }
+
+    .example-box {
+      margin: 22px 0;
+      padding: 22px;
+      border: 1px solid #c8ddd4;
+      border-radius: 16px;
+      background: linear-gradient(135deg, #fbfffd, #eef8f4);
+    }
+    .example-box h3 { margin-top: 0; }
+    .example-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+
+    .trouble-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    details {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+    }
+    summary {
+      cursor: pointer;
+      padding: 16px 18px;
+      font-size: 15px;
+      font-weight: 900;
+    }
+    details p, details ul {
+      margin: 0;
+      padding: 0 18px 17px;
+      color: var(--ink-soft);
+      font-size: 14px;
+    }
+    details ul { padding-left: 38px; }
+
+    .footer {
+      margin-top: 76px;
+      padding: 26px 0 10px;
+      border-top: 1px solid var(--line);
+      color: var(--ink-faint);
+      font-size: 13px;
+    }
+    .footer strong { color: var(--ink-soft); }
+
+    @media (max-width: 1180px) {
+      :root { --sidebar: 248px; }
+      .quick-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .quick-step:nth-child(3)::after { display: none; }
+      .workspace-map { grid-template-columns: 1fr 1fr; }
+      .role-grid { grid-template-columns: 1fr 1fr; }
+      .flow { grid-template-columns: repeat(3, 1fr); }
+      .flow-item:nth-child(3)::after { display: none; }
+      .layer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .layer-card:nth-child(2)::after { display: none; }
+    }
+    @media (max-width: 820px) {
+      .sidebar { position: static; width: auto; max-height: none; }
+      .toc { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .sidebar-note, .sidebar-footer { display: none; }
+      main.content { margin-left: 0; padding: 28px 18px 70px; }
+      .hero { padding: 30px 24px; }
+      .quick-grid, .role-grid, .ability-grid, .two-col, .trouble-grid, .layer-grid, .path-compare { grid-template-columns: 1fr; }
+      .quick-step::after { display: none; }
+      .workspace-map { grid-template-columns: 1fr; }
+      .flow { grid-template-columns: 1fr 1fr; }
+      .flow-item:nth-child(3)::after { display: block; }
+      .flow-item:nth-child(even)::after { display: none; }
+      .layer-card::after { display: none; }
+    }
+    @media print {
+      body { background: #fff; }
+      .sidebar, .hero-actions { display: none; }
+      main.content { margin: 0; padding: 0; }
+      .hero, .figure, .card, .step, .role-card, .ability-card, details { box-shadow: none; break-inside: avoid; }
+      .section { margin-top: 40px; }
+      a { color: inherit; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar" aria-label="文档目录">
+      <div class="brand">
+        <div class="brand-mark">D</div>
+        <div>
+          <div class="brand-name">Dobby 管理中心</div>
+          <div class="brand-sub">全局操作说明</div>
+        </div>
+      </div>
+      <p class="sidebar-note">第一次使用时，按“10 分钟上手”从上往下操作即可。遇到问题可直接跳到最后的排查清单。</p>
+      <div class="toc-title">开始使用</div>
+      <nav class="toc">
+        <a href="#quick-start"><span class="toc-num">01</span>10 分钟上手</a>
+        <a href="#workspace"><span class="toc-num">02</span>看懂工作台</a>
+        <a href="#roles"><span class="toc-num">03</span>角色与职责</a>
+      </nav>
+      <div class="toc-title">核心操作</div>
+      <nav class="toc">
+        <a href="#credentials"><span class="toc-num">04</span>配置凭证</a>
+        <a href="#create-agent"><span class="toc-num">05</span>创建智能体</a>
+        <a href="#capabilities"><span class="toc-num">06</span>分配能力</a>
+        <a href="#database-tutorial"><span class="toc-num">07</span>数据库配置实战</a>
+        <a href="#mcp-database"><span class="toc-num">08</span>MCP 与数据库</a>
+        <a href="#initialization-mcp"><span class="toc-num">09</span>项目初始化与 MCP</a>
+        <a href="#conversation"><span class="toc-num">10</span>会话与协同</a>
+        <a href="#knowledge"><span class="toc-num">11</span>知识库</a>
+      </nav>
+      <div class="toc-title">平台管理</div>
+      <nav class="toc">
+        <a href="#platform-settings"><span class="toc-num">12</span>平台设置</a>
+        <a href="#audit"><span class="toc-num">13</span>交互审计</a>
+        <a href="#schedule"><span class="toc-num">14</span>日程</a>
+        <a href="#troubleshooting"><span class="toc-num">15</span>问题排查</a>
+      </nav>
+      <div class="sidebar-footer">文档版本：1.2<br>更新日期：2026-08-08</div>
+    </aside>
+
+    <main class="content">
+      <div class="content-inner">
+        <header class="hero" id="top">
+          <span class="eyebrow">● 新手友好 · 按图操作</span>
+          <h1>智能体管理中心<br>全局操作说明</h1>
+          <p class="hero-lead">从模型凭证、智能体创建、能力分配，到项目初始化、平台职责和审计，一份手册走完整个管理流程。无需提前理解 MCP、ReAct 或权限模型。</p>
+          <div class="hero-meta">
+            <span>适用对象：平台管理员、智能体配置人员、业务负责人</span>
+            <span>适用版本：当前探索版</span>
+            <span>建议阅读：首次 15 分钟，日常按目录查阅</span>
+          </div>
+          <div class="hero-actions">
+            <a class="button primary" href="#quick-start">从 10 分钟上手开始</a>
+            <a class="button" href="http://127.0.0.1:25173/" target="_blank" rel="noreferrer">打开管理中心</a>
+            <a class="button" href="#troubleshooting">直接排查问题</a>
+          </div>
+        </header>
+
+        <section class="section" id="quick-start">
+          <div class="section-head">
+            <p class="section-kicker">Quick start</p>
+            <h2>10 分钟完成第一次可用配置</h2>
+            <p class="section-desc">首次配置可按以下 5 步完成基础验证。模型凭证是创建可用智能体前必须完成的基础配置。</p>
+          </div>
+          <div class="quick-grid">
+            <div class="quick-step"><span class="quick-no">1</span><strong>添加凭证</strong><span>配置模型 API，并拉取或手动添加模型。</span></div>
+            <div class="quick-step"><span class="quick-no">2</span><strong>创建智能体</strong><span>填写名称、系统提示词，选择固定模型。</span></div>
+            <div class="quick-step"><span class="quick-no">3</span><strong>分配能力</strong><span>勾选 MCP、数据库交互、知识库和协同范围。</span></div>
+            <div class="quick-step"><span class="quick-no">4</span><strong>创建会话</strong><span>点击 Create Session，发送一条真实任务。</span></div>
+            <div class="quick-step"><span class="quick-no">5</span><strong>确认发布</strong><span>需要业务端使用时，再启用并发布为业务智能体。</span></div>
+          </div>
+          <div class="callout">
+            <div class="callout-icon">✓</div>
+            <div>
+              <div class="callout-title">首次测试建议</div>
+              <p>建议创建一个暂不发布的测试智能体，首次仅分配一项能力。会话验证成功后再逐项增加能力，便于准确定位配置问题。</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="workspace">
+          <div class="section-head">
+            <p class="section-kicker">Workspace</p>
+            <h2>工作台的四个区域</h2>
+            <p class="section-desc">日常管理主要在对话工作台完成，操作结构为“左侧选择对象、中间测试会话、右侧配置能力”。</p>
+          </div>
+          <div class="workspace-map" aria-label="工作台区域示意">
+            <div class="workspace-zone"><strong>① 全局导航</strong><span>对话、审计、平台设置、日程、凭证、知识库、语言与新手引导。</span></div>
+            <div class="workspace-zone"><strong>② 智能体与会话</strong><span>切换智能体、创建 Agent、创建/选择会话。</span></div>
+            <div class="workspace-zone"><strong>③ 对话区</strong><span>发送任务、上传附件、查看计划时间线、协同过程和结果。</span></div>
+            <div class="workspace-zone"><strong>④ 能力侧栏</strong><span>MCP、技能、数据库交互、工具、知识库、协同智能体。</span></div>
+          </div>
+          <figure class="figure">
+            <img src="assets/agent-management-center/01-chat-overview.png" alt="智能体管理中心对话工作台总览">
+            <figcaption>工作台总览：左侧选择智能体和会话，中间进行真实对话测试，右侧为当前智能体配置能力。侧栏可收起，为对话区释放空间。</figcaption>
+          </figure>
+          <div class="callout info">
+            <div class="callout-icon">?</div>
+            <div>
+              <div class="callout-title">功能入口查找</div>
+              <p>将鼠标悬停在右侧标签上可查看用途说明；左下角“指南/罗盘”按钮可以重新启动内置新手引导。</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="roles">
+          <div class="section-head">
+            <p class="section-kicker">Roles</p>
+            <h2>平台角色与能力范围</h2>
+            <p class="section-desc">智能体的可见范围由名称、平台角色、发布状态和协同设置共同决定。</p>
+          </div>
+          <div class="role-grid">
+            <article class="role-card">
+              <span class="tag orange">平台职责</span>
+              <h3>平台总控智能体</h3>
+              <p>承接普通平台对话并分派任务。只能调用“已启用、允许协同、并明确开放给总控”的智能体。</p>
+            </article>
+            <article class="role-card">
+              <span class="tag green">平台职责</span>
+              <h3>项目初始化智能体</h3>
+              <p>工程配置页的固定入口，负责读取项目资料、制定计划、组织专项智能体并形成待核对草稿。</p>
+            </article>
+            <article class="role-card">
+              <span class="tag blue">可发布</span>
+              <h3>业务智能体</h3>
+              <p>面向具体业务任务。只有“已启用 + 已发布”的业务智能体才会进入业务端目录。</p>
+            </article>
+            <article class="role-card">
+              <span class="tag">内部能力</span>
+              <h3>协同智能体</h3>
+              <p>被其他智能体邀请处理专项任务。必须开启“允许被邀请”，并填写清晰的邀请说明。</p>
+            </article>
+            <article class="role-card">
+              <span class="tag">系统专家</span>
+              <h3>隐藏智能体</h3>
+              <p>不直接出现在业务端，只作为平台职责或内部协同成员使用，适合专业解析、核验、分析等能力。</p>
+            </article>
+            <article class="role-card">
+              <span class="tag red">安全边界</span>
+              <h3>权限审核员</h3>
+              <p>不参与业务会话，仅审核 Auto 权限模式下“需要确认”的操作；拒绝和危险操作不会被绕过。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="credentials">
+          <div class="section-head">
+            <p class="section-kicker">Step 1</p>
+            <h2>配置模型凭证</h2>
+            <p class="section-desc">没有可用凭证和模型，智能体无法开始对话。入口位于左侧钥匙图标“凭证”。</p>
+          </div>
+          <div class="steps">
+            <div class="step">
+              <div class="step-index">1</div>
+              <div><h3>点击“添加凭证”</h3><p>选择与服务兼容的凭证类型。自定义服务通常选择 OpenAI 兼容方式。</p></div>
+            </div>
+            <div class="step">
+              <div class="step-index">2</div>
+              <div><h3>填写连接信息</h3><p>填写名称、API Key 和 Base URL。名称应准确体现用途，例如“生产模型”或“测试模型”，避免使用“key1”等无法识别用途的名称。</p></div>
+            </div>
+            <div class="step">
+              <div class="step-index">3</div>
+              <div><h3>建立模型目录</h3><p>优先使用“自动获取”；服务不支持时再“手动添加”。至少配置一个对话模型，之后才可在智能体中固定使用。</p></div>
+            </div>
+            <div class="step">
+              <div class="step-index">4</div>
+              <div><h3>测试并保存</h3><p>保存前先测试模型。若启用 Auto 权限模式，再为系统权限审核员绑定独立审核模型。</p></div>
+            </div>
+          </div>
+          <figure class="figure">
+            <img src="assets/agent-management-center/04-credential.png" alt="凭证与系统权限审核员配置页面">
+            <figcaption>凭证页同时管理模型 API 和系统权限审核员。审核员模型与聊天模型独立，可设置备用模型、置信度、最高风险和超时。</figcaption>
+          </figure>
+          <div class="callout danger">
+            <div class="callout-icon">!</div>
+            <div><div class="callout-title">API Key 安全要求</div><p>界面会脱敏显示密钥。完整密钥不得写入智能体提示词、截图、日志或会话消息，只能保存在凭证配置中。</p></div>
+          </div>
+        </section>
+
+        <section class="section" id="create-agent">
+          <div class="section-head">
+            <p class="section-kicker">Step 2</p>
+            <h2>创建并配置智能体</h2>
+            <p class="section-desc">在对话页左侧点击“创建 Agent”。左侧目录用于快速切换配置分区；首次创建应先完成身份、模型和平台接入配置。</p>
+          </div>
+          <figure class="figure">
+            <img src="assets/agent-management-center/02-create-agent.png" alt="创建智能体弹窗">
+            <figcaption>创建弹窗：左侧是配置目录，右侧是当前分区。系统提示词支持多行输入；上下文、ReAct 等高级项可先保留默认值。</figcaption>
+          </figure>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>配置分区</th><th>功能说明</th><th>首次配置建议</th></tr></thead>
+              <tbody>
+                <tr><td><strong>Agent 身份</strong></td><td>名称用于列表展示；系统提示词定义职责和边界。</td><td>名称写业务用途；提示词写清“目标、输入、输出、禁止事项”。</td></tr>
+                <tr><td><strong>模型配置</strong></td><td>“跟随会话”允许每次选择模型；“固定模型”保证稳定。</td><td>业务和平台职责智能体优先固定已验证模型。</td></tr>
+                <tr><td><strong>平台接入配置</strong></td><td>决定是否运行、发布、被总控调用和在业务端的排序。</td><td>先启用但不发布；验证通过后再发布。需要业务端展示时填写清晰说明和分类。</td></tr>
+                <tr><td><strong>上下文配置</strong></td><td>控制长会话压缩、保留比例和工具结果截断。</td><td>保持默认。只有确认上下文过长或关键信息丢失时再调整。</td></tr>
+                <tr><td><strong>ReAct 配置</strong></td><td>控制一次任务最多循环多少轮，以及拒绝和中断行为。</td><td>保持默认。复杂任务失败且日志显示迭代耗尽时再增加。</td></tr>
+                <tr><td><strong>邀请配置</strong></td><td>开启后才可被其他智能体协同调用；说明会帮助调用方判断何时邀请。</td><td>专项智能体开启，并明确写“负责什么、需要什么输入、返回什么”。</td></tr>
+                <tr><td><strong>调用白名单</strong></td><td>限制当前智能体可以邀请哪些协同成员。</td><td>总控可按需设为全部；专业智能体建议选择“指定”。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="callout warn">
+            <div class="callout-icon">!</div>
+            <div><div class="callout-title">“启用”与“发布”的区别</div><p>启用表示智能体可以运行；发布表示智能体可以出现在业务端。智能体应在测试完成后再发布，避免向用户展示未完成配置。</p></div>
+          </div>
+        </section>
+
+        <section class="section" id="capabilities">
+          <div class="section-head">
+            <p class="section-kicker">Step 3</p>
+            <h2>给智能体分配能力</h2>
+            <p class="section-desc">右侧标签是当前智能体的能力视图。能力是否可编辑取决于类型：有的按智能体分配，有的是平台固定能力。</p>
+          </div>
+          <div class="ability-grid">
+            <article class="ability-card">
+              <span class="tag green">可分配</span>
+              <h3>MCP</h3>
+              <p>依赖完整的外部能力包。平台统一安装版本，每个智能体通过勾选决定是否装载。</p>
+              <ul><li>上传后先查看工具清单和说明</li><li>勾选需要的包，再点击“保存分配”</li><li>删除包会影响所有使用该版本的智能体</li></ul>
+            </article>
+            <article class="ability-card">
+              <span class="tag green">可分配</span>
+              <h3>技能</h3>
+              <p>可复用的工作方法、提示和流程说明，指导智能体以固定步骤完成任务。</p>
+              <ul><li>通过“添加技能”关联当前智能体</li><li>点击条目查看；可编辑项使用统一编辑弹窗</li><li>名称用于展示，英文标识用于系统识别</li></ul>
+            </article>
+            <article class="ability-card">
+              <span class="tag green">可分配</span>
+              <h3>数据库交互</h3>
+              <p>在表白名单和操作范围内读取或写入业务数据，按智能体勾选最小必要权限。</p>
+              <ul><li>点击整行查看参数和涉及表</li><li>“只读”和“写操作”必须明确区分</li><li>管理端只查看表白名单，不能随意修改治理规则</li></ul>
+            </article>
+            <article class="ability-card fixed">
+              <span class="tag orange">全局固定</span>
+              <h3>工具</h3>
+              <p>文件读取、搜索、写入、附件解析等系统基础能力。所有智能体可用，仅展示、不可勾选或修改。</p>
+              <ul><li>点击条目查看具体参数和用途</li><li>附件上传后先经过统一解析流水线</li><li>固定能力不需要重复分配</li></ul>
+            </article>
+            <article class="ability-card">
+              <span class="tag green">可分配</span>
+              <h3>知识库</h3>
+              <p>为智能体提供可检索资料。先在知识库页面创建并导入文档，再回到智能体选择。</p>
+              <ul><li>适合制度、规范、产品资料和长期知识</li><li>临时会话附件应使用附件解析工具，不作为知识库维护</li><li>答案仍需由智能体结合当前任务判断</li></ul>
+            </article>
+            <article class="ability-card">
+              <span class="tag green">可分配</span>
+              <h3>协同智能体</h3>
+              <p>决定当前智能体可邀请的其他智能体范围：全部、指定或禁用。</p>
+              <ul><li>被邀请方必须允许被邀请</li><li>业务智能体建议使用“指定”</li><li>保存后对该智能体后续会话生效</li></ul>
+            </article>
+          </div>
+
+          <h3>MCP：上传、查看、勾选、保存</h3>
+          <p>MCP 包是可独立升级的能力。上传必须使用平台适配后的依赖完整包；包内应包含正确的清单、启动入口、工具中文名称/英文标识和参数说明。上传成功不等于已经分配，仍需对当前智能体勾选并保存。</p>
+          <figure class="figure">
+            <img src="assets/agent-management-center/01-chat-overview.png" alt="MCP 分配面板">
+            <figcaption>MCP 列表会显示版本和工具数量。点击条目查看详情，复选框负责分配，底部按钮负责保存。</figcaption>
+          </figure>
+
+          <h3>技能：把工作方法交给智能体</h3>
+          <figure class="figure">
+            <img src="assets/agent-management-center/08-skills.png" alt="技能管理面板">
+            <figcaption>技能面板支持搜索和添加。空列表时先点击“添加技能”；已有技能可点击查看，并按权限编辑或移除。</figcaption>
+          </figure>
+
+          <h3>数据库交互：只分配必要数据能力</h3>
+          <figure class="figure">
+            <img src="assets/agent-management-center/09-database-interactions.png" alt="数据库交互分配面板">
+            <figcaption>数据库交互统一显示名称、说明、数据对象和只读/写操作。点击复选框分配，点击内容区查看完整参数。</figcaption>
+          </figure>
+          <div class="callout warn">
+            <div class="callout-icon">!</div>
+            <div><div class="callout-title">数据库交互按最小权限分配</div><p>总控、初始化助手和业务智能体需要的数据库交互不同。每个智能体仅分配完成职责所需的最小集合，写操作须逐项确认。</p></div>
+          </div>
+
+          <h3>系统工具：固定能力，只看不改</h3>
+          <figure class="figure">
+            <img src="assets/agent-management-center/11-built-in-tools.png" alt="系统内置工具列表">
+            <figcaption>系统工具是平台基础设施。它们全局可用，不提供分配复选框；点击条目即可查看用途和调用参数。</figcaption>
+          </figure>
+
+          <h3>协同智能体：控制可以邀请谁</h3>
+          <figure class="figure">
+            <img src="assets/agent-management-center/10-collaboration.png" alt="协同智能体范围配置">
+            <figcaption>“全部”包含未来新增且开放邀请的智能体；“指定”最安全；“禁用”适合必须独立执行的智能体。</figcaption>
+          </figure>
+        </section>
+
+        <section class="section" id="database-tutorial">
+          <div class="section-head">
+            <p class="section-kicker">Database tutorial</p>
+            <h2>数据库交互：从零配置到成功调用</h2>
+            <p class="section-desc">数据库交互不是 SQL 编辑器，而是基于表白名单、字段范围和操作类型创建的可分配数据能力。</p>
+          </div>
+
+          <h3>数据库交互的四层关系</h3>
+          <div class="layer-grid" aria-label="数据库交互四层关系">
+            <article class="layer-card">
+              <span class="layer-index">第 1 层</span>
+              <h3>数据表白名单</h3>
+              <p>平台统一决定哪些表、字段和操作可以开放，以及只能访问当前项目、当前用户还是全局数据。</p>
+            </article>
+            <article class="layer-card">
+              <span class="layer-index">第 2 层</span>
+              <h3>数据库交互</h3>
+              <p>从白名单中选择主表、查询或写入方式、可选关联表和运行边界，形成一项中文可读的能力。</p>
+            </article>
+            <article class="layer-card">
+              <span class="layer-index">第 3 层</span>
+              <h3>智能体分配</h3>
+              <p>把已经创建的交互勾选给需要它的智能体。未分配的智能体即使知道技术标识也不能调用。</p>
+            </article>
+            <article class="layer-card">
+              <span class="layer-index">第 4 层</span>
+              <h3>会话运行校验</h3>
+              <p>调用时平台再次核对会话、用户、项目、智能体、权限和字段范围，然后才执行结构化操作。</p>
+            </article>
+          </div>
+          <div class="callout info">
+            <div class="callout-icon">i</div>
+            <div>
+            <div class="callout-title">白名单与数据库交互的区别</div>
+              <p>白名单是平台级安全边界，在智能体管理端只能查看；数据库交互是基于白名单创建的具体能力，可以新增、编辑、删除并分配给智能体。一个白名单可以创建多项不同交互。</p>
+            </div>
+          </div>
+
+          <h3>开始前的三个检查</h3>
+          <div class="steps">
+            <div class="step">
+              <div class="step-index">1</div>
+              <div>
+                <h3>选择目标智能体</h3>
+                <p>左侧切换到准备使用数据库能力的智能体，再打开右侧“数据库交互”。只读智能体不会显示新增或编辑能力。</p>
+              </div>
+            </div>
+            <div class="step">
+              <div class="step-index">2</div>
+              <div>
+                <h3>点击“查看表白名单”</h3>
+                <p>确认目标表已存在，并检查允许操作、可读字段、可写字段、可筛选字段、数据范围和最低角色。该页面仅用于查看，不能临时扩大权限。</p>
+              </div>
+            </div>
+            <div class="step">
+              <div class="step-index">3</div>
+              <div>
+                <h3>明确数据操作</h3>
+                <p>在创建交互前，明确“目标主表、筛选条件、返回或修改字段，以及是否需要关联表字段”。需求范围不明确时，应先完成业务规则梳理。</p>
+              </div>
+            </div>
+          </div>
+          <div class="callout warn">
+            <div class="callout-icon">!</div>
+            <div>
+            <div class="callout-title">“新增交互”按钮不可用</div>
+              <p>该状态通常表示平台尚未配置数据表白名单，或当前智能体不可编辑。白名单缺失时，由平台维护人员开放目标表；交互配置不能绕过白名单。</p>
+            </div>
+          </div>
+
+          <h3>实战示例：查询项目任务并返回负责人姓名</h3>
+          <div class="example-box">
+            <div class="example-meta">
+              <span class="tag green">只读查询</span>
+              <span class="tag">主表：项目任务</span>
+              <span class="tag">关联表：平台账号</span>
+              <span class="tag blue">按当前项目隔离</span>
+            </div>
+            <p><strong>目标：</strong>让智能体查询当前项目的任务，并把任务负责人从内部 ID 转换为可读的姓名和账号。</p>
+            <p><strong>预期调用：</strong>用户问“本周有哪些未完成任务，负责人是谁？”时，智能体调用该交互并获得任务信息与负责人名称。</p>
+          </div>
+
+          <h4>第 1 步：打开新增弹窗</h4>
+          <p>在“数据库交互”标签点击“新增交互”。弹窗左侧目录可以快速跳到基本信息、数据来源、运行边界、关联表、调用参数和运行设置。</p>
+          <figure class="figure">
+            <img src="assets/agent-management-center/12-database-create-basic.png" alt="新增数据库交互的基本信息、数据来源与运行边界">
+            <figcaption>示例已选择“项目任务 · tasks”作为主表，平台自动显示执行来源和“当前项目”数据范围；此时尚未保存任何配置。</figcaption>
+          </figure>
+
+          <h4>第 2 步：填写基本信息</h4>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>字段</th><th>示例</th><th>判断标准</th></tr></thead>
+              <tbody>
+                <tr><td><strong>中文名称</strong></td><td>查询项目任务与负责人</td><td>名称应以动作开头，让不懂技术的人一眼知道用途。</td></tr>
+                <tr><td><strong>英文技术标识</strong></td><td><code>query_project_tasks_with_owner</code></td><td>仅小写字母、数字和下划线，以字母开头；创建后不能修改。</td></tr>
+                <tr><td><strong>用途说明</strong></td><td>查询当前项目任务，并返回负责人姓名、账号、状态和截止时间。</td><td>说明应包含使用时机、返回内容和不能做什么；模型会用它判断何时调用。</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h4>第 3 步：选择数据来源和操作</h4>
+          <ul>
+            <li><strong>主表白名单：</strong>选择“项目任务 · tasks”。下拉框只会出现平台已经授权的表。</li>
+            <li><strong>允许操作：</strong>选择“查询”。下拉框只会出现该白名单允许的操作。</li>
+            <li><strong>执行来源/数据范围：</strong>确认显示为 <code>tasks</code> 和“当前项目”。这意味着平台会自动隔离项目，不需要模型传入项目 ID。</li>
+          </ul>
+          <div class="callout">
+            <div class="callout-icon">✓</div>
+            <div><div class="callout-title">可信上下文安全规则</div><p>项目 ID、用户 ID 和会话 ID 不由模型自由填写。平台根据当前会话识别真实范围，伪造或越权的记录会在执行前被拒绝。</p></div>
+          </div>
+
+          <h4>第 4 步：配置运行边界</h4>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>项目</th><th>本示例选择</th><th>含义</th></tr></thead>
+              <tbody>
+                <tr><td><strong>调用方式</strong></td><td>智能体直接调用</td><td>保存并分配后，这项能力会直接出现在智能体可调用工具中。</td></tr>
+                <tr><td><strong>允许的会话</strong></td><td>普通、业务</td><td>仅在勾选的会话类型中装载。是否允许写入仍受平台实际权限约束。</td></tr>
+                <tr><td><strong>可信上下文绑定</strong></td><td>无需额外添加</td><td>主表白名单已经按当前项目隔离。只有还要按当前会话、用户或执行智能体进一步隔离时才添加。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p><strong>可信上下文绑定选择规则：</strong></p>
+          <ul>
+            <li><strong>限定记录范围：</strong>查询和写入都只能命中当前项目、当前会话、当前用户或当前执行智能体对应的记录。</li>
+            <li><strong>写入时自动填充：</strong>仅用于写操作，平台自动把可信值写入目标字段，调用方无法伪造。</li>
+            <li>白名单已限定为“当前项目”时，无需重复绑定无关字段。</li>
+          </ul>
+
+          <h4>第 5 步：添加关联表</h4>
+          <p>点击“添加关联表”。系统只会提供与当前查询路径存在<strong>真实数据库外键</strong>、并且已经加入白名单的表。本示例自动找到：</p>
+          <p><code>main.assignee_user_id → users.id</code></p>
+          <figure class="figure">
+            <img src="assets/agent-management-center/13-database-create-relations.png" alt="数据库交互多表关联配置">
+            <figcaption>关联表配置：选择平台账号表，别名为 users，通过负责人外键连接；可分别勾选返回字段和筛选字段。</figcaption>
+          </figure>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>字段</th><th>本示例</th><th>说明</th></tr></thead>
+              <tbody>
+                <tr><td><strong>关联表白名单</strong></td><td>平台账号</td><td>目标表必须已经加入平台白名单。</td></tr>
+                <tr><td><strong>返回别名</strong></td><td><code>users</code></td><td>结果字段会以 <code>users.real_name</code> 形式出现；别名不能使用 <code>main</code>。</td></tr>
+                <tr><td><strong>外键关联条件</strong></td><td><code>main.assignee_user_id → users.id</code></td><td>只能选择数据库真实存在的外键，不允许手写任意连接条件。</td></tr>
+                <tr><td><strong>保留方式</strong></td><td>保留主表全部记录</td><td>即 LEFT JOIN；负责人缺失时任务仍返回。选择“只保留匹配记录”会过滤无负责人任务。</td></tr>
+                <tr><td><strong>返回字段</strong></td><td><code>username</code>、<code>real_name</code></td><td>只勾选智能体真正需要看到的字段。</td></tr>
+                <tr><td><strong>筛选字段</strong></td><td>按业务需要勾选</td><td>勾选后模型才能使用该字段做精确筛选或排序。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="callout warn">
+            <div class="callout-icon">!</div>
+            <div><div class="callout-title">多表关联只用于查询</div><p>新增、修改和删除永远只作用于主表，不能在一项写交互中同时修改多张表。需要多步写入时，应拆成多项交互并由智能体或 MCP 工作流按顺序调用。</p></div>
+          </div>
+
+          <h4>第 6 步：理解自动生成的调用参数</h4>
+          <p>保存后，平台会根据主表、字段白名单、操作类型和关联表自动生成参数，不需要手写 JSON Schema。</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>操作</th><th>常见参数</th><th>使用规则</th></tr></thead>
+              <tbody>
+                <tr><td><strong>查询</strong></td><td><code>keyword</code>、<code>filters</code>、<code>fields</code>、<code>order_by</code>、<code>offset</code>、<code>limit</code></td><td>只能使用白名单允许返回、筛选和排序的字段；一次最多返回 200 条。</td></tr>
+                <tr><td><strong>按 ID 查询</strong></td><td><code>record_id</code> 或 <code>record_ids</code></td><td>两者不能同时使用；批量 ID 有数量上限。</td></tr>
+                <tr><td><strong>新增</strong></td><td><code>values</code></td><td>只能传可写字段；项目、用户、会话等绑定字段由平台补充。</td></tr>
+                <tr><td><strong>修改</strong></td><td><code>record_id</code>、<code>values</code>、可选 <code>expected</code></td><td>建议先读后改；<code>expected</code> 可防止覆盖别人刚刚修改的数据。</td></tr>
+                <tr><td><strong>删除</strong></td><td><code>record_id</code></td><td>只能删除当前授权范围内的单条记录。</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h4>第 7 步：保存、分配、测试</h4>
+          <div class="steps">
+            <div class="step"><div class="step-index">1</div><div><h3>保存交互</h3><p>打开“允许分配和调用”。只读敏感数据可额外要求确认；智能体直接调用的写操作固定需要权限审核，不能关闭。</p></div></div>
+            <div class="step"><div class="step-index">2</div><div><h3>在列表中勾选</h3><p>新建交互会进入全平台目录，但不会自动分配给当前智能体。找到它，勾选复选框并点击“保存分配”。</p></div></div>
+            <div class="step"><div class="step-index">3</div><div><h3>新建会话测试</h3><p>发送“列出当前项目未完成任务及负责人姓名”。观察是否调用正确交互、是否只返回当前项目数据。</p></div></div>
+            <div class="step"><div class="step-index">4</div><div><h3>按最小权限修正</h3><p>如果返回字段过多，编辑交互减少字段；如果智能体无需该能力，取消勾选而不是只在提示词中禁止。</p></div></div>
+          </div>
+
+          <h3>写操作配置规则</h3>
+          <div class="two-col">
+            <article class="card">
+              <h3>安全配置顺序</h3>
+              <ul class="checklist">
+                <li>确认主表白名单允许所需的新增、修改或删除操作。</li>
+                <li>每项交互只做一个明确动作，例如“更新任务状态”。</li>
+                <li>只开放该动作所需字段，不开放整张表。</li>
+                <li>把项目、会话、用户、执行智能体等字段设为可信绑定。</li>
+                <li>创建配套只读交互，使智能体能够按“先读后写”的顺序执行。</li>
+              </ul>
+            </article>
+            <article class="card">
+              <h3>运行时仍会检查</h3>
+              <ul class="checklist">
+                <li>当前会话是否允许写入。</li>
+                <li>当前用户是否属于项目、是否满足最低角色。</li>
+                <li>记录是否属于当前项目/用户范围。</li>
+                <li>外键引用是否存在且没有越权。</li>
+                <li>记录是否已被其他任务修改。</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="mcp-database">
+          <div class="section-head">
+            <p class="section-kicker">MCP + Database</p>
+            <h2>让 MCP 与数据库交互协同</h2>
+            <p class="section-desc">MCP 不得获得数据库账号、文件路径或任意 SQL 权限。MCP 访问业务数据时统一通过平台数据库交互网关，并受能力分配、会话范围和白名单约束。</p>
+          </div>
+
+          <h3>协同方式选择</h3>
+          <div class="path-compare">
+            <article class="path-card recommended">
+              <header>
+                <h3>方式 A：由智能体编排 <span class="tag green">推荐</span></h3>
+                <p>适用于常规管理配置和普通 MCP。</p>
+              </header>
+              <div class="path-body">
+                <div class="mini-flow"><span>用户任务</span><b>›</b><span>数据库查询</span><b>›</b><span>MCP 分析</span><b>›</b><span>可选写回</span></div>
+                <ul>
+                  <li>数据库交互选择“智能体直接调用”。</li>
+                  <li>把 MCP 和数据库交互都分配给同一智能体。</li>
+                  <li>模型能看到每一步，过程清楚、容易调试。</li>
+                  <li>MCP 包不需要声明数据库平台能力。</li>
+                </ul>
+              </div>
+            </article>
+            <article class="path-card">
+              <header>
+                <h3>方式 B：MCP 内部调用 <span class="tag blue">开发者</span></h3>
+                <p>适合大量分页、循环处理或需要封装成单个工具的流程。</p>
+              </header>
+              <div class="path-body">
+                <div class="mini-flow"><span>用户任务</span><b>›</b><span>MCP 工具</span><b>›</b><span>平台数据网关</span><b>›</b><span>结果</span></div>
+                <ul>
+                  <li>数据库交互选择“MCP / 工作流内部调用”。</li>
+                  <li>该交互不会直接暴露给模型。</li>
+                  <li>MCP 包声明受控平台能力，通过注入的接口调用。</li>
+                  <li>适合具备 MCP 开发经验并需要封装复杂流程的维护人员。</li>
+                </ul>
+              </div>
+            </article>
+          </div>
+          <div class="callout info">
+            <div class="callout-icon">?</div>
+            <div><div class="callout-title">一项交互对应一种调用方式</div><p>“智能体直接调用”和“MCP / 工作流内部调用”不能同时生效。需要同时提供两种入口时，应基于同一白名单创建两项不同技术标识的交互，并分别控制分配。</p></div>
+          </div>
+
+          <h3>方式 A 实战：数据分析 MCP 读取任务并生成分析</h3>
+          <p>方式 A 配置简单且调用过程完整可见。以下示例假设平台已上传“数据分析与预测建模”MCP：</p>
+          <div class="steps">
+            <div class="step">
+              <div class="step-index">1</div>
+              <div><h3>准备只读交互</h3><p>创建或复用“查询项目任务与负责人”，调用方式选择“智能体直接调用”，并分配给数据分析智能体。</p></div>
+            </div>
+            <div class="step">
+              <div class="step-index">2</div>
+              <div><h3>分配数据分析 MCP</h3><p>切换到 MCP 标签，勾选“数据分析与预测建模”，点击“保存分配”。确认详情中能看到需要的分析工具。</p></div>
+            </div>
+            <div class="step">
+              <div class="step-index">3</div>
+              <div><h3>可选：准备写回交互</h3><p>分析结果需要入库时，应单独创建仅开放必要字段的写交互。MCP 和智能体不得绕过交互直接更新数据表。</p></div>
+            </div>
+            <div class="step">
+              <div class="step-index">4</div>
+              <div><h3>配置智能体调用顺序</h3><p>在智能体说明中配置“先读取数据，再调用 MCP 分析；只有用户确认且存在已分配写交互时才写回”。该顺序由智能体在运行时执行。</p></div>
+            </div>
+            <div class="step">
+              <div class="step-index">5</div>
+              <div><h3>新建会话验证闭环</h3><p>让智能体分析当前项目任务延期风险。时间线应依次显示数据库查询、MCP 调用和可选写回确认，MCP 不直接连接数据库。</p></div>
+            </div>
+          </div>
+          <div class="example-box">
+            <h3>智能体协同规则示例</h3>
+            <p>当任务需要分析平台数据时，先调用已分配的只读数据库交互获取必要字段，再把结构化结果交给数据分析 MCP。数据量较大时使用分页或 MCP 内部工作流，避免将整张表复制进提示词。需要写回时必须调用独立写交互并经过权限确认。</p>
+          </div>
+
+          <h3>方式 B 的适用场景</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>场景</th><th>建议</th><th>原因</th></tr></thead>
+              <tbody>
+                <tr><td>几十条以内、步骤需要用户看见</td><td>方式 A</td><td>调试简单，数据库查询和 MCP 调用都在会话时间线可见。</td></tr>
+                <tr><td>需要连续分页读取数千条记录</td><td>方式 B</td><td>MCP 可以在内部循环读取，避免把大量数据反复写入模型上下文。</td></tr>
+                <tr><td>同一 MCP 工具内部要读、计算、再读</td><td>方式 B</td><td>封装后单次调用更稳定，也不会产生很长的邀请或工具参数。</td></tr>
+                <tr><td>业务人员临时组合多个能力</td><td>方式 A</td><td>无需改 MCP 包，只需要调整智能体分配与说明。</td></tr>
+                <tr><td>需要原子性地修改多张表</td><td>设计专用工作流</td><td>当前交互写操作只允许单表；多表写入需要受控工作流和回滚策略。</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>方式 B 的平台配置</h3>
+          <ol>
+            <li>新增数据库交互，选择目标白名单和操作。</li>
+            <li>“调用方式”选择<strong>MCP / 工作流内部调用</strong>。</li>
+            <li>只勾选真正需要的会话类型，配置可信上下文绑定。</li>
+            <li>保存后把该交互分配给实际执行 MCP 的智能体。</li>
+            <li>把 MCP 也分配给同一个智能体。</li>
+          </ol>
+          <p>MCP 包的 <code>mcp.json</code> 需要声明受控平台能力：</p>
+          <pre><code>{
+  "schema_version": 1,
+  "name": "project-analysis",
+  "display_name": "项目数据分析",
+  "version": "1.0.0",
+  "transport": "stdio",
+  "command": "runtime/python.exe",
+  "args": ["server.py"],
+  "platform_capabilities": ["dobby_database_interactions"]
+}</code></pre>
+          <p>运行时由平台向 MCP 子进程注入以下信息，上传包内不得写入固定值：</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>环境变量</th><th>用途</th></tr></thead>
+              <tbody>
+                <tr><td><code>DOBBY_DATABASE_INTERACTION_BASE_URL</code></td><td>受控数据库交互接口地址。</td></tr>
+                <tr><td><code>DOBBY_AGENT_TOOL_TOKEN</code></td><td>专用网关令牌，只在服务器 MCP 进程内存在。</td></tr>
+                <tr><td><code>DOBBY_PLATFORM_SESSION_ID</code></td><td>真实工程平台会话，用于反查当前用户和项目。</td></tr>
+                <tr><td><code>DOBBY_PLATFORM_AGENT_ID</code></td><td>平台会话所属主智能体。</td></tr>
+                <tr><td><code>AGENTSCOPE_AGENT_ID</code></td><td>实际执行该 MCP 的智能体，用于核对交互分配。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>请求必须携带专用令牌，并使用已分配交互的技术标识。下面是协议示意，包开发者可用任意 HTTP 客户端实现：</p>
+          <pre><code>POST {DOBBY_DATABASE_INTERACTION_BASE_URL}/execute
+Authorization: Bearer {DOBBY_AGENT_TOOL_TOKEN}
+Content-Type: application/json
+
+{
+  "agentscope_session_id": "{DOBBY_PLATFORM_SESSION_ID}",
+  "actor_agent_id": "{AGENTSCOPE_AGENT_ID}",
+  "platform_agent_id": "{DOBBY_PLATFORM_AGENT_ID}",
+  "interaction_key": "query_project_tasks_for_analysis",
+  "access_mode": "workflow",
+  "arguments": {
+    "fields": ["title", "status", "users.real_name"],
+    "filters": {"status": "pending"},
+    "offset": 0,
+    "limit": 100
+  }
+}</code></pre>
+          <div class="callout danger">
+            <div class="callout-icon">!</div>
+            <div>
+              <div class="callout-title">MCP 数据访问边界</div>
+              <p>MCP 不得接收数据库文件路径、账号、连接字符串或原始 SQL。平台会拒绝未分配交互、错误调用方式、越权项目、未授权字段和未开放的写操作，MCP 不能绕过这些边界。</p>
+            </div>
+          </div>
+
+          <h3>协同配置验收标准</h3>
+          <ul class="checklist">
+            <li>当前智能体的 MCP 列表和数据库交互列表都显示已选，并且已经保存。</li>
+            <li>新会话中，方式 A 能分别看到数据库交互和 MCP 调用；方式 B 只看到 MCP 工具，但 MCP 返回中没有 401、403 或 404。</li>
+            <li>换到另一个项目执行同样任务时，只返回该项目数据。</li>
+            <li>取消数据库交互分配后，MCP 内部调用应立即被 403 拒绝。</li>
+            <li>写操作会产生权限确认和审计记录，未确认时不会修改业务数据。</li>
+          </ul>
+        </section>
+
+        <section class="section" id="initialization-mcp">
+          <div class="section-head">
+            <p class="section-kicker">Project initialization</p>
+            <h2>项目初始化：MCP、技能和数据库交互如何配合</h2>
+            <p class="section-desc">项目初始化不是由一个 MCP 包独立完成。它是一条受平台控制的流水线：固定附件解析工具负责读文件，初始化技能负责组织工作，专项智能体通过数据库交互写草稿，核验 MCP 只负责最后核验。</p>
+          </div>
+
+          <div class="callout info">
+            <div class="callout-icon">i</div>
+            <div>
+              <div class="callout-title">初始化能力边界</div>
+              <p>附件解析由平台固定工具执行，流程组织由初始化编排技能负责，草稿读取与写入通过数据库交互完成，最终检查由核验 MCP 执行。核验 MCP 不属于智能体可分配能力，其当前使用版本在“平台设置”中统一选择。</p>
+            </div>
+          </div>
+
+          <h3>初始化能力职责划分</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>环节</th><th>实现方式</th><th>负责内容</th><th>配置位置</th></tr></thead>
+              <tbody>
+                <tr>
+                  <td><strong>附件解析</strong></td>
+                  <td>平台固定工具</td>
+                  <td>附件进入模型前先解析；PDF、图片、DOCX、PPTX、XLSX 优先使用 MinerU，失败后使用本地解析；CSV、TXT、Markdown、XLS 直接本地解析。</td>
+                  <td>在“工具”标签中查看。它是全局固定能力，不能勾选、取消或编辑。</td>
+                </tr>
+                <tr>
+                  <td><strong>流程编排</strong></td>
+                  <td>初始化技能</td>
+                  <td>先创建执行计划，再创建草稿、读取附件分块、邀请相关专项智能体、检查分区完成状态并提交核验。</td>
+                  <td>主智能体的“技能”标签，分配 <code>orchestrate-project-initialization</code>。</td>
+                </tr>
+                <tr>
+                  <td><strong>专项整理</strong></td>
+                  <td>专项智能体 + 技能</td>
+                  <td>分别整理工程信息、人员岗位、WBS 进度、风险源和质量指标；专项智能体只处理自己的分区。</td>
+                  <td>主智能体“协同智能体”标签，以及各专项智能体的“技能”标签。</td>
+                </tr>
+                <tr>
+                  <td><strong>草稿读写</strong></td>
+                  <td>数据库交互</td>
+                  <td>读取附件分块、创建草稿、写入各分区、检查分区状态和提交核验。智能体不直接连接数据库。</td>
+                  <td>每个初始化智能体的“数据库交互”标签，按职责分配最小集合。</td>
+                </tr>
+                <tr>
+                  <td><strong>最终核验</strong></td>
+                  <td>必需的核验 MCP</td>
+                  <td>读取平台组装好的规范化草稿 JSON，快速执行跨分区规则，返回 ready / invalid 和定位到数据行、字段的问题。</td>
+                  <td>“平台设置 → 项目初始化智能体 → 核验 MCP”，选择当前使用版本。</td>
+                </tr>
+                <tr>
+                  <td><strong>核对与正式入库</strong></td>
+                  <td>平台固定界面</td>
+                  <td>把问题标签展示到准确的数据行和字段；用户核对并确认后，才把草稿写入正式项目表。</td>
+                  <td>工程管理平台的初始化草稿核对弹窗，无需在管理中心分配。</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>初始化运行流程</h3>
+          <div class="flow" aria-label="项目初始化运行流程">
+            <div class="flow-item">上传附件</div>
+            <div class="flow-item">固定工具解析</div>
+            <div class="flow-item">主智能体建计划</div>
+            <div class="flow-item">专项智能体写分区</div>
+            <div class="flow-item">主智能体提交草稿 ID</div>
+            <div class="flow-item">核验 MCP 检查</div>
+            <div class="flow-item">用户确认入库</div>
+          </div>
+          <div class="steps">
+            <div class="step">
+              <div class="step-index">1</div>
+              <div><h3>附件接收与解析</h3><p>用户上传后应立即看到已接收反馈和解析状态。原附件保留用于下载与审计，解析结果按文件和分块保存为临时数据；附件内容不会整段写入模型提示词。</p></div>
+            </div>
+            <div class="step">
+              <div class="step-index">2</div>
+              <div><h3>创建执行计划与草稿</h3><p>附件解析预处理结束后，模型的第一个业务动作必须是 <code>TaskCreate</code>。随后主智能体读取初始化状态和附件分块，创建本轮初始化草稿。</p></div>
+            </div>
+            <div class="step">
+              <div class="step-index">3</div>
+              <div><h3>分配专项整理任务</h3><p>主智能体根据资料内容邀请本轮需要的专家。邀请参数传递 <code>draft_id</code>、文件 ID 和分块 ID，不传递大段解析文本；专家通过数据库交互分页读取所需分块。</p></div>
+            </div>
+            <div class="step">
+              <div class="step-index">4</div>
+              <div><h3>写入专项草稿分区</h3><p>每位专家使用对应技能理解资料，并通过已分配的数据库交互创建或更新对应分区。专项智能体不能写入其他专家分区，也不能直接写入正式业务表。</p></div>
+            </div>
+            <div class="step">
+              <div class="step-index">5</div>
+              <div><h3>提交草稿核验</h3><p>主智能体确认所需分区均已完成后，调用 <code>dobby_finalize_project_initialization_draft(record_id=draft_id)</code>。该调用只提交草稿 ID，不把整份草稿重新交给模型。</p></div>
+            </div>
+            <div class="step">
+              <div class="step-index">6</div>
+              <div><h3>执行核验 MCP</h3><p>平台通过数据库交互读取并组装规范化草稿 JSON，然后启动“平台设置”中选定版本的核验 MCP。MCP 返回状态以及问题所在的数据记录 ID、字段、说明和处理建议；平台负责持久化结果。</p></div>
+            </div>
+            <div class="step">
+              <div class="step-index">7</div>
+              <div><h3>人工核对与正式入库</h3><p>前端在具体行的“核验”列展示问题标签。用户查看问题与建议、修正或确认后，平台才把草稿原子写入正式项目数据。草稿结构规范不代表业务内容已自动确认，人工确认仍为必需步骤。</p></div>
+            </div>
+          </div>
+
+          <h3>初始化团队能力分配</h3>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>智能体</th><th>技能</th><th>主要数据库交互职责</th></tr></thead>
+              <tbody>
+                <tr><td><strong>Dobby 项目初始化助手</strong></td><td><code>orchestrate-project-initialization</code></td><td>读取状态、草稿、分区和附件分块；创建草稿；全部分区完成后提交草稿核验。</td></tr>
+                <tr><td><strong>工程信息专家</strong></td><td><code>extract-project-basics</code></td><td>读取附件分块，创建或更新工程信息分区。</td></tr>
+                <tr><td><strong>人员与岗位专家</strong></td><td><code>organize-project-personnel</code></td><td>读取附件分块，创建或更新人员与岗位分区。</td></tr>
+                <tr><td><strong>WBS 与进度专家</strong></td><td><code>validate-wbs-timeline</code></td><td>读取附件分块，创建或更新 WBS 与进度分区。</td></tr>
+                <tr><td><strong>风险源专家</strong></td><td><code>extract-project-risks</code></td><td>读取附件分块，创建或更新风险源分区。</td></tr>
+                <tr><td><strong>质量指标专家</strong></td><td><code>map-quality-requirements</code></td><td>读取附件分块，创建或更新质量指标分区。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="callout warn">
+            <div class="callout-icon">!</div>
+            <div>
+              <div class="callout-title">数据库交互采用职责隔离</div>
+              <p>各智能体看到的可分配目录可以相同，但实际分配必须按职责区分。主智能体负责创建草稿和提交核验；专项智能体仅创建或更新自己的业务分区。知识库不属于固定初始化步骤，仅在任务需要长期资料时分配。</p>
+            </div>
+          </div>
+
+          <h3>初始化团队配置步骤</h3>
+          <div class="two-col">
+            <article class="card">
+              <h3>主智能体配置</h3>
+              <ol>
+                <li>进入“平台设置”，选择 <strong>Dobby 项目初始化助手</strong>。</li>
+                <li>回到该智能体的“技能”标签，确认编排技能已分配。</li>
+                <li>在“数据库交互”中只勾选初始化状态、草稿、分区、附件分块、创建草稿和提交核验相关交互。</li>
+                <li>在“协同智能体”中允许邀请五位专项智能体。</li>
+                <li>普通“MCP”标签不分配核验 MCP，也不分配旧版编排 MCP。</li>
+              </ol>
+            </article>
+            <article class="card">
+              <h3>专项智能体配置</h3>
+              <ol>
+                <li>每位专家只分配与其职责对应的一项技能。</li>
+                <li>共同分配只读的状态、草稿、分区和附件分块交互。</li>
+                <li>写操作只分配本专家对应分区的创建和更新交互。</li>
+                <li>专项智能体不需要核验 MCP，也不应直接写正式项目表。</li>
+                <li>修改分配后新建初始化任务验证，旧会话可能仍保留旧配置。</li>
+              </ol>
+            </article>
+          </div>
+
+          <h3>核验 MCP 版本管理</h3>
+          <figure class="figure">
+            <img src="assets/agent-management-center/03-platform-settings.png" alt="平台设置中的项目初始化智能体与核验 MCP 版本管理">
+            <figcaption>进入“平台设置 → 项目初始化智能体”。核验 MCP 是平台必需能力，版本仅在该区域管理，不出现在普通智能体的 MCP 分配目录中。</figcaption>
+          </figure>
+          <div class="steps">
+            <div class="step"><div class="step-index">1</div><div><h3>上传新版本</h3><p>点击“上传新版本”，上传包含运行时和全部依赖的平台适配 ZIP 包。包名可以保持一致，但 <code>mcp.json</code> 中的版本号必须递增。</p></div></div>
+            <div class="step"><div class="step-index">2</div><div><h3>选择使用版本</h3><p>上传不会自动切换。打开“使用版本”下拉框选择目标版本，再点击页面底部“保存初始化配置”。之后新触发的核验使用该版本。</p></div></div>
+            <div class="step"><div class="step-index">3</div><div><h3>下载和修改</h3><p>点击“下载所选版本”可取得当前包作为修改基线。修改规则、提升版本号、重新构建后，再作为新版本上传。</p></div></div>
+            <div class="step"><div class="step-index">4</div><div><h3>删除历史版本</h3><p>在下拉框选择未使用的历史版本后删除。当前正在使用的版本不能删除，必须先切换并保存其他版本。</p></div></div>
+          </div>
+
+          <h3>核验 MCP 与数据库交互的协作机制</h3>
+          <div class="path-compare">
+            <article class="path-card recommended">
+              <header>
+                <h3>平台受控核验流程 <span class="tag green">采用</span></h3>
+                <p>平台负责数据权限与结果持久化，MCP 仅运行核验规则。</p>
+              </header>
+              <div class="path-body">
+                <div class="mini-flow"><span>数据库交互读取草稿</span><b>›</b><span>平台组装 JSON</span><b>›</b><span>核验 MCP</span><b>›</b><span>平台保存问题</span></div>
+                <ul>
+                  <li>MCP 输入已经是规范化的草稿数据。</li>
+                  <li>MCP 不读取数据库文件，也不持有数据库账号。</li>
+                  <li>MCP 返回问题，不直接向数据库写 SQL。</li>
+                  <li>平台用记录 ID 和字段名把问题保存到准确位置。</li>
+                </ul>
+              </div>
+            </article>
+            <article class="path-card">
+              <header>
+                <h3>MCP 直接访问数据库 <span class="tag">不支持</span></h3>
+                <p>核验 MCP 不具备查找或修改业务数据库的权限。</p>
+              </header>
+              <div class="path-body">
+                <div class="mini-flow"><span>MCP</span><b>›</b><span>数据库账号 / 文件</span><b>›</b><span>任意 SQL</span></div>
+                <ul>
+                  <li>无法统一控制项目、用户和字段范围。</li>
+                  <li>规则包可能误写正式数据。</li>
+                  <li>升级和审计时无法区分平台行为与包内行为。</li>
+                  <li>不得把连接字符串、数据库路径或令牌写入包内。</li>
+                </ul>
+              </div>
+            </article>
+          </div>
+          <p>核验 MCP 的输入与输出边界固定，规则可以持续升级：</p>
+          <pre><code>平台输入：{
+  "draft_id": "草稿记录 ID",
+  "project": {...},
+  "personnel": [...],
+  "wbs": [...],
+  "risks": [...],
+  "quality_requirements": [...]
+}
+
+MCP 输出：{
+  "status": "ready 或 invalid",
+  "issues": [{
+    "record_id": "草稿中具体数据的记录 ID",
+    "field": "具体字段名",
+    "label": "问题中文标题",
+    "detail": "问题详细说明",
+    "suggestion": "处理建议"
+  }]
+}</code></pre>
+
+          <details open>
+            <summary>维护人员：构建、测试和本机安装核验 MCP</summary>
+            <p>在仓库根目录使用项目内嵌 Python。日常管理员通过页面上传即可，不需要执行这些命令。</p>
+            <pre><code>.\python-3.13.14\python.exe .\scripts\build_project_initialization_validator_mcp_package.py
+.\python-3.13.14\python.exe .\scripts\smoke_test_project_initialization_validator_mcp_package.py
+.\python-3.13.14\python.exe .\scripts\install_project_initialization_validator.py</code></pre>
+            <p>构建产物位于 <code>data/agentscope/test-packages/project-initialization-validator-mcp-windows.zip</code>。修改核验规则后应提升 <code>mcp-packages/project-initialization-validator/mcp.json</code> 中的版本号。</p>
+          </details>
+
+          <h3>初始化流水线验收</h3>
+          <div class="two-col">
+            <article class="card">
+              <h3>验收通过的表现</h3>
+              <ul class="checklist">
+                <li>上传后先出现接收反馈，再显示附件解析过程。</li>
+                <li>解析预处理后，聊天时间线立即出现执行计划。</li>
+                <li>协同卡片只说明专家正在处理什么，不展示大段邀请文本。</li>
+                <li>专家通过数据库交互读取分块并提交各自分区。</li>
+                <li>最终核验调用显示平台设置中当前使用的 MCP 版本。</li>
+                <li>问题出现在准确的数据行和字段，可打开查看说明与建议。</li>
+                <li>用户确认前，正式项目表不会写入初始化数据。</li>
+              </ul>
+            </article>
+            <article class="card">
+              <h3>需要排查的异常表现</h3>
+              <ul class="checklist">
+                <li>执行一半后才创建计划：主智能体编排技能缺失或版本不对。</li>
+                <li>邀请命令包含整份附件文本：没有传递文件和分块 ID。</li>
+                <li>主智能体自己生成全部分区：专项智能体或数据库交互分配错误。</li>
+                <li>模型重新读取整份草稿做最终核验：没有走平台核验 MCP。</li>
+                <li>上传新核验包后仍执行旧规则：未选择新版本并保存。</li>
+                <li>核验完成后直接正式入库：跳过了用户草稿确认边界。</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <section class="section" id="conversation">
+          <div class="section-head">
+            <p class="section-kicker">Step 4</p>
+            <h2>创建会话并做真实测试</h2>
+            <p class="section-desc">配置保存后必须经过会话验证。除确认列表显示“已选”外，还应验证能力已实际调用并返回正确结果。</p>
+          </div>
+          <div class="flow" aria-label="会话测试流程">
+            <div class="flow-item">选择智能体</div>
+            <div class="flow-item">Create Session</div>
+            <div class="flow-item">输入真实任务</div>
+            <div class="flow-item">观察计划/调用</div>
+            <div class="flow-item">检查结果</div>
+            <div class="flow-item">回到侧栏调整</div>
+          </div>
+          <div class="two-col">
+            <article class="card">
+              <h3>会话测试验收项</h3>
+              <ul class="checklist">
+                <li>模型能正确理解任务，没有偏离系统提示词。</li>
+                <li>需要计划时，计划会动态出现在聊天时间线中。</li>
+                <li>调用 MCP、数据库交互或协同智能体时，有清晰的过程状态。</li>
+                <li>协同卡片只展示做了什么，不展示内部邀请提示词。</li>
+                <li>任务完成后计划框不再占用底部空间，历史记录仍留在时间线。</li>
+                <li>输出与源数据一致，敏感操作遵守权限确认。</li>
+              </ul>
+            </article>
+            <article class="card">
+              <h3>推荐测试语句</h3>
+              <p><code>请列出你当前可使用的能力，并分别说明什么情况下会使用。</code></p>
+              <p><code>请用已分配的数据能力读取一个只读概览，不要执行写操作。</code></p>
+              <p><code>请把任务拆成计划，并邀请最合适的协同智能体完成其中一项。</code></p>
+            </article>
+          </div>
+          <div class="callout info">
+            <div class="callout-icon">i</div>
+            <div><div class="callout-title">计划的展示位置</div><p>计划在创建和执行时直接插入聊天时间线，以便与触发消息保持上下文。完成后从底部活动区域移除，历史过程保留在时间线中。</p></div>
+          </div>
+        </section>
+
+        <section class="section" id="knowledge">
+          <div class="section-head">
+            <p class="section-kicker">Knowledge</p>
+            <h2>创建和使用知识库</h2>
+            <p class="section-desc">知识库适合长期复用的资料。入口位于左侧书本图标；创建完成后，再回到智能体右侧“知识库”标签分配。</p>
+          </div>
+          <div class="steps">
+            <div class="step"><div class="step-index">1</div><div><h3>创建知识库</h3><p>使用能体现内容范围的名称，例如“公司质量制度”“项目技术规范”。</p></div></div>
+            <div class="step"><div class="step-index">2</div><div><h3>导入并等待索引</h3><p>上传资料后等待解析与索引完成。索引失败的文件不会被智能体可靠检索。</p></div></div>
+            <div class="step"><div class="step-index">3</div><div><h3>分配给智能体</h3><p>返回对话页，选择智能体，在“知识库”标签中勾选并保存。</p></div></div>
+            <div class="step"><div class="step-index">4</div><div><h3>用可核对问题测试</h3><p>询问资料中有明确答案的问题，并让智能体说明依据；避免只测试宽泛问答。</p></div></div>
+          </div>
+          <figure class="figure">
+            <img src="assets/agent-management-center/05-knowledge.png" alt="知识库管理页面">
+            <figcaption>知识库页左侧是知识库列表，右侧查看和维护详情。空状态时点击“创建知识库”开始。</figcaption>
+          </figure>
+        </section>
+
+        <section class="section" id="platform-settings">
+          <div class="section-head">
+            <p class="section-kicker">Platform settings</p>
+            <h2>设置平台总控与项目初始化能力</h2>
+            <p class="section-desc">平台设置影响整个 Dobby，不是单个会话。入口位于左侧皇冠图标，仅管理员应修改。</p>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>职责</th><th>作用</th><th>配置要求</th><th>修改后的影响</th></tr></thead>
+              <tbody>
+                <tr><td><strong>平台总控智能体</strong></td><td>统一承接普通对话、理解意图并组织协同。</td><td>已启用、可编辑、固定对话模型；不能与初始化智能体相同。</td><td>立即影响平台新请求；原总控恢复为业务智能体。</td></tr>
+                <tr><td><strong>项目初始化智能体</strong></td><td>工程配置页统一入口，处理计划、专项协同和草稿；附件解析由平台固定工具预先完成。</td><td>固定模型；分配初始化编排技能、职责内数据库交互和五位专项智能体，不分配旧编排 MCP。</td><td>影响新的项目初始化流程。</td></tr>
+                <tr><td><strong>核验 MCP</strong></td><td>草稿入正式项目数据前执行最终结构与业务核验。</td><td>必须选择一个可用版本。</td><td>保存后新核验使用所选版本。</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <figure class="figure">
+            <img src="assets/agent-management-center/03-platform-settings.png" alt="平台设置中的项目初始化智能体与核验 MCP 版本管理">
+            <figcaption>项目初始化配置：选择初始化智能体，并在“核验 MCP”中上传新版本、选择使用版本、下载或删除指定版本。</figcaption>
+          </figure>
+          <div class="callout warn">
+            <div class="callout-icon">!</div>
+            <div><div class="callout-title">核验 MCP 的版本规则</div><p>上传新版本不会自动切换。上传后应在下拉框选择目标版本并保存；当前正在使用的版本不能直接删除。需要修改规则时，先下载当前版本作为基线，再上传新版本验证。</p></div>
+          </div>
+          <p>首次配置或排查完整流程时，请同时参阅“<a href="#initialization-mcp">项目初始化：MCP、技能和数据库交互如何配合</a>”。版本选择仅代表核验能力配置，不代表整条初始化流水线已完成配置。</p>
+        </section>
+
+        <section class="section" id="audit">
+          <div class="section-head">
+            <p class="section-kicker">Audit</p>
+            <h2>查看平台交互审计</h2>
+            <p class="section-desc">审计页只读，用于定位“谁、在哪个项目、哪个会话、调用了什么”。不会修改用户会话。</p>
+          </div>
+          <div class="steps">
+            <div class="step"><div class="step-index">1</div><div><h3>选择平台用户</h3><p>下拉项显示用户名称和账号，先确定具体使用者。</p></div></div>
+            <div class="step"><div class="step-index">2</div><div><h3>选择项目</h3><p>项目选择框会在用户选定后启用；一名用户可能属于多个项目。</p></div></div>
+            <div class="step"><div class="step-index">3</div><div><h3>选择会话并检查记录</h3><p>查看完整消息、工具调用、时间和状态。审计页不提供编辑或重放。</p></div></div>
+          </div>
+          <figure class="figure">
+            <img src="assets/agent-management-center/06-platform-audit.png" alt="平台交互审计页面">
+            <figcaption>审计范围按“用户 → 项目 → 会话”逐级筛选；右侧展示完整交互记录，始终为只读。</figcaption>
+          </figure>
+        </section>
+
+        <section class="section" id="schedule">
+          <div class="section-head">
+            <p class="section-kicker">Schedule</p>
+            <h2>查看和管理日程</h2>
+            <p class="section-desc">日程页提供日历与列表两种视图，适合查看智能体产生或关联的计划安排。</p>
+          </div>
+          <figure class="figure">
+            <img src="assets/agent-management-center/07-schedule.png" alt="日程日历页面">
+            <figcaption>日历视图适合按日期定位；列表视图适合集中浏览和筛选。使用“今天”和前后切换按钮快速定位。</figcaption>
+          </figure>
+        </section>
+
+        <section class="section" id="troubleshooting">
+          <div class="section-head">
+            <p class="section-kicker">Troubleshooting</p>
+            <h2>常见问题快速排查</h2>
+            <p class="section-desc">根据实际现象按顺序检查，每次只调整一项相关配置，以便确认问题原因。</p>
+          </div>
+          <div class="trouble-grid">
+            <details open>
+              <summary>创建智能体后无法对话</summary>
+              <ul><li>检查凭证是否保存且模型测试成功。</li><li>检查智能体是否启用、是否绑定了可用模型。</li><li>固定模型被删除或停用时，重新选择模型并保存。</li></ul>
+            </details>
+            <details open>
+              <summary>业务端看不到智能体</summary>
+              <ul><li>平台角色应为“业务智能体”。</li><li>同时打开“允许平台运行”和“发布到平台”。</li><li>填写平台展示说明和业务分类后再检查目录。</li></ul>
+            </details>
+            <details open>
+              <summary>MCP 上传成功，但智能体不会调用</summary>
+              <ul><li>确认当前智能体已勾选该 MCP，并点击“保存分配”。</li><li>打开 MCP 详情，确认工具已被正确发现。</li><li>新建会话再测试，避免旧会话仍使用旧配置。</li><li>检查包是否为依赖完整的平台适配包。</li></ul>
+            </details>
+            <details open>
+              <summary>上传 MCP 出现 Failed to fetch</summary>
+              <p>通常是管理中心后端或 AgentScope 服务未启动，或请求地址不可达。确认服务状态后重新上传；该提示不属于包内容校验错误。</p>
+            </details>
+            <details open>
+              <summary>数据库交互列表与其他智能体不同</summary>
+              <p>可分配目录应保持一致，但每个智能体的勾选结果可以不同。目录缺项时，刷新页面并检查平台数据库交互服务；已选数量不同符合按职责实施最小权限分配的规则。</p>
+            </details>
+            <details open>
+              <summary>新增数据库交互无法保存</summary>
+              <ul><li>检查中文名称和英文技术标识是否填写。</li><li>技术标识只能使用小写字母、数字和下划线。</li><li>确认已选择主表白名单和允许操作。</li><li>至少保留一种允许的会话类型。</li><li>关联表别名不能重复，且必须选择返回或筛选字段。</li></ul>
+            </details>
+            <details open>
+              <summary>点击“添加关联表”后提示没有可关联表</summary>
+              <p>主表到目标表之间必须存在数据库真实外键，而且两张表都已加入白名单。仅仅字段名称相同不能建立关联；请让数据库维护人员补充外键或调整数据模型。</p>
+            </details>
+            <details open>
+              <summary>数据库写操作不可用</summary>
+              <ul><li>确认该交互属于“写操作”且已分配给当前智能体。</li><li>确认目标表和字段在白名单中；写操作不能使用关联表同时修改多表。</li><li>检查当前会话是否允许写入以及权限审核结果。</li><li>修改或删除必须提供当前范围内的记录 ID。</li></ul>
+            </details>
+            <details open>
+              <summary>MCP 内部数据库调用返回 401 / 403 / 404</summary>
+              <ul><li><strong>401：</strong>MCP 没有声明 <code>dobby_database_interactions</code>，或没有使用平台注入的专用令牌。</li><li><strong>403：</strong>交互未分配给执行智能体、调用方式不是 workflow，或会话/项目权限不允许。</li><li><strong>404：</strong>技术标识错误、交互已停用，或平台会话无法解析。</li><li>包内不得写入固定令牌、项目 ID 或用户 ID。</li></ul>
+            </details>
+            <details open>
+              <summary>找不到可协同的智能体</summary>
+              <ul><li>被邀请方必须已启用“允许被邀请”。</li><li>当前智能体的协同范围不能为“禁用”。</li><li>选择“指定”时，确认目标智能体已被勾选并保存。</li></ul>
+            </details>
+            <details open>
+              <summary>知识库已经创建，但回答没有引用资料</summary>
+              <ul><li>确认文件解析和索引已完成。</li><li>确认知识库已分配给当前智能体并保存。</li><li>用资料中有明确答案的问题重新测试。</li></ul>
+            </details>
+            <details open>
+              <summary>核验规则更新后仍像旧版本</summary>
+              <ul><li>上传新包后，在平台设置中选择新版本。</li><li>点击“保存初始化配置”。</li><li>重新发起核验；已经完成的历史核验不会自动重跑。</li></ul>
+            </details>
+            <details open>
+              <summary>项目初始化的执行计划出现得很晚</summary>
+              <ul><li>附件解析预处理结束后，主智能体的第一个业务动作应为 <code>TaskCreate</code>。</li><li>检查主智能体是否分配 <code>orchestrate-project-initialization</code> 技能。</li><li>若技能在代码中已更新但平台仍使用旧内容，重新同步初始化团队后新建任务测试。</li></ul>
+            </details>
+            <details open>
+              <summary>邀请专项智能体时命令很长、响应很慢</summary>
+              <p>该现象通常由邀请消息携带附件解析全文引起。邀请参数应只包含草稿 ID、文件 ID 和分块 ID，由专项智能体通过数据库交互分页读取。请检查初始化编排技能和附件分块交互的分配情况。</p>
+            </details>
+            <details open>
+              <summary>项目初始化没有触发核验 MCP</summary>
+              <ul><li>确认平台设置中已选择可用的核验 MCP 版本并保存。</li><li>确认五个实际需要的草稿分区均已提交完成。</li><li>确认主智能体拥有“提交初始化草稿核验”数据库交互，并且最终只提交草稿 ID。</li><li>检查 AgentScope 和工程管理平台服务是否都在运行。</li></ul>
+            </details>
+            <details open>
+              <summary>保存按钮是灰色</summary>
+              <p>该状态通常表示当前没有变更，或必填项未完成。产生有效修改后若按钮仍为灰色，请检查名称、模型、邀请说明和必选的核验版本。</p>
+            </details>
+          </div>
+        </section>
+
+        <section class="section" id="final-checklist">
+          <div class="section-head">
+            <p class="section-kicker">Go live</p>
+            <h2>发布前最后检查</h2>
+          </div>
+          <div class="two-col">
+            <article class="card">
+              <h3>配置检查</h3>
+              <ul class="checklist">
+                <li>凭证和模型测试通过。</li>
+                <li>系统提示词明确职责、输出和禁止事项。</li>
+                <li>只分配完成职责所需的 MCP 和数据库交互。</li>
+                <li>写操作逐项确认，协同范围使用最小集合。</li>
+                <li>知识库文件已完成索引。</li>
+              </ul>
+            </article>
+            <article class="card">
+              <h3>运行检查</h3>
+              <ul class="checklist">
+                <li>至少完成一次真实会话测试。</li>
+                <li>计划、协同和工具调用过程可见。</li>
+                <li>结果可核对，敏感信息未泄露。</li>
+                <li>业务端展示名称和说明清晰。</li>
+                <li>必要时在审计页确认完整调用记录。</li>
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        <footer class="footer">
+          <p><strong>Dobby 智能体管理中心全局操作说明</strong> · 文档版本 1.2 · 2026-08-08</p>
+          <p>界面仍在探索迭代时，以当前系统实际按钮和权限为准。本文截图不包含未脱敏的密钥和业务敏感数据。</p>
+          <p><a href="#top">返回顶部 ↑</a></p>
+        </footer>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

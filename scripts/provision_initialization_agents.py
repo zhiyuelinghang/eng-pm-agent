@@ -377,8 +377,8 @@ def _upsert_agent(
             "scope": "selected" if allowed_agent_ids else "none",
             "allowed_agent_ids": allowed_agent_ids or [],
         },
-        # 初始化已经改为“固定附件解析 + 受控数据库交互 + 专项智能体”链路。
-        # 不继承历史 MCP 分配，避免旧的标准化批次工具重新进入初始化上下文。
+        # 初始化链路只使用固定附件解析、受控数据库交互和专项智能体。
+        # 初始化智能体不分配普通 MCP，最终核验 MCP 由平台设置统一管理。
         "mcp_config": {"allowed_mcp_ids": []},
     }
     if existing:

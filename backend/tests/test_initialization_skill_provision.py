@@ -190,7 +190,7 @@ def test_skill_sync_can_explicitly_replace_repository_managed_skill(
     assert ("POST", "/workspace/skill") in calls
 
 
-def test_provision_clears_legacy_initialization_mcp_assignment(
+def test_provision_keeps_initialization_agents_without_regular_mcp_assignments(
     monkeypatch,
 ) -> None:
     calls: list[dict[str, Any]] = []
@@ -232,7 +232,7 @@ def test_provision_clears_legacy_initialization_mcp_assignment(
                     "platform_config": {"role": "system_internal"},
                     "mcp_config": {
                         "allowed_mcp_ids": [
-                            "project-initialization-orchestrator",
+                            "unrelated-regular-mcp",
                         ],
                     },
                 },
