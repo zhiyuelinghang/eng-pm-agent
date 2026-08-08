@@ -1,5 +1,5 @@
 {
-  "version": 18,
+  "version": 19,
   "policies": [
     {
       "table_name": "project_status_snapshots",
@@ -218,7 +218,7 @@
       "upgrade_existing": true,
       "allowed_operations": ["read", "create", "update"],
       "readable_fields": ["id", "conversation_id", "created_by_user_id", "status", "revision", "payload", "validation_issues", "source_files", "applied_at", "created_at", "updated_at"],
-      "writable_fields": ["status", "payload", "validation_issues", "source_files"],
+      "writable_fields": ["source_files"],
       "filterable_fields": ["id", "conversation_id", "status", "revision"],
       "scope_type": "project",
       "scope_field": "project_id",

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from .models import (
     Project,
     ProjectInitializationDraft,
-    ProjectInitializationDraftSection,
+    ProjectInitializationValidationRun,
     ProjectMember,
     ProjectMemberPosition,
     ProjectPosition,
@@ -38,6 +38,7 @@ class StrictInitializationModel(BaseModel):
 
 
 class ProjectDetailsDraft(StrictInitializationModel):
+    record_id: int | None = Field(default=None, gt=0)
     engineering_type_description: str | None = Field(default=None, max_length=10000)
     contract_start_date: date | None = None
     contract_end_date: date | None = None
@@ -51,6 +52,7 @@ class ProjectDetailsDraft(StrictInitializationModel):
 
 
 class PersonnelDraft(StrictInitializationModel):
+    record_id: int | None = Field(default=None, gt=0)
     serial_no: int = Field(gt=0)
     real_name: str = Field(min_length=1, max_length=100)
     identity_card_no: str = Field(min_length=1, max_length=30)
@@ -60,6 +62,7 @@ class PersonnelDraft(StrictInitializationModel):
 
 
 class WbsDraft(StrictInitializationModel):
+    record_id: int | None = Field(default=None, gt=0)
     wbs_code: str = Field(min_length=1, max_length=128)
     parent_wbs_code: str | None = Field(max_length=128)
     predecessor_wbs_codes: list[str] = Field(default_factory=list, max_length=100)
@@ -89,6 +92,7 @@ class WbsDraft(StrictInitializationModel):
 
 
 class RiskDraftItem(StrictInitializationModel):
+    record_id: int | None = Field(default=None, gt=0)
     serial_no: int = Field(gt=0)
     related_process_name: str = Field(min_length=1, max_length=300)
     risk_part: str = Field(min_length=1, max_length=300)
@@ -100,6 +104,7 @@ class RiskDraftItem(StrictInitializationModel):
 
 
 class QualityRequirementDraft(StrictInitializationModel):
+    record_id: int | None = Field(default=None, gt=0)
     wbs_code: str = Field(min_length=1, max_length=128)
     quality_acceptance_item: str = Field(min_length=1, max_length=20000)
     control_indicator: str = Field(min_length=1, max_length=20000)
@@ -353,7 +358,7 @@ def build_initialization_state(
 
 
 class InitializationApplyError(ValueError):
-    def __init__(self, message: str, issues: list[dict[str, str]] | None = None):
+    def __init__(self, message: str, issues: list[dict[str, Any]] | None = None):
         super().__init__(message)
         self.issues = issues or []
 
@@ -368,31 +373,48 @@ def apply_initialization_draft(
         raise InitializationApplyError("该初始化草稿已经入库")
     if draft.status == "building":
         raise InitializationApplyError("初始化智能体尚未完成草稿整理")
-    payload_data = dict(draft.payload or {})
-    for section_row in db.scalars(
-        select(ProjectInitializationDraftSection)
-        .where(ProjectInitializationDraftSection.draft_id == draft.id)
-        .order_by(ProjectInitializationDraftSection.id),
-    ).all():
-        payload_data[section_row.section] = section_row.payload
-    payload = ProjectInitializationPayload.model_validate(payload_data)
+    latest_validation = db.scalar(
+        select(ProjectInitializationValidationRun)
+        .where(ProjectInitializationValidationRun.draft_id == draft.id)
+        .order_by(ProjectInitializationValidationRun.id.desc()),
+    )
+    if (
+        latest_validation is None
+        or latest_validation.status != "completed"
+        or latest_validation.draft_revision != draft.revision
+    ):
+        raise InitializationApplyError("当前草稿版本尚未完成核验，不能入库")
+    from .initialization_draft_queries import (
+        compose_initialization_draft_payload,
+        latest_initialization_validation_issues,
+        serialize_initialization_validation_issue,
+    )
+
+    payload = compose_initialization_draft_payload(db, draft)
     draft.payload = payload.model_dump(mode="json")
-    deterministic_issues = validate_initialization_integrity(payload)
-    deterministic_keys = {
-        (item["level"], item["path"], item["message"])
-        for item in deterministic_issues
-    }
-    semantic_issues = [
-        item
-        for item in (draft.validation_issues or [])
-        if (
-            item.get("level"),
-            item.get("path"),
-            item.get("message"),
-        )
-        not in deterministic_keys
+    issues = [
+        serialize_initialization_validation_issue(item)
+        for item in latest_initialization_validation_issues(db, draft.id)
     ]
-    issues = [*deterministic_issues, *semantic_issues]
+    seen_issues = {
+        (
+            item["rule_id"],
+            item["target_record_id"],
+            item["field_name"],
+            item["message"],
+        )
+        for item in issues
+    }
+    for item in validate_initialization_integrity(payload):
+        key = (
+            item["rule_id"],
+            item["target_record_id"],
+            item["field_name"],
+            item["message"],
+        )
+        if key not in seen_issues:
+            seen_issues.add(key)
+            issues.append(item)
     errors = [item for item in issues if item["level"] == "error"]
     warnings = [item for item in issues if item["level"] == "warning"]
     if errors:
@@ -443,7 +465,7 @@ def apply_initialization_draft(
         raise InitializationApplyError(
             "项目已经产生业务任务，不能再整体替换初始化数据",
         )
-    for field, value in payload.project.model_dump().items():
+    for field, value in payload.project.model_dump(exclude={"record_id"}).items():
         setattr(project, field, value)
 
     # Confirmed initialization is the source of truth for these five sections.

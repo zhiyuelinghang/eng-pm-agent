@@ -6,7 +6,11 @@ from sqlalchemy.orm import Session
 
 from backend.app.db import Base
 from backend.app.models import (
+    AgentConversation,
     Project,
+    ProjectInitializationDraft,
+    ProjectInitializationDraftRecord,
+    ProjectInitializationDraftSection,
     ProjectMemberPosition,
     QualityMetric,
     RiskSource,
@@ -281,4 +285,118 @@ def test_existing_attachment_texts_receive_pipeline_state(tmp_path) -> None:
     assert row.parse_status == "legacy"
     assert row.parser == "legacy_extractor"
     assert json.loads(row.parse_details)["status"] == "legacy"
+    engine.dispose()
+
+
+def test_existing_initialization_sections_receive_addressable_rows(tmp_path) -> None:
+    database_path = tmp_path / "existing-initialization.db"
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        project = Project(name="既有初始化项目")
+        user = User(
+            username="migration-admin",
+            password_hash="hash",
+            real_name="迁移管理员",
+            identity_card_no="MIGRATION_ADMIN",
+            role="admin",
+        )
+        db.add_all([project, user])
+        db.flush()
+        conversation = AgentConversation(
+            project_id=project.id,
+            user_id=user.id,
+            agent_id="initializer",
+            agent_name="初始化助手",
+            conversation_type="initialization",
+            title="初始化",
+        )
+        db.add(conversation)
+        db.flush()
+        draft = ProjectInitializationDraft(
+            project_id=project.id,
+            conversation_id=conversation.id,
+            created_by_user_id=user.id,
+            status="building",
+            payload={},
+        )
+        db.add(draft)
+        db.flush()
+        db.add(
+            ProjectInitializationDraftSection(
+                draft_id=draft.id,
+                project_id=project.id,
+                conversation_id=conversation.id,
+                section="wbs",
+                writer_agent_id="wbs-specialist",
+                payload=[
+                    {"wbs_code": "1", "name": "总进度"},
+                    {"wbs_code": "1.1", "name": "基础施工"},
+                ],
+                source_files=["总进度计划.xlsx"],
+                extraction_notes=[],
+            ),
+        )
+        db.commit()
+
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "DROP TABLE project_initialization_validation_issues",
+        )
+        connection.exec_driver_sql(
+            "DROP TABLE project_initialization_draft_records",
+        )
+        connection.exec_driver_sql(
+            """
+            CREATE TABLE project_initialization_draft_records (
+                id INTEGER NOT NULL PRIMARY KEY,
+                section_id INTEGER NOT NULL,
+                draft_id INTEGER NOT NULL,
+                project_id INTEGER NOT NULL,
+                conversation_id INTEGER NOT NULL,
+                section VARCHAR(40) NOT NULL,
+                ordinal INTEGER NOT NULL,
+                business_key VARCHAR(300),
+                payload JSON NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+            )
+            """,
+        )
+
+    upgrade_database_schema(engine, Base.metadata)
+    upgrade_database_schema(engine, Base.metadata)
+
+    with Session(engine) as db:
+        records = list(
+            db.scalars(
+                select(ProjectInitializationDraftRecord).order_by(
+                    ProjectInitializationDraftRecord.ordinal,
+                ),
+            ).all(),
+        )
+        assert [record.payload["wbs_code"] for record in records] == [
+            "1",
+            "1.1",
+        ]
+        assert [record.business_key for record in records] == [
+            "1 · 总进度",
+            "1.1 · 基础施工",
+        ]
+        assert [record.section_revision for record in records] == [1, 1]
+        assert [record.active for record in records] == [True, True]
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns(
+            "project_initialization_draft_records",
+        )
+    }
+    assert {"section_revision", "active"} <= columns
+    indexes = {
+        index["name"]
+        for index in inspect(engine).get_indexes(
+            "project_initialization_draft_records",
+        )
+    }
+    assert "ix_project_initialization_draft_records_active" in indexes
     engine.dispose()

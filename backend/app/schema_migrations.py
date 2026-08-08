@@ -411,6 +411,137 @@ def _ensure_attachment_text_pipeline_fields(engine: Engine) -> None:
         )
 
 
+def _ensure_initialization_draft_record_version_fields(engine: Engine) -> None:
+    """Keep addressable draft-row history compatible with older installs."""
+    table_name = "project_initialization_draft_records"
+    inspector = inspect(engine)
+    if table_name not in inspector.get_table_names():
+        return
+    columns = {
+        str(column["name"])
+        for column in inspector.get_columns(table_name)
+    }
+    statements: list[str] = []
+    if "section_revision" not in columns:
+        statements.append(
+            f"ALTER TABLE {table_name} ADD COLUMN "
+            "section_revision INTEGER NOT NULL DEFAULT 1",
+        )
+    if "active" not in columns:
+        boolean_default = "1" if engine.dialect.name == "sqlite" else "TRUE"
+        statements.append(
+            f"ALTER TABLE {table_name} ADD COLUMN "
+            f"active BOOLEAN NOT NULL DEFAULT {boolean_default}",
+        )
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+    refreshed = inspect(engine)
+    index_names = {
+        str(index["name"])
+        for index in refreshed.get_indexes(table_name)
+        if index.get("name")
+    }
+    index_name = "ix_project_initialization_draft_records_active"
+    if index_name not in index_names:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"CREATE INDEX {index_name} "
+                    f"ON {table_name} (active)",
+                ),
+            )
+
+
+def _backfill_initialization_draft_records(engine: Engine) -> None:
+    """Give existing section payload rows stable database identities."""
+    if engine.dialect.name != "sqlite":
+        return
+    raw_connection = engine.raw_connection()
+    cursor = raw_connection.cursor()
+    try:
+        if not (
+            _table_exists(cursor, "project_initialization_draft_sections")
+            and _table_exists(cursor, "project_initialization_draft_records")
+        ):
+            return
+        rows = cursor.execute(
+            "SELECT id, draft_id, project_id, conversation_id, section, "
+            "revision, payload "
+            "FROM project_initialization_draft_sections ORDER BY id",
+        ).fetchall()
+        key_fields = {
+            "personnel": ("serial_no", "real_name"),
+            "wbs": ("wbs_code", "name"),
+            "risks": ("serial_no", "risk_part"),
+            "quality_requirements": (
+                "wbs_code",
+                "quality_acceptance_item",
+            ),
+        }
+        for section_row in rows:
+            section_id = int(section_row[0])
+            exists = cursor.execute(
+                "SELECT 1 FROM project_initialization_draft_records "
+                "WHERE section_id = ? LIMIT 1",
+                (section_id,),
+            ).fetchone()
+            if exists is not None:
+                continue
+            raw_payload = section_row[6]
+            try:
+                payload = (
+                    json.loads(raw_payload)
+                    if isinstance(raw_payload, str)
+                    else raw_payload
+                )
+            except (TypeError, json.JSONDecodeError):
+                continue
+            section = str(section_row[4])
+            items = payload if isinstance(payload, list) else [payload]
+            for ordinal, raw_item in enumerate(items):
+                if not isinstance(raw_item, dict):
+                    continue
+                item = dict(raw_item)
+                item.pop("record_id", None)
+                parts = [
+                    str(item.get(name, "")).strip()
+                    for name in key_fields.get(section, ())
+                ]
+                business_key = " · ".join(part for part in parts if part)[:300]
+                cursor.execute(
+                    """
+                    INSERT INTO project_initialization_draft_records (
+                        section_id, draft_id, project_id, conversation_id,
+                        section, section_revision, active, ordinal,
+                        business_key, payload,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP)
+                    """,
+                    (
+                        section_id,
+                        int(section_row[1]),
+                        int(section_row[2]),
+                        int(section_row[3]),
+                        section,
+                        int(section_row[5] or 1),
+                        ordinal,
+                        business_key or None,
+                        json.dumps(item, ensure_ascii=False),
+                    ),
+                )
+        raw_connection.commit()
+    except Exception:
+        raw_connection.rollback()
+        raise
+    finally:
+        cursor.close()
+        raw_connection.close()
+
+
 def upgrade_database_schema(engine: Engine, metadata: MetaData) -> None:
     """Create the current schema and bridge supported legacy SQLite layouts."""
 
@@ -419,6 +550,7 @@ def upgrade_database_schema(engine: Engine, metadata: MetaData) -> None:
         _ensure_database_interaction_join_rules(engine)
         _ensure_database_interaction_runtime_rules(engine)
         _ensure_attachment_text_pipeline_fields(engine)
+        _ensure_initialization_draft_record_version_fields(engine)
         return
 
     legacy_layout = _prepare_legacy_sqlite_schema(engine)
@@ -426,5 +558,7 @@ def upgrade_database_schema(engine: Engine, metadata: MetaData) -> None:
     _ensure_database_interaction_join_rules(engine)
     _ensure_database_interaction_runtime_rules(engine)
     _ensure_attachment_text_pipeline_fields(engine)
+    _ensure_initialization_draft_record_version_fields(engine)
+    _backfill_initialization_draft_records(engine)
     if legacy_layout:
         _copy_legacy_business_data(engine)

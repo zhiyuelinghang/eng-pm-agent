@@ -152,6 +152,9 @@
                   已完成 {{ materialAgentDraft.workflow.completed_sections.length }}/{{ materialAgentDraft.workflow.expected_sections.length }} 个专项分区
                   <template v-if="materialAgentDraft.workflow.pending_sections.length">，等待：{{ initializationSectionLabels(materialAgentDraft.workflow.pending_sections) }}</template>
                 </span>
+                <span v-else-if="materialAgentDraft.validation?.status === 'failed'">核验未完成，请重新执行规则核验</span>
+                <span v-else-if="materialAgentDraft.status === 'collecting'">专业智能体仍在整理草稿</span>
+                <span v-else-if="materialAgentDraft.status === 'reviewing'">平台正在运行规则核验</span>
                 <span v-else>{{ materialAgentDraft.validation_issues.length ? initializationDraftIssueSummary : '结构校验已通过，确认前不会写入项目' }}</span>
                 <small v-if="materialAgentDraft.validation?.status === 'completed'">
                   核验规则 {{ materialAgentDraft.validation.package_version ? `v${materialAgentDraft.validation.package_version}` : '' }}
@@ -577,60 +580,108 @@
           </header>
 
           <div class="initialization-review-body">
+            <aside class="initialization-review-navigation" aria-label="需要核验的内容">
+              <header>
+                <strong>需要核验</strong>
+                <span>{{ materialAgentDraft.validation_issues.length }} 项</span>
+              </header>
+              <p>选择分类，快速定位到对应数据。</p>
+              <nav v-if="initializationReviewIssueTabs.length">
+                <button
+                  v-for="tab in initializationReviewIssueTabs"
+                  :key="tab.key"
+                  type="button"
+                  :class="{ active: activeInitializationReviewSection === tab.key, error: tab.errorCount > 0 }"
+                  :aria-current="activeInitializationReviewSection === tab.key ? 'true' : undefined"
+                  @click="focusInitializationReviewSection(tab.key)"
+                >
+                  <span>{{ tab.label }}</span>
+                  <em>{{ tab.count }}</em>
+                </button>
+              </nav>
+              <div v-else class="initialization-review-navigation-empty">当前没有需要核验的内容</div>
+            </aside>
+            <div ref="initializationReviewScrollRef" class="initialization-review-scroll">
+              <div class="initialization-review-content">
             <p v-if="materialAgentDraft.validation?.status === 'failed'" class="material-agent-error">
               最近一次规则核验失败：{{ materialAgentDraft.validation.error || '核验服务暂时不可用' }}
             </p>
-            <section v-if="draftProjectFields.length" class="initialization-review-section initialization-project-section">
+            <section v-if="draftProjectFields.length || initializationSectionIssues('project').length || initializationRecordIssues(materialAgentDraft.payload.project.record_id).length" class="initialization-review-section initialization-project-section" data-initialization-section="project">
               <header class="initialization-project-head">
-                <div><h3>工程基本信息</h3><p>核对从项目资料中识别的合同信息与参建单位。</p></div>
-                <span>{{ draftProjectFields.length }} 项已识别</span>
+                <div>
+                  <h3>工程基本信息</h3>
+                  <p>核对从项目资料中识别的合同信息与参建单位。</p>
+                </div>
+                <span>{{ draftProjectRecognizedCount }} 项已识别</span>
               </header>
-              <article v-if="draftProjectDescription" class="initialization-project-description">
-                <span>{{ draftProjectDescription.label }}</span>
-                <p>{{ draftProjectDescription.value }}</p>
-              </article>
-              <div v-if="draftProjectContractFields.length" class="initialization-project-contract-grid">
-                <article v-for="item in draftProjectContractFields" :key="item.key">
-                  <span>{{ item.label }}</span>
-                  <strong>{{ item.value }}</strong>
-                </article>
-              </div>
-              <div v-if="draftProjectUnitFields.length" class="initialization-project-units">
-                <h4>参建单位</h4>
-                <dl>
-                  <div
-                    v-for="item in draftProjectUnitFields"
-                    :key="item.key"
-                    :class="{ primary: item.key === 'construction_unit_name' }"
-                  >
-                    <dt>{{ item.label }}</dt>
-                    <dd>{{ item.value }}</dd>
+              <div class="initialization-project-record">
+                <aside class="initialization-record-validation">
+                  <strong>核验</strong>
+                  <InitializationIssueBadges :issues="initializationSectionIssues('project')" @select="openInitializationIssue" />
+                  <InitializationIssueBadges :issues="initializationAllRecordIssues(materialAgentDraft.payload.project.record_id)" @select="openInitializationIssue" />
+                  <span v-if="!initializationSectionIssues('project').length && !initializationAllRecordIssues(materialAgentDraft.payload.project.record_id).length">—</span>
+                </aside>
+                <div class="initialization-project-record-content">
+                  <article v-if="draftProjectDescription" class="initialization-project-description" :class="{ 'has-validation-issue': draftProjectDescription.issues.length, missing: draftProjectDescription.missing }">
+                    <span>{{ draftProjectDescription.label }}</span>
+                    <p>{{ draftProjectDescription.value }}</p>
+                  </article>
+                  <div v-if="draftProjectContractFields.length" class="initialization-project-contract-grid">
+                    <article v-for="item in draftProjectContractFields" :key="item.key" :class="{ 'has-validation-issue': item.issues.length, missing: item.missing }">
+                      <span>{{ item.label }}</span>
+                      <strong>{{ item.value }}</strong>
+                    </article>
                   </div>
-                </dl>
+                  <div v-if="draftProjectUnitFields.length" class="initialization-project-units">
+                    <h4>参建单位</h4>
+                    <dl>
+                      <div
+                        v-for="item in draftProjectUnitFields"
+                        :key="item.key"
+                        :class="{ primary: item.key === 'construction_unit_name', 'has-validation-issue': item.issues.length, missing: item.missing }"
+                      >
+                        <dt>{{ item.label }}</dt>
+                        <dd>{{ item.value }}</dd>
+                      </div>
+                    </dl>
+                  </div>
+                </div>
               </div>
             </section>
 
-            <section v-if="materialAgentDraft.payload.personnel.length" class="initialization-review-data-section">
+            <section v-if="materialAgentDraft.payload.personnel.length || initializationSectionIssues('personnel').length" class="initialization-review-data-section" data-initialization-section="personnel">
               <button type="button" class="initialization-review-data-toggle" :class="{ expanded: initializationReviewExpanded.personnel }" :aria-expanded="initializationReviewExpanded.personnel" @click="initializationReviewExpanded.personnel = !initializationReviewExpanded.personnel">
                 <n-icon :size="16" aria-hidden="true"><ChevronDown /></n-icon>
                 <span><strong>人员</strong><small>身份、岗位、证书与登录账号</small></span>
                 <em>{{ materialAgentDraft.summary.personnel }} 人 · {{ materialAgentDraft.summary.position_assignments }} 条任职</em>
               </button>
+              <div v-if="initializationSectionIssues('personnel').length" class="initialization-section-issues">
+                <strong>分区核验</strong>
+                <InitializationIssueBadges :issues="initializationSectionIssues('personnel')" @select="openInitializationIssue" />
+              </div>
               <div v-show="initializationReviewExpanded.personnel" class="initialization-personnel-list">
+                <p v-if="!initializationPersonnelReviewRows.length" class="initialization-empty-section">当前草稿没有人员记录。</p>
                 <article
                   v-for="item in initializationPersonnelReviewRows"
-                  :key="`${item.identity_card_no}-${item.serial_no}`"
+                  :key="item.key"
                   class="initialization-personnel-card"
+                  :class="{ 'has-validation-issue': item.issues.length }"
                 >
+                  <aside class="initialization-record-validation">
+                    <strong>核验</strong>
+                    <InitializationIssueBadges :issues="item.issues" @select="openInitializationIssue" />
+                    <span v-if="!item.issues.length">—</span>
+                  </aside>
                   <header class="initialization-personnel-profile">
-                    <span>{{ String(item.serial_no).padStart(2, '0') }}</span>
+                    <div class="initialization-personnel-sequence">
+                      <span>{{ String(item.serial_no).padStart(2, '0') }}</span>
+                    </div>
                     <div>
                       <h4>{{ item.real_name }}</h4>
-                      <p>{{ item.position_name }}</p>
+                      <p>{{ item.positions.map(position => position.position_name).join('、') }}</p>
                     </div>
                     <em v-if="item.credential">将新建账号</em>
                     <em v-else-if="item.existingAccount" class="existing">已匹配账号</em>
-                    <em v-else-if="item.sharedCredential" class="shared">共用账号</em>
                   </header>
                   <dl class="initialization-personnel-facts">
                     <div>
@@ -638,12 +689,18 @@
                       <dd>{{ item.identity_card_no }}</dd>
                     </div>
                     <div>
-                      <dt>证书编号</dt>
-                      <dd>{{ item.certificate_no || '' }}</dd>
+                      <dt>任职数量</dt>
+                      <dd>{{ item.positions.length }} 个岗位</dd>
                     </div>
-                    <div class="responsibility">
-                      <dt>岗位职责</dt>
-                      <dd>{{ item.responsibility_description || '' }}</dd>
+                    <div class="responsibility initialization-personnel-assignments">
+                      <dt>岗位与职责</dt>
+                      <dd>
+                        <article v-for="position in item.positions" :key="position.record_id">
+                          <strong>{{ position.position_name }}</strong>
+                          <span>{{ position.responsibility_description || '未填写岗位职责' }}</span>
+                          <small v-if="position.certificate_no">证书：{{ position.certificate_no }}</small>
+                        </article>
+                      </dd>
                     </div>
                   </dl>
                   <div v-if="item.credential" class="initialization-personnel-credential">
@@ -667,12 +724,7 @@
                   <div v-else-if="item.existingAccount" class="initialization-personnel-account-ready existing">
                     <small>已关联现有平台账号</small>
                     <strong>{{ item.existingAccount.username }}</strong>
-                    <span>身份证号匹配成功。确认后只把该账号加入当前项目，不会重建账号或修改密码。</span>
-                  </div>
-                  <div v-else-if="item.sharedCredential" class="initialization-personnel-account-ready shared">
-                    <small>同一人员兼任岗位</small>
-                    <strong>{{ item.sharedCredential.username }}</strong>
-                    <span>该岗位将与同一身份证号的其他岗位共用上方新账号，不会重复创建用户。</span>
+                    <span>身份证号匹配成功。确认后所有岗位均关联该账号，不会重建账号或修改密码。</span>
                   </div>
                   <div v-else class="initialization-personnel-account-ready">
                     <strong>账号状态待确认</strong>
@@ -682,37 +734,36 @@
               </div>
             </section>
 
-            <section v-if="materialAgentDraft.payload.wbs.length" class="initialization-review-data-section">
+            <section v-if="materialAgentDraft.payload.wbs.length || initializationSectionIssues('wbs').length" class="initialization-review-data-section" data-initialization-section="wbs">
               <button type="button" class="initialization-review-data-toggle" :class="{ expanded: initializationReviewExpanded.wbs }" :aria-expanded="initializationReviewExpanded.wbs" @click="initializationReviewExpanded.wbs = !initializationReviewExpanded.wbs">
                 <n-icon :size="16" aria-hidden="true"><ChevronDown /></n-icon>
                 <span><strong>WBS</strong><small>工序计划、执行状态与层级关系</small></span>
                 <em>{{ materialAgentDraft.payload.wbs.length }} 项</em>
               </button>
+              <div v-if="initializationSectionIssues('wbs').length" class="initialization-section-issues">
+                <strong>分区核验</strong>
+                <InitializationIssueBadges :issues="initializationSectionIssues('wbs')" @select="openInitializationIssue" />
+              </div>
               <div v-show="initializationReviewExpanded.wbs" class="initialization-wbs-content">
                 <div class="initialization-wbs-toolbar">
                   <div>
                     <strong>树形工序结构</strong>
                     <span>当前显示 {{ visibleInitializationWbsRows.length }}/{{ materialAgentDraft.payload.wbs.length }} 项</span>
-                    <em v-if="initializationWbsSequenceWarningCount" class="sequence-warning">
-                      <n-icon :size="15" aria-hidden="true"><AlertTriangle /></n-icon>
-                      {{ initializationWbsSequenceWarningCount }} 项时间线异常
-                    </em>
-                    <em v-if="initializationWbsDependencyWarningCount">
-                      <n-icon :size="15" aria-hidden="true"><AlertTriangle /></n-icon>
-                      {{ initializationWbsDependencyWarningCount }} 项依赖日期需核对
-                    </em>
                   </div>
                   <div>
                     <button type="button" @click="expandAllInitializationWbs">全部展开</button>
                     <button type="button" @click="collapseAllInitializationWbs">全部收起</button>
                   </div>
                 </div>
+                <p v-if="!visibleInitializationWbsRows.length" class="initialization-empty-section">当前草稿没有 WBS 记录。</p>
                 <div class="initialization-wbs-table-wrap">
                   <table class="initialization-wbs-table">
                     <thead>
                       <tr>
+                        <th class="initialization-validation-column">核验</th>
                         <th>WBS 编码</th>
                         <th>工序名称</th>
+                        <th>层级</th>
                         <th>计划开始</th>
                         <th>计划完成</th>
                         <th>进度</th>
@@ -725,14 +776,18 @@
                     <tbody>
                       <tr
                         v-for="row in visibleInitializationWbsRows"
-                        :key="row.item.wbs_code"
+                        :key="row.item.record_id"
                         :class="{
                           'is-wbs-group': row.hasChildren,
-                          'has-sequence-warning': row.sequenceWarnings.length,
-                          'has-dependency-warning': row.dependencyWarnings.length,
+                          'has-validation-issue': initializationHasRecordIssues(row.item.record_id),
                         }"
-                        :title="[...row.sequenceWarnings, ...row.dependencyWarnings].join('；')"
                       >
+                        <td class="initialization-validation-cell">
+                          <div class="initialization-validation-stack">
+                            <InitializationIssueBadges :issues="initializationAllRecordIssues(row.item.record_id)" @select="openInitializationIssue" />
+                            <span v-if="!initializationAllRecordIssues(row.item.record_id).length">—</span>
+                          </div>
+                        </td>
                         <td><strong>{{ row.item.wbs_code }}</strong></td>
                         <td class="initialization-wbs-name">
                           <div
@@ -755,10 +810,10 @@
                             <span class="initialization-wbs-node-copy">
                               <strong>{{ row.item.name }}</strong>
                               <small v-if="row.item.item_type">{{ displayWbsItemType(row.item.item_type) }}</small>
-                              <em v-if="row.sequenceWarnings.length">时间线异常</em>
                             </span>
                           </div>
                         </td>
+                        <td>{{ row.item.level || '—' }}</td>
                         <td>{{ formatInitializationDate(row.item.planned_start_at) }}</td>
                         <td>{{ formatInitializationDate(row.item.planned_finish_at) }}</td>
                         <td>{{ formatInitializationProgress(row.item.progress_percent) }}</td>
@@ -766,7 +821,6 @@
                         <td>{{ displayWbsPriorityText(row.item.priority_text, '') || '—' }}</td>
                         <td class="initialization-wbs-dependencies">
                           <span v-for="code in row.item.predecessor_wbs_codes || []" :key="code">{{ code }}</span>
-                          <em v-if="row.dependencyWarnings.length">需核对</em>
                         </td>
                         <td>{{ row.item.parent_wbs_code || '' }}</td>
                       </tr>
@@ -776,59 +830,77 @@
               </div>
             </section>
 
-            <section v-if="materialAgentDraft.payload.risks.length" class="initialization-review-data-section">
+            <section v-if="materialAgentDraft.payload.risks.length || initializationSectionIssues('risks').length" class="initialization-review-data-section" data-initialization-section="risks">
               <button type="button" class="initialization-review-data-toggle" :class="{ expanded: initializationReviewExpanded.risks }" :aria-expanded="initializationReviewExpanded.risks" @click="initializationReviewExpanded.risks = !initializationReviewExpanded.risks">
                 <n-icon :size="16" aria-hidden="true"><ChevronDown /></n-icon>
                 <span><strong>风险源</strong><small>风险部位、评价条件与风险窗口</small></span>
                 <em>{{ materialAgentDraft.payload.risks.length }} 项</em>
               </button>
+              <div v-if="initializationSectionIssues('risks').length" class="initialization-section-issues">
+                <strong>分区核验</strong>
+                <InitializationIssueBadges :issues="initializationSectionIssues('risks')" @select="openInitializationIssue" />
+              </div>
               <div v-show="initializationReviewExpanded.risks" class="initialization-risk-list">
-                <article v-for="item in materialAgentDraft.payload.risks" :key="`${item.serial_no}-${item.risk_part}`" class="initialization-risk-card">
-                  <header class="initialization-risk-head">
-                    <div>
-                      <span>序号 {{ item.serial_no }}</span>
-                      <h4>{{ item.risk_part }}</h4>
+                <p v-if="!materialAgentDraft.payload.risks.length" class="initialization-empty-section">当前草稿没有风险源记录。</p>
+                <article v-for="item in materialAgentDraft.payload.risks" :key="item.record_id" class="initialization-risk-card" :class="{ 'has-validation-issue': initializationHasRecordIssues(item.record_id) }">
+                  <aside class="initialization-record-validation">
+                    <strong>核验</strong>
+                    <InitializationIssueBadges :issues="initializationAllRecordIssues(item.record_id)" @select="openInitializationIssue" />
+                    <span v-if="!initializationAllRecordIssues(item.record_id).length">—</span>
+                  </aside>
+                  <div class="initialization-risk-card-content">
+                    <header class="initialization-risk-head">
+                      <div>
+                        <span>序号 {{ item.serial_no }}</span>
+                        <h4>{{ item.risk_part }}</h4>
+                      </div>
+                      <strong>{{ item.risk_level }}</strong>
+                    </header>
+                    <dl class="initialization-risk-facts">
+                      <div>
+                        <dt>相关工序</dt>
+                        <dd>{{ item.related_process_name }}</dd>
+                      </div>
+                      <div v-if="item.risk_window_start_date || item.risk_window_end_date">
+                        <dt>风险窗口</dt>
+                        <dd class="initialization-risk-window">
+                          <time v-if="item.risk_window_start_date" :datetime="item.risk_window_start_date">{{ formatInitializationDate(item.risk_window_start_date) }}</time>
+                          <span v-if="item.risk_window_start_date && item.risk_window_end_date">至</span>
+                          <time v-if="item.risk_window_end_date" :datetime="item.risk_window_end_date">{{ formatInitializationDate(item.risk_window_end_date) }}</time>
+                        </dd>
+                      </div>
+                    </dl>
+                    <div class="initialization-risk-details">
+                      <section>
+                        <h5>风险评价条件</h5>
+                        <p>{{ item.evaluation_condition }}</p>
+                      </section>
+                      <section v-if="item.summary || initializationFieldIssues(item.record_id, 'summary').length">
+                        <h5>风险情况简述</h5>
+                        <p>{{ item.summary }}</p>
+                      </section>
                     </div>
-                    <strong>{{ item.risk_level }}</strong>
-                  </header>
-                  <dl class="initialization-risk-facts">
-                    <div>
-                      <dt>相关工序</dt>
-                      <dd>{{ item.related_process_name }}</dd>
-                    </div>
-                    <div v-if="item.risk_window_start_date || item.risk_window_end_date">
-                      <dt>风险窗口</dt>
-                      <dd class="initialization-risk-window">
-                        <time v-if="item.risk_window_start_date" :datetime="item.risk_window_start_date">{{ formatInitializationDate(item.risk_window_start_date) }}</time>
-                        <span v-if="item.risk_window_start_date && item.risk_window_end_date">至</span>
-                        <time v-if="item.risk_window_end_date" :datetime="item.risk_window_end_date">{{ formatInitializationDate(item.risk_window_end_date) }}</time>
-                      </dd>
-                    </div>
-                  </dl>
-                  <div class="initialization-risk-details">
-                    <section>
-                      <h5>风险评价条件</h5>
-                      <p>{{ item.evaluation_condition }}</p>
-                    </section>
-                    <section v-if="item.summary">
-                      <h5>风险情况简述</h5>
-                      <p>{{ item.summary }}</p>
-                    </section>
                   </div>
                 </article>
               </div>
             </section>
 
-            <section v-if="materialAgentDraft.payload.quality_requirements.length" class="initialization-review-data-section">
+            <section v-if="materialAgentDraft.payload.quality_requirements.length || initializationSectionIssues('quality_requirements').length" class="initialization-review-data-section" data-initialization-section="quality_requirements">
               <button type="button" class="initialization-review-data-toggle" :class="{ expanded: initializationReviewExpanded.quality }" :aria-expanded="initializationReviewExpanded.quality" @click="initializationReviewExpanded.quality = !initializationReviewExpanded.quality">
                 <n-icon :size="16" aria-hidden="true"><ChevronDown /></n-icon>
                 <span><strong>质量指标</strong><small>按 WBS 编码关联质量要求</small></span>
                 <em>{{ materialAgentDraft.payload.quality_requirements.length }} 项</em>
               </button>
+              <div v-if="initializationSectionIssues('quality_requirements').length" class="initialization-section-issues">
+                <strong>分区核验</strong>
+                <InitializationIssueBadges :issues="initializationSectionIssues('quality_requirements')" @select="openInitializationIssue" />
+              </div>
               <div v-show="initializationReviewExpanded.quality" class="initialization-quality-table-wrap">
+                <p v-if="!materialAgentDraft.payload.quality_requirements.length" class="initialization-empty-section">当前草稿没有质量指标记录。</p>
                 <table class="initialization-quality-table">
                   <thead>
                     <tr>
+                      <th class="initialization-validation-column">核验</th>
                       <th>WBS 编码</th>
                       <th>质量验收项目</th>
                       <th>控制指标</th>
@@ -838,9 +910,16 @@
                   </thead>
                   <tbody>
                     <tr
-                      v-for="(item, index) in materialAgentDraft.payload.quality_requirements"
-                      :key="`${item.wbs_code}-${index}`"
+                      v-for="item in materialAgentDraft.payload.quality_requirements"
+                      :key="item.record_id"
+                      :class="{ 'has-validation-issue': initializationHasRecordIssues(item.record_id) }"
                     >
+                      <td class="initialization-validation-cell">
+                        <div class="initialization-validation-stack">
+                          <InitializationIssueBadges :issues="initializationAllRecordIssues(item.record_id)" @select="openInitializationIssue" />
+                          <span v-if="!initializationAllRecordIssues(item.record_id).length">—</span>
+                        </div>
+                      </td>
                       <td><code>{{ item.wbs_code }}</code></td>
                       <td><strong>{{ item.quality_acceptance_item }}</strong></td>
                       <td>{{ item.control_indicator || '' }}</td>
@@ -851,61 +930,8 @@
                 </table>
               </div>
             </section>
-
-            <section v-if="materialAgentDraft.validation_issues.length" class="initialization-review-section draft-issues">
-              <header class="draft-issues-heading">
-                <div>
-                  <h3>需要你确认的内容</h3>
-                  <p>已按业务内容整理。必须修正的问题会阻止入库，其余提醒可核对后继续。</p>
-                </div>
-                <span>{{ materialAgentDraft.validation_issues.length }} 项</span>
-              </header>
-              <div class="draft-issues-summary" aria-label="校验问题统计">
-                <span v-if="initializationDraftErrorCount" class="error"><strong>{{ initializationDraftErrorCount }}</strong> 项必须修正</span>
-                <span v-if="initializationDraftWarningCount" class="warning"><strong>{{ initializationDraftWarningCount }}</strong> 项需要核对</span>
               </div>
-              <div class="draft-issue-groups">
-                <article
-                  v-for="group in initializationDraftIssueGroups"
-                  :key="group.key"
-                  class="draft-issue-group"
-                  :class="group.level"
-                >
-                  <button
-                    type="button"
-                    class="draft-issue-group-toggle"
-                    :aria-expanded="Boolean(initializationIssueGroupsExpanded[group.key])"
-                    @click="initializationIssueGroupsExpanded[group.key] = !initializationIssueGroupsExpanded[group.key]"
-                  >
-                    <span class="draft-issue-group-icon" aria-hidden="true"><n-icon :size="17"><AlertTriangle /></n-icon></span>
-                    <span class="draft-issue-group-copy">
-                      <strong>{{ group.label }}</strong>
-                      <small>{{ group.description }}</small>
-                    </span>
-                    <span class="draft-issue-group-count">{{ group.items.length }} 项</span>
-                    <n-icon class="draft-issue-group-chevron" :size="16" aria-hidden="true"><ChevronDown /></n-icon>
-                  </button>
-                  <ul v-show="initializationIssueGroupsExpanded[group.key]">
-                    <li v-for="(issue, index) in group.items" :key="`${issue.path}-${index}`" :class="issue.level">
-                      <header>
-                        <div>
-                          <strong>{{ issue.title }}</strong>
-                          <span v-if="issue.reference">{{ issue.reference }}</span>
-                        </div>
-                        <em>{{ issue.level === 'error' ? '必须修正' : '需要核对' }}</em>
-                      </header>
-                      <p>{{ issue.description }}</p>
-                      <div class="draft-issue-guidance">
-                        <strong>怎么处理</strong>
-                        <span>{{ issue.guidance }}</span>
-                      </div>
-                    </li>
-                  </ul>
-                </article>
-              </div>
-              <label v-if="draftHasWarnings && !draftHasErrors" class="initialization-partial-confirm"><input v-model="initializationDraftAllowPartial" type="checkbox">我已核对待补充项，确认先按当前草稿完成部分初始化</label>
-            </section>
-
+            </div>
           </div>
 
           <footer class="initialization-review-actions">
@@ -914,6 +940,7 @@
             <span v-else-if="materialAgentDraft.status === 'collecting'">专业智能体仍在整理草稿，全部相关分区完成后将自动进入统一核验。</span>
             <span v-else-if="materialAgentDraft.status === 'reviewing'">平台正在运行版本化核验规则，完成后才可确认入库。</span>
             <span v-else>确认后将以该草稿整体写入项目基础数据。</span>
+            <label v-if="draftHasWarnings && !draftHasErrors" class="initialization-partial-confirm"><input v-model="initializationDraftAllowPartial" type="checkbox">我已逐项核对问题标签，确认按当前草稿入库</label>
             <button
               v-if="materialAgentDraft.status !== 'applied' && materialAgentDraft.status !== 'rejected' && isPlatformAdmin"
               type="button"
@@ -925,6 +952,38 @@
             <button v-if="materialAgentDraft.status !== 'applied' && isPlatformAdmin" type="button" class="primary" :disabled="!canApplyInitializationDraft" @click="applyInitializationDraft">{{ initializationDraftApplying ? '正在入库…' : '确认并写入项目' }}</button>
           </footer>
         </section>
+        <div v-if="selectedInitializationIssues.length" class="initialization-issue-detail-backdrop" @click.self="closeInitializationIssue">
+          <section class="initialization-issue-detail" role="dialog" aria-modal="true" aria-labelledby="initialization-issue-detail-title">
+            <header>
+              <div>
+                <h3 id="initialization-issue-detail-title">核验说明</h3>
+                <p>共 {{ selectedInitializationIssues.length }} 项问题，请逐项核对。</p>
+              </div>
+              <button type="button" aria-label="关闭问题详情" @click="closeInitializationIssue"><n-icon :size="17"><X /></n-icon></button>
+            </header>
+            <div class="initialization-issue-detail-body">
+              <article v-for="(issue, index) in selectedInitializationIssues" :key="issue.id" class="initialization-issue-detail-item">
+                <header>
+                  <span>{{ index + 1 }}</span>
+                  <strong>{{ issue.title }}</strong>
+                </header>
+                <div>
+                  <section>
+                    <h4>问题</h4>
+                    <p>{{ issue.message }}</p>
+                  </section>
+                  <section>
+                    <h4>处理建议</h4>
+                    <p>{{ issue.suggestion || '请结合原始资料核对后处理。' }}</p>
+                  </section>
+                </div>
+              </article>
+            </div>
+            <footer>
+              <button type="button" class="modal-secondary" @click="closeInitializationIssue">关闭</button>
+            </footer>
+          </section>
+        </div>
       </div>
     </div>
   </div>
@@ -935,7 +994,7 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref, shallowRef, watch }
 import { useRoute, useRouter } from 'vue-router'
 import { NIcon, useMessage } from 'naive-ui'
 import dayjs from 'dayjs'
-import { AlertTriangle, ArrowsLeftRight, ChevronDown, ChevronUp, Link, ListDetails, MessageCircle, Paperclip, Pencil, Plus, Search, Shield, ShieldLock, Users, X } from '@vicons/tabler'
+import { ArrowsLeftRight, ChevronDown, ChevronUp, Link, ListDetails, MessageCircle, Paperclip, Pencil, Plus, Search, Shield, ShieldLock, Users, X } from '@vicons/tabler'
 import api, { type ApiEnvelope } from '@/api/client'
 import {
   streamAgentConversationConfirmation,
@@ -943,6 +1002,7 @@ import {
 } from '@/api/agentStream'
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
 import AgentRuntimeDock from '@/components/agent/AgentRuntimeDock.vue'
+import InitializationIssueBadges from '@/components/initialization/InitializationIssueBadges.vue'
 import { useAppStore, type ProjectConfigScope } from '@/stores/app'
 import type { DirConfig, Member, MemberPosition, PlatformFieldMapping, QualityMetric, RemindRule, RiskLevel, RiskSource, WbsItem } from '@/types'
 import {
@@ -990,27 +1050,22 @@ type ApiInitializationFile = {
   file_size: number
 }
 type InitializationDraftIssue = {
-  rule_id?: string
+  id: number
+  rule_id: string
   level: 'error' | 'warning'
-  path: string
-  message: string
-}
-type InitializationDraftIssueGroupKey = 'project' | 'personnel' | 'wbs_content' | 'wbs_timeline' | 'wbs_structure' | 'risks' | 'quality' | 'other'
-type InitializationDraftIssuePresentation = InitializationDraftIssue & {
-  category: InitializationDraftIssueGroupKey
-  title: string
-  description: string
-  guidance: string
-  reference?: string
-}
-type InitializationDraftIssueGroup = {
-  key: InitializationDraftIssueGroupKey
+  section: 'project' | 'personnel' | 'wbs' | 'risks' | 'quality_requirements'
+  target_record_id: number | null
+  field_name: string | null
   label: string
-  description: string
-  level: 'error' | 'warning'
-  items: InitializationDraftIssuePresentation[]
+  title: string
+  message: string
+  suggestion?: string | null
+  related_record_ids: number[]
+  details: Record<string, unknown>
 }
+type InitializationReviewSectionKey = InitializationDraftIssue['section']
 type InitializationDraftPersonnel = {
+  record_id: number
   serial_no: number
   real_name: string
   identity_card_no: string
@@ -1019,6 +1074,7 @@ type InitializationDraftPersonnel = {
   responsibility_description: string
 }
 type InitializationDraftWbs = {
+  record_id: number
   wbs_code: string
   parent_wbs_code?: string | null
   predecessor_wbs_codes?: string[]
@@ -1037,10 +1093,9 @@ type InitializationWbsTreeRow = {
   depth: number
   ancestorCodes: string[]
   hasChildren: boolean
-  sequenceWarnings: string[]
-  dependencyWarnings: string[]
 }
 type InitializationDraftRisk = {
+  record_id: number
   serial_no: number
   related_process_name: string
   risk_part: string
@@ -1051,6 +1106,7 @@ type InitializationDraftRisk = {
   summary?: string | null
 }
 type InitializationDraftQuality = {
+  record_id: number
   wbs_code: string
   quality_acceptance_item: string
   control_indicator: string
@@ -1064,7 +1120,7 @@ type ApiInitializationDraft = {
   status: 'collecting' | 'reviewing' | 'invalid' | 'ready' | 'applied' | 'rejected'
   revision: number
   payload: {
-    project: Record<string, string | number | null>
+    project: Record<string, string | number | null> & { record_id: number | null }
     personnel: InitializationDraftPersonnel[]
     wbs: InitializationDraftWbs[]
     risks: InitializationDraftRisk[]
@@ -1074,6 +1130,7 @@ type ApiInitializationDraft = {
   validation?: {
     id: number
     status: 'running' | 'completed' | 'failed'
+    draft_revision: number
     result_status?: 'ready' | 'invalid' | null
     package_id?: string | null
     package_version?: string | null
@@ -1122,6 +1179,17 @@ type InitializationCredentialForm = {
   suggested_username: string
   username: string
   initial_password: string
+}
+type InitializationPersonnelReviewGroup = {
+  key: string
+  serial_no: number
+  real_name: string
+  identity_card_no: string
+  positions: InitializationDraftPersonnel[]
+  record_ids: number[]
+  existingAccount: ApiInitializationDraft['existing_personnel_accounts'][number] | null
+  credential: InitializationCredentialForm | null
+  issues: InitializationDraftIssue[]
 }
 type ProjectConnectorKey = 'wecom' | 'feishu' | 'dingtalk'
 type ProjectConnectorConfig = {
@@ -1334,22 +1402,15 @@ function materialAgentTraceHasActiveRuntime(trace: AgentRuntimeTrace) {
 const initializationDraftCollapsed = ref(false)
 const initializationDraftReviewOpen = ref(false)
 const collapsedInitializationWbsCodes = ref<Set<string>>(new Set())
+const initializationReviewScrollRef = ref<HTMLElement | null>(null)
+const activeInitializationReviewSection = ref<InitializationReviewSectionKey | null>(null)
 const initializationReviewExpanded = reactive({
   personnel: true,
   wbs: true,
   risks: true,
   quality: true,
 })
-const initializationIssueGroupsExpanded = reactive<Record<InitializationDraftIssueGroupKey, boolean>>({
-  project: true,
-  personnel: true,
-  wbs_content: true,
-  wbs_timeline: false,
-  wbs_structure: true,
-  risks: true,
-  quality: true,
-  other: true,
-})
+const selectedInitializationIssues = ref<InitializationDraftIssue[]>([])
 const initializationDraftApplying = ref(false)
 const initializationDraftValidating = ref(false)
 const initializationDraftAllowPartial = ref(false)
@@ -1541,232 +1602,159 @@ const initializationDraftIssueSummary = computed(() => {
     initializationDraftWarningCount.value ? `${initializationDraftWarningCount.value} 项需要核对` : '',
   ].filter(Boolean).join('，')
 })
-const initializationDraftIssueGroups = computed<InitializationDraftIssueGroup[]>(() => {
-  const groupMetadata: Record<InitializationDraftIssueGroupKey, Pick<InitializationDraftIssueGroup, 'label' | 'description'>> = {
-    project: { label: '工程基本信息', description: '工程日期或基础资料需要补充、修正' },
-    personnel: { label: '人员信息', description: '人员名单中存在重复或缺失内容' },
-    wbs_content: { label: 'WBS 工序内容', description: '工序名称或基础内容需要核对' },
-    wbs_timeline: { label: 'WBS 时间线', description: '工序日期、编码顺序或前置时间需要核对' },
-    wbs_structure: { label: 'WBS 层级与关联', description: '工序的上级、层级或前置关系需要修正' },
-    risks: { label: '风险源', description: '风险清单及其关联工序需要核对' },
-    quality: { label: '质量指标', description: '质量指标及其关联工序需要核对' },
-    other: { label: '其他内容', description: '还有未归类的内容需要核对' },
-  }
-  const order: InitializationDraftIssueGroupKey[] = [
-    'project',
-    'personnel',
-    'wbs_content',
-    'wbs_timeline',
-    'wbs_structure',
-    'risks',
-    'quality',
-    'other',
-  ]
-  const grouped = new Map<InitializationDraftIssueGroupKey, InitializationDraftIssuePresentation[]>()
-  for (const issue of materialAgentDraft.value?.validation_issues || []) {
-    const presentation = presentInitializationDraftIssue(issue)
-    grouped.set(presentation.category, [...(grouped.get(presentation.category) || []), presentation])
-  }
-  return order
-    .filter(key => grouped.has(key))
-    .map(key => {
-      const items = grouped.get(key) || []
+const initializationReviewSectionDefinitions: Array<{
+  key: InitializationReviewSectionKey
+  label: string
+}> = [
+  { key: 'project', label: '工程信息' },
+  { key: 'personnel', label: '人员' },
+  { key: 'wbs', label: 'WBS' },
+  { key: 'risks', label: '风险源' },
+  { key: 'quality_requirements', label: '质量指标' },
+]
+const initializationReviewIssueTabs = computed(() => (
+  initializationReviewSectionDefinitions
+    .map(section => {
+      const issues = (materialAgentDraft.value?.validation_issues || []).filter(
+        issue => issue.section === section.key,
+      )
       return {
-        key,
-        ...groupMetadata[key],
-        level: (items.some(item => item.level === 'error') ? 'error' : 'warning') as 'error' | 'warning',
-        items,
+        ...section,
+        count: issues.length,
+        errorCount: issues.filter(issue => issue.level === 'error').length,
       }
     })
-    .sort((left, right) => {
-      if (left.level === right.level) return order.indexOf(left.key) - order.indexOf(right.key)
-      return left.level === 'error' ? -1 : 1
-    })
+    .filter(section => section.count > 0)
+))
+const initializationIssuesByLocation = computed(() => {
+  const result = new Map<string, InitializationDraftIssue[]>()
+  for (const issue of materialAgentDraft.value?.validation_issues || []) {
+    const key = issue.target_record_id === null
+      ? `section:${issue.section}`
+      : `record:${issue.target_record_id}:${issue.field_name || ''}`
+    result.set(key, [...(result.get(key) || []), issue])
+  }
+  return result
 })
 
-function initializationIssueWbsCode(path: string) {
-  if (!path.startsWith('wbs.')) return ''
-  const detailedPath = path.match(/^wbs\.(.+)\.(name|planned_start_at|planned_finish_at|parent_wbs_code|level|predecessor_wbs_codes)$/)
-  return detailedPath?.[1] || path.slice(4)
+const initializationIssuesByRecord = computed(() => {
+  const result = new Map<number, InitializationDraftIssue[]>()
+  for (const issue of materialAgentDraft.value?.validation_issues || []) {
+    if (issue.target_record_id === null) continue
+    result.set(issue.target_record_id, [
+      ...(result.get(issue.target_record_id) || []),
+      issue,
+    ])
+  }
+  return result
+})
+
+function initializationAllRecordIssues(recordId: number | null | undefined) {
+  if (!recordId) return []
+  return initializationIssuesByRecord.value.get(recordId) || []
 }
 
-function presentInitializationDraftIssue(issue: InitializationDraftIssue): InitializationDraftIssuePresentation {
-  const { path, message, level } = issue
-  const wbsCode = initializationIssueWbsCode(path)
-  const reference = wbsCode ? `WBS ${wbsCode}` : undefined
-  const common = { ...issue, description: message, reference }
+function initializationFieldIssues(recordId: number | null | undefined, fieldName: string) {
+  if (!recordId) return []
+  return initializationIssuesByLocation.value.get(`record:${recordId}:${fieldName}`) || []
+}
 
-  if (path.startsWith('project')) {
-    if (message.includes('竣工日期')) {
-      return {
-        ...common,
-        category: 'project',
-        title: '合同日期先后顺序有误',
-        description: '合同竣工日期早于合同开工日期，这组日期无法作为有效工期。',
-        guidance: '请回到工程基本信息，按照合同原件重新核对开工日期和竣工日期。',
-      }
-    }
-    return {
-      ...common,
-      category: 'project',
-      title: '工程基本信息尚未补充完整',
-      guidance: '请在上方工程基本信息中核对已识别内容；缺少的内容可继续通过对话或附件补充。',
-    }
-  }
+const initializationVisibleIssueFields: Record<InitializationDraftIssue['section'], Set<string> | null> = {
+  // Project fields are generated from the returned object, including empty
+  // fields that carry an issue, so every field can render in place.
+  project: null,
+  personnel: new Set([
+    'serial_no',
+    'real_name',
+    'identity_card_no',
+    'position_name',
+    'certificate_no',
+    'responsibility_description',
+  ]),
+  wbs: new Set([
+    'wbs_code',
+    'name',
+    'level',
+    'planned_start_at',
+    'planned_finish_at',
+    'progress_percent',
+    'status_text',
+    'priority_text',
+    'predecessor_wbs_codes',
+    'parent_wbs_code',
+  ]),
+  risks: new Set([
+    'serial_no',
+    'related_process_name',
+    'risk_part',
+    'risk_level',
+    'evaluation_condition',
+    'risk_window_start_date',
+    'risk_window_end_date',
+    'summary',
+  ]),
+  quality_requirements: new Set([
+    'wbs_code',
+    'quality_acceptance_item',
+    'control_indicator',
+    'inspection_frequency',
+    'related_documents',
+  ]),
+}
 
-  if (path === 'personnel') {
-    const identityCard = message.match(/身份证号\s+(\S+)/)?.[1]
-    const serialNo = message.match(/人员序号\s+(\S+)/)?.[1]
-    if (identityCard) {
-      if (message.includes('对应多个岗位')) {
-        return {
-          ...common,
-          category: 'personnel',
-          title: '同一人员在项目中承担多个岗位',
-          description: message,
-          guidance: '请核对这些岗位是否确由同一人兼任。确认无误后，所有岗位会关联同一个平台账号，不会重复创建用户。',
-        }
-      }
-      return {
-        ...common,
-        category: 'personnel',
-        title: '人员名单中存在重复身份证号',
-        description: `身份证号 ${identityCard} 在人员名单中出现了多次。系统无法判断是重复录入，还是同一人员兼任多个岗位。`,
-        guidance: '请在上方人员板块找到对应人员；重复录入请删除多余记录，兼任岗位请合并为一名人员后补充岗位说明。',
-      }
-    }
-    if (serialNo) {
-      return {
-        ...common,
-        category: 'personnel',
-        title: `人员序号 ${serialNo} 重复`,
-        description: `人员名单中有多条记录使用了序号 ${serialNo}，入库后将无法稳定区分这些人员。`,
-        guidance: '请对照原始人员表，为每条人员记录设置不同的序号。',
-      }
-    }
-    return {
-      ...common,
-      category: 'personnel',
-      title: message.includes('未识别') ? '尚未识别到项目人员' : '人员信息需要修正',
-      guidance: '请展开上方人员板块核对名单；如资料中缺少人员信息，请继续上传人员表或手动补充。',
-    }
-  }
+function initializationRecordIssues(recordId: number | null | undefined) {
+  if (!recordId) return []
+  return (materialAgentDraft.value?.validation_issues || []).filter(issue => {
+    if (issue.target_record_id !== recordId) return false
+    if (!issue.field_name) return true
+    const visibleFields = initializationVisibleIssueFields[issue.section]
+    return visibleFields !== null && !visibleFields.has(issue.field_name)
+  })
+}
 
-  if (path === 'wbs' || path.startsWith('wbs.')) {
-    if (path.endsWith('.name') || path === 'wbs') {
-      const placeholder = message.match(/名称[“"](.+?)[”"]/)?.[1]
-      return {
-        ...common,
-        category: 'wbs_content',
-        title: placeholder && reference ? `${reference} 的工序名称需要确认` : (message.includes('未识别') ? '尚未识别到 WBS 工序' : 'WBS 工序内容需要修正'),
-        description: placeholder ? `当前工序名称为“${placeholder}”，看起来是表格中的占位文字，不是实际工序名称。` : message,
-        guidance: reference ? `请在上方 WBS 板块找到 ${reference}，对照原始进度计划填写真实工序名称。` : '请继续上传进度计划，或在 WBS 板块补充工序。',
-      }
-    }
+function initializationSectionIssues(section: InitializationDraftIssue['section']) {
+  return initializationIssuesByLocation.value.get(`section:${section}`) || []
+}
 
-    if (path.endsWith('.planned_start_at') || path.endsWith('.planned_finish_at')) {
-      if (message.includes('编码顺序与开始时间顺序冲突')) {
-        const relatedCodes = [...message.matchAll(/WBS\s+([0-9.]+)/g)].map(match => match[1])
-        const comparedCode = relatedCodes[1]
-        return {
-          ...common,
-          category: 'wbs_timeline',
-          title: `${reference || '该工序'} 的开始时间顺序异常`,
-          description: comparedCode
-            ? `按照同级 WBS 编码顺序，${comparedCode} 应先于 ${wbsCode} 开始，但草稿中的计划开始日期正好相反。`
-            : '该工序的 WBS 编码顺序与计划开始日期顺序不一致。',
-          guidance: `请在上方 WBS 板块对照原始进度计划，核对 ${reference || '该工序'} 的计划开始日期；系统不会自行猜测或调整日期。`,
-        }
-      }
-      if (message.includes('早于前任')) {
-        const predecessorCode = message.match(/前任\s+([0-9.]+)/)?.[1]
-        return {
-          ...common,
-          category: 'wbs_timeline',
-          title: `${reference || '该工序'} 与前置工序的时间有重叠`,
-          description: predecessorCode
-            ? `该工序在前置 WBS ${predecessorCode} 计划完成之前已经开始。可能是交叉施工，也可能是日期填写错误。`
-            : '该工序在前置工序计划完成之前已经开始。',
-          guidance: '请对照原始进度计划确认是否属于搭接施工；若不是，请修正工序日期或前置关系。',
-        }
-      }
-      if (message.includes('早于父级')) {
-        return {
-          ...common,
-          category: 'wbs_timeline',
-          title: `${reference || '子工序'} 早于上级工序开始`,
-          description: '子工序的计划开始日期早于上级工序的汇总开始日期，父子工序的时间范围不一致。',
-          guidance: '请对照原始进度计划，核对该子工序或上级工序的计划开始日期。',
-        }
-      }
-      if (message.includes('晚于父级')) {
-        return {
-          ...common,
-          category: 'wbs_timeline',
-          title: `${reference || '子工序'} 晚于上级工序完成`,
-          description: '子工序的计划完成日期晚于上级工序的汇总完成日期，父子工序的时间范围不一致。',
-          guidance: '请对照原始进度计划，核对该子工序或上级工序的计划完成日期。',
-        }
-      }
-      if (message.includes('结束时间不能早于')) {
-        return {
-          ...common,
-          category: 'wbs_timeline',
-          title: `${reference || '该工序'} 的开始和完成日期有误`,
-          description: '该工序的计划完成日期早于计划开始日期，无法形成有效工期。',
-          guidance: '请对照原始进度计划，重新核对该工序的计划开始日期和计划完成日期。',
-        }
-      }
-      return {
-        ...common,
-        category: 'wbs_timeline',
-        title: `${reference || '该工序'} 的计划日期需要核对`,
-        guidance: '请在上方 WBS 板块对照原始进度计划核对日期，系统不会自动改动。',
-      }
-    }
+function initializationHasRecordIssues(recordId: number | null | undefined) {
+  return initializationAllRecordIssues(recordId).length > 0
+}
 
-    let title = `${reference || 'WBS 工序'} 的层级或关联关系有误`
-    let guidance = `请在上方 WBS 板块找到 ${reference || '对应工序'}，核对其编码、上级和前置工序。`
-    if (message.includes('编码') && message.includes('重复')) title = `${reference || 'WBS 编码'} 重复`
-    else if (message.includes('父级') || message.includes('上级')) title = `${reference || '该工序'} 的上级关系有误`
-    else if (message.includes('层级')) title = `${reference || '该工序'} 的层级有误`
-    else if (message.includes('前任') || message.includes('前置')) title = `${reference || '该工序'} 的前置关系有误`
-    else if (message.includes('循环')) {
-      title = `${reference || 'WBS 工序'} 形成了循环关系`
-      guidance = '请检查该工序的上级或前置工序，移除相互指向的循环关系。'
-    }
-    return { ...common, category: 'wbs_structure', title, guidance }
-  }
+function openInitializationIssue(issues: Array<{ id: number }>) {
+  const issuesById = new Map(
+    (materialAgentDraft.value?.validation_issues || []).map(issue => [issue.id, issue]),
+  )
+  selectedInitializationIssues.value = issues
+    .map(issue => issuesById.get(issue.id))
+    .filter((issue): issue is InitializationDraftIssue => Boolean(issue))
+}
 
-  if (path === 'risks' || path.startsWith('risks.')) {
-    const serialNo = path.match(/^risks\.([^.]+)/)?.[1]
-    const riskReference = serialNo ? `风险源第 ${serialNo} 项` : undefined
-    return {
-      ...common,
-      category: 'risks',
-      reference: riskReference,
-      title: message.includes('未识别') ? '尚未识别到风险清单' : `${riskReference || '风险源信息'}需要修正`,
-      guidance: '请在上方风险源板块找到对应记录，对照原始风险清单核对相关工序、风险等级和风险窗口。',
-    }
-  }
+function closeInitializationIssue() {
+  selectedInitializationIssues.value = []
+}
 
-  if (path === 'quality_requirements' || path.startsWith('quality_requirements.')) {
-    const qualityWbsCode = path.startsWith('quality_requirements.') ? path.slice('quality_requirements.'.length) : ''
-    return {
-      ...common,
-      category: 'quality',
-      reference: qualityWbsCode ? `WBS ${qualityWbsCode}` : undefined,
-      title: message.includes('未识别') ? '尚未识别到工序质量指标' : '质量指标的关联工序需要修正',
-      guidance: '请在上方质量指标板块找到对应记录，核对其 WBS 编码；同一工序存在重复指标时，请合并或删除多余记录。',
-    }
-  }
-
-  return {
-    ...common,
-    category: 'other',
-    title: level === 'error' ? '这项内容必须修正' : '这项内容需要核对',
-    guidance: '请对照原始附件核对该内容；如无法确认，可继续询问初始化助手。',
-  }
+async function focusInitializationReviewSection(section: InitializationReviewSectionKey) {
+  activeInitializationReviewSection.value = section
+  if (section === 'personnel') initializationReviewExpanded.personnel = true
+  if (section === 'wbs') initializationReviewExpanded.wbs = true
+  if (section === 'risks') initializationReviewExpanded.risks = true
+  if (section === 'quality_requirements') initializationReviewExpanded.quality = true
+  await nextTick()
+  const scrollContainer = initializationReviewScrollRef.value
+  const target = scrollContainer?.querySelector<HTMLElement>(
+    `[data-initialization-section="${section}"]`,
+  )
+  if (!scrollContainer || !target) return
+  const targetTop = (
+    target.getBoundingClientRect().top
+    - scrollContainer.getBoundingClientRect().top
+    + scrollContainer.scrollTop
+    - 12
+  )
+  scrollContainer.scrollTo({
+    top: Math.max(0, targetTop),
+    behavior: 'smooth',
+  })
 }
 
 const initializationWbsTree = computed(() => {
@@ -1794,53 +1782,6 @@ const initializationWbsTree = computed(() => {
   roots.sort(compareWbsCode)
   for (const siblings of childrenByParent.values()) siblings.sort(compareWbsCode)
 
-  const dependencyWarningsByCode = new Map<string, string[]>()
-  for (const item of items) {
-    const itemStart = item.planned_start_at ? Date.parse(item.planned_start_at) : Number.NaN
-    const warnings = (item.predecessor_wbs_codes || []).flatMap((predecessorCode) => {
-      const predecessor = itemByCode.get(predecessorCode)
-      const predecessorFinish = predecessor?.planned_finish_at
-        ? Date.parse(predecessor.planned_finish_at)
-        : Number.NaN
-      if (
-        Number.isFinite(itemStart)
-        && Number.isFinite(predecessorFinish)
-        && itemStart < predecessorFinish
-      ) {
-        return [`计划开始早于前置 WBS ${predecessorCode} 的计划完成`]
-      }
-      return []
-    })
-    dependencyWarningsByCode.set(item.wbs_code, warnings)
-  }
-
-  const sequenceWarningsByCode = new Map<string, string[]>()
-  const siblingGroups = [roots, ...childrenByParent.values()]
-  for (const siblings of siblingGroups) {
-    let latestStartedItem: InitializationDraftWbs | null = null
-    for (const item of siblings) {
-      const itemStart = item.planned_start_at
-        ? Date.parse(item.planned_start_at)
-        : Number.NaN
-      if (!Number.isFinite(itemStart)) continue
-      const latestStart = latestStartedItem?.planned_start_at
-        ? Date.parse(latestStartedItem.planned_start_at)
-        : Number.NaN
-      if (
-        latestStartedItem
-        && Number.isFinite(latestStart)
-        && itemStart < latestStart
-      ) {
-        sequenceWarningsByCode.set(item.wbs_code, [
-          `计划开始早于编码在前的同级 WBS ${latestStartedItem.wbs_code}`,
-        ])
-      }
-      if (!latestStartedItem || !Number.isFinite(latestStart) || itemStart >= latestStart) {
-        latestStartedItem = item
-      }
-    }
-  }
-
   const rows: InitializationWbsTreeRow[] = []
   const visited = new Set<string>()
   const append = (
@@ -1856,8 +1797,6 @@ const initializationWbsTree = computed(() => {
       depth,
       ancestorCodes,
       hasChildren: children.length > 0,
-      sequenceWarnings: sequenceWarningsByCode.get(item.wbs_code) || [],
-      dependencyWarnings: dependencyWarningsByCode.get(item.wbs_code) || [],
     })
     for (const child of children) {
       append(child, depth + 1, [...ancestorCodes, item.wbs_code])
@@ -1871,8 +1810,6 @@ const initializationWbsTree = computed(() => {
   return {
     rows,
     groupCodes: [...childrenByParent.keys()],
-    sequenceWarningCount: [...sequenceWarningsByCode.values()].filter(warnings => warnings.length).length,
-    dependencyWarningCount: [...dependencyWarningsByCode.values()].filter(warnings => warnings.length).length,
   }
 })
 const visibleInitializationWbsRows = computed(() => {
@@ -1881,13 +1818,34 @@ const visibleInitializationWbsRows = computed(() => {
     row => !row.ancestorCodes.some(code => collapsedCodes.has(code)),
   )
 })
-const initializationWbsDependencyWarningCount = computed(
-  () => initializationWbsTree.value.dependencyWarningCount,
-)
-const initializationWbsSequenceWarningCount = computed(
-  () => initializationWbsTree.value.sequenceWarningCount,
-)
 const projectFieldLabels: Record<string, string> = {
+  serial_no: '序号',
+  real_name: '姓名',
+  identity_card_no: '身份证号',
+  position_name: '岗位',
+  certificate_no: '证书编号',
+  responsibility_description: '岗位职责',
+  wbs_code: 'WBS 编码',
+  parent_wbs_code: '上级 WBS',
+  predecessor_wbs_codes: '前置 WBS',
+  level: '层级',
+  name: '工序名称',
+  planned_start_at: '计划开始',
+  planned_finish_at: '计划完成',
+  progress_percent: '进度',
+  status_text: '状态',
+  priority_text: '优先级',
+  related_process_name: '相关工序',
+  risk_part: '风险部位',
+  risk_level: '风险等级',
+  evaluation_condition: '风险评价条件',
+  risk_window_start_date: '风险窗口开始',
+  risk_window_end_date: '风险窗口结束',
+  summary: '摘要',
+  quality_acceptance_item: '质量验收项目',
+  control_indicator: '控制指标',
+  inspection_frequency: '检查频次',
+  related_documents: '相关资料',
   engineering_type_description: '工程类型说明',
   contract_start_date: '合同开工',
   contract_end_date: '合同竣工',
@@ -1900,16 +1858,38 @@ const projectFieldLabels: Record<string, string> = {
   survey_unit_name: '勘察单位',
 }
 const draftProjectFields = computed(() => Object.entries(materialAgentDraft.value?.payload.project || {})
-  .filter(([, value]) => value !== null && value !== '')
-  .map(([key, value]) => ({
-    key,
-    label: projectFieldLabels[key] || key,
-    value: key === 'contract_duration_days'
-      ? `${value} 天`
-      : key === 'contract_amount_wan_yuan'
-        ? `${value} 万元`
-        : String(value),
-  })))
+  .filter(([key, value]) => (
+    key !== 'record_id'
+    && (
+      (value !== null && value !== '')
+      || initializationFieldIssues(
+        materialAgentDraft.value?.payload.project.record_id,
+        key,
+      ).length > 0
+    )
+  ))
+  .map(([key, value]) => {
+    const missing = value === null || value === ''
+    return {
+      key,
+      label: projectFieldLabels[key] || key,
+      missing,
+      value: missing
+        ? '未识别'
+        : key === 'contract_duration_days'
+          ? `${value} 天`
+          : key === 'contract_amount_wan_yuan'
+            ? `${value} 万元`
+            : String(value),
+      issues: initializationFieldIssues(
+        materialAgentDraft.value?.payload.project.record_id,
+        key,
+      ),
+    }
+  }))
+const draftProjectRecognizedCount = computed(() => (
+  draftProjectFields.value.filter(item => !item.missing).length
+))
 const draftProjectDescription = computed(() => (
   draftProjectFields.value.find(item => item.key === 'engineering_type_description')
 ))
@@ -1939,17 +1919,48 @@ const initializationPersonnelReviewRows = computed(() => {
   const existingAccountByIdentityCard = new Map(
     (materialAgentDraft.value?.existing_personnel_accounts || []).map(item => [item.identity_card_no, item]),
   )
-  const seenNewIdentityCards = new Set<string>()
-  return (materialAgentDraft.value?.payload.personnel || []).map(item => {
-    const account = existingAccountByIdentityCard.get(item.identity_card_no) || null
-    const generatedCredential = credentialByIdentityCard.get(item.identity_card_no) || null
-    const isRepeatedNewPerson = !account && Boolean(generatedCredential) && seenNewIdentityCards.has(item.identity_card_no)
-    if (generatedCredential) seenNewIdentityCards.add(item.identity_card_no)
+  const groups = new Map<string, InitializationPersonnelReviewGroup>()
+  for (const item of materialAgentDraft.value?.payload.personnel || []) {
+    const normalizedIdentityCard = item.identity_card_no.trim()
+    const normalizedName = item.real_name.trim().toLocaleLowerCase('zh-CN')
+    const key = normalizedIdentityCard
+      ? `identity:${normalizedIdentityCard}`
+      : `name:${normalizedName}`
+    const existing = groups.get(key)
+    if (existing) {
+      existing.positions.push(item)
+      existing.record_ids.push(item.record_id)
+      existing.serial_no = Math.min(existing.serial_no, item.serial_no)
+      continue
+    }
+    groups.set(key, {
+      key,
+      serial_no: item.serial_no,
+      real_name: item.real_name,
+      identity_card_no: item.identity_card_no,
+      positions: [item],
+      record_ids: [item.record_id],
+      existingAccount: existingAccountByIdentityCard.get(item.identity_card_no) || null,
+      credential: credentialByIdentityCard.get(item.identity_card_no) || null,
+      issues: [],
+    })
+  }
+  return [...groups.values()].map(group => {
+    const issuesByContent = new Map<string, InitializationDraftIssue>()
+    for (const recordId of group.record_ids) {
+      for (const issue of initializationAllRecordIssues(recordId)) {
+        const issueKey = [
+          issue.rule_id,
+          issue.title,
+          issue.message,
+          issue.suggestion || '',
+        ].join('|')
+        if (!issuesByContent.has(issueKey)) issuesByContent.set(issueKey, issue)
+      }
+    }
     return {
-      ...item,
-      existingAccount: account,
-      credential: isRepeatedNewPerson ? null : generatedCredential,
-      sharedCredential: isRepeatedNewPerson ? generatedCredential : null,
+      ...group,
+      issues: [...issuesByContent.values()],
     }
   })
 })
@@ -1959,6 +1970,9 @@ const canApplyInitializationDraft = computed(() => {
     !draft
     || !isPlatformAdmin.value
     || draft.status !== 'ready'
+    || draft.validation?.status !== 'completed'
+    || draft.validation?.draft_revision !== draft.revision
+    || draft.validation?.result_status !== 'ready'
     || initializationDraftApplying.value
     || initializationDraftValidating.value
     || draftHasErrors.value
@@ -2712,11 +2726,10 @@ function openInitializationDraftReview() {
     risks: true,
     quality: true,
   })
-  for (const group of initializationDraftIssueGroups.value) {
-    initializationIssueGroupsExpanded[group.key] = group.level === 'error' || group.items.length <= 3
-  }
   collapsedInitializationWbsCodes.value = new Set()
   initializationDraftAllowPartial.value = false
+  selectedInitializationIssues.value = []
+  activeInitializationReviewSection.value = initializationReviewIssueTabs.value[0]?.key || null
   const currentCredentialByIdentityCard = new Map(
     initializationCredentialForms.value.map(item => [item.identity_card_no, item]),
   )
@@ -2726,10 +2739,12 @@ function openInitializationDraftReview() {
     initial_password: currentCredentialByIdentityCard.get(item.identity_card_no)?.initial_password || generateInitializationPassword(),
   }))
   initializationDraftReviewOpen.value = true
+  nextTick(() => initializationReviewScrollRef.value?.scrollTo({ top: 0, left: 0 }))
 }
 
 function closeInitializationDraftReview() {
   if (!initializationDraftApplying.value && !initializationDraftValidating.value) {
+    selectedInitializationIssues.value = []
     initializationDraftReviewOpen.value = false
   }
 }
@@ -3540,8 +3555,29 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .initialization-draft-collapsed .n-icon { flex:0 0 auto; color:#67807a; }
 .initialization-review-backdrop { z-index:36; }.initialization-review-modal { display:grid; width:min(100%,1380px); max-height:calc(100dvh - 48px); grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; padding:0; font-size:12px; }
 .initialization-review-modal > .setup-modal-head { margin:0; padding:18px 20px 14px; border-bottom:1px solid var(--border-default); }
-.initialization-review-body { display:flex; min-height:0; flex-direction:column; gap:13px; overflow-y:auto; padding:16px 20px; background:#fbfcfc; }
-.initialization-review-body > * { flex:0 0 auto; }
+.initialization-review-body { display:grid; min-height:0; grid-template-columns:190px minmax(0,1fr); overflow:hidden; background:#fbfcfc; }
+.initialization-review-navigation { display:flex; min-height:0; flex-direction:column; border-right:1px solid #dce7e4; padding:16px 12px; background:#f5f8f7; }
+.initialization-review-navigation > header { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 5px; }
+.initialization-review-navigation > header strong { color:#294f48; font-size:13px; font-weight:850; }
+.initialization-review-navigation > header span { border-radius:4px; padding:2px 6px; color:#805c16; background:#fff0d1; font-size:12px; font-variant-numeric:tabular-nums; font-weight:800; }
+.initialization-review-navigation > p { margin:6px 5px 13px; color:#7c8f8b; font-size:12px; line-height:1.5; }
+.initialization-review-navigation nav { display:grid; gap:5px; overflow-y:auto; }
+.initialization-review-navigation nav button { display:grid; width:100%; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px; border:1px solid transparent; border-radius:6px; padding:9px 10px; color:#57706b; background:transparent; font:inherit; text-align:left; cursor:pointer; transition:border-color .18s ease,color .18s ease,background .18s ease,transform .18s ease; }
+.initialization-review-navigation nav button:hover { color:#285c54; background:#eaf2f0; }
+.initialization-review-navigation nav button:active { transform:translateY(1px); }
+.initialization-review-navigation nav button:focus-visible { outline:2px solid rgba(15,118,110,.24); outline-offset:1px; }
+.initialization-review-navigation nav button.active { border-color:#c8ddd8; color:#195e54; background:#fff; box-shadow:0 3px 10px rgba(36,77,70,.06); }
+.initialization-review-navigation nav button.error { color:#8d4936; }
+.initialization-review-navigation nav button span { overflow:hidden; font-size:12px; font-weight:750; text-overflow:ellipsis; white-space:nowrap; }
+.initialization-review-navigation nav button em { min-width:24px; border-radius:4px; padding:2px 5px; color:#7a5a1c; background:#fff0d1; font-size:12px; font-style:normal; font-variant-numeric:tabular-nums; font-weight:800; text-align:center; }
+.initialization-review-navigation nav button.error em { color:#984631; background:#fce9e3; }
+.initialization-review-navigation-empty { border:1px dashed #d7e2df; border-radius:7px; padding:16px 10px; color:#81928e; background:#fff; font-size:12px; line-height:1.55; text-align:center; }
+.initialization-review-scroll { min-width:0; overflow:auto; padding:16px 20px; scrollbar-color:#9db5b0 #eef3f2; scrollbar-width:thin; }
+.initialization-review-scroll::-webkit-scrollbar { width:10px; height:10px; }
+.initialization-review-scroll::-webkit-scrollbar-track { background:#eef3f2; }
+.initialization-review-scroll::-webkit-scrollbar-thumb { border:2px solid #eef3f2; border-radius:8px; background:#9db5b0; }
+.initialization-review-content { display:flex; min-width:1300px; flex-direction:column; gap:13px; }
+.initialization-review-content > * { flex:0 0 auto; }
 .initialization-review-section { display:grid; gap:10px; border:1px solid #dce8e5; border-radius:8px; padding:13px 14px; background:#fff; }
 .initialization-review-section > header { display:flex; align-items:center; justify-content:space-between; gap:12px; }.initialization-review-section h3 { margin:0; color:#284d47; font-size:14px; }.initialization-review-section header span { color:#80918e; font-size:12px; }
 .initialization-project-section { gap:14px; overflow:hidden; padding:0; }
@@ -3550,12 +3586,18 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .initialization-project-head h3 { font-size:15px; letter-spacing:-.01em; }
 .initialization-project-head p { margin:4px 0 0; color:#7b8e8a; font-size:12px; line-height:1.5; }
 .initialization-project-head > span { flex:0 0 auto; border-radius:4px; padding:3px 6px; color:#52716b !important; background:#edf5f3; font-weight:750; }
+.initialization-project-record { display:grid; min-width:0; grid-template-columns:128px minmax(0,1fr); border-top:1px solid #e5eeec; }
+.initialization-project-record-content { display:grid; min-width:0; gap:14px; padding-top:14px; }
+.initialization-record-validation { display:flex; min-width:0; flex-direction:column; align-items:flex-start; gap:8px; padding:12px; border-right:1px solid #e2ebe9; color:#80918e; background:#f8fbfa; font-size:12px; }
+.initialization-record-validation > strong { color:#496a64; font-size:12px; font-weight:850; }
+.initialization-record-validation > span:not(.initialization-issue-badges) { color:#9aa9a6; font-size:12px; }
+.initialization-record-validation .initialization-issue-badges,.initialization-validation-stack .initialization-issue-badges,.initialization-section-issues .initialization-issue-badges { margin-left:0; }
 .initialization-project-description { margin:0 14px; border-left:3px solid #5a988e; border-radius:2px 7px 7px 2px; padding:12px 14px 13px; background:#f3f8f6; }
-.initialization-project-description span { display:block; margin-bottom:5px; color:#5e7873; font-size:12px; font-weight:800; }
+.initialization-project-description > span { display:block; margin-bottom:5px; color:#5e7873; font-size:12px; font-weight:800; }
 .initialization-project-description p { max-width:100ch; margin:0; color:#264a44; font-size:13px; font-weight:650; line-height:1.7; text-wrap:pretty; }
 .initialization-project-contract-grid { display:grid; grid-template-columns:1.05fr 1.05fr .8fr 1fr; gap:1px; overflow:hidden; margin:0 14px; border:1px solid #dfe9e7; border-radius:7px; background:#dfe9e7; }
 .initialization-project-contract-grid article { display:grid; min-width:0; gap:5px; padding:11px 12px; background:#fff; }
-.initialization-project-contract-grid span { color:#758985; font-size:12px; }
+.initialization-project-contract-grid article > span { color:#758985; font-size:12px; }
 .initialization-project-contract-grid strong { overflow-wrap:anywhere; color:#244d46; font-size:13px; font-variant-numeric:tabular-nums; line-height:1.45; }
 .initialization-project-units { display:grid; gap:8px; border-top:1px solid #e5eeec; padding:12px 14px 15px; }
 .initialization-project-units h4 { margin:0; color:#486760; font-size:12px; font-weight:850; }
@@ -3576,10 +3618,11 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .initialization-review-data-toggle small { overflow:hidden; color:#80928e; font-size:12px; font-weight:600; text-overflow:ellipsis; white-space:nowrap; }
 .initialization-review-data-toggle em { flex:0 0 auto; color:#6b827d; font-size:12px; font-style:normal; font-variant-numeric:tabular-nums; font-weight:750; }
 .initialization-personnel-list { display:grid; gap:10px; border-top:1px solid #e5eeec; padding:12px; background:#f6faf8; }
-.initialization-personnel-card { display:grid; min-width:0; grid-template-columns:minmax(190px,.62fr) minmax(300px,1.25fr) minmax(330px,1.05fr); gap:0; overflow:hidden; border:1px solid #dce8e5; border-radius:7px; background:#fff; transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease; }
+.initialization-personnel-card { display:grid; min-width:1080px; grid-template-columns:128px minmax(190px,.62fr) minmax(300px,1.25fr) minmax(330px,1.05fr); gap:0; overflow:hidden; border:1px solid #dce8e5; border-radius:7px; background:#fff; transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease; }
 .initialization-personnel-card:hover { border-color:#c6dbd6; box-shadow:0 5px 16px rgba(31,83,73,.07); transform:translateY(-1px); }
 .initialization-personnel-profile { display:grid; min-width:0; grid-template-columns:36px minmax(0,1fr); grid-template-rows:auto auto; align-content:center; align-items:center; gap:2px 10px; padding:14px; border-right:1px solid #e5eeec; background:#fbfdfc; }
-.initialization-personnel-profile > span { display:grid; grid-row:1 / 3; width:36px; height:36px; place-items:center; border-radius:9px; color:#fff; background:#377f74; box-shadow:0 4px 10px rgba(55,127,116,.16); font-size:12px; font-variant-numeric:tabular-nums; font-weight:850; letter-spacing:.04em; }
+.initialization-personnel-sequence { display:grid; grid-row:1 / 3; justify-items:center; gap:5px; }
+.initialization-personnel-sequence > span { display:grid; width:36px; height:36px; place-items:center; border-radius:9px; color:#fff; background:#377f74; box-shadow:0 4px 10px rgba(55,127,116,.16); font-size:12px; font-variant-numeric:tabular-nums; font-weight:850; letter-spacing:.04em; }
 .initialization-personnel-profile > div { min-width:0; }
 .initialization-personnel-profile h4 { margin:0; color:#244c45; font-size:14px; line-height:1.35; overflow-wrap:anywhere; }
 .initialization-personnel-profile p { margin:3px 0 0; color:#6d837e; font-size:12px; line-height:1.45; overflow-wrap:anywhere; }
@@ -3592,6 +3635,11 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .initialization-personnel-facts dt,.initialization-personnel-facts dd { margin:0; font-size:12px; line-height:1.55; }
 .initialization-personnel-facts dt { margin-bottom:3px; color:#7a8d89; font-weight:700; }
 .initialization-personnel-facts dd { color:#31534d; font-variant-numeric:tabular-nums; font-weight:650; overflow-wrap:anywhere; text-wrap:pretty; }
+.initialization-personnel-assignments dd { display:grid; gap:7px; }
+.initialization-personnel-assignments article { display:grid; gap:3px; border-radius:5px; padding:8px 9px; background:#f5f9f8; }
+.initialization-personnel-assignments article strong { color:#2d5a52; font-size:12px; }
+.initialization-personnel-assignments article span { color:#526e68; font-size:12px; font-weight:600; line-height:1.55; }
+.initialization-personnel-assignments article small { color:#849590; font-size:12px; font-weight:600; }
 .initialization-personnel-credential { display:grid; min-width:0; grid-template-columns:repeat(2,minmax(0,1fr)); align-content:center; gap:9px 10px; padding:12px 14px; border-left:1px solid #e5eeec; background:#f5faf8; }
 .initialization-personnel-credential > div { display:flex; grid-column:1 / -1; align-items:baseline; justify-content:space-between; gap:12px; }
 .initialization-personnel-credential > div strong { color:#31564f; font-size:12px; font-weight:850; }
@@ -3616,14 +3664,12 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .initialization-wbs-toolbar > div { display:flex; min-width:0; align-items:center; gap:10px; }
 .initialization-wbs-toolbar strong { color:#28564f; font-size:12px; }
 .initialization-wbs-toolbar span { color:#718783; font-size:12px; font-variant-numeric:tabular-nums; }
-.initialization-wbs-toolbar em { display:inline-flex; align-items:center; gap:5px; border-radius:4px; padding:4px 7px; color:#8b5a24; background:#fff2d7; font-size:12px; font-style:normal; font-weight:750; white-space:nowrap; }
-.initialization-wbs-toolbar em.sequence-warning { color:#a53f2c; background:#ffebe5; }
 .initialization-wbs-toolbar button { border:0; border-radius:4px; padding:5px 7px; color:#287166; background:transparent; font:inherit; font-size:12px; font-weight:750; cursor:pointer; transition:color .16s ease,background .16s ease; }
 .initialization-wbs-toolbar button:hover { color:#174f47; background:#eaf4f1; }
 .initialization-wbs-toolbar button:active { transform:translateY(1px); }
 .initialization-wbs-toolbar button:focus-visible { outline:2px solid rgba(15,118,110,.24); outline-offset:1px; }
-.initialization-wbs-table-wrap { overflow-x:auto; overflow-y:hidden; background:#fff; }
-.initialization-wbs-table { width:100%; min-width:1180px; border-spacing:0; border-collapse:separate; table-layout:fixed; color:#49635e; font-size:12px; }
+.initialization-wbs-table-wrap { background:#fff; }
+.initialization-wbs-table { width:100%; min-width:1300px; border-spacing:0; border-collapse:separate; table-layout:fixed; color:#49635e; font-size:12px; }
 .initialization-wbs-table th { padding:10px 11px; border-right:1px solid #e5eeec; border-bottom:1px solid #dce8e5; color:#5d7772; background:#f3f8f6; font-size:12px; font-weight:800; line-height:1.4; text-align:left; white-space:nowrap; }
 .initialization-wbs-table th:last-child,.initialization-wbs-table td:last-child { border-right:0; }
 .initialization-wbs-table td { padding:10px 11px; border-right:1px solid #edf2f0; border-bottom:1px solid #edf2f0; font-size:12px; line-height:1.55; vertical-align:top; }
@@ -3631,19 +3677,18 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .initialization-wbs-table tbody tr { transition:background .16s ease; }
 .initialization-wbs-table tbody tr:hover { background:#f3f9f7; }
 .initialization-wbs-table tbody tr.is-wbs-group { background:#f9fcfb; }
-.initialization-wbs-table tbody tr.has-dependency-warning { background:#fffaf0; }
-.initialization-wbs-table tbody tr.has-dependency-warning:hover { background:#fff6e5; }
-.initialization-wbs-table tbody tr.has-sequence-warning { background:#fff5f1; }
-.initialization-wbs-table tbody tr.has-sequence-warning:hover { background:#ffebe5; }
-.initialization-wbs-table th:nth-child(1),.initialization-wbs-table td:nth-child(1) { width:92px; }
-.initialization-wbs-table th:nth-child(2),.initialization-wbs-table td:nth-child(2) { width:340px; }
-.initialization-wbs-table th:nth-child(3),.initialization-wbs-table td:nth-child(3),.initialization-wbs-table th:nth-child(4),.initialization-wbs-table td:nth-child(4) { width:104px; }
-.initialization-wbs-table th:nth-child(5),.initialization-wbs-table td:nth-child(5) { width:68px; }
-.initialization-wbs-table th:nth-child(6),.initialization-wbs-table td:nth-child(6) { width:74px; }
-.initialization-wbs-table th:nth-child(7),.initialization-wbs-table td:nth-child(7) { width:70px; }
-.initialization-wbs-table th:nth-child(8),.initialization-wbs-table td:nth-child(8) { width:126px; }
-.initialization-wbs-table th:nth-child(9),.initialization-wbs-table td:nth-child(9) { width:88px; }
-.initialization-wbs-table td:not(.initialization-wbs-name):not(.initialization-wbs-dependencies) { white-space:nowrap; }
+.initialization-wbs-table tbody tr.has-validation-issue,.initialization-quality-table tbody tr.has-validation-issue { background:#fffcf4; }
+.initialization-wbs-table th:nth-child(1),.initialization-wbs-table td:nth-child(1) { width:128px; }
+.initialization-wbs-table th:nth-child(2),.initialization-wbs-table td:nth-child(2) { width:92px; }
+.initialization-wbs-table th:nth-child(3),.initialization-wbs-table td:nth-child(3) { width:340px; }
+.initialization-wbs-table th:nth-child(4),.initialization-wbs-table td:nth-child(4) { width:64px; }
+.initialization-wbs-table th:nth-child(5),.initialization-wbs-table td:nth-child(5),.initialization-wbs-table th:nth-child(6),.initialization-wbs-table td:nth-child(6) { width:104px; }
+.initialization-wbs-table th:nth-child(7),.initialization-wbs-table td:nth-child(7) { width:68px; }
+.initialization-wbs-table th:nth-child(8),.initialization-wbs-table td:nth-child(8) { width:74px; }
+.initialization-wbs-table th:nth-child(9),.initialization-wbs-table td:nth-child(9) { width:70px; }
+.initialization-wbs-table th:nth-child(10),.initialization-wbs-table td:nth-child(10) { width:126px; }
+.initialization-wbs-table th:nth-child(11),.initialization-wbs-table td:nth-child(11) { width:88px; }
+.initialization-wbs-table td:not(.initialization-wbs-name):not(.initialization-wbs-dependencies):not(.initialization-validation-cell) { white-space:nowrap; }
 .initialization-wbs-table td strong { color:#28564f; font-size:12px; font-variant-numeric:tabular-nums; }
 .initialization-wbs-name { padding-left:7px !important; color:#2f514b; overflow-wrap:anywhere; }
 .initialization-wbs-tree-node { --wbs-depth:0; position:relative; display:flex; min-height:22px; align-items:flex-start; gap:7px; padding-left:calc(var(--wbs-depth) * 18px); }
@@ -3659,15 +3704,14 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .initialization-wbs-node-copy { display:flex; min-width:0; flex-wrap:wrap; align-items:baseline; gap:6px; padding-top:1px; }
 .initialization-wbs-node-copy > strong { color:#2f514b !important; font-weight:700; overflow-wrap:anywhere; }
 .initialization-wbs-node-copy > small { border-radius:3px; padding:1px 4px; color:#6c827e; background:#eef3f2; font-size:12px; font-weight:650; white-space:nowrap; }
-.initialization-wbs-node-copy > em { border-radius:3px; padding:1px 5px; color:#a53f2c; background:#ffdfd5; font-size:12px; font-style:normal; font-weight:800; white-space:nowrap; }
 .initialization-wbs-dependencies { display:flex; flex-wrap:wrap; gap:4px; white-space:normal; }
 .initialization-wbs-dependencies span { border-radius:3px; padding:2px 5px; color:#456b64; background:#eaf3f1; font-size:12px; font-variant-numeric:tabular-nums; font-weight:750; }
-.initialization-wbs-dependencies em { border-radius:3px; padding:2px 5px; color:#8b5a24; background:#fff0cf; font-size:12px; font-style:normal; font-weight:750; white-space:nowrap; }
 .initialization-risk-list { display:grid; gap:10px; border-top:1px solid #e5eeec; padding:12px; background:#f8fbfa; }
-.initialization-risk-card { overflow:hidden; border:1px solid #d9e7e3; border-left:3px solid #6d9f96; border-radius:7px; background:#fff; }
+.initialization-risk-card { display:grid; min-width:1000px; grid-template-columns:128px minmax(0,1fr); overflow:hidden; border:1px solid #d9e7e3; border-left:3px solid #6d9f96; border-radius:7px; background:#fff; }
+.initialization-risk-card-content { min-width:0; }
 .initialization-risk-head { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; padding:12px 14px 11px; border-bottom:1px solid #e7efed; background:#fcfdfd; }
 .initialization-risk-head > div { min-width:0; }
-.initialization-risk-head span { display:block; margin-bottom:3px; color:#7c8f8b; font-size:12px; font-variant-numeric:tabular-nums; font-weight:700; }
+.initialization-risk-head > div > span { display:block; margin-bottom:3px; color:#7c8f8b; font-size:12px; font-variant-numeric:tabular-nums; font-weight:700; }
 .initialization-risk-head h4 { margin:0; color:#294f49; font-size:14px; line-height:1.45; overflow-wrap:anywhere; text-wrap:pretty; }
 .initialization-risk-head > strong { flex:0 0 auto; border-radius:4px; padding:4px 8px; color:#935125; background:#fff0df; font-size:12px; font-weight:800; white-space:nowrap; }
 .initialization-risk-facts { display:grid; grid-template-columns:minmax(0,1.45fr) minmax(220px,.55fr); gap:1px; margin:0; border-bottom:1px solid #e7efed; background:#e7efed; }
@@ -3683,61 +3727,51 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .initialization-risk-details section + section { border-left:1px solid #e4ecea; padding-left:12px; }
 .initialization-risk-details h5 { margin:0 0 5px; color:#667d78; font-size:12px; font-weight:800; }
 .initialization-risk-details p { margin:0; color:#355650; font-size:12px; line-height:1.7; overflow-wrap:anywhere; text-wrap:pretty; }
-.initialization-quality-table-wrap { overflow-x:auto; border-top:1px solid #e5eeec; background:#fff; }
-.initialization-quality-table { width:100%; min-width:1160px; border-spacing:0; border-collapse:separate; table-layout:fixed; color:#45615b; font-size:12px; }
+.initialization-quality-table-wrap { border-top:1px solid #e5eeec; background:#fff; }
+.initialization-quality-table { width:100%; min-width:1290px; border-spacing:0; border-collapse:separate; table-layout:fixed; color:#45615b; font-size:12px; }
 .initialization-quality-table th { padding:10px 12px; border-right:1px solid #e1ebe8; border-bottom:1px solid #d9e6e3; color:#58736d; background:#f1f7f5; font-size:12px; font-weight:800; line-height:1.45; text-align:left; }
 .initialization-quality-table th:last-child,.initialization-quality-table td:last-child { border-right:0; }
 .initialization-quality-table td { padding:11px 12px; border-right:1px solid #edf2f0; border-bottom:1px solid #edf2f0; font-size:12px; line-height:1.6; vertical-align:top; overflow-wrap:anywhere; text-wrap:pretty; }
 .initialization-quality-table tbody tr:last-child td { border-bottom:0; }
 .initialization-quality-table tbody tr { transition:background .16s ease; }
 .initialization-quality-table tbody tr:hover { background:#f5faf8; }
-.initialization-quality-table th:nth-child(1),.initialization-quality-table td:nth-child(1) { width:96px; }
-.initialization-quality-table th:nth-child(2),.initialization-quality-table td:nth-child(2) { width:280px; }
-.initialization-quality-table th:nth-child(3),.initialization-quality-table td:nth-child(3) { width:300px; }
-.initialization-quality-table th:nth-child(4),.initialization-quality-table td:nth-child(4) { width:190px; }
-.initialization-quality-table th:nth-child(5),.initialization-quality-table td:nth-child(5) { width:294px; }
+.initialization-quality-table th:nth-child(1),.initialization-quality-table td:nth-child(1) { width:128px; }
+.initialization-quality-table th:nth-child(2),.initialization-quality-table td:nth-child(2) { width:96px; }
+.initialization-quality-table th:nth-child(3),.initialization-quality-table td:nth-child(3) { width:280px; }
+.initialization-quality-table th:nth-child(4),.initialization-quality-table td:nth-child(4) { width:300px; }
+.initialization-quality-table th:nth-child(5),.initialization-quality-table td:nth-child(5) { width:190px; }
+.initialization-quality-table th:nth-child(6),.initialization-quality-table td:nth-child(6) { width:294px; }
 .initialization-quality-table code { display:inline-flex; border-radius:4px; padding:3px 6px; color:#2f675e; background:#e6f1ee; font:750 12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .initialization-quality-table strong { color:#294f48; font-size:12px; font-weight:750; }
-.draft-issues { gap:14px; padding:16px; background:#fbfcfc; }
-.draft-issues > .draft-issues-heading { align-items:flex-start; }
-.draft-issues-heading > div { min-width:0; }
-.draft-issues-heading h3 { font-size:15px; line-height:1.4; }
-.draft-issues-heading p { margin:4px 0 0; color:#6d817d; font-size:12px; line-height:1.55; }
-.draft-issues-heading > span { flex:0 0 auto; border-radius:999px; padding:4px 9px; color:#5f7873 !important; background:#edf4f2; font-size:12px !important; font-weight:750; font-variant-numeric:tabular-nums; }
-.draft-issues-summary { display:flex; flex-wrap:wrap; gap:8px; }
-.draft-issues-summary span { display:inline-flex; align-items:baseline; gap:4px; border:1px solid transparent; border-radius:6px; padding:7px 10px; font-size:12px; font-weight:700; line-height:1.35; }
-.draft-issues-summary span strong { font-size:15px; font-variant-numeric:tabular-nums; }
-.draft-issues-summary .error { border-color:#efd7d0; color:#98442f; background:#fff5f2; }
-.draft-issues-summary .warning { border-color:#eadfc8; color:#8b641f; background:#fffaf0; }
-.draft-issue-groups { display:grid; gap:9px; }
-.draft-issue-group { overflow:hidden; border:1px solid #dfe8e6; border-radius:8px; background:#fff; }
-.draft-issue-group.error { border-left:3px solid #c96952; }
-.draft-issue-group.warning { border-left:3px solid #d2a24b; }
-.draft-issue-group-toggle { display:grid; width:100%; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:10px; border:0; padding:11px 12px; color:#294d47; background:#fff; font:inherit; text-align:left; cursor:pointer; transition:background .16s ease; }
-.draft-issue-group-toggle:hover { background:#f7faf9; }
-.draft-issue-group-toggle:focus-visible { outline:2px solid rgba(15,118,110,.22); outline-offset:-2px; }
-.draft-issue-group-icon { display:grid; width:30px; height:30px; place-items:center; border-radius:7px; color:#9a6c22; background:#fff5df; }
-.draft-issue-group.error .draft-issue-group-icon { color:#a94e39; background:#fcece7; }
-.draft-issue-group-copy { display:grid; min-width:0; gap:2px; }
-.draft-issue-group-copy strong { color:#294d47; font-size:13px; font-weight:800; line-height:1.4; }
-.draft-issue-group-copy small { color:#70837f; font-size:12px; line-height:1.45; }
-.draft-issue-group-count { min-width:44px; color:#69807b !important; font-size:12px !important; font-weight:750; text-align:right; white-space:nowrap; }
-.draft-issue-group-chevron { color:#738984; transition:transform .16s ease; }
-.draft-issue-group-toggle[aria-expanded="true"] .draft-issue-group-chevron { transform:rotate(180deg); }
-.draft-issue-group ul { display:grid; gap:0; margin:0; padding:0 12px 12px 52px; list-style:none; }
-.draft-issue-group li { display:grid; gap:7px; border-top:1px solid #e8efed; padding:12px 0; font-size:12px; line-height:1.55; }
-.draft-issue-group li:first-child { border-top-color:#dfe9e6; }
-.draft-issue-group li > header { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
-.draft-issue-group li > header > div { display:flex; min-width:0; flex-wrap:wrap; align-items:center; gap:7px; }
-.draft-issue-group li > header strong { color:#31534d; font-size:13px; font-weight:800; line-height:1.45; }
-.draft-issue-group li > header span { display:inline-flex; border-radius:4px; padding:2px 6px; color:#446b64; background:#eaf3f1; font:750 12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:nowrap; }
-.draft-issue-group li > header em { flex:0 0 auto; border-radius:999px; padding:3px 7px; color:#93691f; background:#fff4dd; font-size:12px; font-style:normal; font-weight:750; line-height:1.35; white-space:nowrap; }
-.draft-issue-group li.error > header em { color:#a24732; background:#fcebe6; }
-.draft-issue-group li > p { margin:0; color:#516a65; font-size:12px; line-height:1.65; text-wrap:pretty; }
-.draft-issue-guidance { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:start; gap:8px; border-radius:6px; padding:8px 10px; color:#58716c; background:#f4f8f7; font-size:12px; line-height:1.55; }
-.draft-issue-guidance strong { color:#2f6259; font-size:12px; font-weight:800; white-space:nowrap; }
-.draft-issue-guidance span { color:#58716c; font-size:12px; }
-.initialization-partial-confirm { display:flex; align-items:flex-start; gap:7px; border-top:1px solid #e7eeec; padding-top:12px; color:#6f5d4d; font-size:12px; line-height:1.5; }.initialization-partial-confirm input { margin-top:2px; }
+.initialization-validation-column { color:#7a5a1c !important; background:#fff8e8 !important; }
+.initialization-validation-cell { background:#fffdf7; }
+.initialization-validation-stack { display:flex; min-height:24px; flex-wrap:wrap; align-items:flex-start; gap:5px; color:#9aa9a6; }
+.initialization-validation-stack > span:not(.initialization-issue-badges) { line-height:24px; }
+.initialization-section-issues { display:grid; min-height:42px; grid-template-columns:116px minmax(0,1fr); align-items:center; gap:12px; border-top:1px solid #e4ecea; padding:7px 12px; background:#fffcf5; }
+.initialization-section-issues > strong { color:#7a5a1c; font-size:12px; font-weight:850; }
+.initialization-empty-section { margin:0; padding:22px 14px; color:#738682; background:#fbfdfc; font-size:12px; text-align:center; }
+.has-validation-issue { box-shadow:inset 3px 0 0 #d7a54b; }
+.initialization-project-section .has-validation-issue { background:#fffcf5; }
+.initialization-project-section .missing { color:#8b6a2d; }
+.initialization-issue-detail-backdrop { position:fixed; z-index:1300; inset:0; display:grid; place-items:center; padding:24px; background:rgba(22,38,35,.42); }
+.initialization-issue-detail { display:grid; width:min(100%,760px); max-height:min(760px,calc(100dvh - 48px)); grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; border:1px solid #d7e2df; border-radius:12px; background:#fff; box-shadow:0 22px 70px rgba(15,38,34,.24); }
+.initialization-issue-detail > header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; border-bottom:1px solid #e1e9e7; padding:18px 20px 15px; }
+.initialization-issue-detail > header > div { min-width:0; }
+.initialization-issue-detail > header h3 { margin:0; color:#284d46; font-size:18px; line-height:1.4; }
+.initialization-issue-detail > header p { margin:4px 0 0; color:#758782; font-size:12px; line-height:1.5; }
+.initialization-issue-detail > header button { display:grid; flex:0 0 30px; width:30px; height:30px; place-items:center; border:0; border-radius:6px; color:#5c746f; background:#f2f6f5; cursor:pointer; }
+.initialization-issue-detail-body { display:grid; align-content:start; gap:14px; min-height:0; overflow-y:auto; padding:18px 20px; }
+.initialization-issue-detail-item { display:grid; gap:10px; border:1px solid #dce7e4; border-radius:9px; padding:12px; background:#fff; }
+.initialization-issue-detail-item > header { display:grid; grid-template-columns:28px minmax(0,1fr); align-items:center; gap:9px; }
+.initialization-issue-detail-item > header span { display:grid; width:28px; height:28px; place-items:center; border-radius:6px; color:#805c16; background:#fff0d1; font-size:12px; font-variant-numeric:tabular-nums; font-weight:850; }
+.initialization-issue-detail-item > header strong { color:#2c514a; font-size:13px; line-height:1.5; }
+.initialization-issue-detail-item > div { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px; }
+.initialization-issue-detail-body section { display:grid; gap:6px; border:1px solid #e1eae7; border-radius:8px; padding:12px 14px; background:#fbfdfc; }
+.initialization-issue-detail-body h4 { margin:0; color:#496761; font-size:12px; font-weight:850; }
+.initialization-issue-detail-body strong { color:#2d514a; font-size:13px; line-height:1.55; }
+.initialization-issue-detail-body p { margin:0; color:#2f514b; font-size:13px; line-height:1.7; white-space:pre-wrap; overflow-wrap:anywhere; }
+.initialization-issue-detail > footer { display:flex; align-items:center; justify-content:flex-end; gap:12px; border-top:1px solid #e1e9e7; padding:12px 20px; background:#fbfcfc; }
+.initialization-partial-confirm { display:flex; flex:0 1 360px; align-items:flex-start; gap:7px; color:#6f5d4d; font-size:12px; line-height:1.5; }.initialization-partial-confirm input { margin-top:2px; }
 .initialization-review-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; padding:13px 20px; border-top:1px solid var(--border-default); background:#fff; }.initialization-review-actions > span { flex:1 1 auto; color:#738682; font-size:12px; line-height:1.5; }.initialization-review-actions .primary:disabled { opacity:.5; cursor:not-allowed; }
 .project-navigator { display:grid; grid-template-rows:auto minmax(0,1fr); }.project-navigator-list { min-height:0; overflow-y:auto; }
 .manual-config-workspace { display:grid; min-height:0; grid-template-columns:176px minmax(0,1fr); margin-top:8px; border:1px solid var(--border-default); border-radius:10px; overflow:hidden; background:#fff; }
@@ -3901,10 +3935,6 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
   .risk-context,.risk-record-card dl { grid-template-columns:1fr; }
   .risk-record-card > header { grid-template-columns:auto minmax(0,1fr) auto; }.risk-record-card > header .row-action { grid-column:2; justify-self:start; }
 }
-@media (max-width:1100px) {
-  .initialization-personnel-card { grid-template-columns:minmax(190px,.65fr) minmax(0,1.35fr); }
-  .initialization-personnel-credential,.initialization-personnel-account-ready { grid-column:1 / -1; border-top:1px solid #e5eeec; border-left:0; }
-}
 @media (max-width:1380px) and (min-width:1001px) { .project-config-scroll > .setup-grid { grid-template-columns:1fr; } }
 @media (max-width:1000px) { .setup-page { display:block; height:auto; min-height:100%; overflow:visible; }.setup-workspace { display:block; min-height:0; }.project-navigator { min-height:0; margin-bottom:18px; }.project-config-panel { display:block; min-width:0; overflow:visible; }.project-config-scroll { overflow:visible; padding-right:0; }.project-workspace-tabs { position:static; overflow-x:auto; }.project-workspace-tabs button { flex:0 0 155px; }.project-config-scroll > .material-agent-workspace,.project-connection-workspace { min-height:520px; }.project-connection-grid { grid-template-columns:210px minmax(0,1fr); }.manual-config-workspace { min-height:520px; grid-template-columns:1fr; }.manual-config-tree { grid-template-columns:repeat(3,minmax(150px,1fr)); grid-auto-rows:min-content; border-right:0; border-bottom:1px solid var(--border-default); overflow:auto; }.manual-config-tree-head { grid-column:1 / -1; }.setup-grid { grid-template-columns:1fr; }.config-summary { grid-template-columns:repeat(2,1fr); }.compact-form,.wbs-form,.risk-form { grid-template-columns:1fr 1fr; }.compact-form button { grid-column:span 2; } } @media (max-width:600px) { .setup-page { padding:18px; }.project-context { padding:16px; }.project-context-title h1 { font-size:16px; }.project-context-meta { grid-template-columns:1fr; gap:9px; margin-top:15px; }.project-context-meta div { grid-template-columns:60px minmax(0,1fr); }.project-nav-item { padding:13px 14px; }.material-agent-workspace,.project-connection-workspace { min-height:0; padding:15px; }.material-workspace-head,.project-connection-head { display:grid; gap:12px; }.material-workspace-actions { justify-content:space-between; }.agent-context-summary { grid-template-columns:1fr; }.project-config-scroll > .material-agent-workspace { min-height:500px; padding:14px; }.agent-context-summary article { border-right:0; border-bottom:1px solid #e0ebe8; }.agent-context-summary article:last-child { border-bottom:0; }.material-agent-chat { min-height:340px; }.material-agent-composer { grid-template-columns:1fr; }.project-connection-grid { grid-template-columns:1fr; overflow:visible; }.project-connector-list { grid-template-columns:repeat(3,minmax(0,1fr)); overflow:visible; border-right:0; border-bottom:1px solid var(--border-default); }.project-connector-list button { grid-template-columns:auto minmax(0,1fr); }.project-connector-list button > i { display:none; }.project-connector-editor { overflow:visible; padding:16px; }.project-connector-actions { align-items:stretch; flex-direction:column; }.project-connector-actions .primary { width:100%; }.manual-config-workspace { min-height:500px; }.manual-config-tree { display:flex; gap:3px; padding:7px; overflow-x:auto; }.manual-config-tree-head { display:none; }.manual-config-tree button { flex:0 0 auto; grid-template-columns:auto minmax(0,1fr); width:auto; }.manual-config-tree button em { display:none; }.manual-list-head { display:grid; padding:15px; }.manual-list-actions { width:100%; }.manual-search { width:auto; flex:1 1 auto; }.manual-editor-form { grid-template-columns:1fr; }.manual-editor-form .full-span,.manual-editor-actions { grid-column:auto; }.manual-rule-editor>div { display:grid; }.manual-editor-actions { justify-content:stretch; }.manual-editor-actions button { flex:1 1 auto; }.config-summary { grid-template-columns:1fr 1fr; }.item-list>div { grid-template-columns:1fr; gap:3px; }.panel-head { gap:10px; }.setup-modal-backdrop { padding:12px; }.setup-modal { max-height:calc(100dvh - 24px); padding:16px; border-radius:10px; }.setup-modal-head { gap:12px; }.setup-modal-actions { justify-content:stretch; }.setup-modal-actions button { flex:1 1 auto; } }
 @media (max-width:600px) { .setup-modal-head span,.setup-modal-head p { display:none; } }
@@ -3924,17 +3954,10 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
   .project-empty-stage::before { opacity:.6; }
   .initialization-draft-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .initialization-draft-summary span { border-right:0; border-bottom:1px solid #e4efec; }
-  .initialization-project-contract-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
-  .initialization-project-units dl { grid-template-columns:1fr; }
-  .initialization-personnel-card { grid-template-columns:1fr; }
-  .initialization-personnel-profile { border-right:0; border-bottom:1px solid #e5eeec; }
-  .initialization-personnel-facts { grid-template-columns:1fr; }
-  .initialization-personnel-facts > div.responsibility { grid-column:auto; }
-  .initialization-personnel-credential { grid-template-columns:1fr; }
-  .initialization-personnel-credential > div { grid-column:auto; }
-  .initialization-risk-facts,.initialization-risk-details { grid-template-columns:1fr; }
-  .initialization-risk-details section + section { border-top:1px solid #e4ecea; border-left:0; padding-top:12px; padding-left:0; }
-  .initialization-project-units dl > div.primary { grid-column:auto; }
+  .initialization-review-modal { padding:0; }
+  .initialization-review-body { grid-template-columns:160px minmax(0,1fr); }
+  .initialization-review-navigation { padding:14px 9px; }
+  .initialization-issue-detail-item > div { grid-template-columns:1fr; }
   .initialization-review-actions { align-items:stretch; flex-wrap:wrap; }
   .initialization-review-actions > span { flex-basis:100%; }
 }

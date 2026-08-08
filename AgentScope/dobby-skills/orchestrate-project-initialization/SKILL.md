@@ -17,13 +17,15 @@ description: 先规划，再组织持久化专项智能体把任意格式资料�
    分区，不要在主智能体中重复读取全部附件。调用
    `dobby_list_project_initialization_attachment_chunks` 时显式指定 fields，并使用
    `record_id=chunk_id`、`limit=1`、`text_field="content"`、`text_offset=0`、
-   `text_limit=6000`；需要完整理解某个分块时，按 `_text_page.next_offset` 继续
+   `text_limit=6000`。即使已传唯一的 `record_id` 也绝不能省略 `limit=1`，否则
+   平台会拒绝调用；需要完整理解某个分块时，按 `_text_page.next_offset` 继续
    读取到 `has_more=false`。随后调用
    `dobby_get_project_initialization_state` 和
    `dobby_get_project_initialization_draft`，识别增量更新还是新草稿。
-3. 需要新草稿时调用 `dobby_create_project_initialization_draft`，传入
-   `status="building"`、空的标准 payload、来源文件名，并要求返回新记录以取得
-   `draft_id`。不得写正式项目表。平台持久化的解析分块就是本轮附件证据；禁止
+3. 需要新草稿时调用 `dobby_create_project_initialization_draft`，只在 `values` 中
+   传入非空 `source_files`，并设置 `return_record=true` 取得新记录的 `draft_id`；
+   `status`、`payload`、会话和创建人均由平台生成，禁止传入。不得写正式项目表。
+   平台持久化的解析分块就是本轮附件证据；禁止
    扫描工作区寻找附件或元数据，禁止建立标准化批次、
    写标准化产物或调用任何旧初始化编排 MCP。
 4. `TeamCreate` 后只邀请实际涉及的持久化专项智能体。用 `AgentInvite` 的任务说明

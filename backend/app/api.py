@@ -25,7 +25,6 @@ from .config import get_settings
 from .db import SessionLocal, get_db
 from .models import (AgentConversation, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectInitializationDraft, ProjectInitializationFile, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectSettings, ProjectStatusSnapshot,
                       QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsPredecessor, WbsRiskLink)
-from .initialization_integrity import validate_initialization_integrity
 from .initialization_validation import (
     InitializationValidationError,
     latest_initialization_validation_run,
@@ -35,6 +34,8 @@ from .initialization_validation import (
 from .initialization_draft_queries import (
     compose_initialization_draft_payload,
     initialization_draft_workflow_summary,
+    latest_initialization_validation_issues,
+    serialize_initialization_validation_issue,
 )
 from .initialization_attachment_store import (
     InitializationAttachmentParseError,
@@ -2369,26 +2370,10 @@ def _initialization_draft_review(
     payload_model = compose_initialization_draft_payload(db, draft)
     payload = payload_model.model_dump(mode="json")
     workflow = initialization_draft_workflow_summary(db, draft)
-    deterministic_issues = validate_initialization_integrity(payload_model)
-    deterministic_keys = {
-        (item.get("level"), item.get("path"), item.get("message"))
-        for item in deterministic_issues
-    }
-    semantic_issues = [
-        item
-        for item in (draft.validation_issues or [])
-        if (
-            item.get("level"),
-            item.get("path"),
-            item.get("message"),
-        )
-        not in deterministic_keys
+    current_issues = [] if draft.status == "building" else [
+        serialize_initialization_validation_issue(issue)
+        for issue in latest_initialization_validation_issues(db, draft.id)
     ]
-    current_issues = (
-        []
-        if draft.status == "building"
-        else [*deterministic_issues, *semantic_issues]
-    )
     data["payload"] = payload
     data["workflow"] = workflow
     data["validation_issues"] = current_issues
@@ -2464,11 +2449,12 @@ def _initialization_draft_review(
     data["summary"] = {
         "project_fields": sum(
             value not in (None, "")
-            for value in (
-                payload.get("project", {}).values()
+            for key, value in (
+                payload.get("project", {}).items()
                 if isinstance(payload.get("project"), dict)
                 else []
             )
+            if key != "record_id"
         ),
         "personnel": len(set(identity_cards)),
         "position_assignments": len(personnel),

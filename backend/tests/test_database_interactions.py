@@ -31,6 +31,7 @@ from backend.app.models import (
     OperationLog,
     Project,
     ProjectInitializationDraft,
+    ProjectInitializationDraftRecord,
     ProjectInitializationDraftSection,
     ProjectInitializationAttachmentChunk,
     ProjectInitializationFile,
@@ -1022,6 +1023,7 @@ def test_initialization_specialist_section_is_fixed_by_platform(db: Session) -> 
     assert set(payload_schema["items"]["properties"]) == set(
         _valid_wbs_payload()[0],
     )
+    assert "record_id" not in payload_schema["items"]["properties"]
     update_agent_assignments(db, "wbs-specialist", [interaction.id])
     row, policy = resolve_assigned_interaction(
         db,
@@ -1075,6 +1077,76 @@ def test_initialization_specialist_section_is_fixed_by_platform(db: Session) -> 
     assert section.payload[0]["progress_percent"] == "0"
     assert section.source_files["chunks"][0]["file_id"] == 2
     assert section.extraction_notes == []
+    records = list(
+        db.scalars(
+            select(ProjectInitializationDraftRecord)
+            .where(ProjectInitializationDraftRecord.section_id == section.id)
+            .order_by(ProjectInitializationDraftRecord.ordinal),
+        ).all(),
+    )
+    assert len(records) == len(section.payload)
+    assert records[0].draft_id == draft.id
+    assert records[0].section == "wbs"
+    assert records[0].payload["wbs_code"] == "1"
+    assert records[0].business_key == "1 · 基础施工"
+    original_record_id = records[0].id
+    original_draft_revision = draft.revision
+
+    update_interaction_row = db.scalar(
+        select(DatabaseInteraction).where(
+            DatabaseInteraction.key
+            == "dobby_update_initialization_wbs_section",
+        ),
+    )
+    assert update_interaction_row is not None
+    update_agent_assignments(
+        db,
+        "wbs-specialist",
+        [interaction.id, update_interaction_row.id],
+    )
+    update_row, update_policy = resolve_assigned_interaction(
+        db,
+        "wbs-specialist",
+        update_interaction_row.key,
+    )
+    assert update_policy is not None
+    revised_payload = _valid_wbs_payload()
+    revised_payload[0]["name"] = "基础施工（修订）"
+    execute_table_interaction(
+        db,
+        context,
+        update_row,
+        update_policy,
+        {
+            "record_id": section.id,
+            "values": {
+                "payload": revised_payload,
+                "source_files": ["总进度计划-修订.xlsx"],
+                "extraction_notes": ["修订工序名称"],
+            },
+        },
+        actor_agent_id="wbs-specialist",
+    )
+    db.refresh(section)
+    db.refresh(draft)
+    revised_record = db.scalar(
+        select(ProjectInitializationDraftRecord).where(
+            ProjectInitializationDraftRecord.section_id == section.id,
+            ProjectInitializationDraftRecord.active.is_(True),
+        ),
+    )
+    assert revised_record is not None
+    assert revised_record.id != original_record_id
+    assert revised_record.payload["name"] == "基础施工（修订）"
+    historical_record = db.get(
+        ProjectInitializationDraftRecord,
+        original_record_id,
+    )
+    assert historical_record is not None
+    assert historical_record.active is False
+    assert section.revision == 2
+    assert draft.revision == original_draft_revision + 1
+    assert draft.status == "building"
 
 
 def test_initialization_draft_creation_keeps_envelope_canonical(
@@ -1097,28 +1169,30 @@ def test_initialization_draft_creation_keeps_envelope_canonical(
     )
     assert policy is not None
 
+    with pytest.raises(HTTPException) as blocked:
+        execute_table_interaction(
+            db,
+            context,
+            row,
+            policy,
+            {
+                "values": {
+                    "status": "ready",
+                    "payload": {"project": {"name": "伪造草稿"}},
+                    "validation_issues": [{"message": "伪造问题"}],
+                    "source_files": ["附件.xlsx"],
+                },
+            },
+            actor_agent_id="initialization-orchestrator",
+        )
+    assert "字段不可写" in str(blocked.value.detail)
+
     result, _ = execute_table_interaction(
         db,
         context,
         row,
         policy,
-        {
-            "values": {
-                "status": "ready",
-                "payload": {
-                    "engineering_info": {"project_name": "旧结构"},
-                    "quality_metrics": [{"name": "旧字段"}],
-                },
-                "validation_issues": [
-                    {
-                        "level": "error",
-                        "path": "payload",
-                        "message": "不应由创建动作写入",
-                    },
-                ],
-                "source_files": ["附件.xlsx"],
-            },
-        },
+        {"values": {"source_files": ["附件.xlsx"]}},
         actor_agent_id="initialization-orchestrator",
     )
 

@@ -29,7 +29,7 @@ DEFAULT_ARCHIVE = (
 def _draft(*, valid_dates: bool) -> dict:
     return {
         "project": {
-            "name": "核验测试项目",
+            "record_id": 101,
             "contract_start_date": "2026-08-01" if valid_dates else "2026-08-10",
             "contract_end_date": "2026-08-09",
         },
@@ -78,6 +78,9 @@ async def _run(archive: Path) -> None:
             assert invalid["status"] == "invalid"
             assert any(
                 issue["rule_id"] == "project.contract_date_order"
+                and issue["target_record_id"] == 101
+                and issue["field_name"] == "contract_end_date"
+                and issue["title"] == "合同日期顺序错误"
                 for issue in invalid["validation_issues"]
             )
             assert valid["ruleset_version"]

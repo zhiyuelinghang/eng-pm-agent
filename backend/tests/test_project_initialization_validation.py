@@ -1,8 +1,6 @@
 import importlib
 import sys
 from pathlib import Path
-from types import SimpleNamespace
-
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -15,6 +13,8 @@ from backend.app.models import (
     AgentConversation,
     Project,
     ProjectInitializationDraft,
+    ProjectInitializationDraftSection,
+    ProjectInitializationValidationRun,
     User,
 )
 from backend.app.project_initialization import (
@@ -41,14 +41,22 @@ finally:
 
 def validate_initialization_payload(
     payload: ProjectInitializationPayload,
-) -> list[dict[str, str]]:
+) -> list[dict[str, object]]:
+    data = payload.model_dump(mode="json")
+    data["project"]["record_id"] = 1
+    for section_index, section in enumerate(
+        ("personnel", "wbs", "risks", "quality_requirements"),
+        start=2,
+    ):
+        for row_index, item in enumerate(data[section], start=1):
+            item["record_id"] = section_index * 1000 + row_index
     result = initialization_validator.validate_project_initialization(
-        payload.model_dump(mode="json"),
+        data,
     )
     return result["validation_issues"]
 
 
-def test_ready_draft_can_be_applied_without_legacy_run_state() -> None:
+def test_ready_draft_can_be_applied_with_current_structured_validation() -> None:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -89,6 +97,33 @@ def test_ready_draft_can_be_applied_without_legacy_run_state() -> None:
         )
         db.add(draft)
         db.flush()
+        db.add(
+            ProjectInitializationDraftSection(
+                draft_id=draft.id,
+                project_id=project.id,
+                conversation_id=conversation.id,
+                section="project",
+                writer_agent_id="project-specialist",
+                payload={"engineering_type_description": "测试工程"},
+                source_files=["工程概况.docx"],
+                extraction_notes=[],
+            ),
+        )
+        db.add(
+            ProjectInitializationValidationRun(
+                draft_id=draft.id,
+                project_id=project.id,
+                conversation_id=conversation.id,
+                draft_revision=draft.revision,
+                status="completed",
+                result_status="ready",
+                package_id="project-initialization-validator",
+                package_version="2.0.0",
+                ruleset_version="2026.08.2",
+                validation_issues=[],
+                duration_ms=10,
+            ),
+        )
 
         result = apply_initialization_draft(
             db,
@@ -103,47 +138,86 @@ def test_ready_draft_can_be_applied_without_legacy_run_state() -> None:
 
 
 def test_review_composes_sections_and_ignores_legacy_draft_payload() -> None:
-    rows = [
-        SimpleNamespace(
-            section="project",
-            payload={"engineering_type_description": "异地扩建项目"},
-        ),
-        SimpleNamespace(
-            section="risks",
-            payload=[
-                {
-                    "serial_no": 1,
-                    "related_process_name": "基坑施工",
-                    "risk_part": "深基坑",
-                    "risk_level": "重大风险",
-                    "evaluation_condition": "开挖深度超过 5 米",
-                },
-            ],
-        ),
-    ]
-
-    class _Rows:
-        def all(self):
-            return rows
-
-    class _Session:
-        def scalars(self, _statement):
-            return _Rows()
-
-    payload = compose_initialization_draft_payload(
-        _Session(),
-        SimpleNamespace(
-            id=7,
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        project = Project(name="分区组装测试")
+        user = User(
+            username="compose-admin",
+            password_hash="test",
+            role="admin",
+            real_name="测试管理员",
+            identity_card_no="COMPOSE_ADMIN",
+        )
+        db.add_all([project, user])
+        db.flush()
+        conversation = AgentConversation(
+            project_id=project.id,
+            user_id=user.id,
+            agent_id="initializer",
+            agent_name="初始化助手",
+            conversation_type="initialization",
+            title="初始化",
+        )
+        db.add(conversation)
+        db.flush()
+        draft = ProjectInitializationDraft(
+            project_id=project.id,
+            conversation_id=conversation.id,
+            created_by_user_id=user.id,
+            status="building",
             payload={
                 "engineering_info": {"project_name": "旧结构"},
                 "quality_metrics": [{"name": "旧字段"}],
             },
-        ),
-    )
+        )
+        db.add(draft)
+        db.flush()
+        db.add_all(
+            [
+                ProjectInitializationDraftSection(
+                    draft_id=draft.id,
+                    project_id=project.id,
+                    conversation_id=conversation.id,
+                    section="project",
+                    writer_agent_id="project-specialist",
+                    payload={"engineering_type_description": "异地扩建项目"},
+                    source_files=["工程概况.docx"],
+                    extraction_notes=[],
+                ),
+                ProjectInitializationDraftSection(
+                    draft_id=draft.id,
+                    project_id=project.id,
+                    conversation_id=conversation.id,
+                    section="risks",
+                    writer_agent_id="risk-specialist",
+                    payload=[
+                        {
+                            "serial_no": 1,
+                            "related_process_name": "基坑施工",
+                            "risk_part": "深基坑",
+                            "risk_level": "重大风险",
+                            "evaluation_condition": "开挖深度超过 5 米",
+                        },
+                    ],
+                    source_files=["风险清单.xlsx"],
+                    extraction_notes=[],
+                ),
+            ],
+        )
+        db.flush()
 
-    assert payload.project.engineering_type_description == "异地扩建项目"
-    assert len(payload.risks) == 1
-    assert payload.risks[0].risk_part == "深基坑"
+        payload = compose_initialization_draft_payload(db, draft)
+
+        assert payload.project.engineering_type_description == "异地扩建项目"
+        assert isinstance(payload.project.record_id, int)
+        assert len(payload.risks) == 1
+        assert payload.risks[0].risk_part == "深基坑"
+        assert isinstance(payload.risks[0].record_id, int)
 
 
 def _wbs(
@@ -245,8 +319,9 @@ def test_sibling_start_dates_must_follow_numeric_wbs_order() -> None:
 
     assert any(
         item["level"] == "warning"
-        and item["path"] == "wbs.1.2.planned_start_at"
-        and "同级 WBS 1.1" in item["message"]
+        and item["rule_id"] == "wbs.sibling_start_order"
+        and item["field_name"] == "planned_start_at"
+        and item["target_record_id"] == 3003
         for item in issues
     )
 
@@ -285,8 +360,9 @@ def test_overlapping_predecessor_dates_are_reported_for_confirmation() -> None:
 
     assert any(
         item["level"] == "warning"
-        and item["path"] == "wbs.1.2.planned_start_at"
-        and "如属于搭接施工" in item["message"]
+        and item["rule_id"] == "wbs.predecessor_overlap"
+        and item["field_name"] == "planned_start_at"
+        and "搭接施工" in str(item["suggestion"])
         for item in issues
     )
 
@@ -317,8 +393,9 @@ def test_placeholder_wbs_name_is_preserved_but_warned() -> None:
 
     assert any(
         item["level"] == "warning"
-        and item["path"] == "wbs.1.1.name"
-        and "疑似占位内容" in item["message"]
+        and item["rule_id"] == "wbs.placeholder_name"
+        and item["field_name"] == "name"
+        and item["target_record_id"] == 3002
         for item in issues
     )
 
@@ -360,11 +437,11 @@ def test_same_person_with_multiple_positions_reuses_one_account() -> None:
     )
 
     issues = validate_initialization_payload(payload)
-    personnel_issues = [item for item in issues if item["path"] == "personnel"]
+    personnel_issues = [item for item in issues if item["section"] == "personnel"]
 
     assert any(
         item["level"] == "warning"
-        and "共用同一个平台账号" in item["message"]
+        and "共用同一个平台账号" in str(item["suggestion"])
         for item in personnel_issues
     )
     assert not any(item["level"] == "error" for item in personnel_issues)

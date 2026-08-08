@@ -52,6 +52,11 @@ from .models import (
     DatabaseInteractionAgentAssignment,
     DatabaseInteractionTablePolicy,
     OperationLog,
+    ProjectInitializationDraft,
+    ProjectInitializationDraftSection,
+)
+from .initialization_draft_queries import (
+    sync_initialization_draft_section_records,
 )
 from .project_initialization import (
     PersonnelDraft,
@@ -95,7 +100,7 @@ _SENSITIVE_FIELD_PARTS = (
     "storage_path",
 )
 _SYSTEM_MANAGED_FIELDS = frozenset({"created_at", "updated_at"})
-_DECLARATIVE_CATALOG_VERSION = 18
+_DECLARATIVE_CATALOG_VERSION = 19
 _MAX_BATCH_RECORD_IDS = 12
 _MAX_JSON_PAGE_ITEMS = 20
 _MAX_TEXT_PAGE_CHARS = 6000
@@ -858,6 +863,11 @@ def _initialization_section_payload_schema(section: str) -> dict[str, Any]:
     if model is None:
         raise HTTPException(status_code=422, detail="初始化草稿分区类型无效")
     item_schema = model.model_json_schema()
+    item_schema.get("properties", {}).pop("record_id", None)
+    if isinstance(item_schema.get("required"), list):
+        item_schema["required"] = [
+            name for name in item_schema["required"] if name != "record_id"
+        ]
     if section == "project":
         item_schema["description"] = (
             "工程信息对象；字段名必须与此结构完全一致，禁止额外包裹。"
@@ -893,8 +903,21 @@ def _normalize_initialization_section_payload(
                     f"{max_items} 条完整标准记录"
                 ),
             )
+    if isinstance(payload, list):
+        normalized_input = [
+            {key: value for key, value in item.items() if key != "record_id"}
+            if isinstance(item, dict)
+            else item
+            for item in payload
+        ]
+    elif isinstance(payload, dict):
+        normalized_input = {
+            key: value for key, value in payload.items() if key != "record_id"
+        }
+    else:
+        normalized_input = payload
     try:
-        validated = adapter.validate_python(payload)
+        validated = adapter.validate_python(normalized_input)
     except ValidationError as exc:
         raise HTTPException(
             status_code=422,
@@ -903,7 +926,15 @@ def _normalize_initialization_section_payload(
                 "errors": exc.errors(include_input=False),
             },
         ) from exc
-    return adapter.dump_python(validated, mode="json")
+    serialized = adapter.dump_python(validated, mode="json")
+    if isinstance(serialized, list):
+        return [
+            {key: value for key, value in item.items() if key != "record_id"}
+            for item in serialized
+        ]
+    return {
+        key: value for key, value in serialized.items() if key != "record_id"
+    }
 
 
 def _validate_initialization_section_evidence(values: dict[str, Any]) -> None:
@@ -2610,6 +2641,33 @@ def execute_table_interaction(
                 target_id=target_id if isinstance(target_id, int) else None,
             ),
         )
+        if initialization_section and operation in {"create", "update"}:
+            section_row = db.get(ProjectInitializationDraftSection, target_id)
+            if section_row is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="初始化草稿分区写入后未找到对应记录",
+                )
+            if operation == "update":
+                # The generic table write above uses SQLAlchemy Core. If this
+                # section was already loaded in the session, its ORM instance
+                # can still contain the pre-update JSON payload. Refresh it
+                # before producing the next addressable row revision.
+                db.refresh(section_row)
+                section_row.revision = int(section_row.revision or 0) + 1
+            sync_initialization_draft_section_records(db, section_row)
+            draft_row = db.get(
+                ProjectInitializationDraft,
+                section_row.draft_id,
+            )
+            if draft_row is not None and draft_row.status not in {
+                "applied",
+                "rejected",
+            }:
+                draft_row.status = "building"
+                draft_row.revision = int(draft_row.revision or 0) + 1
+                draft_row.payload = {}
+                draft_row.validation_issues = []
         db.commit()
         payload: dict[str, Any] = {
             "record_id": target_id,

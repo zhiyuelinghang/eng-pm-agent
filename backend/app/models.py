@@ -631,6 +631,55 @@ class ProjectInitializationDraftSection(TimestampMixin, Base):
     extraction_notes: Mapped[list[str]] = mapped_column(JSON, default=list)
 
 
+class ProjectInitializationDraftRecord(TimestampMixin, Base):
+    """One addressable business row inside an initialization draft section."""
+
+    __tablename__ = "project_initialization_draft_records"
+    __table_args__ = (
+        CheckConstraint(
+            "section IN ("
+            "'project', 'personnel', 'wbs', 'risks', "
+            "'quality_requirements'"
+            ")",
+            name="ck_project_initialization_draft_records_section",
+        ),
+        UniqueConstraint(
+            "section_id",
+            "ordinal",
+            name="uq_project_initialization_draft_records_section_ordinal",
+        ),
+        Index(
+            "ix_project_initialization_draft_records_draft_section",
+            "draft_id",
+            "section",
+            "ordinal",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    section_id: Mapped[int] = mapped_column(
+        ForeignKey("project_initialization_draft_sections.id", ondelete="CASCADE"),
+        index=True,
+    )
+    draft_id: Mapped[int] = mapped_column(
+        ForeignKey("project_initialization_drafts.id", ondelete="CASCADE"),
+        index=True,
+    )
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+        index=True,
+    )
+    section: Mapped[str] = mapped_column(String(40))
+    section_revision: Mapped[int] = mapped_column(Integer, default=1)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    ordinal: Mapped[int] = mapped_column(Integer)
+    business_key: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class ProjectInitializationValidationRun(TimestampMixin, Base):
     """One direct execution of the versioned initialization validator MCP."""
 
@@ -683,6 +732,71 @@ class ProjectInitializationValidationRun(TimestampMixin, Base):
         DateTime(timezone=True),
         nullable=True,
     )
+
+
+class ProjectInitializationValidationIssue(TimestampMixin, Base):
+    """Structured validation annotation targeting a draft row and field."""
+
+    __tablename__ = "project_initialization_validation_issues"
+    __table_args__ = (
+        CheckConstraint(
+            "level IN ('error', 'warning')",
+            name="ck_project_initialization_validation_issues_level",
+        ),
+        CheckConstraint(
+            "section IN ("
+            "'project', 'personnel', 'wbs', 'risks', "
+            "'quality_requirements'"
+            ")",
+            name="ck_project_initialization_validation_issues_section",
+        ),
+        Index(
+            "ix_project_initialization_validation_issues_draft_target",
+            "draft_id",
+            "target_record_id",
+            "field_name",
+        ),
+        Index(
+            "ix_project_initialization_validation_issues_run",
+            "validation_run_id",
+            "id",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    validation_run_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "project_initialization_validation_runs.id",
+            ondelete="CASCADE",
+        ),
+        index=True,
+    )
+    draft_id: Mapped[int] = mapped_column(
+        ForeignKey("project_initialization_drafts.id", ondelete="CASCADE"),
+        index=True,
+    )
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    draft_revision: Mapped[int] = mapped_column(Integer)
+    section: Mapped[str] = mapped_column(String(40))
+    target_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey(
+            "project_initialization_draft_records.id",
+            ondelete="SET NULL",
+        ),
+        nullable=True,
+        index=True,
+    )
+    field_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    rule_id: Mapped[str] = mapped_column(String(200))
+    level: Mapped[str] = mapped_column(String(16))
+    label: Mapped[str] = mapped_column(String(100))
+    title: Mapped[str] = mapped_column(String(300))
+    message: Mapped[str] = mapped_column(Text)
+    suggestion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    related_record_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
 
 class ProjectInitializationFile(TimestampMixin, Base):

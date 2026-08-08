@@ -129,6 +129,9 @@ AgentScope Web UI 是智能体管理端，工程管理平台是业务使用端�
 主智能体只提交草稿编号，由平台自动调用版本化核验 MCP，直接检查结构化草稿并标记
 `ready`/`invalid`。核验不再产生额外模型轮次。无论模型如何协作，用户在草稿页确认前
 都不会写入正式项目表。平台不再用固定表格映射或确定性快速入库替代 AI 理解。
+草稿中每条工程信息、人员、WBS、风险和质量数据都有数据库分配的稳定记录 ID；核验
+结果按“记录 ID + 字段名”单独落库。草稿核对页只在对应数据和字段旁展示问题标签，
+点击标签查看规则说明、处理建议和关联记录，不再维护一套前端写死的问题分类列表。
 
 初始化团队结构和能力分配声明在
 `AgentScope/project-initialization-team.json`；实际业务流程只写在各智能体已分配的
@@ -154,6 +157,7 @@ AgentScope Web UI 是智能体管理端，工程管理平台是业务使用端�
 ```powershell
 .\python-3.13.14\python.exe .\scripts\build_project_initialization_validator_mcp_package.py
 .\python-3.13.14\python.exe .\scripts\smoke_test_project_initialization_validator_mcp_package.py
+.\python-3.13.14\python.exe .\scripts\install_project_initialization_validator.py
 ```
 
 生成文件为
