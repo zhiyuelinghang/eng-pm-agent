@@ -1,9 +1,11 @@
 import type { ContentBlock, Msg, ToolCallBlock } from '@agentscope-ai/agentscope/message';
+import type { TaskContext } from '@agentscope-ai/agentscope/state';
 import { ArrowDown } from 'lucide-react';
 import React from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { MessageBubble } from '@/components/chat/MessageBubble';
+import { PlanTimelineCard } from '@/components/chat/PlanTimelineCard';
 import { TextInput } from '@/components/chat/TextInput.tsx';
 import { Button } from '@/components/ui/button.tsx';
 import type { ReplyPhase } from '@/hooks/useMessages';
@@ -12,6 +14,8 @@ import { cn } from '@/lib/utils';
 
 interface ChatContentProps {
 	msgs: Msg[];
+	/** Current plan state, rendered at its chronological position in the chat. */
+	tasksContext: TaskContext | null;
 	/**
 	 * Reply lifecycle phase from ``useMessages`` — forwarded to
 	 * ``TextInput`` so the single send / stop button can pick its
@@ -46,6 +50,7 @@ interface ChatContentProps {
 
 const ChatContentComponent: React.FC<ChatContentProps> = ({
 	msgs,
+	tasksContext,
 	phase,
 	disabled,
 	onSend,
@@ -60,9 +65,38 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 	const { t } = useTranslation();
 	const scrollAreaRef = useRef<HTMLDivElement>(null);
 	const prevMsgCountRef = useRef<number>(0);
+	const prevPlanRevisionRef = useRef('');
 	const wasNearBottomRef = useRef<boolean>(true);
-	const isEmpty = msgs.length === 0;
+	const hasPlan = Boolean(tasksContext?.tasks.length);
+	const isEmpty = msgs.length === 0 && !hasPlan;
 	const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+
+	const planCreatedAt = useMemo(() => {
+		if (!tasksContext?.tasks.length) return null;
+		const timestamps = tasksContext.tasks
+			.map((task) => new Date(task.created_at).getTime())
+			.filter(Number.isFinite);
+		return timestamps.length > 0 ? Math.min(...timestamps) : null;
+	}, [tasksContext]);
+
+	const planInsertIndex = useMemo(() => {
+		if (planCreatedAt === null) return msgs.length;
+		let index = 0;
+		for (const message of msgs) {
+			const messageCreatedAt = new Date(message.created_at).getTime();
+			if (!Number.isFinite(messageCreatedAt) || messageCreatedAt > planCreatedAt) break;
+			index += 1;
+		}
+		return index;
+	}, [msgs, planCreatedAt]);
+
+	const planRevision = useMemo(
+		() =>
+			tasksContext?.tasks
+				.map((task) => `${task.id}:${task.state}:${task.subject}:${task.blocked_by.join(',')}`)
+				.join('|') ?? '',
+		[tasksContext],
+	);
 
 	const updateScrollState = useCallback(() => {
 		const scrollArea = scrollAreaRef.current;
@@ -79,11 +113,14 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 	useEffect(() => {
 		const currentCount = msgs.length;
 		const prevCount = prevMsgCountRef.current;
+		const planChanged = prevPlanRevisionRef.current !== planRevision;
 
 		const isActive = phase !== 'idle';
-		const isInitialLoad = prevCount === 0 && currentCount > 0;
+		const isInitialLoad = prevCount === 0 && (currentCount > 0 || hasPlan);
 		const hasRelevantUpdate =
-			(currentCount > prevCount && prevCount > 0) || (isActive && prevCount > 0);
+			(currentCount > prevCount && prevCount > 0) ||
+			(isActive && prevCount > 0) ||
+			planChanged;
 		const shouldScroll = isInitialLoad || (hasRelevantUpdate && wasNearBottomRef.current);
 
 		if (shouldScroll && scrollAreaRef.current) {
@@ -98,7 +135,8 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 		}
 
 		prevMsgCountRef.current = currentCount;
-	}, [msgs, phase, updateScrollState]);
+		prevPlanRevisionRef.current = planRevision;
+	}, [msgs, phase, hasPlan, planRevision, updateScrollState]);
 
 	// Track if user is near bottom whenever they scroll
 	useEffect(() => {
@@ -141,13 +179,22 @@ const ChatContentComponent: React.FC<ChatContentProps> = ({
 						{isEmpty ? (
 							<p className="text-center text-lg mb-2">{t('chat.greeting')}</p>
 						) : (
-							msgs.map((message) => (
-								<MessageBubble
-									key={message.id}
-									message={message}
-									onUserConfirm={onUserConfirm}
-								/>
-							))
+							<>
+								{planInsertIndex === 0 && tasksContext ? (
+									<PlanTimelineCard tasksContext={tasksContext} />
+								) : null}
+								{msgs.map((message, index) => (
+									<React.Fragment key={message.id}>
+										<MessageBubble
+											message={message}
+											onUserConfirm={onUserConfirm}
+										/>
+										{planInsertIndex === index + 1 && tasksContext ? (
+											<PlanTimelineCard tasksContext={tasksContext} />
+										) : null}
+									</React.Fragment>
+								))}
+							</>
 						)}
 					</div>
 				</div>

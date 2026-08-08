@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "shield-prediction-mcp"
+version = "2.1.4"
+description = "Stateful MCP server for interactive, domain-independent tabular data modeling workflows"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "mcp[cli]>=1.2,<2",
+  "pandas>=2.1",
+  "numpy>=1.26",
+  "scikit-learn>=1.4",
+  "matplotlib>=3.8",
+  "seaborn>=0.13",
+  "joblib>=1.3",
+  "openpyxl>=3.1",
+  "pyarrow>=15.0",
+]
+
+[project.optional-dependencies]
+boosting = ["xgboost>=2.0"]
+deep = ["torch>=2.2"]
+tuning = ["optuna>=3.6"]
+signal = ["scipy>=1.12", "PyWavelets>=1.5"]
+legacy-excel = ["xlrd>=2.0"]
+full = [
+  "xgboost>=2.0",
+  "torch>=2.2",
+  "optuna>=3.6",
+  "scipy>=1.12",
+  "PyWavelets>=1.5",
+  "xlrd>=2.0",
+]
+test = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+interactive-data-modeling-mcp = "shield_prediction_mcp.server:main"
+shield-prediction-mcp = "shield_prediction_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/shield_prediction_mcp"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"prompts/build_model.md" = "shield_prediction_mcp/prompts/build_model.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

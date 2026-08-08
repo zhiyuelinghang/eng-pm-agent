@@ -35,8 +35,8 @@ async def install() -> None:
         with DEFAULT_ARCHIVE.open("rb") as source:
             record = await manager.install_archive(source)
     print(
-        f"已安装平台核验 MCP：{record.manifest.display_name} "
-        f"v{record.manifest.version}",
+        f"已上传平台核验 MCP：{record.manifest.display_name} "
+        f"v{record.manifest.version}。请在平台设置中选择该版本并保存后使用。",
     )
 
 

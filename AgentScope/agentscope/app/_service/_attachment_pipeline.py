@@ -11,7 +11,13 @@ from ...tool import Toolkit
 
 
 _PARSER_TOOL_NAME = "mcp__attachment-parser__parse_attachment"
+_DATA_MODELING_IMPORT_TOOL_NAME = (
+    "mcp__interactive-data-modeling__predict_import_data"
+)
 _PAGE_LIMIT = 500
+_DATA_MODELING_SUFFIXES = frozenset(
+    {".csv", ".tsv", ".xlsx", ".xls", ".json", ".jsonl", ".ndjson", ".parquet", ".pq"},
+)
 
 
 @dataclass(frozen=True)
@@ -61,9 +67,20 @@ class AttachmentPipeline:
             return message
 
         parser_tool = await toolkit.get_tool(_PARSER_TOOL_NAME)
+        data_modeling_import_tool = await toolkit.get_tool(
+            _DATA_MODELING_IMPORT_TOOL_NAME,
+        )
         parsed_sections: list[str] = []
         statuses: list[dict[str, Any]] = []
         for source in sources:
+            data_modeling = await self._stage_for_data_modeling(
+                data_modeling_import_tool,
+                source,
+            )
+            if data_modeling and data_modeling.get("status") == "ready":
+                parsed_sections.append(
+                    self._data_modeling_section(source.name, data_modeling),
+                )
             if parser_tool is None:
                 error = "平台附件解析工具尚未就绪"
                 parsed_sections.append(self._error_section(source.name, error))
@@ -72,6 +89,7 @@ class AttachmentPipeline:
                         "name": source.name,
                         "status": "failed",
                         "error": error,
+                        "data_modeling": data_modeling,
                     },
                 )
                 continue
@@ -87,6 +105,7 @@ class AttachmentPipeline:
                 }
             parsed_sections.extend(sections)
             statuses.append(status)
+            status["data_modeling"] = data_modeling
 
         failed = sum(item["status"] == "failed" for item in statuses)
         pipeline_status = (
@@ -126,6 +145,57 @@ class AttachmentPipeline:
         )
         prepared.metadata["attachment_preprocessing"] = pipeline_metadata
         return prepared
+
+    async def _stage_for_data_modeling(
+        self,
+        import_tool: Any | None,
+        source: _AttachmentSource,
+    ) -> dict[str, Any] | None:
+        suffix = "." + source.name.rsplit(".", 1)[-1].lower() if "." in source.name else ""
+        if suffix not in _DATA_MODELING_SUFFIXES:
+            return None
+        if source.content_base64 is None:
+            return {
+                "status": "failed",
+                "error": "数据附件来源不受支持，请重新选择本地文件上传",
+            }
+        if import_tool is None:
+            return {"status": "unavailable"}
+        try:
+            result = await import_tool.call(
+                file_name=source.name,
+                content_base64=source.content_base64,
+                media_type=source.media_type,
+            )
+            if result.state == ToolResultState.ERROR:
+                detail = "\n".join(
+                    block.text
+                    for block in result.content
+                    if isinstance(block, TextBlock)
+                ).strip()
+                raise RuntimeError(detail or "数据分析 MCP 导入失败")
+            raw = "\n".join(
+                block.text
+                for block in result.content
+                if isinstance(block, TextBlock)
+            )
+            payload = json.loads(raw)
+            data = payload.get("data") if isinstance(payload, dict) else None
+            data_ref = data.get("data_ref") if isinstance(data, dict) else None
+            if payload.get("status") != "ok" or not isinstance(data_ref, str):
+                raise RuntimeError("数据分析 MCP 未返回有效 data_ref")
+            return {
+                "status": "ready",
+                "data_ref": data_ref,
+                "file_name": str(data.get("file_name") or source.name),
+                "size": data.get("size"),
+                "sha256": data.get("sha256"),
+            }
+        except Exception as exc:  # pylint: disable=broad-except
+            return {
+                "status": "failed",
+                "error": str(exc).strip() or exc.__class__.__name__,
+            }
 
     @staticmethod
     def _collect_sources(message: Msg) -> list[_AttachmentSource]:
@@ -309,4 +379,21 @@ class AttachmentPipeline:
             )
             + "\n附件未解析成功，原始二进制内容未发送给 AI。\n"
             "</attachment>"
+        )
+
+    @staticmethod
+    def _data_modeling_section(name: str, staged: dict[str, Any]) -> str:
+        return (
+            "<data-analysis-source>\n"
+            + json.dumps(
+                {
+                    "name": name,
+                    "status": "ready",
+                    "data_ref": staged["data_ref"],
+                    "next_tool": "predict_create_session",
+                },
+                ensure_ascii=False,
+            )
+            + "\n该引用仅用于当前会话的数据分析 MCP，不是服务器文件路径。\n"
+            "</data-analysis-source>"
         )

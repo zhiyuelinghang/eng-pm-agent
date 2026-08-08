@@ -6,6 +6,13 @@ from pydantic import BaseModel, Field
 from ._base import _RecordBase
 
 
+class PlatformMCPVersionBinding(BaseModel):
+    """Exact immutable MCP package version bound to a platform capability."""
+
+    package_id: str = Field(min_length=1, max_length=64)
+    version: str = Field(min_length=1, max_length=64)
+
+
 class PlatformSettingsData(BaseModel):
     """Settings shared by the whole engineering-management platform."""
 
@@ -22,6 +29,13 @@ class PlatformSettingsData(BaseModel):
             "The hidden built-in agent used by project-initialization "
             "conversations. It may build initialization drafts but cannot "
             "write formal project data directly."
+        ),
+    )
+    project_initializer_validation_mcp: PlatformMCPVersionBinding | None = Field(
+        default=None,
+        description=(
+            "The exact managed MCP package version used by the required "
+            "project-initialization validation step."
         ),
     )
 

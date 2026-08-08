@@ -2,15 +2,26 @@ import {
 	Bot,
 	CheckCircle2,
 	Crown,
+	Download,
 	FileSearch,
 	Loader2,
+	PackageCheck,
 	ShieldCheck,
+	Trash2,
+	Upload,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
-import { agentApi } from '@/api';
-import type { AgentView, PlatformSettings } from '@/api';
+import { agentApi, mcpRegistryApi } from '@/api';
+import type {
+	AgentView,
+	ManagedMCPVersion,
+	PlatformMCPVersionBinding,
+	PlatformSettings,
+	ProjectInitializationValidationMCPConfig,
+} from '@/api';
+import { DeleteDialog } from '@/components/dialog/DeleteDialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -27,6 +38,16 @@ import { useTranslation } from '@/i18n/useI18n';
 
 type AssignmentKey = 'main' | 'initializer';
 
+const validationVersionKey = (binding: PlatformMCPVersionBinding) =>
+	`${binding.package_id}@${binding.version}`;
+
+const bindingFromVersion = (
+	version: ManagedMCPVersion,
+): PlatformMCPVersionBinding => ({
+	package_id: version.package_id,
+	version: version.version,
+});
+
 function isMainCandidate(agent: AgentView) {
 	return (
 		agent.editable &&
@@ -40,6 +61,14 @@ export function PlatformSettingsPage() {
 	const { t } = useTranslation();
 	const { agents, loading: agentsLoading, refetch } = useAgents();
 	const [settings, setSettings] = useState<PlatformSettings | null>(null);
+	const [validationConfig, setValidationConfig] =
+		useState<ProjectInitializationValidationMCPConfig | null>(null);
+	const [validationSelectedKey, setValidationSelectedKey] = useState('');
+	const [uploadingValidation, setUploadingValidation] = useState(false);
+	const [downloadingValidation, setDownloadingValidation] = useState(false);
+	const [validationDeleteTarget, setValidationDeleteTarget] =
+		useState<ManagedMCPVersion | null>(null);
+	const validationUploadRef = useRef<HTMLInputElement>(null);
 	const [activeAssignment, setActiveAssignment] =
 		useState<AssignmentKey>('main');
 	const [mainSelectedId, setMainSelectedId] = useState<string>('');
@@ -51,13 +80,21 @@ export function PlatformSettingsPage() {
 
 	useEffect(() => {
 		let active = true;
-		agentApi
-			.getPlatformSettings()
-			.then(async (value) => {
+		Promise.all([
+			agentApi.getPlatformSettings(),
+			mcpRegistryApi.getInitializationValidationConfig(),
+		])
+			.then(async ([value, validation]) => {
 				if (!active) return;
 				setSettings(value);
+				setValidationConfig(validation);
 				setMainSelectedId(value.global_main_agent_id ?? '');
 				setInitializerSelectedId(value.project_initializer_agent_id ?? '');
+				const selectedBinding =
+					value.project_initializer_validation_mcp ?? validation.current;
+				setValidationSelectedKey(
+					selectedBinding ? validationVersionKey(selectedBinding) : '',
+				);
 				await refetch();
 			})
 			.catch(() => undefined)
@@ -68,6 +105,12 @@ export function PlatformSettingsPage() {
 			active = false;
 		};
 	}, [refetch]);
+
+	const refreshValidationConfig = async () => {
+		const next = await mcpRegistryApi.getInitializationValidationConfig();
+		setValidationConfig(next);
+		return next;
+	};
 
 	const candidates = useMemo(
 		() =>
@@ -99,13 +142,37 @@ export function PlatformSettingsPage() {
 		) ?? null;
 	const selectedIsValid =
 		selectedAgent !== null && isMainCandidate(selectedAgent);
-	const initializerIsValid =
+	const initializerAgentIsValid =
 		selectedInitializer !== null && isMainCandidate(selectedInitializer);
+	const selectedValidationVersion =
+		validationConfig?.versions.find(
+			(version) =>
+				validationVersionKey(bindingFromVersion(version)) ===
+				validationSelectedKey,
+		) ?? null;
+	const currentValidationVersion =
+		validationConfig?.versions.find((version) => {
+			const current = settings?.project_initializer_validation_mcp;
+			return (
+				current !== null &&
+				current !== undefined &&
+				validationVersionKey(bindingFromVersion(version)) ===
+					validationVersionKey(current)
+			);
+		}) ?? null;
+	const initializerIsValid =
+		initializerAgentIsValid && selectedValidationVersion !== null;
 	const mainUnchanged =
 		mainSelectedId === (settings?.global_main_agent_id ?? '');
+	const validationUnchanged =
+		validationSelectedKey ===
+		(settings?.project_initializer_validation_mcp
+			? validationVersionKey(settings.project_initializer_validation_mcp)
+			: '');
 	const initializerUnchanged =
 		initializerSelectedId ===
-		(settings?.project_initializer_agent_id ?? '');
+			(settings?.project_initializer_agent_id ?? '') &&
+		validationUnchanged;
 
 	const saveMain = async () => {
 		if (!mainSelectedId || !selectedIsValid) return;
@@ -123,18 +190,85 @@ export function PlatformSettingsPage() {
 	};
 
 	const saveInitializer = async () => {
-		if (!initializerSelectedId || !initializerIsValid) return;
+		if (
+			!initializerSelectedId ||
+			!initializerIsValid ||
+			!selectedValidationVersion
+		)
+			return;
 		setSavingInitializer(true);
 		try {
 			const updated = await agentApi.updatePlatformSettings({
 				project_initializer_agent_id: initializerSelectedId,
+				project_initializer_validation_mcp: bindingFromVersion(
+					selectedValidationVersion,
+				),
 			});
 			setSettings(updated);
+			await refreshValidationConfig();
 			await refetch();
 			toast.success(t('platform-settings.initializer.saved'));
 		} finally {
 			setSavingInitializer(false);
 		}
+	};
+
+	const uploadValidationVersion = async (file: File) => {
+		setUploadingValidation(true);
+		try {
+			const uploaded =
+				await mcpRegistryApi.uploadInitializationValidationVersion(file);
+			await refreshValidationConfig();
+			if (!validationSelectedKey) {
+				setValidationSelectedKey(
+					validationVersionKey(bindingFromVersion(uploaded)),
+				);
+			}
+			toast.success(t('platform-settings.initializer.validation.uploaded'));
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? error.message
+					: t('platform-settings.initializer.validation.uploadFailed'),
+			);
+		} finally {
+			setUploadingValidation(false);
+			if (validationUploadRef.current) validationUploadRef.current.value = '';
+		}
+	};
+
+	const downloadValidationVersion = async () => {
+		if (!selectedValidationVersion) return;
+		setDownloadingValidation(true);
+		try {
+			await mcpRegistryApi.downloadInitializationValidationVersion(
+				selectedValidationVersion.package_id,
+				selectedValidationVersion.version,
+			);
+		} finally {
+			setDownloadingValidation(false);
+		}
+	};
+
+	const deleteValidationVersion = async () => {
+		if (!validationDeleteTarget) return;
+		const targetKey = validationVersionKey(
+			bindingFromVersion(validationDeleteTarget),
+		);
+		await mcpRegistryApi.deleteInitializationValidationVersion(
+			validationDeleteTarget.package_id,
+			validationDeleteTarget.version,
+		);
+		const next = await refreshValidationConfig();
+		if (validationSelectedKey === targetKey) {
+			const fallback =
+				next.current ??
+				(next.versions[0] ? bindingFromVersion(next.versions[0]) : null);
+			setValidationSelectedKey(
+				fallback ? validationVersionKey(fallback) : '',
+			);
+		}
+		toast.success(t('platform-settings.initializer.validation.deleted'));
 	};
 
 	const busy = loading || agentsLoading;
@@ -152,6 +286,17 @@ export function PlatformSettingsPage() {
 		? 'platform-settings.main'
 		: 'platform-settings.initializer';
 	const ActiveIcon = isMain ? Bot : FileSearch;
+	const selectedValidationIsCurrent = Boolean(
+		selectedValidationVersion &&
+		settings?.project_initializer_validation_mcp &&
+		validationVersionKey(bindingFromVersion(selectedValidationVersion)) ===
+			validationVersionKey(settings.project_initializer_validation_mcp),
+	);
+	const canDeleteSelectedValidation = Boolean(
+		selectedValidationVersion &&
+		!selectedValidationIsCurrent &&
+		selectedValidationVersion.active_instances === 0,
+	);
 
 	const assignmentItems = [
 		{
@@ -398,6 +543,143 @@ export function PlatformSettingsPage() {
 										</Alert>
 									)}
 
+									{!isMain && (
+										<section className="rounded-xl border bg-muted/20 p-4 sm:p-5">
+											<div className="flex flex-wrap items-start justify-between gap-3">
+												<div className="flex min-w-0 items-start gap-3">
+													<div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-background shadow-sm ring-1 ring-border">
+														<PackageCheck className="size-5 text-muted-foreground" />
+													</div>
+													<div className="min-w-0">
+														<div className="flex flex-wrap items-center gap-2">
+															<h3 className="font-semibold">
+																{t('platform-settings.initializer.validation.title')}
+															</h3>
+															<Badge variant="secondary">
+																{t('platform-settings.initializer.validation.required')}
+															</Badge>
+														</div>
+														<p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+															{t('platform-settings.initializer.validation.description')}
+														</p>
+													</div>
+												</div>
+												<input
+													ref={validationUploadRef}
+													type="file"
+													accept=".zip,.mcp,.mcpb"
+													className="hidden"
+													onChange={(event) => {
+														const file = event.target.files?.[0];
+														if (file) void uploadValidationVersion(file);
+													}}
+												/>
+												<Button
+													variant="outline"
+													size="sm"
+													disabled={uploadingValidation}
+													onClick={() => validationUploadRef.current?.click()}
+												>
+													{uploadingValidation ? (
+														<Loader2 className="animate-spin" />
+													) : (
+														<Upload />
+													)}
+													{t('platform-settings.initializer.validation.upload')}
+												</Button>
+											</div>
+
+											<div className="mt-5 space-y-2">
+												<label
+													className="text-sm font-medium"
+													htmlFor="initialization-validation-version"
+												>
+													{t('platform-settings.initializer.validation.selector')}
+												</label>
+												<div className="flex min-w-0 items-center gap-2">
+													<div className="min-w-0 flex-1">
+														<Select
+															value={validationSelectedKey}
+															onValueChange={setValidationSelectedKey}
+															disabled={!validationConfig?.versions.length}
+														>
+															<SelectTrigger
+																id="initialization-validation-version"
+																className="w-full"
+															>
+																<SelectValue
+																	placeholder={t(
+																		'platform-settings.initializer.validation.placeholder',
+																	)}
+																/>
+															</SelectTrigger>
+															<SelectContent>
+																{validationConfig?.versions.map((version) => {
+																	const binding = bindingFromVersion(version);
+																	return (
+																		<SelectItem
+																			key={validationVersionKey(binding)}
+																			value={validationVersionKey(binding)}
+																		>
+																			{version.display_name} · v{version.version}
+																		</SelectItem>
+																	);
+																})}
+															</SelectContent>
+														</Select>
+													</div>
+													<div className="flex shrink-0 flex-nowrap items-center gap-2 whitespace-nowrap">
+														<Button
+															variant="outline"
+															size="sm"
+															className="whitespace-nowrap"
+															disabled={!selectedValidationVersion || downloadingValidation}
+															onClick={() => void downloadValidationVersion()}
+														>
+															{downloadingValidation ? (
+																<Loader2 className="animate-spin" />
+															) : (
+																<Download />
+															)}
+															{t('platform-settings.initializer.validation.download')}
+														</Button>
+														<Button
+															variant="outline"
+															size="sm"
+															className="whitespace-nowrap"
+															disabled={!canDeleteSelectedValidation}
+															title={
+																selectedValidationIsCurrent
+																	? t(
+																		'platform-settings.initializer.validation.deleteCurrentHint',
+																	)
+																	: selectedValidationVersion?.active_instances
+																		? t(
+																			'platform-settings.initializer.validation.deleteRunningHint',
+																			)
+																		: undefined
+															}
+															onClick={() =>
+																setValidationDeleteTarget(selectedValidationVersion)
+															}
+														>
+															<Trash2 />
+															{t('platform-settings.initializer.validation.delete')}
+														</Button>
+													</div>
+												</div>
+												<p className="text-xs leading-relaxed text-muted-foreground">
+													{t('platform-settings.initializer.validation.current')}{' '}
+													<span className="font-medium text-foreground">
+														{currentValidationVersion
+															? `${currentValidationVersion.display_name} · v${currentValidationVersion.version}`
+															: t('platform-settings.initializer.validation.unconfigured')}
+													</span>
+												</p>
+											</div>
+										</section>
+									)}
+
 									{activeCurrentInvalid && (
 										<Alert variant="destructive">
 											<AlertTitle>{t(`${activePrefix}.invalidCurrentTitle`)}</AlertTitle>
@@ -426,6 +708,21 @@ export function PlatformSettingsPage() {
 					</section>
 				</div>
 			</main>
+
+			<DeleteDialog
+				open={validationDeleteTarget !== null}
+				onOpenChange={(open) => {
+					if (!open) setValidationDeleteTarget(null);
+				}}
+				title={t('platform-settings.initializer.validation.deleteTitle', {
+					version: validationDeleteTarget?.version ?? '',
+				})}
+				description={t(
+					'platform-settings.initializer.validation.deleteDescription',
+				)}
+				confirmLabel={t('common.delete')}
+				onConfirm={deleteValidationVersion}
+			/>
 		</div>
 	);
 }

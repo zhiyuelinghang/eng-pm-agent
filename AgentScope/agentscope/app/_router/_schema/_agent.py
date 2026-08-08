@@ -11,6 +11,7 @@ from ...storage import (
     AgentModelPolicy,
     InviteConfig,
     PlatformAgentConfig,
+    PlatformMCPVersionBinding,
     SessionKnowledgeConfig,
 )
 from ..._service import AgentView
@@ -173,6 +174,13 @@ class PlatformSettingsResponse(BaseModel):
         default=None,
         description="The hidden agent used for project initialization.",
     )
+    project_initializer_validation_mcp: PlatformMCPVersionBinding | None = Field(
+        default=None,
+        description=(
+            "The exact MCP package version used for required project "
+            "initialization validation."
+        ),
+    )
 
 
 class UpdatePlatformSettingsRequest(BaseModel):
@@ -189,6 +197,13 @@ class UpdatePlatformSettingsRequest(BaseModel):
         description=(
             "ID of an enabled agent with a fixed chat model to use for "
             "project-initialization conversations."
+        ),
+    )
+    project_initializer_validation_mcp: PlatformMCPVersionBinding | None = Field(
+        default=None,
+        description=(
+            "Exact managed MCP version used by project initialization "
+            "validation."
         ),
     )
 

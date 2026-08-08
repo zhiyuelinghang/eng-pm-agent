@@ -23,7 +23,11 @@ from ._permission_review import (
     PermissionReviewerConfigData,
     PermissionReviewerConfigRecord,
 )
-from ._platform_settings import PlatformSettingsData, PlatformSettingsRecord
+from ._platform_settings import (
+    PlatformMCPVersionBinding,
+    PlatformSettingsData,
+    PlatformSettingsRecord,
+)
 from ._schedule import ScheduleData, ScheduleRecord, ScheduleSource
 from ._session import (
     SessionRecord,
@@ -57,6 +61,7 @@ __all__ = [
     "PermissionReviewerConfigRecord",
     "PlatformSettingsData",
     "PlatformSettingsRecord",
+    "PlatformMCPVersionBinding",
     "ScheduleData",
     "ScheduleRecord",
     "ScheduleSource",

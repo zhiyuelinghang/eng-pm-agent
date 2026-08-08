@@ -245,11 +245,18 @@ export interface AgentListResponse {
 export interface PlatformSettings {
 	global_main_agent_id: string | null;
 	project_initializer_agent_id: string | null;
+	project_initializer_validation_mcp: PlatformMCPVersionBinding | null;
+}
+
+export interface PlatformMCPVersionBinding {
+	package_id: string;
+	version: string;
 }
 
 export interface UpdatePlatformSettingsRequest {
 	global_main_agent_id?: string;
 	project_initializer_agent_id?: string | null;
+	project_initializer_validation_mcp?: PlatformMCPVersionBinding | null;
 }
 
 /**
@@ -783,6 +790,24 @@ export interface ManagedMCPPackage {
 	active_instances: number;
 	created_at: string;
 	updated_at: string;
+}
+
+export interface ManagedMCPVersion {
+	package_id: string;
+	display_name: string;
+	version: string;
+	description: string;
+	status: 'ready';
+	tools: ManagedMCPTool[];
+	platform_capabilities: string[];
+	active_instances: number;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface ProjectInitializationValidationMCPConfig {
+	current: PlatformMCPVersionBinding | null;
+	versions: ManagedMCPVersion[];
 }
 
 // ─── Skill ────────────────────────────────────────────────────────────────────

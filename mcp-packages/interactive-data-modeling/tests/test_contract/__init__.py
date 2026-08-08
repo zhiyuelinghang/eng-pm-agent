@@ -1,0 +1,1 @@
+"""Public MCP contract tests."""

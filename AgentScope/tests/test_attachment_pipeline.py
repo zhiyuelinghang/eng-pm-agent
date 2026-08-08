@@ -46,13 +46,47 @@ class _ParserTool:
         )
 
 
+class _ImportTool:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.calls: list[dict] = []
+
+    async def call(self, **kwargs) -> ToolChunk:
+        self.calls.append(kwargs)
+        if self.fail:
+            return ToolChunk(
+                content=[TextBlock(text="数据导入失败")],
+                state=ToolResultState.ERROR,
+            )
+        payload = {
+            "status": "ok",
+            "data": {
+                "data_ref": "predict-data://" + "a" * 32,
+                "file_name": kwargs["file_name"],
+                "size": 12,
+                "sha256": "a" * 64,
+            },
+        }
+        return ToolChunk(
+            content=[TextBlock(text=json.dumps(payload, ensure_ascii=False))],
+            state=ToolResultState.SUCCESS,
+        )
+
+
 class _Toolkit:
-    def __init__(self, tool: _ParserTool | None) -> None:
+    def __init__(
+        self,
+        tool: _ParserTool | None,
+        import_tool: _ImportTool | None = None,
+    ) -> None:
         self.tool = tool
+        self.import_tool = import_tool
         self.requested_names: list[str] = []
 
-    async def get_tool(self, name: str) -> _ParserTool | None:
+    async def get_tool(self, name: str) -> _ParserTool | _ImportTool | None:
         self.requested_names.append(name)
+        if name.endswith("__predict_import_data"):
+            return self.import_tool
         return self.tool
 
 
@@ -102,6 +136,64 @@ class AttachmentPipelineTest(IsolatedAsyncioTestCase):
 
         self.assertIs(prepared, message)
         self.assertEqual(tool.calls, [])
+
+    async def test_tabular_attachment_is_staged_for_assigned_data_mcp(self) -> None:
+        parser = _ParserTool()
+        importer = _ImportTool()
+        message = UserMsg(
+            name="user",
+            content=[
+                TextBlock(text="请建立预测模型"),
+                DataBlock(
+                    name="样本.csv",
+                    source=Base64Source(
+                        data=base64.b64encode(b"x,target\n1,0").decode(),
+                        media_type="text/csv",
+                    ),
+                ),
+            ],
+        )
+
+        prepared = await AttachmentPipeline().prepare(
+            message,
+            _Toolkit(parser, importer),
+        )
+
+        rendered = prepared.get_text_content() or ""
+        self.assertIn("<data-analysis-source>", rendered)
+        self.assertIn("predict-data://" + "a" * 32, rendered)
+        self.assertNotIn(importer.calls[0]["content_base64"], rendered)
+        self.assertEqual(importer.calls[0]["file_name"], "样本.csv")
+        staged = message.metadata["attachment_preprocessing"]["items"][0][
+            "data_modeling"
+        ]
+        self.assertEqual(staged["status"], "ready")
+
+    async def test_data_import_failure_does_not_block_text_parser(self) -> None:
+        message = UserMsg(
+            name="user",
+            content=[
+                DataBlock(
+                    name="样本.csv",
+                    source=Base64Source(
+                        data=base64.b64encode(b"x,target\n1,0").decode(),
+                        media_type="text/csv",
+                    ),
+                ),
+            ],
+        )
+
+        prepared = await AttachmentPipeline().prepare(
+            message,
+            _Toolkit(_ParserTool(), _ImportTool(fail=True)),
+        )
+
+        self.assertIn("第1行", prepared.get_text_content() or "")
+        staged = message.metadata["attachment_preprocessing"]["items"][0][
+            "data_modeling"
+        ]
+        self.assertEqual(staged["status"], "failed")
+        self.assertEqual(message.metadata["attachment_preprocessing"]["status"], "ready")
 
     async def test_parse_failure_never_forwards_raw_binary(self) -> None:
         message = UserMsg(

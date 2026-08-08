@@ -11,6 +11,7 @@ from ..._utils._common import _flatten_json_schema
 from ..access import ResourceKind
 from ..deps import (
     get_current_user_id,
+    get_mcp_registry_manager,
     get_resource_access_service,
     get_session_service,
     get_storage,
@@ -38,9 +39,15 @@ from ..storage import (
     AgentData,
     AgentModelPolicy,
     AgentRecord,
+    PlatformMCPVersionBinding,
     PlatformSettingsData,
     PlatformSettingsRecord,
     StorageBase,
+)
+from ..mcp_registry import (
+    MCPPackageRecord,
+    MCPRegistryManager,
+    PROJECT_INITIALIZATION_VALIDATION_CAPABILITY,
 )
 from ...credential import CredentialFactory
 
@@ -52,6 +59,44 @@ agent_router = APIRouter(
     tags=["agent"],
     responses={404: {"description": "Not found"}},
 )
+
+
+def _is_initialization_validation_package(record: MCPPackageRecord) -> bool:
+    """Whether one package version satisfies the platform validation slot."""
+    return (
+        PROJECT_INITIALIZATION_VALIDATION_CAPABILITY
+        in record.manifest.platform_capabilities
+        and len(record.tools) == 1
+    )
+
+
+async def _migrate_initialization_validation_binding(
+    settings: PlatformSettingsRecord,
+    *,
+    storage: StorageBase,
+    user_id: str,
+    manager: MCPRegistryManager,
+) -> PlatformSettingsRecord:
+    """Bind the sole legacy validator package once, without naming it."""
+    if settings.data.project_initializer_validation_mcp is not None:
+        return settings
+    candidates = [
+        record
+        for record in await manager.list_records()
+        if _is_initialization_validation_package(record)
+    ]
+    if len(candidates) != 1:
+        return settings
+    record = candidates[0]
+    data = settings.data.model_copy(
+        update={
+            "project_initializer_validation_mcp": PlatformMCPVersionBinding(
+                package_id=record.id,
+                version=record.manifest.version,
+            ),
+        },
+    )
+    return await storage.upsert_platform_settings(user_id, data)
 
 
 def _normalise_platform_agent_data(data: AgentData) -> AgentData:
@@ -566,13 +611,23 @@ async def get_platform_agent_catalog(
 async def get_platform_settings(
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
+    manager: MCPRegistryManager = Depends(get_mcp_registry_manager),
 ) -> PlatformSettingsResponse:
     """Return the global settings shared by the whole platform."""
     settings = await _load_platform_settings(storage, user_id)
+    settings = await _migrate_initialization_validation_binding(
+        settings,
+        storage=storage,
+        user_id=user_id,
+        manager=manager,
+    )
     return PlatformSettingsResponse(
         global_main_agent_id=settings.data.global_main_agent_id,
         project_initializer_agent_id=(
             settings.data.project_initializer_agent_id
+        ),
+        project_initializer_validation_mcp=(
+            settings.data.project_initializer_validation_mcp
         ),
     )
 
@@ -586,6 +641,7 @@ async def update_platform_settings(
     body: UpdatePlatformSettingsRequest,
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
+    manager: MCPRegistryManager = Depends(get_mcp_registry_manager),
 ) -> PlatformSettingsResponse:
     """Update global agent assignments without exposing per-account settings."""
     if not body.model_fields_set:
@@ -594,10 +650,18 @@ async def update_platform_settings(
             detail="At least one platform setting must be provided.",
         )
     current = await _load_platform_settings(storage, user_id)
+    current = await _migrate_initialization_validation_binding(
+        current,
+        storage=storage,
+        user_id=user_id,
+        manager=manager,
+    )
     global_main_agent_id = current.data.global_main_agent_id
     project_initializer_agent_id = (
         current.data.project_initializer_agent_id
     )
+    validation_mcp = current.data.project_initializer_validation_mcp
+    previous_validation_mcp = validation_mcp
 
     async def validate_candidate(
         agent_id: str,
@@ -642,6 +706,27 @@ async def update_platform_settings(
                 "project initializer",
             )
         project_initializer_agent_id = body.project_initializer_agent_id
+    if "project_initializer_validation_mcp" in body.model_fields_set:
+        requested_binding = body.project_initializer_validation_mcp
+        if requested_binding is not None:
+            record = await manager.get_record(
+                requested_binding.package_id,
+                requested_binding.version,
+            )
+            if record is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="选择的核验 MCP 版本不存在，请刷新后重新选择。",
+                )
+            if not _is_initialization_validation_package(record):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "选择的 MCP 未声明项目初始化核验能力，或包含多个"
+                        "核验入口。"
+                    ),
+                )
+        validation_mcp = requested_binding
     if (
         global_main_agent_id is not None
         and global_main_agent_id == project_initializer_agent_id
@@ -653,13 +738,42 @@ async def update_platform_settings(
                 "different agents."
             ),
         )
+    if project_initializer_agent_id is not None and validation_mcp is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="项目初始化智能体必须配置一个核验 MCP 版本。",
+        )
+    if validation_mcp is not None:
+        selected_validation_record = await manager.get_record(
+            validation_mcp.package_id,
+            validation_mcp.version,
+        )
+        if (
+            selected_validation_record is None
+            or not _is_initialization_validation_package(
+                selected_validation_record,
+            )
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="当前核验 MCP 配置已不可用，请重新选择版本。",
+            )
     settings = await storage.upsert_platform_settings(
         user_id,
         PlatformSettingsData(
             global_main_agent_id=global_main_agent_id,
             project_initializer_agent_id=project_initializer_agent_id,
+            project_initializer_validation_mcp=validation_mcp,
         ),
     )
+    if (
+        previous_validation_mcp is not None
+        and previous_validation_mcp != validation_mcp
+    ):
+        await manager.close_version_instances(
+            previous_validation_mcp.package_id,
+            previous_validation_mcp.version,
+        )
     await _synchronise_global_main_agent_roles(
         storage,
         user_id,
@@ -674,6 +788,9 @@ async def update_platform_settings(
         global_main_agent_id=settings.data.global_main_agent_id,
         project_initializer_agent_id=(
             settings.data.project_initializer_agent_id
+        ),
+        project_initializer_validation_mcp=(
+            settings.data.project_initializer_validation_mcp
         ),
     )
 

@@ -6,6 +6,7 @@ import io
 import json
 import sys
 import zipfile
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -139,7 +140,7 @@ def test_upload_publishes_verified_package_and_persists_index(
     asyncio.run(scenario())
 
 
-def test_platform_capability_is_persisted_and_exposed_in_package_view(
+def test_platform_capability_is_persisted_and_hidden_from_agent_catalogue(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -154,11 +155,15 @@ def test_platform_capability_is_persisted_and_exposed_in_package_view(
                 ),
             )
             views = await manager.list_views()
+            version_views = await manager.list_version_views(
+                capability="project_initialization_validation",
+            )
 
             assert record.manifest.platform_capabilities == [
                 "project_initialization_validation",
             ]
-            assert views[0].platform_capabilities == [
+            assert views == []
+            assert version_views[0].platform_capabilities == [
                 "project_initialization_validation",
             ]
 
@@ -186,6 +191,107 @@ def test_upload_rejects_duplicate_immutable_version(
             await manager.install_archive(_archive())
             with pytest.raises(MCPPackageConflictError):
                 await manager.install_archive(_archive())
+
+    asyncio.run(scenario())
+
+
+def test_package_cannot_change_platform_capability_between_versions(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        manager = MCPRegistryManager(tmp_path)
+        async with manager:
+            monkeypatch.setattr(manager, "_probe_package", AsyncMock(return_value=[]))
+            await manager.install_archive(
+                _archive(
+                    name="validation-rules",
+                    version="1.0.0",
+                    platform_capabilities=[
+                        "project_initialization_validation",
+                    ],
+                ),
+            )
+            with pytest.raises(MCPPackageError, match="platform capabilities"):
+                await manager.install_archive(
+                    _archive(
+                        name="validation-rules",
+                        version="2.0.0",
+                    ),
+                )
+
+    asyncio.run(scenario())
+
+
+def test_registry_retains_downloads_and_deletes_exact_versions(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        manager = MCPRegistryManager(tmp_path)
+        async with manager:
+            monkeypatch.setattr(
+                manager,
+                "_probe_package",
+                AsyncMock(
+                    return_value=[
+                        MCPPackageTool(name="validate_initialization"),
+                    ],
+                ),
+            )
+            await manager.install_archive(
+                _archive(
+                    name="validation-rules",
+                    version="1.0.0",
+                    platform_capabilities=[
+                        "project_initialization_validation",
+                    ],
+                ),
+            )
+            await manager.install_archive(
+                _archive(
+                    name="validation-rules",
+                    version="2.0.0",
+                    platform_capabilities=[
+                        "project_initialization_validation",
+                    ],
+                ),
+            )
+
+            current = await manager.get_record("validation-rules")
+            first = await manager.get_record("validation-rules", "1.0.0")
+            versions = await manager.list_version_records("validation-rules")
+            assert current is not None
+            assert current.manifest.version == "2.0.0"
+            assert first is not None
+            assert {item.manifest.version for item in versions} == {
+                "1.0.0",
+                "2.0.0",
+            }
+
+            archive = await manager.build_version_archive(
+                "validation-rules",
+                "1.0.0",
+            )
+            with zipfile.ZipFile(archive) as bundle:
+                names = set(bundle.namelist())
+            assert "validation-rules-mcp/mcp.json" in names
+            assert "validation-rules-mcp/server.exe" in names
+            archive.unlink()
+
+            assert await manager.delete_version(
+                "validation-rules",
+                "1.0.0",
+            )
+            assert await manager.get_record(
+                "validation-rules",
+                "1.0.0",
+            ) is None
+
+        reloaded = MCPRegistryManager(tmp_path)
+        async with reloaded:
+            versions = await reloaded.list_version_records("validation-rules")
+            assert [item.manifest.version for item in versions] == ["2.0.0"]
 
     asyncio.run(scenario())
 
@@ -333,6 +439,33 @@ def test_platform_gateway_context_is_injected_only_when_requested(
     assert "DOBBY_DATABASE_PATH" not in plain_env
     assert "AGENTSCOPE_SERVICE_TOKEN" not in plain_env
     assert "MINERU_FILE_PARSE_URL" not in plain_env
+    plain_state = Path(plain_env["AGENTSCOPE_MCP_STATE_DIR"])
+    assert manager.state_dir / "plain" in plain_state.parents
+    assert "session" not in plain_state.name
+    same_scope = manager._runtime_environment(
+        MCPPackageManifest(
+            name="plain",
+            display_name="普通 MCP",
+            version="1.0.0",
+            command="server.exe",
+        ),
+        user_id="user",
+        agent_id="agent",
+        session_id="session",
+    )
+    other_scope = manager._runtime_environment(
+        MCPPackageManifest(
+            name="plain",
+            display_name="普通 MCP",
+            version="1.0.0",
+            command="server.exe",
+        ),
+        user_id="user",
+        agent_id="agent",
+        session_id="other-session",
+    )
+    assert same_scope["AGENTSCOPE_MCP_STATE_DIR"] == str(plain_state)
+    assert other_scope["AGENTSCOPE_MCP_STATE_DIR"] != str(plain_state)
 
     gateway_env = manager._runtime_environment(
         MCPPackageManifest(
@@ -576,6 +709,46 @@ def test_system_tool_is_hidden_from_assignment_and_loaded_for_every_agent(
             assert [client.name for client in first] == ["attachment-parser"]
             assert first[0] is repeated[0]
             assert len(created) == 1
+
+    asyncio.run(scenario())
+
+
+def test_platform_validation_package_cannot_run_as_an_agent_assignment(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    package_dir = tmp_path / "packages" / "validator" / "1.0.0"
+    package_dir.mkdir(parents=True)
+    (package_dir / "server.exe").write_bytes(b"complete-package")
+    manager = MCPRegistryManager(tmp_path)
+    build_client = AsyncMock()
+    monkeypatch.setattr(manager, "_build_client", build_client)
+
+    async def scenario() -> None:
+        async with manager:
+            manager._records["validator"] = MCPPackageRecord(
+                id="validator",
+                manifest=MCPPackageManifest(
+                    name="validator",
+                    display_name="核验器",
+                    version="1.0.0",
+                    command="server.exe",
+                    platform_capabilities=[
+                        "project_initialization_validation",
+                    ],
+                ),
+                relative_dir="packages/validator/1.0.0",
+                tools=[MCPPackageTool(name="validate")],
+            )
+            clients = await manager.get_session_clients(
+                user_id="user",
+                agent_id="agent",
+                session_id="session",
+                package_ids=["validator"],
+            )
+
+            assert clients == []
+            build_client.assert_not_awaited()
 
     asyncio.run(scenario())
 

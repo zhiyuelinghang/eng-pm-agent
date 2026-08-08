@@ -30,6 +30,11 @@ from agentscope.app._router._session import (
     update_session,
 )
 from agentscope.app._service import AgentView
+from agentscope.app.mcp_registry import (
+    MCPPackageManifest,
+    MCPPackageRecord,
+    MCPPackageTool,
+)
 from agentscope.app.storage import (
     AgentCallConfig,
     AgentData,
@@ -37,6 +42,7 @@ from agentscope.app.storage import (
     AgentRecord,
     ChatModelConfig,
     PlatformAgentConfig,
+    PlatformMCPVersionBinding,
     PlatformSessionContext,
     PlatformSettingsData,
     PlatformSettingsRecord,
@@ -251,6 +257,9 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             ),
             user_id=USER_ID,
             storage=storage,
+            manager=SimpleNamespace(
+                list_records=AsyncMock(return_value=[]),
+            ),
         )
 
         self.assertEqual(response.global_main_agent_id, "selected")
@@ -268,6 +277,81 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             "global_main",
         )
         self.assertEqual(updated["selected"].data.call_config.scope, "all")
+
+    async def test_platform_settings_selects_an_exact_validation_version(
+        self,
+    ) -> None:
+        initializer = _record(
+            "initializer",
+            "Initializer",
+            fixed_model=True,
+        )
+        old_binding = PlatformMCPVersionBinding(
+            package_id="validation-rules",
+            version="1.0.0",
+        )
+        new_binding = PlatformMCPVersionBinding(
+            package_id="validation-rules",
+            version="2.0.0",
+        )
+        storage = SimpleNamespace(
+            get_agent=AsyncMock(return_value=initializer),
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        project_initializer_agent_id="initializer",
+                        project_initializer_validation_mcp=old_binding,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[initializer]),
+            upsert_agent=AsyncMock(return_value="initializer"),
+        )
+
+        async def save_settings(_user_id, data):
+            return PlatformSettingsRecord(user_id=USER_ID, data=data)
+
+        storage.upsert_platform_settings = AsyncMock(side_effect=save_settings)
+        manager = SimpleNamespace(
+            get_record=AsyncMock(
+                return_value=MCPPackageRecord(
+                    id="validation-rules",
+                    manifest=MCPPackageManifest(
+                        name="validation-rules",
+                        display_name="核验规则",
+                        version="2.0.0",
+                        command="server.exe",
+                        platform_capabilities=[
+                            "project_initialization_validation",
+                        ],
+                    ),
+                    relative_dir="packages/validation-rules/2.0.0",
+                    tools=[MCPPackageTool(name="validate")],
+                ),
+            ),
+            close_version_instances=AsyncMock(),
+        )
+
+        response = await update_platform_settings(
+            body=UpdatePlatformSettingsRequest(
+                project_initializer_agent_id="initializer",
+                project_initializer_validation_mcp=new_binding,
+            ),
+            user_id=USER_ID,
+            storage=storage,
+            manager=manager,
+        )
+
+        self.assertEqual(response.project_initializer_validation_mcp, new_binding)
+        manager.get_record.assert_awaited_with(
+            "validation-rules",
+            "2.0.0",
+        )
+        manager.close_version_instances.assert_awaited_once_with(
+            "validation-rules",
+            "1.0.0",
+        )
 
     async def test_selecting_main_demotes_the_previous_main(self) -> None:
         old_main = _record("old", "Old", role="global_main")
@@ -510,13 +594,28 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         async with storage:
             saved = await storage.upsert_platform_settings(
                 USER_ID,
-                PlatformSettingsData(global_main_agent_id="main"),
+                PlatformSettingsData(
+                    global_main_agent_id="main",
+                    project_initializer_validation_mcp=(
+                        PlatformMCPVersionBinding(
+                            package_id="validation-rules",
+                            version="2.0.0",
+                        )
+                    ),
+                ),
             )
             loaded = await storage.get_platform_settings(USER_ID)
 
         self.assertIsNotNone(loaded)
         self.assertEqual(loaded.id, saved.id)
         self.assertEqual(loaded.data.global_main_agent_id, "main")
+        self.assertEqual(
+            loaded.data.project_initializer_validation_mcp,
+            PlatformMCPVersionBinding(
+                package_id="validation-rules",
+                version="2.0.0",
+            ),
+        )
 
     async def test_alembic_creates_platform_settings_table(self) -> None:
         with TemporaryDirectory() as temp_dir:

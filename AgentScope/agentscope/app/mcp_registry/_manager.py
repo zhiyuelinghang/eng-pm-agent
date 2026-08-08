@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -21,7 +22,9 @@ from ._models import (
     MCPPackageManifest,
     MCPPackageRecord,
     MCPPackageTool,
+    MCPPackageVersionView,
     MCPPackageView,
+    PROJECT_INITIALIZATION_VALIDATION_CAPABILITY,
     utc_now,
 )
 
@@ -56,7 +59,7 @@ class MCPRegistryManager:
     process state between conversations.
     """
 
-    _INDEX_VERSION = 1
+    _INDEX_VERSION = 2
     _MANIFEST_NAME = "mcp.json"
     _MAX_ARCHIVE_BYTES = 200 * 1024 * 1024
     _MAX_UNCOMPRESSED_BYTES = 500 * 1024 * 1024
@@ -84,6 +87,7 @@ class MCPRegistryManager:
     ) -> None:
         self.root_dir = Path(root_dir).resolve()
         self.packages_dir = self.root_dir / "packages"
+        self.state_dir = self.root_dir / "state"
         self.staging_dir = self.root_dir / ".staging"
         self.index_path = self.root_dir / "index.json"
         self.idle_ttl = max(60.0, idle_ttl)
@@ -96,6 +100,7 @@ class MCPRegistryManager:
         )
 
         self._records: dict[str, MCPPackageRecord] = {}
+        self._versions: dict[tuple[str, str], MCPPackageRecord] = {}
         self._catalog_lock = asyncio.Lock()
         self._install_lock = asyncio.Lock()
         self._runtime_lock = asyncio.Lock()
@@ -122,6 +127,7 @@ class MCPRegistryManager:
 
     def _prepare_directories(self) -> None:
         self.packages_dir.mkdir(parents=True, exist_ok=True)
+        self.state_dir.mkdir(parents=True, exist_ok=True)
         self.staging_dir.mkdir(parents=True, exist_ok=True)
 
     async def _load_index(self) -> None:
@@ -133,9 +139,21 @@ class MCPRegistryManager:
                 encoding="utf-8",
             )
             payload = json.loads(raw)
-            records = {}
+            records: dict[str, MCPPackageRecord] = {}
             for item in payload.get("packages", []):
                 records[item["id"]] = MCPPackageRecord.model_validate(item)
+            version_items = payload.get("versions")
+            if not isinstance(version_items, list):
+                version_items = list(payload.get("packages", []))
+            versions: dict[tuple[str, str], MCPPackageRecord] = {}
+            for item in version_items:
+                record = MCPPackageRecord.model_validate(item)
+                versions[(record.id, record.manifest.version)] = record
+            for record in records.values():
+                versions.setdefault(
+                    (record.id, record.manifest.version),
+                    record,
+                )
         except Exception as exc:  # pylint: disable=broad-except
             raise RuntimeError(
                 f"Failed to load MCP registry index {self.index_path}: {exc}",
@@ -152,7 +170,21 @@ class MCPRegistryManager:
                 package_id,
             )
             records.pop(package_id, None)
+        missing_versions = [
+            key
+            for key, record in versions.items()
+            if not (self.root_dir / record.relative_dir).is_dir()
+        ]
+        for key in missing_versions:
+            logger.warning(
+                "Skipping MCP package version %r %r because its package "
+                "directory is missing.",
+                key[0],
+                key[1],
+            )
+            versions.pop(key, None)
         self._records = records
+        self._versions = versions
 
     async def _save_index(self) -> None:
         payload = {
@@ -162,6 +194,13 @@ class MCPRegistryManager:
                 for record in sorted(
                     self._records.values(),
                     key=lambda item: item.id,
+                )
+            ],
+            "versions": [
+                record.model_dump(mode="json")
+                for record in sorted(
+                    self._versions.values(),
+                    key=lambda item: (item.id, item.manifest.version),
                 )
             ],
         }
@@ -187,10 +226,74 @@ class MCPRegistryManager:
                 )
             ]
 
-    async def get_record(self, package_id: str) -> MCPPackageRecord | None:
+    async def get_record(
+        self,
+        package_id: str,
+        version: str | None = None,
+    ) -> MCPPackageRecord | None:
         async with self._catalog_lock:
-            record = self._records.get(package_id)
+            record = (
+                self._versions.get((package_id, version))
+                if version is not None
+                else self._records.get(package_id)
+            )
+            if record is None and version is not None:
+                current = self._records.get(package_id)
+                if current is not None and current.manifest.version == version:
+                    record = current
             return record.model_copy(deep=True) if record is not None else None
+
+    async def list_version_records(
+        self,
+        package_id: str | None = None,
+    ) -> list[MCPPackageRecord]:
+        """Return every retained immutable version, newest upload first."""
+        async with self._catalog_lock:
+            records = list(self._versions.values())
+            for current in self._records.values():
+                if (current.id, current.manifest.version) not in self._versions:
+                    records.append(current)
+            if package_id is not None:
+                records = [item for item in records if item.id == package_id]
+            return [
+                item.model_copy(deep=True)
+                for item in sorted(
+                    records,
+                    key=lambda item: item.updated_at,
+                    reverse=True,
+                )
+            ]
+
+    async def list_version_views(
+        self,
+        *,
+        capability: str | None = None,
+    ) -> list[MCPPackageVersionView]:
+        """Return retained versions, optionally limited to one platform slot."""
+        records = await self.list_version_records()
+        if capability is not None:
+            records = [
+                record
+                for record in records
+                if capability in record.manifest.platform_capabilities
+            ]
+        async with self._runtime_lock:
+            counts: dict[tuple[str, str], int] = {}
+            for (_, package_id), entry in self._runtime.items():
+                if entry.owner_task.done() or not entry.client.is_connected:
+                    continue
+                key = (package_id, entry.version)
+                counts[key] = counts.get(key, 0) + 1
+        return [
+            MCPPackageVersionView.from_record(
+                record,
+                active_instances=counts.get(
+                    (record.id, record.manifest.version),
+                    0,
+                ),
+            )
+            for record in records
+        ]
 
     async def list_views(
         self,
@@ -207,6 +310,8 @@ class MCPRegistryManager:
             record
             for record in await self.list_records()
             if record.id not in self.system_tool_package_ids
+            and PROJECT_INITIALIZATION_VALIDATION_CAPABILITY
+            not in record.manifest.platform_capabilities
         ]
         async with self._runtime_lock:
             counts: dict[str, int] = {}
@@ -236,6 +341,7 @@ class MCPRegistryManager:
         package_id: str,
         *,
         runtime_id: str,
+        version: str | None = None,
     ) -> MCPClient:
         """Return a reusable MCP client owned by a trusted platform flow.
 
@@ -244,7 +350,7 @@ class MCPRegistryManager:
         package capability and tool name; this method does not expose a
         general-purpose MCP execution gateway.
         """
-        record = await self.get_record(package_id)
+        record = await self.get_record(package_id, version)
         if record is None:
             raise MCPPackageError(f"MCP package {package_id!r} is not installed.")
         return await self._get_or_start_client(
@@ -293,8 +399,18 @@ class MCPRegistryManager:
                 existing = await self.get_record(manifest.name)
                 if (
                     existing is not None
-                    and existing.manifest.version == manifest.version
+                    and set(existing.manifest.platform_capabilities)
+                    != set(manifest.platform_capabilities)
                 ):
+                    raise MCPPackageError(
+                        f"MCP {manifest.name!r} cannot change platform "
+                        "capabilities between versions.",
+                    )
+                existing_version = await self.get_record(
+                    manifest.name,
+                    manifest.version,
+                )
+                if existing_version is not None:
                     raise MCPPackageConflictError(
                         f"MCP {manifest.name!r} version "
                         f"{manifest.version!r} already exists.",
@@ -327,7 +443,10 @@ class MCPRegistryManager:
                 )
                 async with self._catalog_lock:
                     previous = self._records.get(record.id)
+                    version_key = (record.id, record.manifest.version)
+                    previous_version = self._versions.get(version_key)
                     self._records[record.id] = record
+                    self._versions[version_key] = record
                     try:
                         await self._save_index()
                     except BaseException:
@@ -335,6 +454,10 @@ class MCPRegistryManager:
                             self._records.pop(record.id, None)
                         else:
                             self._records[record.id] = previous
+                        if previous_version is None:
+                            self._versions.pop(version_key, None)
+                        else:
+                            self._versions[version_key] = previous_version
                         raise
                 published = True
                 return record.model_copy(deep=True)
@@ -531,6 +654,11 @@ class MCPRegistryManager:
                 "DOBBY_PLATFORM_SESSION_ID": platform_session_id or session_id,
             },
         )
+        scope_source = "\0".join((user_id, agent_id, session_id))
+        scope_id = hashlib.sha256(scope_source.encode("utf-8")).hexdigest()[:32]
+        env["AGENTSCOPE_MCP_STATE_DIR"] = str(
+            (self.state_dir / manifest.name / scope_id).resolve(),
+        )
         return env
 
     def _build_client(
@@ -619,12 +747,143 @@ class MCPRegistryManager:
             record = self._records.pop(package_id, None)
             if record is None:
                 return False
-            await self._save_index()
+            version_keys = [
+                key for key in self._versions if key[0] == package_id
+            ]
+            removed_versions = {
+                key: self._versions.pop(key)
+                for key in version_keys
+            }
+            try:
+                await self._save_index()
+            except BaseException:
+                self._records[package_id] = record
+                self._versions.update(removed_versions)
+                raise
         await self.close_package_instances(package_id)
         package_home = self.packages_dir / package_id
         if package_home.exists():
             await asyncio.to_thread(shutil.rmtree, package_home, True)
+        package_state = self.state_dir / package_id
+        if package_state.exists():
+            await asyncio.to_thread(shutil.rmtree, package_state, True)
         return True
+
+    async def active_version_instances(
+        self,
+        package_id: str,
+        version: str,
+    ) -> int:
+        """Count connected runtime processes for one immutable version."""
+        async with self._runtime_lock:
+            return sum(
+                1
+                for (_, runtime_package_id), entry in self._runtime.items()
+                if runtime_package_id == package_id
+                and entry.version == version
+                and not entry.owner_task.done()
+                and entry.client.is_connected
+            )
+
+    async def close_version_instances(
+        self,
+        package_id: str,
+        version: str,
+    ) -> None:
+        """Close runtime processes that use one package version."""
+        async with self._runtime_lock:
+            keys = [
+                key
+                for key, entry in self._runtime.items()
+                if key[1] == package_id and entry.version == version
+            ]
+            entries = [self._runtime.pop(key) for key in keys]
+        await self._close_entries(entries)
+
+    async def delete_version(self, package_id: str, version: str) -> bool:
+        """Delete one retained version and keep the package's other versions."""
+        async with self._catalog_lock:
+            key = (package_id, version)
+            record = self._versions.get(key)
+            current = self._records.get(package_id)
+            if record is None and current is not None:
+                if current.manifest.version == version:
+                    record = current
+            if record is None:
+                return False
+
+            previous_current = current
+            self._versions.pop(key, None)
+            remaining = [
+                item
+                for (item_package_id, _), item in self._versions.items()
+                if item_package_id == package_id
+            ]
+            if current is not None and current.manifest.version == version:
+                if remaining:
+                    self._records[package_id] = max(
+                        remaining,
+                        key=lambda item: item.updated_at,
+                    )
+                else:
+                    self._records.pop(package_id, None)
+            try:
+                await self._save_index()
+            except BaseException:
+                self._versions[key] = record
+                if previous_current is not None:
+                    self._records[package_id] = previous_current
+                raise
+
+        await self.close_version_instances(package_id, version)
+        version_dir = (self.root_dir / record.relative_dir).resolve()
+        if version_dir.exists():
+            await asyncio.to_thread(shutil.rmtree, version_dir, True)
+        if not remaining:
+            package_home = self.packages_dir / package_id
+            if package_home.exists():
+                await asyncio.to_thread(shutil.rmtree, package_home, True)
+            package_state = self.state_dir / package_id
+            if package_state.exists():
+                await asyncio.to_thread(shutil.rmtree, package_state, True)
+        return True
+
+    async def build_version_archive(
+        self,
+        package_id: str,
+        version: str,
+    ) -> Path:
+        """Create a temporary ZIP for downloading one immutable version."""
+        record = await self.get_record(package_id, version)
+        if record is None:
+            raise MCPPackageError(
+                f"MCP package {package_id!r} version {version!r} is not installed.",
+            )
+        package_dir = (self.root_dir / record.relative_dir).resolve()
+        if not package_dir.is_dir():
+            raise MCPPackageError("MCP package directory is missing.")
+        archive_path = self.staging_dir / (
+            f"download-{package_id}-{version}-{uuid.uuid4().hex}.zip"
+        )
+
+        def _write_archive() -> None:
+            root_name = f"{package_id}-mcp"
+            with zipfile.ZipFile(
+                archive_path,
+                "w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=6,
+            ) as bundle:
+                for path in sorted(package_dir.rglob("*")):
+                    if not path.is_file():
+                        continue
+                    relative = path.relative_to(package_dir)
+                    if "__pycache__" in relative.parts or path.suffix == ".pyc":
+                        continue
+                    bundle.write(path, (Path(root_name) / relative).as_posix())
+
+        await asyncio.to_thread(_write_archive)
+        return archive_path
 
     async def get_session_clients(
         self,
@@ -663,6 +922,11 @@ class MCPRegistryManager:
             package_id: all_records[package_id]
             for package_id in requested_ids
             if package_id in all_records
+            and (
+                package_id in self.system_tool_package_ids
+                or PROJECT_INITIALIZATION_VALIDATION_CAPABILITY
+                not in all_records[package_id].manifest.platform_capabilities
+            )
         }
         missing = [
             package_id

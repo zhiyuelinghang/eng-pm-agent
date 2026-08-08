@@ -152,7 +152,9 @@ AgentScope Web UI 是智能体管理端，工程管理平台是业务使用端�
 
 项目初始化核验规则位于
 `mcp-packages/project-initialization-validator`。修改规则并提高 `mcp.json` 版本后，构建
-并在 AgentScope 管理端重新上传同名包即可立即切换，不需要修改初始化智能体：
+并在 AgentScope「平台设置 → 项目初始化智能体」中上传新版本；上传不会自动切换，
+需要在版本下拉框中选择并保存后才会用于后续核验。当前版本可从同一位置下载，未被
+使用的历史版本可按版本删除，不需要修改初始化智能体：
 
 ```powershell
 .\python-3.13.14\python.exe .\scripts\build_project_initialization_validator_mcp_package.py

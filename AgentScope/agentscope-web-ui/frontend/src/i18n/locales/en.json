@@ -97,7 +97,26 @@
 			"invalidCurrentTitle": "The current initialization agent is unavailable",
 			"invalidCurrent": "The current agent is disabled or has no fixed model. Select another available agent.",
 			"effect": "The selected agent is hidden and may collaborate only with explicitly assigned system specialists. It may read the current project and submit a review draft, but it cannot write formal project data.",
-			"save": "Set as initializer"
+			"save": "Save initialization settings",
+			"validation": {
+				"title": "Validation MCP",
+				"required": "Required",
+				"description": "Runs final validation before a draft enters project data. The selected MCP version owns the rules; uploading a new version never switches the active configuration automatically.",
+				"selector": "Version to use",
+				"placeholder": "Select a validation MCP version",
+				"current": "Currently used:",
+				"unconfigured": "Not configured",
+				"upload": "Upload new version",
+				"uploaded": "The new validation MCP version was uploaded. Select and save it to use it.",
+				"uploadFailed": "Validation MCP upload failed",
+				"download": "Download selected",
+				"delete": "Delete selected",
+				"deleteCurrentHint": "The currently used version cannot be deleted. Select and save another version first.",
+				"deleteRunningHint": "This version still has a running validation process and cannot be deleted yet.",
+				"deleted": "Validation MCP version deleted",
+				"deleteTitle": "Delete validation MCP v{{version}}?",
+				"deleteDescription": "The package for this version will be permanently removed. The currently used version cannot be deleted."
+			}
 		}
 	},
 	"error": {
@@ -835,6 +854,12 @@
 			"description": "View the current agent's planned tasks, progress, and dependencies.",
 			"completed": "Completed: {{count}}",
 			"total": "Total: {{count}}",
+			"timelineTitle": "Execution plan",
+			"timelineRunning": "In progress",
+			"timelineCompleted": "Completed",
+			"timelineProgress": "{{completed}} / {{total}} completed",
+			"timelineExpand": "Show all plan steps",
+			"timelineCollapse": "Collapse plan steps",
 			"emptyTitle": "No tasks yet",
 			"emptyDescription": "Tasks the agent plans will show up here."
 		},

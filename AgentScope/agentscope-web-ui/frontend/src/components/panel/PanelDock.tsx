@@ -6,7 +6,6 @@ import { ResizablePanel } from '@/components/ui/resizable.tsx';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export type PanelKey =
-	| 'plan'
 	| 'mcp'
 	| 'skill'
 	| 'tool'
@@ -33,11 +32,10 @@ interface PanelDockProps {
 }
 
 const PANEL_KEYS: PanelKey[] = [
-	'plan',
 	'mcp',
 	'skill',
-	'tool',
 	'database',
+	'tool',
 	'knowledge',
 	'collaboration',
 ];
@@ -96,7 +94,9 @@ export const PanelDock = ({
 									onBlur={() => clearPreview(key)}
 									onClick={() => clearPreview(key)}
 									className={`h-9 min-w-0 justify-start px-2 text-xs ${
-										key === 'database' ? 'col-span-2' : ''
+										key === 'database' || key === 'collaboration'
+											? 'col-span-2'
+											: ''
 									}`}
 								>
 									{descriptor.icon}

@@ -5,7 +5,6 @@ import {
 	ChevronLeft,
 	ChevronRight,
 	Database,
-	ListTodo,
 	Users,
 	Wrench,
 } from 'lucide-react';
@@ -32,7 +31,6 @@ import { KnowledgeBasePanel } from '@/components/panel/KnowledgeBasePanel';
 import { McpPanel } from '@/components/panel/McpPanel';
 import { PanelDock, type PanelDescriptor, type PanelKey } from '@/components/panel/PanelDock.tsx';
 import { SkillPanel } from '@/components/panel/SkillPanel';
-import { TaskPanel } from '@/components/panel/TaskPanel';
 import { ToolPanel } from '@/components/panel/ToolPanel';
 import { KnowledgeBaseParametersPopover } from '@/components/popover/KnowledgeBaseParametersPopover';
 import { ModelParametersPopover } from '@/components/popover/ModelParametersPopover';
@@ -161,7 +159,7 @@ export function ChatViewport({
 	const [credentialOpen, setCredentialOpen] = useState(false);
 	const [credentialRefetchTrigger, setCredentialRefetchTrigger] = useState(0);
 	const [tasksContext, setTasksContext] = useState<TaskContext | null>(null);
-	const [activePanel, setActivePanel] = useState<PanelKey>('plan');
+	const [activePanel, setActivePanel] = useState<PanelKey>('mcp');
 	const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
 	const panelDockRef = usePanelRef();
 	const togglePanelDock = useCallback(() => {
@@ -247,14 +245,6 @@ export function ChatViewport({
 	// dock itself stays free of any data dependency.
 	const panels = useMemo<Record<PanelKey, PanelDescriptor>>(
 		() => ({
-			plan: {
-				tabLabel: t('panel.plan.title'),
-				icon: <ListTodo className="size-4" />,
-				help: {
-					description: t('panel.plan.description'),
-				},
-				content: <TaskPanel tasksContext={tasksContext} />,
-			},
 			mcp: {
 				tabLabel: 'MCP',
 				icon: <MCPSvg className="size-4" />,
@@ -360,7 +350,6 @@ export function ChatViewport({
 		}),
 		[
 			t,
-			tasksContext,
 			mcpPackages,
 			mcpsLoading,
 			mcpUploading,
@@ -650,6 +639,7 @@ export function ChatViewport({
 								<ChatContent
 									className={'max-w-[var(--chat-content-w)] w-full'}
 									msgs={msgs}
+									tasksContext={tasksContext}
 									phase={phase}
 									disabled={effectiveSelectedModel === null}
 									onSend={send}

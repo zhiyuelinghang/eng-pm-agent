@@ -11,6 +11,8 @@ from ._models import (
     MCPPackageRecord,
     MCPPackageTool,
     MCPPackageView,
+    MCPPackageVersionView,
+    PROJECT_INITIALIZATION_VALIDATION_CAPABILITY,
 )
 
 __all__ = [
@@ -22,4 +24,6 @@ __all__ = [
     "MCPPackageRecord",
     "MCPPackageTool",
     "MCPPackageView",
+    "MCPPackageVersionView",
+    "PROJECT_INITIALIZATION_VALIDATION_CAPABILITY",
 ]

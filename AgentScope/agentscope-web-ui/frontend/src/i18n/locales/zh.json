@@ -97,7 +97,26 @@
 			"invalidCurrentTitle": "当前初始化智能体不可用",
 			"invalidCurrent": "当前智能体已停用或缺少固定模型，请选择另一个可用智能体。",
 			"effect": "保存后会自动隐藏该智能体，并将协同范围限制为管理员明确分配的系统专家；它只能读取当前项目和提交待核对草稿，不能直接写入正式业务表。",
-			"save": "设为初始化智能体"
+			"save": "保存初始化配置",
+			"validation": {
+				"title": "核验 MCP",
+				"required": "必需",
+				"description": "在草稿进入项目数据前执行最终核验。核验逻辑由所选 MCP 版本提供，上传新版本不会自动切换当前配置。",
+				"selector": "使用版本",
+				"placeholder": "选择核验 MCP 版本",
+				"current": "当前使用：",
+				"unconfigured": "未配置",
+				"upload": "上传新版本",
+				"uploaded": "核验 MCP 新版本已上传，请选择并保存后使用",
+				"uploadFailed": "核验 MCP 上传失败",
+				"download": "下载所选版本",
+				"delete": "删除所选版本",
+				"deleteCurrentHint": "当前正在使用的版本不能删除，请先切换并保存其他版本。",
+				"deleteRunningHint": "该版本仍有运行中的核验进程，暂时不能删除。",
+				"deleted": "核验 MCP 版本已删除",
+				"deleteTitle": "删除核验 MCP v{{version}}？",
+				"deleteDescription": "该版本的安装包将被永久移除；当前正在使用的版本不能删除。"
+			}
 		}
 	},
 	"error": {
@@ -835,6 +854,12 @@
 			"description": "查看当前智能体规划的任务、完成状态和任务依赖。",
 			"completed": "已完成：{{count}}",
 			"total": "总计：{{count}}",
+			"timelineTitle": "执行计划",
+			"timelineRunning": "执行中",
+			"timelineCompleted": "已完成",
+			"timelineProgress": "已完成 {{completed}} / {{total}} 项",
+			"timelineExpand": "展开全部计划步骤",
+			"timelineCollapse": "收起计划步骤",
 			"emptyTitle": "暂无任务",
 			"emptyDescription": "智能体规划的任务会显示在这里。"
 		},

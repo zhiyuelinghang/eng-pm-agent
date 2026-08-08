@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "interactive-data-modeling",
+  "display_name": "数据分析与预测建模",
+  "version": "2.1.4-platform.1",
+  "description": "面向 CSV、Excel、JSON 和 Parquet 的交互式数据画像、预处理、预测建模、评估与模型导出能力。平台自动将当前会话上传的表格转换为隔离 data_ref，智能体不得传入服务器文件路径。",
+  "transport": "stdio",
+  "command": "runtime/python.exe",
+  "args": ["server.py"],
+  "env": {
+    "PYTHONPATH": "packages",
+    "PREDICT_MCP_WORKDIR": "runtime",
+    "PREDICT_MCP_LOG_LEVEL": "INFO",
+    "PREDICT_IMPORT_TTL_SECONDS": "86400",
+    "PREDICT_MAX_FILE_BYTES": "536870912",
+    "PREDICT_MAX_CONCURRENT_JOBS": "2",
+    "PREDICT_MAX_QUEUED_JOBS": "16",
+    "PREDICT_JOB_TIMEOUT_SECONDS": "3600",
+    "MPLBACKEND": "Agg",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "NUMEXPR_MAX_THREADS": "4"
+  },
+  "platform_capabilities": [],
+  "startup_timeout": 90,
+  "execution_timeout": 300
+}

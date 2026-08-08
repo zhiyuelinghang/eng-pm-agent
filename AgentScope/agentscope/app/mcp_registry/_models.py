@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field, field_validator
 
 _MCP_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
 _VERSION_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+PROJECT_INITIALIZATION_VALIDATION_CAPABILITY = (
+    "project_initialization_validation"
+)
 
 
 def utc_now() -> datetime:
@@ -165,6 +168,42 @@ class MCPPackageView(BaseModel):
             tools=record.tools,
             platform_capabilities=list(manifest.platform_capabilities),
             assigned=assigned,
+            active_instances=active_instances,
+            created_at=record.created_at,
+            updated_at=record.updated_at,
+        )
+
+
+class MCPPackageVersionView(BaseModel):
+    """One immutable installed version exposed to platform settings."""
+
+    package_id: str
+    display_name: str
+    version: str
+    description: str
+    status: Literal["ready"] = "ready"
+    tools: list[MCPPackageTool] = Field(default_factory=list)
+    platform_capabilities: list[str] = Field(default_factory=list)
+    active_instances: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_record(
+        cls,
+        record: MCPPackageRecord,
+        *,
+        active_instances: int = 0,
+    ) -> "MCPPackageVersionView":
+        """Build a secret-free view of one retained package version."""
+        manifest = record.manifest
+        return cls(
+            package_id=record.id,
+            display_name=manifest.display_name,
+            version=manifest.version,
+            description=manifest.description,
+            tools=record.tools,
+            platform_capabilities=list(manifest.platform_capabilities),
             active_instances=active_instances,
             created_at=record.created_at,
             updated_at=record.updated_at,
