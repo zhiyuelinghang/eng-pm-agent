@@ -29,7 +29,7 @@ export function SubagentHitlCard({
 		toolCall: ToolCallBlock,
 		confirm: boolean,
 		rules?: ToolCallBlock['suggested_rules'],
-	) => void;
+	) => Promise<void>;
 }) {
 	const { t } = useTranslation();
 	const toolCalls = entry.event.tool_calls ?? [];

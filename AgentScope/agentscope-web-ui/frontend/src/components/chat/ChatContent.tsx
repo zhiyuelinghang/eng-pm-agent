@@ -29,7 +29,7 @@ interface ChatContentProps {
 		confirm: boolean,
 		replyId: string,
 		rules?: ToolCallBlock['suggested_rules'],
-	) => void;
+	) => Promise<void>;
 	autoComplete?: (input: string) => string | null;
 	className?: string;
 	/** Called when the user clicks the stop button. */

@@ -285,7 +285,7 @@ type OnUserConfirm = (
 	toolCallBlock: ToolCallBlock,
 	confirm: boolean,
 	rules?: ToolCallBlock['suggested_rules'],
-) => void;
+) => Promise<void>;
 
 const MCP_TOOL_PREFIX = 'mcp__';
 
@@ -295,10 +295,13 @@ const TODO_TOOLS = new Set(['TaskGet', 'TaskUpdate', 'TaskList', 'TaskCreate']);
 function renderConfirmCard(askingCall: ToolCallBlock, onUserConfirm?: OnUserConfirm) {
 	return (
 		<ConfirmCard
+			key={askingCall.id}
 			toolCall={askingCall}
-			onUserConfirm={(confirm, rules) => {
-				if (onUserConfirm) onUserConfirm(askingCall, confirm, rules);
-			}}
+			onUserConfirm={(confirm, rules) =>
+				onUserConfirm
+					? onUserConfirm(askingCall, confirm, rules)
+					: Promise.resolve()
+			}
 		/>
 	);
 }
@@ -378,7 +381,7 @@ function renderBlock(
 		toolCallBlock: ToolCallBlock,
 		confirm: boolean,
 		rules?: ToolCallBlock['suggested_rules'],
-	) => void,
+	) => Promise<void>,
 ) {
 	switch (block.type) {
 		case 'tool_call_group': {
@@ -585,7 +588,7 @@ interface MessageBubbleProps {
 		confirm: boolean,
 		replyId: string,
 		rules?: ToolCallBlock['suggested_rules'],
-	) => void;
+	) => Promise<void>;
 }
 
 /**
@@ -663,12 +666,12 @@ export function MessageBubble({ message, onUserConfirm }: MessageBubbleProps) {
 							i,
 							t,
 							onUserConfirm
-								? (
+								? async (
 										toolCall: ToolCallBlock,
 										confirm: boolean,
 										rules?: ToolCallBlock['suggested_rules'],
 									) => {
-										onUserConfirm(toolCall, confirm, message.id, rules);
+										await onUserConfirm(toolCall, confirm, message.id, rules);
 										toolCall.state = confirm ? 'allowed' : 'finished';
 									}
 								: undefined,

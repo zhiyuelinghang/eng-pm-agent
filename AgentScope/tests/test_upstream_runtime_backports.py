@@ -6,7 +6,7 @@ from typing import Any, AsyncGenerator
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock
 
-from agentscope.agent import Agent
+from agentscope.agent import Agent, InjectionConfig, ReActConfig
 from agentscope.credential import CredentialBase
 from agentscope.event import ToolResultEndEvent, ToolResultStartEvent
 from agentscope.message import (
@@ -17,10 +17,16 @@ from agentscope.message import (
     ThinkingBlock,
     ToolCallBlock,
     ToolCallState,
+    ToolResultState,
     UserMsg,
 )
 from agentscope.middleware import MiddlewareBase
-from agentscope.model import ChatModelBase, ChatResponse, ChatUsage
+from agentscope.model import (
+    ChatModelBase,
+    ChatResponse,
+    ChatUsage,
+    FinishedReason,
+)
 from agentscope.model._utils import _StreamAccumulator
 from agentscope.permission import (
     PermissionBehavior,
@@ -28,7 +34,53 @@ from agentscope.permission import (
     PermissionDecision,
 )
 from agentscope.state import AgentState
-from agentscope.tool import ToolBase, ToolChunk, ToolChoice, Toolkit
+from agentscope.tool import (
+    ToolBase,
+    ToolChunk,
+    ToolChoice,
+    ToolResponse,
+    Toolkit,
+)
+
+
+class ChatResponseFinishedReasonBackportTest(TestCase):
+    """Keep explicit model interruption reasons visible as attributes."""
+
+    def test_explicit_finished_reason_matches_mapping(self) -> None:
+        response = ChatResponse(
+            content=[],
+            is_last=True,
+            finished_reason=FinishedReason.INTERRUPTED,
+        )
+
+        self.assertEqual(
+            response.finished_reason,
+            response["finished_reason"],
+        )
+        self.assertEqual(
+            response.finished_reason,
+            FinishedReason.INTERRUPTED,
+        )
+
+
+class ToolResponseStateBackportTest(TestCase):
+    """An observed tool error must remain the terminal aggregate state."""
+
+    def test_error_is_not_downgraded_by_later_terminal_chunks(self) -> None:
+        for later_state in (
+            ToolResultState.INTERRUPTED,
+            ToolResultState.DENIED,
+        ):
+            with self.subTest(later_state=later_state):
+                response = ToolResponse()
+                response.append_chunk(
+                    ToolChunk(content=[], state=ToolResultState.ERROR),
+                )
+                response.append_chunk(
+                    ToolChunk(content=[], state=later_state),
+                )
+
+                self.assertEqual(response.state, ToolResultState.ERROR)
 
 
 class StreamAccumulatorTest(TestCase):
@@ -228,6 +280,71 @@ class _MutationProbeTool(ToolBase):
     async def call(self, value: str) -> ToolChunk:
         self.execution_values.append(value)
         return ToolChunk(content=[TextBlock(text=value)])
+
+
+class _RoundCountingModel:
+    """Deterministic two-response model for iteration accounting."""
+
+    model = "round-counting-model"
+    context_size = 100_000
+
+    def __init__(self, responses: list[ChatResponse]) -> None:
+        self._responses = responses
+        self.call_count = 0
+
+    async def __call__(self, **_: Any) -> ChatResponse:
+        response = self._responses[self.call_count]
+        self.call_count += 1
+        return response
+
+    async def count_tokens(self, *_: Any, **__: Any) -> int:
+        return 1
+
+
+class AgentIterationAccountingBackportTest(IsolatedAsyncioTestCase):
+    """Reasoning plus its tool execution should consume one round."""
+
+    async def test_tool_round_allows_final_reasoning_at_max_iters_two(
+        self,
+    ) -> None:
+        tool = _MutationProbeTool()
+        model = _RoundCountingModel(
+            [
+                ChatResponse(
+                    content=[
+                        ToolCallBlock(
+                            id="round-tool-call",
+                            name=tool.name,
+                            input='{"value":"original"}',
+                        ),
+                    ],
+                    is_last=True,
+                ),
+                ChatResponse(
+                    content=[TextBlock(text="done")],
+                    is_last=True,
+                ),
+            ],
+        )
+        agent = Agent(
+            name="worker",
+            system_prompt="test",
+            model=model,
+            toolkit=Toolkit(tools=[tool]),
+            react_config=ReActConfig(max_iters=2),
+            injection_config=InjectionConfig(inject_runtime_state=False),
+        )
+
+        reply = await agent.reply(UserMsg(name="user", content="run"))
+
+        self.assertEqual(reply.finished_reason, "completed")
+        self.assertEqual(
+            [block.text for block in reply.get_content_blocks("text")],
+            ["done"],
+        )
+        self.assertEqual(model.call_count, 2)
+        self.assertEqual(agent.state.cur_iter, 2)
+        self.assertEqual(tool.execution_values, ["original"])
 
 
 class _MutatingPermissionMiddleware(MiddlewareBase):

@@ -188,11 +188,19 @@ export function useMessages(
 				return;
 			}
 			if (event.type === EventType.REPLY_START) {
-				audioManager?.stopAllPlayback();
 				const e = event as ReplyStartEvent;
-				const msg = AssistantMsg({ id: e.reply_id, name: e.name, content: [] });
-				msgsRef.current = [...msgsRef.current, msg];
-				currentReplyRef.current = msg;
+				// A run resumed after confirmation may emit REPLY_START again
+				// with the same reply id. Reuse that message so React keys stay
+				// unique and any remaining confirmation cards remain visible.
+				const existing = msgsRef.current.find((msg) => msg.id === e.reply_id);
+				if (existing) {
+					currentReplyRef.current = existing;
+				} else {
+					audioManager?.stopAllPlayback();
+					const msg = AssistantMsg({ id: e.reply_id, name: e.name, content: [] });
+					msgsRef.current = [...msgsRef.current, msg];
+					currentReplyRef.current = msg;
+				}
 				clearInterruptTimer();
 				setPhase('streaming');
 			} else if (event.type === EventType.REPLY_END) {
@@ -377,6 +385,7 @@ export function useMessages(
 				});
 			} catch (e) {
 				setError(e as Error);
+				throw e;
 			}
 		},
 		[agentId, sessionId],
@@ -458,9 +467,6 @@ export function useMessages(
 				],
 			};
 
-			// Optimistically clear; the backend's clear event re-confirms.
-			setSubagentHitl((prev) => prev.filter((x) => hitlKey(x) !== hitlKey(entry)));
-
 			try {
 				// Post to the leader front door — backend routes to the
 				// worker session (§3.6). Do NOT address the worker here.
@@ -471,7 +477,28 @@ export function useMessages(
 				});
 			} catch (e) {
 				setError(e as Error);
+				// Let the card re-enable itself so the confirmation can be retried.
+				throw e;
 			}
+
+			// Remove only the call that was answered. One projected entry may
+			// contain several pending calls and its siblings must remain visible.
+			setSubagentHitl((prev) =>
+				prev.flatMap((candidate) => {
+					if (hitlKey(candidate) !== hitlKey(entry)) return [candidate];
+					const remaining = (candidate.event.tool_calls ?? []).filter(
+						(pending) => pending.id !== toolCall.id,
+					);
+					return remaining.length > 0
+						? [
+								{
+									...candidate,
+									event: { ...candidate.event, tool_calls: remaining },
+								},
+							]
+						: [];
+				}),
+			);
 		},
 		[agentId, sessionId],
 	);

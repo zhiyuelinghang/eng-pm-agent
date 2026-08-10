@@ -23,7 +23,7 @@ if not defined AGENTSCOPE_WEBUI_HELPER_PORT set "AGENTSCOPE_WEBUI_HELPER_PORT=23
 if not exist "%PYTHON_EXE%" goto ERROR_PYTHON
 if not exist "%AGENTSCOPE_CORE_HOME%\__init__.py" goto ERROR_CORE
 
-"%PYTHON_EXE%" -c "import agentscope; from agentscope.app.storage import AsyncSQLAlchemyStorage; assert agentscope.__version__ == '2.0.5'" >nul
+"%PYTHON_EXE%" -c "import agentscope; from agentscope.app.storage import AsyncSQLAlchemyStorage; assert agentscope.__version__ == '2.0.6'" >nul
 if errorlevel 1 goto ERROR_CORE_IMPORT
 
 "%PYTHON_EXE%" -c "import aiosqlite, alembic, qdrant_client, sqlalchemy, pypdf, pandas, pptx, openpyxl, xlrd, docx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime" >nul
@@ -47,7 +47,7 @@ pause
 exit /b 1
 
 :ERROR_CORE_IMPORT
-echo [错误] 无法导入项目内 AgentScope 2.0.5 核心。
+echo [错误] 无法导入项目内 AgentScope 2.0.6 核心。
 pause
 exit /b 1
 
@@ -111,7 +111,7 @@ set "AGENTSCOPE_QDRANT_HOME=%QDRANT_HOME%"
 set "AGENTSCOPE_KNOWLEDGE_BLOB_HOME=%KNOWLEDGE_BLOB_HOME%"
 
 echo [AgentScope] Python 核心：%AGENTSCOPE_CORE_HOME%
-echo [AgentScope] 核心版本：发布版 2.0.5
+echo [AgentScope] 核心版本：本地集成版 2.0.6
 echo [AgentScope] 存储模式：%AGENTSCOPE_STORAGE%
 echo [AgentScope] 运行数据：%RUNTIME_HOME%
 echo [AgentScope] SQLite 元数据：%SQLITE_PATH%

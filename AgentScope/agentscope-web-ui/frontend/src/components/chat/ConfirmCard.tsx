@@ -1,6 +1,6 @@
 import type { ToolCallBlock } from '@agentscope-ai/agentscope/message';
 import { ChevronRight } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { getDisplayName, renderConfirmBody } from './tool-renderers';
 import { Button } from '@/components/ui/button';
@@ -10,22 +10,42 @@ import { cn } from '@/lib/utils';
 
 type SelectOption = 'yes' | 'yes_with_rule' | 'no';
 
+const OPTIONS_WITH_SUGGESTED_RULES: SelectOption[] = ['yes', 'yes_with_rule', 'no'];
+const OPTIONS_WITHOUT_SUGGESTED_RULES: SelectOption[] = ['yes', 'no'];
+
 export function ConfirmCard({
 	toolCall,
 	onUserConfirm,
 }: {
 	toolCall: ToolCallBlock;
-	onUserConfirm: (confirm: boolean, rules?: ToolCallBlock['suggested_rules']) => void;
+	onUserConfirm: (confirm: boolean, rules?: ToolCallBlock['suggested_rules']) => Promise<void>;
 }) {
 	const { t } = useTranslation();
 	const hasSuggestedRules = !!toolCall.suggested_rules?.length;
-	const options: SelectOption[] = hasSuggestedRules
-		? ['yes', 'yes_with_rule', 'no']
-		: ['yes', 'no'];
+	const options = hasSuggestedRules
+		? OPTIONS_WITH_SUGGESTED_RULES
+		: OPTIONS_WITHOUT_SUGGESTED_RULES;
 	const [selected, setSelected] = useState<SelectOption>('yes');
+	const [isSubmitting, setIsSubmitting] = useState(false);
+	const submittingRef = useRef(false);
+
+	const handleConfirm = useCallback(
+		async (confirm: boolean, rules?: ToolCallBlock['suggested_rules']) => {
+			if (submittingRef.current) return;
+			submittingRef.current = true;
+			setIsSubmitting(true);
+			try {
+				await onUserConfirm(confirm, rules);
+			} catch {
+				submittingRef.current = false;
+				setIsSubmitting(false);
+			}
+		},
+		[onUserConfirm],
+	);
 
 	useEffect(() => {
-		const handleKeyDown = (e: KeyboardEvent) => {
+		const handleKeyDown = async (e: KeyboardEvent) => {
 			const currentIndex = options.indexOf(selected);
 			switch (e.key) {
 				case 'ArrowUp':
@@ -39,9 +59,9 @@ export function ConfirmCard({
 				case 'Enter':
 					e.preventDefault();
 					if (selected === 'yes_with_rule') {
-						onUserConfirm(true, [toolCall.suggested_rules![0]]);
+						await handleConfirm(true, [toolCall.suggested_rules![0]]);
 					} else {
-						onUserConfirm(selected === 'yes');
+						await handleConfirm(selected === 'yes');
 					}
 					break;
 			}
@@ -49,10 +69,13 @@ export function ConfirmCard({
 
 		window.addEventListener('keydown', handleKeyDown);
 		return () => window.removeEventListener('keydown', handleKeyDown);
-	}, [onUserConfirm, selected, options]);
+	}, [handleConfirm, selected, options, toolCall.suggested_rules]);
 
 	return (
-		<div className="ring ring-border rounded-xl w-full p-4 space-y-4 text-sm overflow-hidden">
+		<div
+			className="ring ring-border rounded-xl w-full p-4 space-y-4 text-sm overflow-hidden"
+			aria-busy={isSubmitting}
+		>
 			<div className="flex flex-col gap-y-2">
 				<strong className="text-secondary-foreground">{getDisplayName(toolCall, t)}</strong>
 				<div className="px-4 py-2 bg-white rounded-sm">
@@ -70,11 +93,12 @@ export function ConfirmCard({
 					)}
 					size="sm"
 					variant="ghost"
+					disabled={isSubmitting}
 					onMouseEnter={() => setSelected('yes')}
 					onClick={(e) => {
 						e.stopPropagation();
 						e.preventDefault();
-						onUserConfirm(true);
+						void handleConfirm(true);
 					}}
 				>
 					<ChevronRight
@@ -93,11 +117,12 @@ export function ConfirmCard({
 						)}
 						size="sm"
 						variant="ghost"
+						disabled={isSubmitting}
 						onMouseEnter={() => setSelected('yes_with_rule')}
 						onClick={(e) => {
 							e.stopPropagation();
 							e.preventDefault();
-							onUserConfirm(true, [toolCall.suggested_rules![0]]);
+							void handleConfirm(true, [toolCall.suggested_rules![0]]);
 						}}
 					>
 						<span className="flex items-start gap-1 w-full break-words whitespace-normal min-w-0">
@@ -129,11 +154,12 @@ export function ConfirmCard({
 					)}
 					size="sm"
 					variant="ghost"
+					disabled={isSubmitting}
 					onMouseEnter={() => setSelected('no')}
 					onClick={(e) => {
 						e.stopPropagation();
 						e.preventDefault();
-						onUserConfirm(false);
+						void handleConfirm(false);
 					}}
 				>
 					<ChevronRight
