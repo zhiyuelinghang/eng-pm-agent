@@ -1,0 +1,36 @@
+# Dobby Embed — BGE-large-zh-v1.5 Embedding Server
+# Build: docker build -f Dockerfile.embed -t dobby-embed:local .
+# Run:   docker run -p 9999:9999 dobby-embed:local
+
+FROM python:3.12-slim
+
+LABEL org.dobby.service="embed"
+LABEL org.dobby.version="1.0.0"
+
+WORKDIR /app
+
+# ── System dependencies ──
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Embedding-only dependencies (lightweight) ──
+RUN pip install --no-cache-dir \
+    sentence-transformers \
+    numpy
+
+# ── Pre-download model (cached in image) ──
+RUN python -c "from sentence_transformers import SentenceTransformer; \
+    SentenceTransformer('BAAI/bge-large-zh-v1.5')"
+
+# ── Application code ──
+COPY embed_server.py .
+
+# ── Health check ──
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -sf http://localhost:9999/health || exit 1
+
+EXPOSE 9999
+
+CMD ["python", "embed_server.py"]
