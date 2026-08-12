@@ -1,0 +1,7 @@
+{
+  "name": "wecom-notify-mcp",
+  "version": "0.1.0",
+  "description": "企业微信群机器人通知推送 MCP Server",
+  "namespace_prefix": "wecom_",
+  "author": "C4"
+}
