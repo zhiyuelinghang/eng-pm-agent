@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "wecom-notify",
+  "display_name": "企业微信通知推送",
+  "version": "1.0.0",
+  "description": "通过企业微信群机器人发送文本、Markdown、图片和图文消息。",
+  "transport": "stdio",
+  "command": "python",
+  "args": ["server.py"],
+  "env": {},
+  "platform_capabilities": [],
+  "startup_timeout": 30,
+  "execution_timeout": 120
+}
