@@ -12,7 +12,7 @@ set "RUNTIME_HOME=%ROOT%data\agentscope"
 
 if not defined AGENTSCOPE_HOST set "AGENTSCOPE_HOST=127.0.0.1"
 if not defined AGENTSCOPE_PORT set "AGENTSCOPE_PORT=18642"
-if not defined AGENTSCOPE_STORAGE set "AGENTSCOPE_STORAGE=sqlite"
+if not defined AGENTSCOPE_STORAGE set "AGENTSCOPE_STORAGE=postgresql"
 if not defined AGENTSCOPE_WEBUI_PORT set "AGENTSCOPE_WEBUI_PORT=25173"
 
 title Dobby 服务器智能体服务启动器
@@ -41,7 +41,7 @@ if not exist "%WEB_GATEWAY%" (
     exit /b 1
 )
 
-"%PYTHON_EXE%" -c "import agentscope; import aiosqlite, qdrant_client, sqlalchemy, openpyxl, xlrd, docx, pptx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime; assert agentscope.__version__ == '2.0.5'" >nul
+"%PYTHON_EXE%" -c "import agentscope; import aiosqlite, asyncpg, psycopg, pgvector, sqlalchemy, openpyxl, xlrd, docx, pptx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime; assert agentscope.__version__ == '2.0.6'" >nul
 if errorlevel 1 (
     echo [错误] 随包携带的 AgentScope Python 依赖验证失败。
     pause
@@ -54,7 +54,6 @@ for %%P in (%AGENTSCOPE_PORT% %AGENTSCOPE_WEBUI_PORT%) do call :KILL_PORT %%P
 
 set "AGENTSCOPE_RUNTIME_HOME=%RUNTIME_HOME%"
 set "AGENTSCOPE_SQLITE_PATH=%RUNTIME_HOME%\agentscope.db"
-set "AGENTSCOPE_QDRANT_HOME=%RUNTIME_HOME%\qdrant"
 set "AGENTSCOPE_KNOWLEDGE_BLOB_HOME=%RUNTIME_HOME%\knowledge_blobs"
 
 echo [AgentScope] 正在启动 API：http://%AGENTSCOPE_HOST%:%AGENTSCOPE_PORT%

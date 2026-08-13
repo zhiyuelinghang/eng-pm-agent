@@ -9,10 +9,12 @@ from typing import Any
 
 from fastapi.middleware import Middleware
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.engine import make_url
 
 from agentscope.app import AgentScopeAuthConfig, create_app
 from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app.mcp_registry import MCPRegistryManager
+from agentscope.app.memory import DobbyMemoryMiddleware, get_memory_runtime
 from agentscope.app.database_interactions import (
     DatabaseInteractionGatewayError,
     DatabaseInteractionManager,
@@ -30,7 +32,7 @@ from agentscope.rag import (
     ExcelParser,
     PDFParser,
     PPTParser,
-    QdrantStore,
+    PGVectorStore,
     TextParser,
     WordParser,
 )
@@ -77,9 +79,6 @@ RUNTIME_HOME = Path(
     os.getenv("AGENTSCOPE_RUNTIME_HOME", PROJECT_ROOT / "data" / "agentscope"),
 ).resolve()
 WORKSPACE_HOME = RUNTIME_HOME / "workspaces"
-QDRANT_HOME = Path(
-    os.getenv("AGENTSCOPE_QDRANT_HOME", RUNTIME_HOME / "qdrant"),
-).resolve()
 KNOWLEDGE_BLOB_HOME = Path(
     os.getenv("AGENTSCOPE_KNOWLEDGE_BLOB_HOME", RUNTIME_HOME / "knowledge_blobs"),
 ).resolve()
@@ -93,7 +92,6 @@ _fake_redis_client: Any = None
 
 for runtime_path in (
     WORKSPACE_HOME,
-    QDRANT_HOME,
     KNOWLEDGE_BLOB_HOME,
     MCP_REGISTRY_HOME,
     SQLITE_PATH.parent,
@@ -105,7 +103,34 @@ def _create_storage() -> StorageBase:
     """Create the configured durable or compatibility storage backend."""
     global _fake_redis_client
 
-    mode = os.getenv("AGENTSCOPE_STORAGE", "sqlite").strip().lower()
+    configured_url = (
+        os.getenv("AGENTSCOPE_DATABASE_URL", "").strip()
+        or os.getenv("DATABASE_URL", "").strip()
+    )
+    mode = os.getenv("AGENTSCOPE_STORAGE", "postgresql").strip().lower()
+
+    if mode in {"postgres", "postgresql"}:
+        if not configured_url:
+            raise RuntimeError(
+                "AGENTSCOPE_STORAGE=postgresql 时必须配置 DATABASE_URL "
+                "或 AGENTSCOPE_DATABASE_URL",
+            )
+        url = make_url(configured_url)
+        if url.get_backend_name() != "postgresql":
+            raise RuntimeError("AgentScope PostgreSQL 存储收到的不是 PostgreSQL URL")
+        async_url = url.set(drivername="postgresql+asyncpg").render_as_string(
+            hide_password=False,
+        )
+        return AsyncSQLAlchemyStorage(
+            async_url,
+            create_tables=False,
+            auto_migrate=True,
+            schema=os.getenv(
+                "AGENTSCOPE_DATABASE_SCHEMA",
+                "agentscope",
+            ).strip(),
+        )
+
     if mode == "sqlite":
         sqlite_url = f"sqlite+aiosqlite:///{SQLITE_PATH.as_posix()}"
         return AsyncSQLAlchemyStorage(
@@ -132,14 +157,40 @@ def _create_storage() -> StorageBase:
         )
 
     raise ValueError(
-        "AGENTSCOPE_STORAGE 仅支持 'sqlite'、'memory' 或 'redis'",
+        "AGENTSCOPE_STORAGE 仅支持 'postgresql'、'sqlite'、'memory' 或 'redis'",
+    )
+
+
+def _create_vector_store() -> PGVectorStore:
+    """Create the shared PostgreSQL knowledge-base vector store."""
+
+    configured_url = (
+        os.getenv("AGENTSCOPE_KNOWLEDGE_DATABASE_URL", "").strip()
+        or os.getenv("AGENTSCOPE_DATABASE_URL", "").strip()
+        or os.getenv("DATABASE_URL", "").strip()
+    )
+    if not configured_url:
+        raise RuntimeError(
+            "知识库必须配置 DATABASE_URL、AGENTSCOPE_DATABASE_URL "
+            "或 AGENTSCOPE_KNOWLEDGE_DATABASE_URL",
+        )
+    url = make_url(configured_url)
+    if url.get_backend_name() != "postgresql":
+        raise RuntimeError("知识库向量存储仅支持 PostgreSQL/pgvector")
+    return PGVectorStore(
+        url.render_as_string(hide_password=False),
+        schema=(
+            os.getenv("AGENTSCOPE_KNOWLEDGE_DATABASE_SCHEMA", "knowledge")
+            .strip()
+            or "knowledge"
+        ),
     )
 
 
 storage = _create_storage()
 knowledge_base_manager = CollectionPerKbManager(
     storage=storage,
-    vector_store=QdrantStore(path=str(QDRANT_HOME)),
+    vector_store=_create_vector_store(),
 )
 
 
@@ -161,6 +212,36 @@ database_interaction_manager = DatabaseInteractionManager(
         or _required_env("AGENTSCOPE_SERVICE_TOKEN")
     ),
 )
+
+
+async def _create_memory_middlewares(
+    user_id: str,
+    agent_id: str,
+    session_id: str,
+):
+    """Bind every AgentScope turn to its immutable project memory scope."""
+
+    session = await storage.get_session(user_id, agent_id, session_id)
+    platform_context = session.config.platform_context if session else None
+    if session is not None and platform_context is None and session.team_id:
+        team = await storage.get_team(user_id, session.team_id)
+        if team is not None:
+            leader = await storage.get_session(user_id, "", team.session_id)
+            if leader is not None:
+                platform_context = leader.config.platform_context
+
+    runtime = get_memory_runtime()
+    scope = runtime.scope(
+        project_id=(
+            platform_context.project_id if platform_context is not None else None
+        ),
+        platform_user_id=(
+            platform_context.user_id if platform_context is not None else user_id
+        ),
+        agent_id=agent_id,
+        session_id=session_id,
+    )
+    return [DobbyMemoryMiddleware(runtime, scope)]
 
 
 async def _create_platform_agent_tools(
@@ -235,6 +316,7 @@ app = create_app(
             os.getenv("AGENTSCOPE_MANAGEMENT_TOKEN_TTL_SECONDS", "28800"),
         ),
     ),
+    extra_agent_middlewares=_create_memory_middlewares,
     extra_agent_tools=_create_platform_agent_tools,
     extra_middlewares=[
         Middleware(

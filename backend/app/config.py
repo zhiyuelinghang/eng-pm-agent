@@ -7,7 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "Dobby API"
     environment: str = "development"
-    database_url: str = "sqlite:///./data/engpm.db"
+    database_url: str
+    database_schema: str = "platform"
     jwt_secret: str = "change-this-in-production"
     jwt_expire_minutes: int = 480
     cors_origins: str = "http://localhost:38429,http://127.0.0.1:38429"

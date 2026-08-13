@@ -76,12 +76,20 @@ if not errorlevel 1 (
 
 echo.
 echo [初始化] 正在验证随包携带的 Python 与 AgentScope 运行环境……
-"%PYTHON_EXE%" -c "import agentscope; import aiosqlite, alembic, qdrant_client, sqlalchemy, pypdf, pandas, openpyxl, xlrd, docx, pptx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime; assert agentscope.__version__ == '2.0.5'"
+"%PYTHON_EXE%" -c "import agentscope; import aiosqlite, asyncpg, alembic, psycopg, pgvector, sqlalchemy, pypdf, pandas, openpyxl, xlrd, docx, pptx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime; assert agentscope.__version__ == '2.0.6'"
 if errorlevel 1 (
     echo [失败] AgentScope Python 环境验证失败。
     goto FAILED
 )
 echo [初始化] AgentScope Python 环境验证通过。
+
+echo [初始化] 正在建立 PostgreSQL、pgvector 和 Alembic 基线……
+"%PYTHON_EXE%" "%ROOT%scripts\bootstrap_postgres.py" --expected-database projectcopilot --upgrade
+if errorlevel 1 (
+    echo [失败] PostgreSQL 初始化失败，请检查 DATABASE_URL 和 pgvector 安装。
+    goto FAILED
+)
+echo [初始化] PostgreSQL、pgvector 和 Alembic 基线验证通过。
 
 "%PYTHON_EXE%" -c "import sys; sys.path.insert(0, r'%PROJECT_ROOT%'); from scripts.agentscope_dev_app import app; assert app is not None"
 if errorlevel 1 (
@@ -100,8 +108,8 @@ echo [初始化] 平台前端与 Dobby 管理端验证通过。
 echo.
 echo [完成] 服务器首次初始化完成。
 echo [完成] 本脚本没有安装任何依赖，服务器不需要 Node.js、npm 或 pnpm。
-echo [下一步] 如需迁移本机配置，请先复制 data\agentscope，再运行 服务器一键启动.bat。
-echo [下一步] 如果不迁移，直接运行 服务器一键启动.bat 后在管理端重新配置。
+echo [下一步] 旧版数据可执行 scripts\migrate_legacy_storage.py --expected-database projectcopilot --apply --replace。
+echo [下一步] 新部署或迁移完成后，直接运行 服务器一键启动.bat。
 goto FINISH
 
 :CONFIG_REQUIRED

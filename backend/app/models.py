@@ -30,6 +30,17 @@ class TimestampMixin:
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class PlatformSchemaVersion(Base):
+    """Applied versions of the declarative database-interaction catalogue."""
+
+    __tablename__ = "platform_schema_versions"
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    applied_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
 class User(TimestampMixin, Base):
     __tablename__ = "users"
     __table_args__ = (
@@ -829,6 +840,173 @@ class ProjectInitializationFile(TimestampMixin, Base):
     file_size: Mapped[int] = mapped_column(Integer)
     file_hash: Mapped[str] = mapped_column(String(64), index=True)
 
+
+class ProjectInitializationRun(TimestampMixin, Base):
+    """Durable orchestration state for one initialization workflow."""
+
+    __tablename__ = "project_initialization_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ("
+            "'queued', 'parsing', 'extracting', 'validating', 'ready', "
+            "'needs_attention', 'failed', 'cancelling', 'cancelled', 'applied'"
+            ")",
+            name="ck_project_initialization_runs_status",
+        ),
+        Index(
+            "ix_project_initialization_runs_project_status",
+            "project_id",
+            "status",
+            "created_at",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+        index=True,
+    )
+    created_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"),
+        index=True,
+    )
+    draft_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_initialization_drafts.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(32), default="queued", index=True)
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0)
+    current_step_key: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    request_text: Mapped[str] = mapped_column(Text, default="")
+    source_file_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    source_files: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    detected_sections: Mapped[list[str]] = mapped_column(JSON, default=list)
+    completed_sections: Mapped[list[str]] = mapped_column(JSON, default=list)
+    failed_sections: Mapped[list[str]] = mapped_column(JSON, default=list)
+    validation_issues: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON,
+        default=list,
+    )
+    semantic_review_summary: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    final_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    revision: Mapped[int] = mapped_column(Integer, default=1)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
+class ProjectInitializationRunStep(TimestampMixin, Base):
+    """One observable step inside an initialization workflow run."""
+
+    __tablename__ = "project_initialization_run_steps"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'running', 'completed', 'failed', 'skipped')",
+            name="ck_project_initialization_run_steps_status",
+        ),
+        UniqueConstraint(
+            "run_id",
+            "step_key",
+            name="uq_project_initialization_run_steps_key",
+        ),
+        Index(
+            "ix_project_initialization_run_steps_run_order",
+            "run_id",
+            "sort_order",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("project_initialization_runs.id", ondelete="CASCADE"),
+        index=True,
+    )
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="CASCADE"),
+        index=True,
+    )
+    step_key: Mapped[str] = mapped_column(String(80))
+    name: Mapped[str] = mapped_column(String(200))
+    phase: Mapped[str] = mapped_column(String(40))
+    section: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    sort_order: Mapped[int] = mapped_column(Integer)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=1)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
+class ProjectInitializationParsedChunk(TimestampMixin, Base):
+    """Normalized parser output retained for deterministic replay."""
+
+    __tablename__ = "project_initialization_parsed_chunks"
+    __table_args__ = (
+        CheckConstraint(
+            "chunk_index >= 0",
+            name="ck_project_initialization_parsed_chunks_index",
+        ),
+        UniqueConstraint(
+            "run_id",
+            "file_id",
+            "chunk_index",
+            name="uq_project_initialization_parsed_chunks_position",
+        ),
+        Index(
+            "ix_project_initialization_parsed_chunks_run_file",
+            "run_id",
+            "file_id",
+            "chunk_index",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("project_initialization_runs.id", ondelete="CASCADE"),
+        index=True,
+    )
+    file_id: Mapped[int] = mapped_column(
+        ForeignKey("project_initialization_files.id", ondelete="CASCADE"),
+        index=True,
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    parser: Mapped[str] = mapped_column(String(100))
+    content_format: Mapped[str] = mapped_column(String(40))
+    content: Mapped[str] = mapped_column(Text)
+    structured_payload: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+    section_hints: Mapped[list[str]] = mapped_column(JSON, default=list)
+    source_location: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
 
 class ProjectInitializationAttachmentChunk(TimestampMixin, Base):
     """Temporary parsed text referenced by initialization agents."""

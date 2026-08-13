@@ -286,7 +286,11 @@ def seed_prototype_project() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    upgrade_database_schema(engine, Base.metadata)
+    upgrade_database_schema(
+        engine,
+        Base.metadata,
+        schema=settings.database_schema,
+    )
     with SessionLocal() as db:
         bootstrap_declarative_catalog(db)
     seed_admin()

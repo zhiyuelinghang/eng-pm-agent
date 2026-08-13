@@ -52,6 +52,7 @@ from .models import (
     DatabaseInteractionAgentAssignment,
     DatabaseInteractionTablePolicy,
     OperationLog,
+    PlatformSchemaVersion,
     ProjectInitializationDraft,
     ProjectInitializationDraftSection,
 )
@@ -1362,12 +1363,6 @@ def _seed_join_rules(
 
 def bootstrap_declarative_catalog(db: Session) -> int:
     """Convert code-bound tools and apply declared catalogue upgrades."""
-    db.execute(
-        text(
-            "CREATE TABLE IF NOT EXISTS platform_schema_versions ("
-            "version INTEGER PRIMARY KEY, applied_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
-        ),
-    )
     legacy_rows = db.scalars(
         select(DatabaseInteraction).where(
             or_(
@@ -1376,13 +1371,10 @@ def bootstrap_declarative_catalog(db: Session) -> int:
             ),
         ),
     ).all()
-    migrated = db.execute(
-        text(
-            "SELECT 1 FROM platform_schema_versions "
-            "WHERE version = :version LIMIT 1",
-        ),
-        {"version": _DECLARATIVE_CATALOG_VERSION},
-    ).scalar_one_or_none()
+    migrated = db.get(
+        PlatformSchemaVersion,
+        _DECLARATIVE_CATALOG_VERSION,
+    )
     obsolete_initialization_row = db.execute(
         select(DatabaseInteraction.id)
         .outerjoin(
@@ -1674,12 +1666,8 @@ def bootstrap_declarative_catalog(db: Session) -> int:
         if row.id not in migrated_ids:
             db.delete(row)
             changed += 1
-    db.execute(
-        text(
-            "INSERT OR IGNORE INTO platform_schema_versions(version) "
-            "VALUES (:version)",
-        ),
-        {"version": _DECLARATIVE_CATALOG_VERSION},
+    db.merge(
+        PlatformSchemaVersion(version=_DECLARATIVE_CATALOG_VERSION),
     )
     db.commit()
     return changed

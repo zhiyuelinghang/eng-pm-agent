@@ -33,9 +33,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from pathlib import Path
 import threading
 from collections.abc import AsyncGenerator
 from typing import Any, TYPE_CHECKING
+
+os.environ.setdefault(
+    "MEM0_DIR",
+    str(Path(os.getenv("AGENTSCOPE_RUNTIME_HOME", "data/agentscope")) / "mem0"),
+)
+os.environ.setdefault("MEM0_TELEMETRY", "false")
 
 from mem0.configs.embeddings.base import BaseEmbedderConfig
 from mem0.configs.llms.base import BaseLlmConfig

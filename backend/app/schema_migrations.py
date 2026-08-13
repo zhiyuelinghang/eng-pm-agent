@@ -542,8 +542,21 @@ def _backfill_initialization_draft_records(engine: Engine) -> None:
         raw_connection.close()
 
 
-def upgrade_database_schema(engine: Engine, metadata: MetaData) -> None:
+def upgrade_database_schema(
+    engine: Engine,
+    metadata: MetaData,
+    *,
+    schema: str | None = None,
+) -> None:
     """Create the current schema and bridge supported legacy SQLite layouts."""
+
+    if engine.dialect.name == "postgresql":
+        if not schema:
+            raise ValueError("PostgreSQL 升级必须指定业务 schema")
+        from .alembic_runner import upgrade_postgres_schema
+
+        upgrade_postgres_schema(engine, schema)
+        return
 
     if engine.dialect.name != "sqlite":
         metadata.create_all(bind=engine)

@@ -160,7 +160,7 @@
                   核验规则 {{ materialAgentDraft.validation.package_version ? `v${materialAgentDraft.validation.package_version}` : '' }}
                   · {{ formatValidationDuration(materialAgentDraft.validation.duration_ms) }}
                 </small>
-                <small v-if="materialAgentDraft.source_files.length">来源：{{ materialAgentDraft.source_files.join('、') }}</small>
+                <small v-if="initializationDraftSourceNames.length">来源：{{ initializationDraftSourceNames.join('、') }}</small>
                 <small v-else>来源：本次问答</small>
               </footer>
             </div>
@@ -1113,6 +1113,15 @@ type InitializationDraftQuality = {
   inspection_frequency: string
   related_documents: string
 }
+type InitializationDraftSourceFile = {
+  file_id?: number | string | null
+  file_name?: string | null
+  name?: string | null
+  original_name?: string | null
+  content_type?: string | null
+  file_size?: number | null
+  chunk_ids?: Array<number | string>
+}
 type ApiInitializationDraft = {
   id: number
   project_id: number
@@ -1140,7 +1149,7 @@ type ApiInitializationDraft = {
     started_at?: string | null
     finished_at?: string | null
   } | null
-  source_files: string[]
+  source_files: Array<string | InitializationDraftSourceFile>
   workflow?: {
     stage: 'collecting' | 'reviewing' | 'completed'
     run_revision: number
@@ -1360,6 +1369,19 @@ const materialAgentPreparationDetail = computed(() => {
   return '你的消息已经进入对话，正在准备本次初始化任务。'
 })
 const materialAgentDraft = ref<ApiInitializationDraft | null>(null)
+const initializationDraftSourceNames = computed(() => {
+  const names = (materialAgentDraft.value?.source_files || [])
+    .map((source) => {
+      if (typeof source === 'string') return source.trim()
+      const fileName = source.file_name || source.name || source.original_name
+      if (fileName?.trim()) return fileName.trim()
+      return source.file_id === null || source.file_id === undefined
+        ? ''
+        : `附件 #${source.file_id}`
+    })
+    .filter(name => name.length > 0)
+  return [...new Set(names)]
+})
 const materialAgentActiveRuntimeTrace = computed<AgentRuntimeTrace | null>(() => {
   if (
     materialAgentDraft.value

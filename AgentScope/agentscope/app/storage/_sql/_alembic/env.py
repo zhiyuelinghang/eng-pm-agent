@@ -17,11 +17,13 @@ from __future__ import with_statement
 
 import asyncio
 import os
+import re
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import pool, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy.schema import CreateSchema
 
 from agentscope.app.storage._sql._tables import _Base
 
@@ -35,6 +37,29 @@ if url_from_env and not config.get_main_option("sqlalchemy.url"):
     config.set_main_option("sqlalchemy.url", url_from_env)
 
 target_metadata = _Base.metadata
+_SCHEMA_PATTERN = re.compile(r"[a-z_][a-z0-9_]{0,62}")
+
+
+def _configured_schema() -> str | None:
+    value = config.attributes.get("schema") or os.getenv(
+        "AGENTSCOPE_DATABASE_SCHEMA",
+    )
+    if value is None or not str(value).strip():
+        return None
+    schema = str(value).strip()
+    if not _SCHEMA_PATTERN.fullmatch(schema):
+        raise ValueError("非法 AgentScope PostgreSQL schema")
+    return schema
+
+
+def _include_object(
+    _object: object,
+    name: str | None,
+    type_: str,
+    _reflected: bool,
+    _compare_to: object | None,
+) -> bool:
+    return not (type_ == "table" and name == "alembic_version")
 
 
 # ---------------------------------------------------------------------
@@ -43,12 +68,16 @@ target_metadata = _Base.metadata
 def run_migrations_offline() -> None:
     """Run migrations using URL-only context (no DBAPI connection)."""
     url = config.get_main_option("sqlalchemy.url")
+    schema = _configured_schema()
+    is_postgres = (url or "").startswith("postgresql")
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         render_as_batch=(url or "").startswith("sqlite"),
+        include_object=_include_object,
+        version_table_schema=schema if is_postgres else None,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -60,10 +89,20 @@ def run_migrations_offline() -> None:
 def do_run_migrations(connection: Connection) -> None:
     """Bind Alembic to *connection* and run every pending revision."""
     is_sqlite = connection.dialect.name == "sqlite"
+    schema = _configured_schema()
+    if connection.dialect.name == "postgresql" and schema:
+        connection.execute(CreateSchema(schema, if_not_exists=True))
+        connection.execute(
+            text(f'SET search_path TO "{schema}", public'),
+        )
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
         render_as_batch=is_sqlite,
+        include_object=_include_object,
+        version_table_schema=(
+            schema if connection.dialect.name == "postgresql" else None
+        ),
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -85,5 +124,7 @@ async def run_migrations_online() -> None:
 
 if context.is_offline_mode():
     run_migrations_offline()
+elif config.attributes.get("connection") is not None:
+    do_run_migrations(config.attributes["connection"])
 else:
     asyncio.run(run_migrations_online())

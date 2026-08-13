@@ -41,6 +41,7 @@ def _client() -> AgentScopeClient:
     return AgentScopeClient(
         Settings(
             agentscope_base_url="http://127.0.0.1:18642",
+            database_url="postgresql://user:password@localhost/projectcopilot",
             agentscope_service_token="platform-service-token-for-tests",
             agentscope_request_timeout_seconds=2,
             agentscope_poll_interval_seconds=0.1,

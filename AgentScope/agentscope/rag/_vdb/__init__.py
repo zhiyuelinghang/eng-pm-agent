@@ -8,6 +8,7 @@ from ._vector_store import (
     VectorStoreBase,
 )
 from ._qdrant import QdrantStore
+from ._pgvector import PGVectorStore
 from ._mongodb import MongoDBStore
 from ._milvus_lite import MilvusLiteStore
 from ._elasticsearch import ElasticsearchStore
@@ -16,6 +17,7 @@ __all__ = [
     "DocumentSummary",
     "ElasticsearchStore",
     "MilvusLiteStore",
+    "PGVectorStore",
     "VectorStoreBase",
     "VectorRecord",
     "VectorSearchResult",

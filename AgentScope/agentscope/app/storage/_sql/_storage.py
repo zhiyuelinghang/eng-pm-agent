@@ -17,6 +17,7 @@ timezone, while staying tz-naive so the plain ``DateTime`` columns
 need no dialect-specific timezone handling.
 """
 from datetime import datetime, timedelta, timezone
+import re
 from typing import TYPE_CHECKING, Any, Self
 
 from .._base import StorageBase
@@ -65,6 +66,9 @@ if TYPE_CHECKING:
     )
 
 
+_POSTGRES_SCHEMA_PATTERN = re.compile(r"[a-z_][a-z0-9_]{0,62}")
+
+
 def _utcnow() -> datetime:
     """Current time as a naive UTC timestamp.
 
@@ -110,6 +114,7 @@ class AsyncSQLAlchemyStorage(StorageBase):
         *,
         create_tables: bool = True,
         auto_migrate: bool = False,
+        schema: str | None = None,
         engine: "AsyncEngine | None" = None,
         engine_kwargs: dict[str, Any] | None = None,
     ) -> None:
@@ -136,6 +141,11 @@ class AsyncSQLAlchemyStorage(StorageBase):
                 two replicas racing on the same migration is unsafe.
                 In that setup keep this `False` and run
                 ``alembic upgrade head`` as a discrete deploy step.
+            schema (`str | None`, optional):
+                PostgreSQL schema used by both runtime queries and the
+                packaged Alembic version table.  The internally-created
+                asyncpg engine receives ``<schema>,public`` as its search
+                path.  Ignored by SQLite.
             engine (`AsyncEngine | None`, optional):
                 An externally managed engine.  When supplied the
                 engine is used as-is and **not** disposed by
@@ -152,13 +162,42 @@ class AsyncSQLAlchemyStorage(StorageBase):
         self._url = url
         self._create_tables = create_tables
         self._auto_migrate = auto_migrate
+        if schema and not _POSTGRES_SCHEMA_PATTERN.fullmatch(schema):
+            raise ValueError(
+                "schema 必须是最多 63 位的小写 PostgreSQL 标识符",
+            )
+        self._schema = schema
         self._external_engine: "AsyncEngine | None" = engine
-        self._engine_kwargs = engine_kwargs or {}
+        self._engine_kwargs = dict(engine_kwargs or {})
 
         # Populated in __aenter__; None until the context is entered.
         self._engine: "AsyncEngine | None" = None
         self._owns_engine: bool = False
         self._session_factory: "async_sessionmaker[AsyncSession] | None" = None
+
+    def _internal_engine_kwargs(self) -> dict[str, Any]:
+        """Return engine options with an isolated PostgreSQL search path."""
+
+        kwargs = dict(self._engine_kwargs)
+        if not self._schema:
+            return kwargs
+
+        from sqlalchemy.engine import make_url
+
+        url = make_url(self._url)
+        if url.get_backend_name() != "postgresql":
+            return kwargs
+
+        connect_args = dict(kwargs.get("connect_args", {}))
+        search_path = f"{self._schema},public"
+        if url.drivername == "postgresql+asyncpg":
+            server_settings = dict(connect_args.get("server_settings", {}))
+            server_settings.setdefault("search_path", search_path)
+            connect_args["server_settings"] = server_settings
+        else:
+            connect_args.setdefault("options", f"-csearch_path={search_path}")
+        kwargs["connect_args"] = connect_args
+        return kwargs
 
     async def __aenter__(self) -> Self:
         """Build the engine (or adopt the external one) and optionally
@@ -176,7 +215,7 @@ class AsyncSQLAlchemyStorage(StorageBase):
             self._engine = create_async_engine(
                 self._url,
                 future=True,
-                **self._engine_kwargs,
+                **self._internal_engine_kwargs(),
             )
             self._owns_engine = True
             # SQLite ignores foreign keys unless enabled per connection,
@@ -213,17 +252,13 @@ class AsyncSQLAlchemyStorage(StorageBase):
         """Bring the schema up to ``head`` via the packaged Alembic scripts.
 
         Runs :func:`alembic.command.upgrade` against the ``_alembic/``
-        directory shipped alongside this module, using the current
-        engine URL. Executed inside :meth:`asyncio.to_thread` because
-        Alembic's runtime is synchronous (it drives an async engine
-        internally via :func:`asyncio.run` inside its own ``env.py``,
-        so calling it from the main event loop would nest loops and
-        deadlock).
+        directory shipped alongside this module.  The already-open async
+        connection is bridged into Alembic with ``run_sync`` so migrations
+        inherit the exact same schema/search-path settings as runtime I/O.
 
         Failures propagate: a broken migration MUST prevent
         ``__aenter__`` from returning a half-configured storage.
         """
-        import asyncio
         from pathlib import Path
 
         from alembic import command
@@ -232,9 +267,18 @@ class AsyncSQLAlchemyStorage(StorageBase):
         alembic_dir = Path(__file__).resolve().parent / "_alembic"
         cfg = Config(str(alembic_dir / "alembic.ini"))
         cfg.set_main_option("script_location", str(alembic_dir))
-        cfg.set_main_option("sqlalchemy.url", self._url)
+        cfg.set_main_option("sqlalchemy.url", self._url.replace("%", "%%"))
+        cfg.attributes["schema"] = self._schema
 
-        await asyncio.to_thread(command.upgrade, cfg, "head")
+        if self._engine is None:
+            raise RuntimeError("SQL 存储引擎尚未初始化")
+
+        def _upgrade(sync_connection: Any) -> None:
+            cfg.attributes["connection"] = sync_connection
+            command.upgrade(cfg, "head")
+
+        async with self._engine.begin() as connection:
+            await connection.run_sync(_upgrade)
 
     async def aclose(self) -> None:
         """Dispose the engine (if owned) and drop the session factory."""
