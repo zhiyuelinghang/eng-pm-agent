@@ -4,6 +4,7 @@ import {
 	Crown,
 	Download,
 	FileSearch,
+	FolderKanban,
 	Loader2,
 	PackageCheck,
 	ShieldCheck,
@@ -36,7 +37,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAgents } from '@/hooks/useAgents';
 import { useTranslation } from '@/i18n/useI18n';
 
-type AssignmentKey = 'main' | 'initializer';
+type AssignmentKey = 'main' | 'initializer' | 'engineeringDocuments';
 
 const validationVersionKey = (binding: PlatformMCPVersionBinding) =>
 	`${binding.package_id}@${binding.version}`;
@@ -74,9 +75,13 @@ export function PlatformSettingsPage() {
 	const [mainSelectedId, setMainSelectedId] = useState<string>('');
 	const [initializerSelectedId, setInitializerSelectedId] =
 		useState<string>('');
+	const [engineeringDocumentSelectedId, setEngineeringDocumentSelectedId] =
+		useState<string>('');
 	const [loading, setLoading] = useState(true);
 	const [savingMain, setSavingMain] = useState(false);
 	const [savingInitializer, setSavingInitializer] = useState(false);
+	const [savingEngineeringDocument, setSavingEngineeringDocument] =
+		useState(false);
 
 	useEffect(() => {
 		let active = true;
@@ -90,6 +95,9 @@ export function PlatformSettingsPage() {
 				setValidationConfig(validation);
 				setMainSelectedId(value.global_main_agent_id ?? '');
 				setInitializerSelectedId(value.project_initializer_agent_id ?? '');
+				setEngineeringDocumentSelectedId(
+					value.engineering_document_agent_id ?? '',
+				);
 				const selectedBinding =
 					value.project_initializer_validation_mcp ?? validation.current;
 				setValidationSelectedKey(
@@ -134,16 +142,25 @@ export function PlatformSettingsPage() {
 		agents.find((agent) => agent.id === mainSelectedId) ?? null;
 	const selectedInitializer =
 		agents.find((agent) => agent.id === initializerSelectedId) ?? null;
+	const selectedEngineeringDocument =
+		agents.find((agent) => agent.id === engineeringDocumentSelectedId) ?? null;
 	const currentAgent =
 		agents.find((agent) => agent.id === settings?.global_main_agent_id) ?? null;
 	const currentInitializer =
 		agents.find(
 			(agent) => agent.id === settings?.project_initializer_agent_id,
 		) ?? null;
+	const currentEngineeringDocument =
+		agents.find(
+			(agent) => agent.id === settings?.engineering_document_agent_id,
+		) ?? null;
 	const selectedIsValid =
 		selectedAgent !== null && isMainCandidate(selectedAgent);
 	const initializerAgentIsValid =
 		selectedInitializer !== null && isMainCandidate(selectedInitializer);
+	const engineeringDocumentIsValid =
+		selectedEngineeringDocument !== null &&
+		isMainCandidate(selectedEngineeringDocument);
 	const selectedValidationVersion =
 		validationConfig?.versions.find(
 			(version) =>
@@ -173,6 +190,9 @@ export function PlatformSettingsPage() {
 		initializerSelectedId ===
 			(settings?.project_initializer_agent_id ?? '') &&
 		validationUnchanged;
+	const engineeringDocumentUnchanged =
+		engineeringDocumentSelectedId ===
+		(settings?.engineering_document_agent_id ?? '');
 
 	const saveMain = async () => {
 		if (!mainSelectedId || !selectedIsValid) return;
@@ -210,6 +230,21 @@ export function PlatformSettingsPage() {
 			toast.success(t('platform-settings.initializer.saved'));
 		} finally {
 			setSavingInitializer(false);
+		}
+	};
+
+	const saveEngineeringDocument = async () => {
+		if (!engineeringDocumentSelectedId || !engineeringDocumentIsValid) return;
+		setSavingEngineeringDocument(true);
+		try {
+			const updated = await agentApi.updatePlatformSettings({
+				engineering_document_agent_id: engineeringDocumentSelectedId,
+			});
+			setSettings(updated);
+			await refetch();
+			toast.success(t('platform-settings.engineeringDocuments.saved'));
+		} finally {
+			setSavingEngineeringDocument(false);
 		}
 	};
 
@@ -273,19 +308,64 @@ export function PlatformSettingsPage() {
 
 	const busy = loading || agentsLoading;
 	const isMain = activeAssignment === 'main';
-	const activeAgent = isMain ? selectedAgent : selectedInitializer;
-	const activeCandidates = isMain ? mainCandidates : initializerCandidates;
-	const activeSelectedId = isMain ? mainSelectedId : initializerSelectedId;
-	const activeValid = isMain ? selectedIsValid : initializerIsValid;
-	const activeUnchanged = isMain ? mainUnchanged : initializerUnchanged;
-	const activeSaving = isMain ? savingMain : savingInitializer;
-	const activeCurrent = isMain ? currentAgent : currentInitializer;
+	const isInitializer = activeAssignment === 'initializer';
+	const activeAgent = isMain
+		? selectedAgent
+		: isInitializer
+			? selectedInitializer
+			: selectedEngineeringDocument;
+	const activeCandidates = isMain
+		? mainCandidates
+		: isInitializer
+			? initializerCandidates
+			: candidates;
+	const activeSelectedId = isMain
+		? mainSelectedId
+		: isInitializer
+			? initializerSelectedId
+			: engineeringDocumentSelectedId;
+	const activeValid = isMain
+		? selectedIsValid
+		: isInitializer
+			? initializerIsValid
+			: engineeringDocumentIsValid;
+	const activeUnchanged = isMain
+		? mainUnchanged
+		: isInitializer
+			? initializerUnchanged
+			: engineeringDocumentUnchanged;
+	const activeSaving = isMain
+		? savingMain
+		: isInitializer
+			? savingInitializer
+			: savingEngineeringDocument;
+	const activeCurrent = isMain
+		? currentAgent
+		: isInitializer
+			? currentInitializer
+			: currentEngineeringDocument;
 	const activeCurrentInvalid =
 		activeCurrent !== null && !isMainCandidate(activeCurrent);
 	const activePrefix = isMain
 		? 'platform-settings.main'
-		: 'platform-settings.initializer';
-	const ActiveIcon = isMain ? Bot : FileSearch;
+		: isInitializer
+			? 'platform-settings.initializer'
+			: 'platform-settings.engineeringDocuments';
+	const ActiveIcon = isMain ? Bot : isInitializer ? FileSearch : FolderKanban;
+	const handleAgentSelection = (agentId: string) => {
+		if (isMain) {
+			setMainSelectedId(agentId);
+		} else if (isInitializer) {
+			setInitializerSelectedId(agentId);
+		} else {
+			setEngineeringDocumentSelectedId(agentId);
+		}
+	};
+	const saveActiveAssignment = isMain
+		? saveMain
+		: isInitializer
+			? saveInitializer
+			: saveEngineeringDocument;
 	const selectedValidationIsCurrent = Boolean(
 		selectedValidationVersion &&
 		settings?.project_initializer_validation_mcp &&
@@ -314,6 +394,14 @@ export function PlatformSettingsPage() {
 			agent: selectedInitializer,
 			isValid: initializerIsValid,
 			isDirty: !initializerUnchanged,
+		},
+		{
+			key: 'engineeringDocuments' as const,
+			icon: FolderKanban,
+			title: t('platform-settings.engineeringDocuments.title'),
+			agent: selectedEngineeringDocument,
+			isValid: engineeringDocumentIsValid,
+			isDirty: !engineeringDocumentUnchanged,
 		},
 	];
 
@@ -455,9 +543,7 @@ export function PlatformSettingsPage() {
 										</label>
 										<Select
 											value={activeSelectedId}
-											onValueChange={
-												isMain ? setMainSelectedId : setInitializerSelectedId
-											}
+											onValueChange={handleAgentSelection}
 										>
 											<SelectTrigger
 												id={`${activeAssignment}-agent`}
@@ -491,7 +577,11 @@ export function PlatformSettingsPage() {
 															<Badge variant="secondary">
 																{isMain
 																	? activeAgent.data.platform_config.category
-																	: t('platform-settings.initializer.internal')}
+																	: isInitializer
+																		? t('platform-settings.initializer.internal')
+																			: t(
+																				'platform-settings.engineeringDocuments.roleBadge',
+																			)}
 															</Badge>
 														</div>
 														<p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
@@ -533,7 +623,13 @@ export function PlatformSettingsPage() {
 										</section>
 									) : (
 										<Alert>
-											{isMain ? <ShieldCheck /> : <FileSearch />}
+											{isMain ? (
+												<ShieldCheck />
+											) : isInitializer ? (
+												<FileSearch />
+											) : (
+												<FolderKanban />
+											)}
 											<AlertTitle>{t(`${activePrefix}.unconfiguredTitle`)}</AlertTitle>
 											<AlertDescription>
 												{activeCandidates.length === 0
@@ -543,7 +639,7 @@ export function PlatformSettingsPage() {
 										</Alert>
 									)}
 
-									{!isMain && (
+									{isInitializer && (
 										<section className="rounded-xl border bg-muted/20 p-4 sm:p-5">
 											<div className="flex flex-wrap items-start justify-between gap-3">
 												<div className="flex min-w-0 items-start gap-3">
@@ -695,7 +791,7 @@ export function PlatformSettingsPage() {
 								{t(`${activePrefix}.effect`)}
 							</p>
 							<Button
-								onClick={isMain ? saveMain : saveInitializer}
+								onClick={saveActiveAssignment}
 								disabled={busy || activeSaving || activeUnchanged || !activeValid}
 								className="shrink-0"
 							>

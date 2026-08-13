@@ -27,6 +27,7 @@ from ._platform_settings import (
     PlatformMCPVersionBinding,
     PlatformSettingsData,
     PlatformSettingsRecord,
+    WeKnoraConnectionConfig,
 )
 from ._schedule import ScheduleData, ScheduleRecord, ScheduleSource
 from ._session import (
@@ -62,6 +63,7 @@ __all__ = [
     "PlatformSettingsData",
     "PlatformSettingsRecord",
     "PlatformMCPVersionBinding",
+    "WeKnoraConnectionConfig",
     "ScheduleData",
     "ScheduleRecord",
     "ScheduleSource",

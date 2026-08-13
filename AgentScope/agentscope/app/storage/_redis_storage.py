@@ -2,6 +2,7 @@
 # pylint: disable=too-many-public-methods
 """The Redis storage implementation."""
 
+import json
 import warnings
 from datetime import datetime, timedelta
 from typing import Any, TYPE_CHECKING, Self
@@ -332,7 +333,10 @@ class RedisStorage(StorageBase):
             self.key_config.platform_settings,
             user_id=user_id,
         )
-        await self._set_with_ttl(key, record.model_dump_json())
+        await self._set_with_ttl(
+            key,
+            json.dumps(_dump_with_secrets(record)),
+        )
         return record
 
     async def append_permission_review_audit(

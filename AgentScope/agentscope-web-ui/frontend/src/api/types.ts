@@ -246,6 +246,7 @@ export interface PlatformSettings {
 	global_main_agent_id: string | null;
 	project_initializer_agent_id: string | null;
 	project_initializer_validation_mcp: PlatformMCPVersionBinding | null;
+	engineering_document_agent_id: string | null;
 }
 
 export interface PlatformMCPVersionBinding {
@@ -257,6 +258,64 @@ export interface UpdatePlatformSettingsRequest {
 	global_main_agent_id?: string;
 	project_initializer_agent_id?: string | null;
 	project_initializer_validation_mcp?: PlatformMCPVersionBinding | null;
+	engineering_document_agent_id?: string | null;
+}
+
+export interface WeKnoraConnection {
+	base_url: string;
+	api_prefix: string;
+	auth_header: string;
+	api_key_configured: boolean;
+}
+
+export interface UpdateWeKnoraConnectionRequest {
+	base_url: string;
+	api_prefix: string;
+	auth_header: string;
+	api_key?: string;
+}
+
+export interface TestWeKnoraConnectionResponse {
+	success: boolean;
+	knowledge_base_count: number;
+	message: string;
+}
+
+export interface WeKnoraKnowledgeBase {
+	id: string;
+	name: string;
+	description: string;
+	created_at: string | null;
+	updated_at: string | null;
+}
+
+export interface WeKnoraKnowledgeBaseListResponse {
+	knowledge_bases: WeKnoraKnowledgeBase[];
+	total: number;
+}
+
+export interface WeKnoraKnowledgeItem {
+	id: string;
+	knowledge_base_id: string | null;
+	type: string;
+	title: string;
+	description: string;
+	file_name: string;
+	file_type: string;
+	file_size: number | null;
+	source: string;
+	channel: string;
+	parse_status: string;
+	enable_status: string;
+	created_at: string | null;
+	processed_at: string | null;
+}
+
+export interface WeKnoraKnowledgeListResponse {
+	knowledge: WeKnoraKnowledgeItem[];
+	total: number;
+	page: number;
+	page_size: number;
 }
 
 /**

@@ -181,10 +181,93 @@ class PlatformSettingsResponse(BaseModel):
             "initialization validation."
         ),
     )
+    engineering_document_agent_id: str | None = Field(
+        default=None,
+        description=(
+            "The dedicated agent used by engineering document management."
+        ),
+    )
+
+
+class WeKnoraConnectionResponse(BaseModel):
+    """Secret-free view of the saved WeKnora connection."""
+
+    base_url: str = ""
+    api_prefix: str = "/api/v1"
+    auth_header: str = "X-API-Key"
+    api_key_configured: bool = False
+
+
+class UpdateWeKnoraConnectionRequest(BaseModel):
+    """Create or update the independently managed WeKnora connection."""
+
+    base_url: str = Field(min_length=1, max_length=2048)
+    api_prefix: str = Field(default="/api/v1", min_length=1, max_length=256)
+    auth_header: str = Field(default="X-API-Key", min_length=1, max_length=256)
+    api_key: str | None = Field(default=None, min_length=1, max_length=4096)
+
+
+class TestWeKnoraConnectionRequest(UpdateWeKnoraConnectionRequest):
+    """Candidate connection to probe without necessarily saving it."""
+
+
+class TestWeKnoraConnectionResponse(BaseModel):
+    """Result returned after listing WeKnora knowledge bases."""
+
+    success: bool
+    knowledge_base_count: int = 0
+    message: str
+
+
+class WeKnoraKnowledgeBaseItem(BaseModel):
+    """Knowledge-base metadata returned by the configured WeKnora tenant."""
+
+    id: str
+    name: str
+    description: str = ""
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class ListWeKnoraKnowledgeBasesResponse(BaseModel):
+    """Remote WeKnora knowledge bases available to engineering documents."""
+
+    knowledge_bases: list[WeKnoraKnowledgeBaseItem] = Field(
+        default_factory=list,
+    )
+    total: int
+
+
+class WeKnoraKnowledgeItem(BaseModel):
+    """One remote file, URL, or manual knowledge item."""
+
+    id: str
+    knowledge_base_id: str | None = None
+    type: str = ""
+    title: str = ""
+    description: str = ""
+    file_name: str = ""
+    file_type: str = ""
+    file_size: int | None = None
+    source: str = ""
+    channel: str = ""
+    parse_status: str = ""
+    enable_status: str = ""
+    created_at: str | None = None
+    processed_at: str | None = None
+
+
+class ListWeKnoraKnowledgeResponse(BaseModel):
+    """A page of knowledge items in one remote WeKnora knowledge base."""
+
+    knowledge: list[WeKnoraKnowledgeItem] = Field(default_factory=list)
+    total: int
+    page: int
+    page_size: int
 
 
 class UpdatePlatformSettingsRequest(BaseModel):
-    """Update one or both platform-wide agent assignments."""
+    """Update one or more platform-wide agent assignments."""
 
     global_main_agent_id: str | None = Field(
         default=None,
@@ -204,6 +287,14 @@ class UpdatePlatformSettingsRequest(BaseModel):
         description=(
             "Exact managed MCP version used by project initialization "
             "validation."
+        ),
+    )
+    engineering_document_agent_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "ID of an enabled agent with a fixed chat model to use for "
+            "engineering document management."
         ),
     )
 

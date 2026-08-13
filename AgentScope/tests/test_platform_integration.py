@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
@@ -13,16 +13,27 @@ from agentscope.message import UserMsg
 from agentscope.app._auth import AgentScopePrincipal
 from agentscope.app._router._agent import (
     _demote_other_global_main_agents,
+    _fetch_weknora_knowledge,
+    _fetch_weknora_knowledge_bases,
     _normalise_platform_agent_data,
     delete_agent,
     get_platform_agent_catalog,
+    get_weknora_connection,
+    list_weknora_knowledge as _list_weknora_knowledge_endpoint,
+    list_weknora_knowledge_bases as _list_weknora_knowledge_bases_endpoint,
+    test_weknora_connection as _test_weknora_connection_endpoint,
     update_platform_settings,
+    update_weknora_connection,
 )
 from agentscope.app._router._schema import (
     CreateSessionRequest,
     UpdateMessageMetadataRequest,
     UpdatePlatformSettingsRequest,
+    TestWeKnoraConnectionRequest as WeKnoraConnectionTestRequest,
+    UpdateWeKnoraConnectionRequest,
     UpdateSessionRequest,
+    WeKnoraKnowledgeBaseItem,
+    WeKnoraKnowledgeItem,
 )
 from agentscope.app._router._session import (
     create_session,
@@ -46,10 +57,12 @@ from agentscope.app.storage import (
     PlatformSessionContext,
     PlatformSettingsData,
     PlatformSettingsRecord,
+    WeKnoraConnectionConfig,
     SessionConfig,
     SessionRecord,
 )
 from agentscope.app.storage import AsyncSQLAlchemyStorage
+from agentscope.app.storage._utils import _dump_with_secrets
 
 
 USER_ID = "platform-test"
@@ -277,6 +290,355 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             "global_main",
         )
         self.assertEqual(updated["selected"].data.call_config.scope, "all")
+
+    async def test_platform_settings_persists_engineering_document_agent(
+        self,
+    ) -> None:
+        engineering = _record(
+            "engineering-documents",
+            "Engineering Documents",
+            fixed_model=True,
+        )
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="preserved-secret",
+        )
+        storage = SimpleNamespace(
+            get_agent=AsyncMock(return_value=engineering),
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[engineering]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+
+        async def save_settings(_user_id, data):
+            return PlatformSettingsRecord(user_id=USER_ID, data=data)
+
+        storage.upsert_platform_settings = AsyncMock(side_effect=save_settings)
+
+        response = await update_platform_settings(
+            body=UpdatePlatformSettingsRequest(
+                engineering_document_agent_id=engineering.id,
+            ),
+            user_id=USER_ID,
+            storage=storage,
+            manager=SimpleNamespace(list_records=AsyncMock(return_value=[])),
+        )
+
+        self.assertEqual(response.engineering_document_agent_id, engineering.id)
+        saved = storage.upsert_platform_settings.await_args.args[1]
+        self.assertEqual(saved.engineering_document_agent_id, engineering.id)
+        self.assertEqual(
+            saved.weknora_connection.api_key.get_secret_value(),
+            "preserved-secret",
+        )
+
+    async def test_engineering_document_agent_rejects_disabled_agent(
+        self,
+    ) -> None:
+        disabled = _record(
+            "engineering-disabled",
+            "Engineering Disabled",
+            enabled=False,
+            fixed_model=True,
+        )
+        storage = SimpleNamespace(
+            get_agent=AsyncMock(return_value=disabled),
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(user_id=USER_ID),
+            ),
+            list_agents=AsyncMock(return_value=[disabled]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+
+        with self.assertRaises(HTTPException) as context:
+            await update_platform_settings(
+                body=UpdatePlatformSettingsRequest(
+                    engineering_document_agent_id=disabled.id,
+                ),
+                user_id=USER_ID,
+                storage=storage,
+                manager=SimpleNamespace(
+                    list_records=AsyncMock(return_value=[]),
+                ),
+            )
+
+        self.assertEqual(context.exception.status_code, 422)
+
+    async def test_weknora_connection_is_configurable_and_secret_free(
+        self,
+    ) -> None:
+        current = PlatformSettingsRecord(user_id=USER_ID)
+
+        async def load_settings(_user_id):
+            return current
+
+        async def save_settings(_user_id, data):
+            nonlocal current
+            current = PlatformSettingsRecord(user_id=USER_ID, data=data)
+            return current
+
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(side_effect=load_settings),
+            upsert_platform_settings=AsyncMock(side_effect=save_settings),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+
+        response = await update_weknora_connection(
+            body=UpdateWeKnoraConnectionRequest(
+                base_url="https://weknora.example.com/",
+                api_prefix="api/v1/",
+                auth_header="X-API-Key",
+                api_key="tenant-secret",
+            ),
+            user_id=USER_ID,
+            storage=storage,
+        )
+
+        self.assertEqual(response.base_url, "https://weknora.example.com")
+        self.assertEqual(response.api_prefix, "/api/v1")
+        self.assertTrue(response.api_key_configured)
+        self.assertNotIn("api_key", response.model_dump())
+        self.assertEqual(
+            current.data.weknora_connection.api_key.get_secret_value(),
+            "tenant-secret",
+        )
+
+        response = await update_weknora_connection(
+            body=UpdateWeKnoraConnectionRequest(
+                base_url="https://weknora.example.com",
+                api_prefix="/api/v2",
+                auth_header="X-Tenant-Key",
+            ),
+            user_id=USER_ID,
+            storage=storage,
+        )
+
+        self.assertEqual(response.api_prefix, "/api/v2")
+        self.assertEqual(
+            current.data.weknora_connection.api_key.get_secret_value(),
+            "tenant-secret",
+        )
+        dumped = _dump_with_secrets(current)
+        self.assertEqual(
+            dumped["data"]["weknora_connection"]["api_key"],
+            "tenant-secret",
+        )
+        read_response = await get_weknora_connection(
+            user_id=USER_ID,
+            storage=storage,
+        )
+        self.assertNotIn("api_key", read_response.model_dump())
+
+    async def test_weknora_connection_test_uses_saved_secret(self) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_prefix="/api/v1",
+            auth_header="X-API-Key",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        probe = AsyncMock(return_value=3)
+
+        with patch(
+            "agentscope.app._router._agent._probe_weknora",
+            new=probe,
+        ):
+            response = await _test_weknora_connection_endpoint(
+                body=WeKnoraConnectionTestRequest(
+                    base_url="https://weknora.example.com",
+                    api_prefix="/api/v1",
+                    auth_header="X-API-Key",
+                ),
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertTrue(response.success)
+        self.assertEqual(response.knowledge_base_count, 3)
+        probed = probe.await_args.args[0]
+        self.assertEqual(probed.api_key.get_secret_value(), "saved-secret")
+
+    async def test_weknora_knowledge_bases_are_loaded_with_saved_connection(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        fetch = AsyncMock(
+            return_value=[
+                WeKnoraKnowledgeBaseItem(
+                    id="kb-1",
+                    name="工程规范",
+                    description="施工规范与验收资料",
+                ),
+            ],
+        )
+
+        with patch(
+            "agentscope.app._router._agent._fetch_weknora_knowledge_bases",
+            new=fetch,
+        ):
+            response = await _list_weknora_knowledge_bases_endpoint(
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertEqual(response.total, 1)
+        self.assertEqual(response.knowledge_bases[0].id, "kb-1")
+        fetched_connection = fetch.await_args.args[0]
+        self.assertEqual(
+            fetched_connection.api_key.get_secret_value(),
+            "saved-secret",
+        )
+
+    async def test_weknora_knowledge_is_loaded_for_selected_base(self) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        fetch = AsyncMock(
+            return_value=(
+                [
+                    WeKnoraKnowledgeItem(
+                        id="knowledge-1",
+                        knowledge_base_id="kb/1",
+                        title="施工组织设计.pdf",
+                        file_name="施工组织设计.pdf",
+                        file_type="pdf",
+                        file_size=2048,
+                        parse_status="completed",
+                    ),
+                ],
+                1,
+            ),
+        )
+
+        with patch(
+            "agentscope.app._router._agent._fetch_weknora_knowledge",
+            new=fetch,
+        ):
+            response = await _list_weknora_knowledge_endpoint(
+                knowledge_base_id="kb/1",
+                page=2,
+                page_size=20,
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertEqual(response.total, 1)
+        self.assertEqual(response.page, 2)
+        self.assertEqual(response.knowledge[0].parse_status, "completed")
+        self.assertEqual(fetch.await_args.args[1], "kb/1")
+        self.assertEqual(fetch.await_args.kwargs, {"page": 2, "page_size": 20})
+
+    async def test_weknora_documented_list_shapes_are_normalised(self) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        request = AsyncMock(
+            side_effect=[
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "id": "kb-1",
+                            "name": "工程规范",
+                            "description": "施工规范与验收资料",
+                        },
+                    ],
+                },
+                {
+                    "success": True,
+                    "data": {
+                        "list": [
+                            {
+                                "id": "knowledge-1",
+                                "title": "施工组织设计",
+                                "file_name": "施工组织设计.pdf",
+                                "file_type": "pdf",
+                                "file_size": "2048",
+                                "parse_status": "completed",
+                            },
+                        ],
+                        "total": 7,
+                    },
+                },
+            ],
+        )
+
+        with patch(
+            "agentscope.app._router._agent._request_weknora_json",
+            new=request,
+        ):
+            knowledge_bases = await _fetch_weknora_knowledge_bases(connection)
+            knowledge, total = await _fetch_weknora_knowledge(
+                connection,
+                "kb/1",
+                page=2,
+                page_size=20,
+            )
+
+        self.assertEqual(knowledge_bases[0].name, "工程规范")
+        self.assertEqual(knowledge[0].file_size, 2048)
+        self.assertEqual(knowledge[0].knowledge_base_id, "kb/1")
+        self.assertEqual(total, 7)
+        self.assertEqual(
+            request.await_args_list[0].args,
+            (connection, "/knowledge-bases"),
+        )
+        self.assertEqual(
+            request.await_args_list[1].args,
+            (connection, "/knowledge-bases/kb%2F1/knowledge"),
+        )
+        self.assertEqual(
+            request.await_args_list[1].kwargs,
+            {"params": {"page": 2, "page_size": 20}},
+        )
 
     async def test_platform_settings_selects_an_exact_validation_version(
         self,
@@ -602,6 +964,10 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                             version="2.0.0",
                         )
                     ),
+                    weknora_connection=WeKnoraConnectionConfig(
+                        base_url="https://weknora.example.com",
+                        api_key="sqlite-secret",
+                    ),
                 ),
             )
             loaded = await storage.get_platform_settings(USER_ID)
@@ -615,6 +981,10 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                 package_id="validation-rules",
                 version="2.0.0",
             ),
+        )
+        self.assertEqual(
+            loaded.data.weknora_connection.api_key.get_secret_value(),
+            "sqlite-secret",
         )
 
     async def test_alembic_creates_platform_settings_table(self) -> None:

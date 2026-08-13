@@ -9,6 +9,7 @@
 		"create": "Create",
 		"creating": "Creating…",
 		"credential": "Credentials",
+		"engineeringKnowledge": "Engineering knowledge",
 		"date": "Date",
 		"delete": "Delete",
 		"deleting": "Deleting…",
@@ -117,6 +118,22 @@
 				"deleteTitle": "Delete validation MCP v{{version}}?",
 				"deleteDescription": "The package for this version will be permanently removed. The currently used version cannot be deleted."
 			}
+		},
+		"engineeringDocuments": {
+			"title": "Engineering document management agent",
+			"description": "The engineering document module uses this agent for document Q&A, organization, and future collaboration with the WeKnora engineering knowledge base.",
+			"selector": "Engineering document management agent",
+			"placeholder": "Select a dedicated agent",
+			"requirement": "Only enabled, editable agents with a fixed chat model are shown.",
+			"roleBadge": "Engineering documents",
+			"saved": "The engineering document management agent has been updated",
+			"unconfiguredTitle": "No engineering document management agent",
+			"unconfigured": "Select and save an agent to reserve one explicit entry point for engineering document management.",
+			"noCandidates": "No eligible agents. Create and enable an agent with a fixed chat model first.",
+			"invalidCurrentTitle": "The current engineering document management agent is unavailable",
+			"invalidCurrent": "The current agent is disabled or has no fixed model. Select another available agent.",
+			"effect": "Saving only records the dedicated agent for engineering document management. WeKnora retrieval and knowledge-source bindings for other agents will be integrated later.",
+			"save": "Save engineering document settings"
 		}
 	},
 	"error": {
@@ -583,6 +600,81 @@
 				"high": "High risk",
 				"critical": "Critical risk"
 			}
+		}
+	},
+	"engineeringKnowledge": {
+		"title": "Engineering knowledge",
+		"subtitle": "Connect to WeKnora independently over HTTP(S) and manage engineering content in one place.",
+		"independentSource": "Independent source",
+		"navigation": {
+			"title": "Integration management",
+			"phase": "Standalone",
+			"description": "Configure the WeKnora service and manage remote engineering content."
+		},
+		"sections": {
+			"connection": {
+				"title": "WeKnora connection",
+				"description": "Configure the independent service URL and tenant authentication.",
+				"status": "Not configured",
+				"configured": "Connection configured"
+			},
+			"knowledge": {
+				"title": "Content management",
+				"description": "Sync remote knowledge bases, content, and parsing status.",
+				"status": "Not synced",
+				"loading": "Loading",
+				"failed": "Load failed",
+				"synced": "Loaded {{count}} knowledge bases"
+			}
+		},
+		"connection": {
+			"eyebrow": "HTTP(S) service configuration",
+			"title": "WeKnora service connection",
+			"description": "The management backend will proxy WeKnora REST API calls; the browser never receives the API key.",
+			"previewTitle": "The API key stays on the management backend",
+			"previewDescription": "The browser only submits a new key and never reads or displays the stored API key. Testing calls the knowledge-base list endpoint to verify the URL and authentication.",
+			"httpWarningTitle": "The service URL currently uses HTTP",
+			"httpWarningDescription": "The API key is not encrypted in transit from the management backend to WeKnora. Use this only for integration testing and switch to HTTPS in production.",
+			"cardTitle": "Service connection",
+			"cardDescription": "A WeKnora tenant connection independent of AgentScope knowledge bases.",
+			"notConfigured": "Not configured",
+			"configured": "Configured",
+			"baseUrl": "Service URL",
+			"apiKey": "API key",
+			"apiKeyPlaceholder": "Enter the WeKnora tenant API key",
+			"apiKeyConfiguredPlaceholder": "Saved; leave blank to keep it unchanged",
+			"apiKeyHelp": "Leave blank while changing other fields. A saved key is replaced only when a new value is entered.",
+			"apiPrefix": "API prefix",
+			"authentication": "Authentication header",
+			"test": "Test connection",
+			"testPassed": "Connection test passed",
+			"save": "Save connection",
+			"saved": "WeKnora connection settings saved"
+		},
+		"knowledge": {
+			"eyebrow": "Remote content management",
+			"title": "WeKnora knowledge bases and engineering content",
+			"description": "After integration, load remote knowledge bases and manage files, URLs, parsing status, previews, and downloads here.",
+			"refresh": "Reload",
+			"addUrl": "Add URL",
+			"upload": "Upload content",
+			"connectTitle": "Configure the WeKnora connection first",
+			"connectDescription": "Enter the service URL and tenant API key. Saving immediately loads remote knowledge bases and engineering content.",
+			"connectAction": "Open connection settings",
+			"loadingTitle": "Connecting to WeKnora",
+			"loadingDescription": "The management backend is loading the remote knowledge-base list.",
+			"loadFailedTitle": "Could not load knowledge bases",
+			"retry": "Retry",
+			"remoteEmptyTitle": "No knowledge bases in WeKnora",
+			"remoteEmptyDescription": "The connection works, but this tenant has no available knowledge bases. Create one in WeKnora first.",
+			"basesTitle": "Remote knowledge bases",
+			"documentsTitle": "Engineering content",
+			"documentsCount": "{{count}} items",
+			"loadingDocuments": "Loading engineering content…",
+			"documentsLoadFailed": "Could not load engineering content",
+			"noDocumentsTitle": "No content in this knowledge base",
+			"noDocumentsDescription": "WeKnora returned the knowledge base, but it currently has no engineering content to display.",
+			"noDescription": "No description"
 		}
 	},
 	"knowledge": {

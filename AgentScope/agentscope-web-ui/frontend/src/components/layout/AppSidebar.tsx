@@ -3,6 +3,7 @@ import {
 	Calendars,
 	Compass,
 	Crown,
+	Database,
 	KeyRound,
 	Languages,
 	LibraryBig,
@@ -134,6 +135,20 @@ export function AppSidebar() {
 									className="px-2"
 								>
 									<KeyRound />
+								</SidebarMenuButton>
+							</SidebarMenuItem>
+							<SidebarMenuItem>
+								<SidebarMenuButton
+									tooltip={{
+										children: t('common.engineeringKnowledge'),
+										hidden: false,
+									}}
+									isActive={location.pathname === '/engineering-knowledge'}
+									onClick={() => navigate('/engineering-knowledge')}
+									aria-label={t('common.engineeringKnowledge')}
+									className="px-2"
+								>
+									<Database />
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>

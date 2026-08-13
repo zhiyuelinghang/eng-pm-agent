@@ -28,10 +28,34 @@ def _dump_with_secrets(model: BaseModel) -> dict:
     # SecretStr fields will be masked at this step.
     result = model.model_dump(mode="json")
 
-    for field_name, _ in model.__class__.model_fields.items():
-        value = getattr(model, field_name)
+    def restore_secrets(value: object, dumped: object) -> object:
         if isinstance(value, SecretStr):
-            result[field_name] = value.get_secret_value()
+            return value.get_secret_value()
+        if isinstance(value, BaseModel) and isinstance(dumped, dict):
+            return {
+                field_name: restore_secrets(
+                    getattr(value, field_name),
+                    dumped.get(field_name),
+                )
+                for field_name in value.__class__.model_fields
+                if field_name in dumped
+            }
+        if isinstance(value, list) and isinstance(dumped, list):
+            return [
+                restore_secrets(item, dumped[index])
+                for index, item in enumerate(value)
+            ]
+        if isinstance(value, dict) and isinstance(dumped, dict):
+            return {
+                key: restore_secrets(item, dumped.get(key))
+                for key, item in value.items()
+                if key in dumped
+            }
+        return dumped
+
+    result = restore_secrets(model, result)
+    if not isinstance(result, dict):
+        raise TypeError("A persisted model must dump to a JSON object.")
 
     return result
 

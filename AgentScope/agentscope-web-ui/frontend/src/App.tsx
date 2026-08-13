@@ -12,6 +12,7 @@ import { UploadProvider } from '@/context/UploadContext';
 import { useTranslation } from '@/i18n/useI18n';
 import { ChatPage } from '@/pages/chat';
 import { CredentialPage } from '@/pages/credential';
+import { EngineeringKnowledgePage } from '@/pages/engineering-knowledge';
 import { KnowledgePage } from '@/pages/knowledge';
 import { PlatformAuditPage } from '@/pages/platform-audit';
 import { PlatformSettingsPage } from '@/pages/platform-settings';
@@ -51,6 +52,10 @@ const router = createBrowserRouter([
 					{ path: '/credential', element: <CredentialPage /> },
 					{ path: '/platform-settings', element: <PlatformSettingsPage /> },
 					{ path: '/platform-audit', element: <PlatformAuditPage /> },
+					{
+						path: '/engineering-knowledge',
+						element: <EngineeringKnowledgePage />,
+					},
 					{ path: '/knowledge', element: <KnowledgePage /> },
 					{ path: '/knowledge/:kbId', element: <KnowledgePage /> },
 				],

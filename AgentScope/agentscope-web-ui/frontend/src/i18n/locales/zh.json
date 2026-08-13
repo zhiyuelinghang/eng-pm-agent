@@ -9,6 +9,7 @@
 		"create": "创建",
 		"creating": "创建中…",
 		"credential": "凭证",
+		"engineeringKnowledge": "工程知识库",
 		"date": "日期",
 		"delete": "删除",
 		"deleting": "删除中…",
@@ -117,6 +118,22 @@
 				"deleteTitle": "删除核验 MCP v{{version}}？",
 				"deleteDescription": "该版本的安装包将被永久移除；当前正在使用的版本不能删除。"
 			}
+		},
+		"engineeringDocuments": {
+			"title": "工程资料管理智能体",
+			"description": "工程资料管理模块统一调用该智能体，负责资料问答、整理和后续 WeKnora 工程知识库协同。",
+			"selector": "工程资料管理智能体",
+			"placeholder": "选择一个专用智能体",
+			"requirement": "这里只显示已启用、可编辑且配置了固定对话模型的智能体。",
+			"roleBadge": "工程资料",
+			"saved": "工程资料管理智能体已更新",
+			"unconfiguredTitle": "尚未设置工程资料管理智能体",
+			"unconfigured": "请选择一个智能体并保存，为工程资料管理模块预留唯一调用入口。",
+			"noCandidates": "暂无符合条件的智能体。请先创建并启用一个使用固定对话模型的智能体。",
+			"invalidCurrentTitle": "当前工程资料管理智能体不可用",
+			"invalidCurrent": "当前智能体已停用或缺少固定模型，请选择另一个可用智能体。",
+			"effect": "保存后只记录工程资料管理模块的专用智能体。WeKnora 检索和其他智能体知识源绑定将在后续阶段单独接入。",
+			"save": "保存工程资料配置"
 		}
 	},
 	"error": {
@@ -583,6 +600,81 @@
 				"high": "高风险",
 				"critical": "严重风险"
 			}
+		}
+	},
+	"engineeringKnowledge": {
+		"title": "工程知识库",
+		"subtitle": "通过 HTTP(S) 独立接入 WeKnora，集中管理工程资料。",
+		"independentSource": "独立知识源",
+		"navigation": {
+			"title": "接入管理",
+			"phase": "独立模块",
+			"description": "配置 WeKnora 服务并管理远程工程资料。"
+		},
+		"sections": {
+			"connection": {
+				"title": "WeKnora 接入",
+				"description": "配置独立服务地址和租户级鉴权。",
+				"status": "尚未配置",
+				"configured": "连接已配置"
+			},
+			"knowledge": {
+				"title": "资料管理",
+				"description": "同步远程知识库、资料和解析状态。",
+				"status": "尚未同步",
+				"loading": "正在拉取",
+				"failed": "拉取失败",
+				"synced": "已拉取 {{count}} 个知识库"
+			}
+		},
+		"connection": {
+			"eyebrow": "HTTP(S) 服务配置",
+			"title": "WeKnora 服务接入",
+			"description": "工程知识库将由管理端后端代理调用 WeKnora REST API，浏览器不会持有 API Key。",
+			"previewTitle": "API Key 仅保存在管理端后端",
+			"previewDescription": "浏览器只提交新密钥，不会读取或回显已保存的 API Key。测试连接将调用知识库列表接口验证地址与鉴权。",
+			"httpWarningTitle": "当前服务地址使用 HTTP",
+			"httpWarningDescription": "管理端向 WeKnora 传输 API Key 时不会加密。仅建议用于当前联调，生产环境请改用 HTTPS 地址。",
+			"cardTitle": "服务连接",
+			"cardDescription": "独立于 AgentScope 知识库的 WeKnora 租户连接。",
+			"notConfigured": "未配置",
+			"configured": "已配置",
+			"baseUrl": "服务地址",
+			"apiKey": "API Key",
+			"apiKeyPlaceholder": "填写 WeKnora 租户 API Key",
+			"apiKeyConfiguredPlaceholder": "已保存；留空表示保持不变",
+			"apiKeyHelp": "更新其他字段时可留空；只有填写新值时才会替换已保存密钥。",
+			"apiPrefix": "API 前缀",
+			"authentication": "鉴权请求头",
+			"test": "测试连接",
+			"testPassed": "连通性测试通过",
+			"save": "保存连接",
+			"saved": "WeKnora 连接配置已保存"
+		},
+		"knowledge": {
+			"eyebrow": "远程资料管理",
+			"title": "WeKnora 知识库与工程资料",
+			"description": "接入后在此加载远程知识库，管理文件、URL、解析状态、预览和下载。",
+			"refresh": "重新拉取",
+			"addUrl": "添加 URL",
+			"upload": "上传资料",
+			"connectTitle": "先配置 WeKnora 连接",
+			"connectDescription": "填写服务地址和租户 API Key，保存后会立即拉取远程知识库与工程资料。",
+			"connectAction": "前往接入配置",
+			"loadingTitle": "正在连接 WeKnora",
+			"loadingDescription": "正在通过管理端读取远程知识库列表。",
+			"loadFailedTitle": "知识库拉取失败",
+			"retry": "重试",
+			"remoteEmptyTitle": "WeKnora 中暂无知识库",
+			"remoteEmptyDescription": "连接已经生效，但租户下还没有可用知识库。请先在 WeKnora 中创建知识库。",
+			"basesTitle": "远程知识库",
+			"documentsTitle": "工程资料",
+			"documentsCount": "{{count}} 条",
+			"loadingDocuments": "正在拉取工程资料…",
+			"documentsLoadFailed": "工程资料拉取失败",
+			"noDocumentsTitle": "该知识库暂无资料",
+			"noDocumentsDescription": "WeKnora 已返回知识库，但其中暂时没有可展示的工程资料。",
+			"noDescription": "暂无说明"
 		}
 	},
 	"knowledge": {

@@ -21,6 +21,7 @@ plain Python dicts.  All dialect specifics live in :mod:`_storage`.
 from typing import TYPE_CHECKING, TypeVar
 
 from .._model._base import _RecordBase
+from .._utils import _dump_with_secrets
 
 if TYPE_CHECKING:
     from ._tables import _JsonRecordMixin
@@ -55,7 +56,7 @@ def _from_record(
             column together carry every field of the record with no
             duplication.
     """
-    dump = record.model_dump(mode="json")
+    dump = _dump_with_secrets(record)
     for field in _ENVELOPE_FIELDS:
         dump.pop(field, None)
     column_values: dict = {}

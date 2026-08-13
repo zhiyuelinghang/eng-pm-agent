@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 """Agent router — CRUD endpoints for agent configurations."""
 from datetime import datetime
+import ipaddress
+import json
 import logging
+import socket
+from urllib.parse import quote, urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import ValidationError
 
 from ...agent import ContextConfig, ReActConfig
@@ -25,6 +30,14 @@ from ._schema import (
     PlatformAgentCatalogItem,
     PlatformAgentCatalogResponse,
     PlatformSettingsResponse,
+    ListWeKnoraKnowledgeBasesResponse,
+    ListWeKnoraKnowledgeResponse,
+    TestWeKnoraConnectionRequest,
+    TestWeKnoraConnectionResponse,
+    UpdateWeKnoraConnectionRequest,
+    WeKnoraConnectionResponse,
+    WeKnoraKnowledgeBaseItem,
+    WeKnoraKnowledgeItem,
     UpdatePlatformSettingsRequest,
     UpdateAgentRequest,
 )
@@ -43,6 +56,7 @@ from ..storage import (
     PlatformSettingsData,
     PlatformSettingsRecord,
     StorageBase,
+    WeKnoraConnectionConfig,
 )
 from ..mcp_registry import (
     MCPPackageRecord,
@@ -59,6 +73,280 @@ agent_router = APIRouter(
     tags=["agent"],
     responses={404: {"description": "Not found"}},
 )
+
+
+def _validate_weknora_endpoint(base_url: str) -> str:
+    """Validate a user-managed endpoint before the backend calls it."""
+    normalised = base_url.strip().rstrip("/")
+    parsed = urlsplit(normalised)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="WeKnora 服务地址必须是完整的 HTTP(S) URL。",
+        )
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="WeKnora 服务地址不能包含用户信息、查询参数或片段。",
+        )
+    return normalised
+
+
+def _validate_weknora_probe_target(base_url: str) -> None:
+    """Resolve a configured host and reject unsafe special-use targets."""
+    parsed = urlsplit(base_url)
+    try:
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(
+                parsed.hostname,
+                parsed.port or (443 if parsed.scheme == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )
+        }
+    except socket.gaierror as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="无法解析 WeKnora 服务地址，请检查域名。",
+        ) from exc
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if (
+            ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_unspecified
+            or ip.is_reserved
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="WeKnora 服务地址不能指向本机或保留网络。",
+            )
+
+
+def _weknora_response(
+    config: WeKnoraConnectionConfig | None,
+) -> WeKnoraConnectionResponse:
+    if config is None:
+        return WeKnoraConnectionResponse()
+    return WeKnoraConnectionResponse(
+        base_url=config.base_url,
+        api_prefix=config.api_prefix,
+        auth_header=config.auth_header,
+        api_key_configured=bool(config.api_key.get_secret_value()),
+    )
+
+
+def _require_weknora_connection(
+    settings: PlatformSettingsRecord,
+) -> WeKnoraConnectionConfig:
+    connection = settings.data.weknora_connection
+    if connection is None or not connection.api_key.get_secret_value():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="请先保存 WeKnora 服务地址和 API Key。",
+        )
+    return connection
+
+
+def _build_weknora_config(
+    body: UpdateWeKnoraConnectionRequest,
+    existing: WeKnoraConnectionConfig | None,
+) -> WeKnoraConnectionConfig:
+    base_url = _validate_weknora_endpoint(body.base_url)
+    api_key = body.api_key or (
+        existing.api_key.get_secret_value() if existing is not None else ""
+    )
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="首次配置 WeKnora 时必须填写 API Key。",
+        )
+    try:
+        return WeKnoraConnectionConfig(
+            base_url=base_url,
+            api_prefix=body.api_prefix,
+            auth_header=body.auth_header,
+            api_key=api_key,
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors()[0]["msg"],
+        ) from exc
+
+
+async def _request_weknora_json(
+    config: WeKnoraConnectionConfig,
+    path: str,
+    *,
+    params: dict[str, int | str] | None = None,
+) -> dict:
+    """Call one WeKnora JSON endpoint through the management backend."""
+    _validate_weknora_probe_target(config.base_url)
+    url = f"{config.base_url}{config.api_prefix}{path}"
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0),
+            follow_redirects=False,
+        ) as client:
+            response = await client.get(
+                url,
+                headers={
+                    config.auth_header: config.api_key.get_secret_value(),
+                    "Accept": "application/json",
+                },
+                params=params,
+            )
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="连接 WeKnora 超时，请检查服务地址和网络。",
+        ) from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="无法连接 WeKnora，请检查服务地址和网络。",
+        ) from exc
+    if response.status_code in {301, 302, 303, 307, 308}:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 返回了重定向，请直接填写最终服务地址。",
+        )
+    if response.status_code in {401, 403}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="WeKnora 拒绝鉴权，请检查 API Key 和鉴权请求头。",
+        )
+    if response.status_code == 404:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="WeKnora 中不存在所请求的知识库或资料。",
+        )
+    if not 200 <= response.status_code < 300:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"WeKnora 返回 HTTP {response.status_code}，请检查配置。",
+        )
+    if len(response.content) > 5 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 知识库列表响应过大，已拒绝处理。",
+        )
+    try:
+        payload = json.loads(response.content)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 返回的不是有效 JSON。",
+        ) from exc
+    if not isinstance(payload, dict) or payload.get("success") is False:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 返回了失败或无效的响应。",
+        )
+    return payload
+
+
+def _weknora_list_payload(payload: dict) -> tuple[list[dict], dict]:
+    """Extract either the documented array or paginated list shape."""
+    data = payload.get("data", [])
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)], {}
+    if isinstance(data, dict) and isinstance(data.get("list"), list):
+        return (
+            [item for item in data["list"] if isinstance(item, dict)],
+            data,
+        )
+    raise HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail="WeKnora 列表响应结构无效。",
+    )
+
+
+def _text(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+async def _fetch_weknora_knowledge_bases(
+    config: WeKnoraConnectionConfig,
+) -> list[WeKnoraKnowledgeBaseItem]:
+    payload = await _request_weknora_json(config, "/knowledge-bases")
+    raw_items, _ = _weknora_list_payload(payload)
+    result: list[WeKnoraKnowledgeBaseItem] = []
+    for item in raw_items:
+        item_id = _text(item.get("id"))
+        if not item_id:
+            continue
+        result.append(
+            WeKnoraKnowledgeBaseItem(
+                id=item_id,
+                name=_text(item.get("name")) or item_id,
+                description=_text(item.get("description")),
+                created_at=_text(item.get("created_at")) or None,
+                updated_at=_text(item.get("updated_at")) or None,
+            ),
+        )
+    return result
+
+
+async def _fetch_weknora_knowledge(
+    config: WeKnoraConnectionConfig,
+    knowledge_base_id: str,
+    *,
+    page: int,
+    page_size: int,
+) -> tuple[list[WeKnoraKnowledgeItem], int]:
+    encoded_id = quote(knowledge_base_id, safe="")
+    payload = await _request_weknora_json(
+        config,
+        f"/knowledge-bases/{encoded_id}/knowledge",
+        params={"page": page, "page_size": page_size},
+    )
+    raw_items, metadata = _weknora_list_payload(payload)
+    result: list[WeKnoraKnowledgeItem] = []
+    for item in raw_items:
+        item_id = _text(item.get("id"))
+        if not item_id:
+            continue
+        file_size = item.get("file_size")
+        try:
+            normalised_file_size = (
+                int(file_size) if file_size is not None else None
+            )
+        except (TypeError, ValueError):
+            normalised_file_size = None
+        result.append(
+            WeKnoraKnowledgeItem(
+                id=item_id,
+                knowledge_base_id=(
+                    _text(item.get("knowledge_base_id"))
+                    or knowledge_base_id
+                ),
+                type=_text(item.get("type")),
+                title=_text(item.get("title")),
+                description=_text(item.get("description")),
+                file_name=_text(item.get("file_name")),
+                file_type=_text(item.get("file_type")),
+                file_size=normalised_file_size,
+                source=_text(item.get("source")),
+                channel=_text(item.get("channel")),
+                parse_status=_text(item.get("parse_status")),
+                enable_status=_text(item.get("enable_status")),
+                created_at=_text(item.get("created_at")) or None,
+                processed_at=_text(item.get("processed_at")) or None,
+            ),
+        )
+    raw_total = metadata.get("total", len(result))
+    try:
+        total = max(int(raw_total), len(result))
+    except (TypeError, ValueError):
+        total = len(result)
+    return result, total
+
+
+async def _probe_weknora(config: WeKnoraConnectionConfig) -> int:
+    return len(await _fetch_weknora_knowledge_bases(config))
 
 
 def _is_initialization_validation_package(record: MCPPackageRecord) -> bool:
@@ -629,6 +917,113 @@ async def get_platform_settings(
         project_initializer_validation_mcp=(
             settings.data.project_initializer_validation_mcp
         ),
+        engineering_document_agent_id=(
+            settings.data.engineering_document_agent_id
+        ),
+    )
+
+
+@agent_router.get(
+    "/platform/weknora-connection",
+    response_model=WeKnoraConnectionResponse,
+    summary="Get the independently managed WeKnora connection",
+)
+async def get_weknora_connection(
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> WeKnoraConnectionResponse:
+    settings = await _load_platform_settings(storage, user_id)
+    return _weknora_response(settings.data.weknora_connection)
+
+
+@agent_router.put(
+    "/platform/weknora-connection",
+    response_model=WeKnoraConnectionResponse,
+    summary="Save the independently managed WeKnora connection",
+)
+async def update_weknora_connection(
+    body: UpdateWeKnoraConnectionRequest,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> WeKnoraConnectionResponse:
+    current = await _load_platform_settings(storage, user_id)
+    connection = _build_weknora_config(
+        body,
+        current.data.weknora_connection,
+    )
+    updated_data = current.data.model_copy(
+        update={"weknora_connection": connection},
+    )
+    settings = await storage.upsert_platform_settings(user_id, updated_data)
+    return _weknora_response(settings.data.weknora_connection)
+
+
+@agent_router.post(
+    "/platform/weknora-connection/test",
+    response_model=TestWeKnoraConnectionResponse,
+    summary="Test a WeKnora connection by listing knowledge bases",
+)
+async def test_weknora_connection(
+    body: TestWeKnoraConnectionRequest,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> TestWeKnoraConnectionResponse:
+    current = await _load_platform_settings(storage, user_id)
+    connection = _build_weknora_config(
+        body,
+        current.data.weknora_connection,
+    )
+    knowledge_base_count = await _probe_weknora(connection)
+    return TestWeKnoraConnectionResponse(
+        success=True,
+        knowledge_base_count=knowledge_base_count,
+        message=f"连接成功，读取到 {knowledge_base_count} 个知识库。",
+    )
+
+
+@agent_router.get(
+    "/platform/weknora/knowledge-bases",
+    response_model=ListWeKnoraKnowledgeBasesResponse,
+    summary="List knowledge bases from the configured WeKnora tenant",
+)
+async def list_weknora_knowledge_bases(
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> ListWeKnoraKnowledgeBasesResponse:
+    settings = await _load_platform_settings(storage, user_id)
+    knowledge_bases = await _fetch_weknora_knowledge_bases(
+        _require_weknora_connection(settings),
+    )
+    return ListWeKnoraKnowledgeBasesResponse(
+        knowledge_bases=knowledge_bases,
+        total=len(knowledge_bases),
+    )
+
+
+@agent_router.get(
+    "/platform/weknora/knowledge-bases/{knowledge_base_id}/knowledge",
+    response_model=ListWeKnoraKnowledgeResponse,
+    summary="List engineering content from one WeKnora knowledge base",
+)
+async def list_weknora_knowledge(
+    knowledge_base_id: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> ListWeKnoraKnowledgeResponse:
+    settings = await _load_platform_settings(storage, user_id)
+    knowledge, total = await _fetch_weknora_knowledge(
+        _require_weknora_connection(settings),
+        knowledge_base_id,
+        page=page,
+        page_size=page_size,
+    )
+    return ListWeKnoraKnowledgeResponse(
+        knowledge=knowledge,
+        total=total,
+        page=page,
+        page_size=page_size,
     )
 
 
@@ -661,6 +1056,9 @@ async def update_platform_settings(
         current.data.project_initializer_agent_id
     )
     validation_mcp = current.data.project_initializer_validation_mcp
+    engineering_document_agent_id = (
+        current.data.engineering_document_agent_id
+    )
     previous_validation_mcp = validation_mcp
 
     async def validate_candidate(
@@ -727,6 +1125,13 @@ async def update_platform_settings(
                     ),
                 )
         validation_mcp = requested_binding
+    if "engineering_document_agent_id" in body.model_fields_set:
+        if body.engineering_document_agent_id is not None:
+            await validate_candidate(
+                body.engineering_document_agent_id,
+                "engineering document manager",
+            )
+        engineering_document_agent_id = body.engineering_document_agent_id
     if (
         global_main_agent_id is not None
         and global_main_agent_id == project_initializer_agent_id
@@ -760,10 +1165,15 @@ async def update_platform_settings(
             )
     settings = await storage.upsert_platform_settings(
         user_id,
-        PlatformSettingsData(
-            global_main_agent_id=global_main_agent_id,
-            project_initializer_agent_id=project_initializer_agent_id,
-            project_initializer_validation_mcp=validation_mcp,
+        current.data.model_copy(
+            update={
+                "global_main_agent_id": global_main_agent_id,
+                "project_initializer_agent_id": project_initializer_agent_id,
+                "project_initializer_validation_mcp": validation_mcp,
+                "engineering_document_agent_id": (
+                    engineering_document_agent_id
+                ),
+            },
         ),
     )
     if (
@@ -791,6 +1201,9 @@ async def update_platform_settings(
         ),
         project_initializer_validation_mcp=(
             settings.data.project_initializer_validation_mcp
+        ),
+        engineering_document_agent_id=(
+            settings.data.engineering_document_agent_id
         ),
     )
 
