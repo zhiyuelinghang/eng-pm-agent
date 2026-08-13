@@ -46,8 +46,8 @@ class MCPPackageManifest(BaseModel):
         min_length=1,
         max_length=500,
         description=(
-            "Executable path relative to the package root, or a bare command "
-            "available on the server PATH."
+            "Executable path inside the uploaded package, relative to the "
+            "package root. Host PATH commands are not allowed."
         ),
     )
     args: list[str] = Field(default_factory=list, max_length=100)

@@ -61,7 +61,7 @@ def _live_archive() -> io.BytesIO:
         "version": "1.0.0",
         "description": "真实 STDIO MCP 启动测试",
         "transport": "stdio",
-        "command": "python",
+        "command": "runtime/python.exe",
         "args": ["server.py"],
     }
     server = """from mcp.server.fastmcp import FastMCP
@@ -78,6 +78,7 @@ if __name__ == "__main__":
 """
     with zipfile.ZipFile(payload, "w") as bundle:
         bundle.writestr("echo-mcp/mcp.json", json.dumps(manifest))
+        bundle.writestr("echo-mcp/runtime/python.exe", b"test-placeholder")
         bundle.writestr("echo-mcp/server.py", server)
     payload.seek(0)
     return payload
@@ -366,6 +367,23 @@ def test_upload_does_not_reject_dependency_complete_package_by_file_count(
         assert len(list((package_dir / "packages").glob("*.py"))) == 2100
 
     asyncio.run(scenario())
+
+
+def test_command_must_resolve_inside_uploaded_package(tmp_path) -> None:
+    package_dir = tmp_path / "package"
+    runtime_dir = package_dir / "runtime"
+    runtime_dir.mkdir(parents=True)
+    executable = runtime_dir / "node.exe"
+    executable.write_bytes(b"bundled-runtime")
+    manager = MCPRegistryManager(tmp_path / "registry")
+
+    assert manager._resolve_command(package_dir, "runtime/node.exe") == str(
+        executable.resolve(),
+    )
+    with pytest.raises(MCPPackageError, match="host PATH commands"):
+        manager._resolve_command(package_dir, "node")
+    with pytest.raises(MCPPackageError, match="relative executable path"):
+        manager._resolve_command(package_dir, str(executable.resolve()))
 
 
 def test_real_stdio_package_can_be_probed_reused_and_called(

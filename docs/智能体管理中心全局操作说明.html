@@ -880,7 +880,8 @@
           </div>
 
           <h3>MCP：上传、查看、勾选、保存</h3>
-          <p>MCP 包是可独立升级的能力。上传必须使用平台适配后的依赖完整包；包内应包含正确的清单、启动入口、工具中文名称/英文标识和参数说明。上传成功不等于已经分配，仍需对当前智能体勾选并保存。</p>
+          <p>MCP 包是可独立升级的能力，上传能力与开发语言无关，并非只支持 Python。Node.js、TypeScript、Python、Go、Rust、Java 等实现只要提供标准 STDIO MCP 和依赖完整的可运行包，都可以上传、检测并分配。</p>
+          <p>上传必须使用平台适配后的完整安装包；包内应包含平台格式的 <code>mcp.json</code>、自带的语言运行时、可直接启动的入口、全部运行依赖、工具中文名称/英文标识和参数说明。禁止使用服务器 <code>PATH</code> 中的全局 <code>node</code>、<code>python</code>、<code>java</code> 或 <code>bash</code>。平台不会在上传时执行 <code>npm install</code>、<code>pip install</code>、源码编译或 Playwright 浏览器下载。仅包含 <code>package.json</code> 的 Node.js 源码工程不能直接上传运行。上传成功不等于已经分配，仍需对当前智能体勾选并保存。</p>
           <figure class="figure">
             <img src="assets/agent-management-center/01-chat-overview.png" alt="MCP 分配面板">
             <figcaption>MCP 列表会显示版本和工具数量。点击条目查看详情，复选框负责分配，底部按钮负责保存。</figcaption>

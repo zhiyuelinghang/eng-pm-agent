@@ -562,25 +562,22 @@ class MCPRegistryManager:
 
     def _resolve_command(self, package_dir: Path, command: str) -> str:
         command_path = Path(command)
-        candidate = (
-            command_path.resolve()
-            if command_path.is_absolute()
-            else (package_dir / command_path).resolve()
-        )
+        if command_path.is_absolute():
+            raise MCPPackageError(
+                "MCP command must be a relative executable path inside the "
+                "uploaded package.",
+            )
+        candidate = (package_dir / command_path).resolve()
         if candidate.is_file():
             if package_dir != candidate and package_dir not in candidate.parents:
                 raise MCPPackageError(
                     "MCP command must stay inside the package directory.",
                 )
             return str(candidate)
-        if command_path.is_absolute() or len(command_path.parts) > 1:
-            raise MCPPackageError(
-                f"MCP command {command!r} does not exist inside the package.",
-            )
-        # A bare command such as ``python`` or ``node`` may be supplied by the
-        # server. Complete packages should normally ship their own executable,
-        # but allowing a bare runtime keeps vendored Python/Node packages usable.
-        return command
+        raise MCPPackageError(
+            f"MCP command {command!r} does not exist inside the uploaded "
+            "package; host PATH commands are not allowed.",
+        )
 
     def _runtime_environment(
         self,
