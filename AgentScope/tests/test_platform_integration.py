@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 
 from agentscope.agent import ContextConfig, ReActConfig
 from agentscope.message import UserMsg
@@ -21,6 +21,7 @@ from agentscope.app._router._agent import (
     get_weknora_connection,
     list_weknora_knowledge as _list_weknora_knowledge_endpoint,
     list_weknora_knowledge_bases as _list_weknora_knowledge_bases_endpoint,
+    reveal_weknora_api_key,
     test_weknora_connection as _test_weknora_connection_endpoint,
     update_platform_settings,
     update_weknora_connection,
@@ -476,6 +477,43 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         self.assertEqual(response.knowledge_base_count, 3)
         probed = probe.await_args.args[0]
         self.assertEqual(probed.api_key.get_secret_value(), "saved-secret")
+
+    async def test_weknora_api_key_is_revealed_only_by_explicit_endpoint(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        raw_response = Response()
+
+        revealed = await reveal_weknora_api_key(
+            response=raw_response,
+            user_id=USER_ID,
+            storage=storage,
+        )
+
+        self.assertEqual(revealed.api_key, "saved-secret")
+        self.assertEqual(raw_response.headers["cache-control"], "no-store")
+        self.assertEqual(raw_response.headers["pragma"], "no-cache")
+
+        connection_view = await get_weknora_connection(
+            user_id=USER_ID,
+            storage=storage,
+        )
+        self.assertNotIn("api_key", connection_view.model_dump())
 
     async def test_weknora_knowledge_bases_are_loaded_with_saved_connection(
         self,

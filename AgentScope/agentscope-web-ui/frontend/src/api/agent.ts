@@ -9,6 +9,7 @@ import type {
 	TestWeKnoraConnectionResponse,
 	UpdateWeKnoraConnectionRequest,
 	UpdatePlatformSettingsRequest,
+	WeKnoraApiKeyResponse,
 	WeKnoraConnection,
 	WeKnoraKnowledgeBaseListResponse,
 	WeKnoraKnowledgeListResponse,
@@ -35,6 +36,11 @@ export const agentApi = {
 
 	getWeKnoraConnection: () =>
 		client.get<WeKnoraConnection>('/agent/platform/weknora-connection'),
+
+	revealWeKnoraApiKey: () =>
+		client.get<WeKnoraApiKeyResponse>(
+			'/agent/platform/weknora-connection/api-key',
+		),
 
 	updateWeKnoraConnection: (body: UpdateWeKnoraConnectionRequest) =>
 		client.put<WeKnoraConnection>('/agent/platform/weknora-connection', body),

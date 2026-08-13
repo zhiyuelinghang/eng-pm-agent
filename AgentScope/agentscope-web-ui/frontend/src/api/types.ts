@@ -268,6 +268,10 @@ export interface WeKnoraConnection {
 	api_key_configured: boolean;
 }
 
+export interface WeKnoraApiKeyResponse {
+	api_key: string;
+}
+
 export interface UpdateWeKnoraConnectionRequest {
 	base_url: string;
 	api_prefix: string;

@@ -8,7 +8,7 @@ import socket
 from urllib.parse import quote, urlsplit
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import ValidationError
 
 from ...agent import ContextConfig, ReActConfig
@@ -35,6 +35,7 @@ from ._schema import (
     TestWeKnoraConnectionRequest,
     TestWeKnoraConnectionResponse,
     UpdateWeKnoraConnectionRequest,
+    WeKnoraApiKeyResponse,
     WeKnoraConnectionResponse,
     WeKnoraKnowledgeBaseItem,
     WeKnoraKnowledgeItem,
@@ -934,6 +935,25 @@ async def get_weknora_connection(
 ) -> WeKnoraConnectionResponse:
     settings = await _load_platform_settings(storage, user_id)
     return _weknora_response(settings.data.weknora_connection)
+
+
+@agent_router.get(
+    "/platform/weknora-connection/api-key",
+    response_model=WeKnoraApiKeyResponse,
+    summary="Reveal the saved WeKnora API key on explicit admin request",
+)
+async def reveal_weknora_api_key(
+    response: Response,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> WeKnoraApiKeyResponse:
+    settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return WeKnoraApiKeyResponse(
+        api_key=connection.api_key.get_secret_value(),
+    )
 
 
 @agent_router.put(

@@ -198,6 +198,12 @@ class WeKnoraConnectionResponse(BaseModel):
     api_key_configured: bool = False
 
 
+class WeKnoraApiKeyResponse(BaseModel):
+    """Saved WeKnora API key returned only on an explicit reveal request."""
+
+    api_key: str
+
+
 class UpdateWeKnoraConnectionRequest(BaseModel):
     """Create or update the independently managed WeKnora connection."""
 

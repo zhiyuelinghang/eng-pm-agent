@@ -2,6 +2,8 @@ import {
 	Cloud,
 	CheckCircle2,
 	Database,
+	Eye,
+	EyeOff,
 	FileText,
 	Globe,
 	Link2,
@@ -9,6 +11,7 @@ import {
 	LockKeyhole,
 	RefreshCw,
 	Save,
+	Search,
 	Server,
 	ShieldCheck,
 	TriangleAlert,
@@ -36,11 +39,24 @@ import {
 	EmptyTitle,
 } from '@/components/ui/empty';
 import { Input } from '@/components/ui/input';
+import {
+	InputGroup,
+	InputGroupAddon,
+	InputGroupInput,
+} from '@/components/ui/input-group';
+import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from '@/components/ui/select';
 import { useTranslation } from '@/i18n/useI18n';
 
 type SectionKey = 'knowledge' | 'connection';
 
 const DEFAULT_WEKNORA_BASE_URL = 'http://z2fpf345.tcp01.cn';
+const SAVED_API_KEY_MASK = '************';
 
 function formatFileSize(size: number | null) {
 	if (size === null || size < 0) return '';
@@ -68,6 +84,9 @@ export function EngineeringKnowledgePage() {
 	const [apiPrefix, setApiPrefix] = useState('/api/v1');
 	const [authHeader, setAuthHeader] = useState('X-API-Key');
 	const [apiKey, setApiKey] = useState('');
+	const [savedApiKey, setSavedApiKey] = useState<string | null>(null);
+	const [showApiKey, setShowApiKey] = useState(false);
+	const [revealingApiKey, setRevealingApiKey] = useState(false);
 	const [connectionLoading, setConnectionLoading] = useState(true);
 	const [savingConnection, setSavingConnection] = useState(false);
 	const [testingConnection, setTestingConnection] = useState(false);
@@ -80,6 +99,7 @@ export function EngineeringKnowledgePage() {
 	const [knowledgeTotal, setKnowledgeTotal] = useState(0);
 	const [knowledgeLoading, setKnowledgeLoading] = useState(false);
 	const [knowledgeError, setKnowledgeError] = useState('');
+	const [documentQuery, setDocumentQuery] = useState('');
 
 	const loadKnowledge = useCallback(async (knowledgeBaseId: string) => {
 		setKnowledgeLoading(true);
@@ -148,6 +168,9 @@ export function EngineeringKnowledgePage() {
 				setBaseUrl(value.base_url || DEFAULT_WEKNORA_BASE_URL);
 				setApiPrefix(value.api_prefix);
 				setAuthHeader(value.auth_header);
+				setApiKey(value.api_key_configured ? SAVED_API_KEY_MASK : '');
+				setSavedApiKey(null);
+				setShowApiKey(false);
 				if (value.api_key_configured) void loadKnowledgeBases();
 			})
 			.catch(() => undefined)
@@ -160,8 +183,11 @@ export function EngineeringKnowledgePage() {
 	}, [loadKnowledgeBases]);
 
 	const connectionConfigured = connection?.api_key_configured ?? false;
+	const apiKeyChanged = connectionConfigured
+		? apiKey !== SAVED_API_KEY_MASK && apiKey !== savedApiKey
+		: Boolean(apiKey);
 	const connectionDirty = Boolean(
-		apiKey ||
+		apiKeyChanged ||
 			baseUrl !== (connection?.base_url ?? '') ||
 			apiPrefix !== (connection?.api_prefix ?? '/api/v1') ||
 			authHeader !== (connection?.auth_header ?? 'X-API-Key'),
@@ -170,14 +196,38 @@ export function EngineeringKnowledgePage() {
 		baseUrl.trim() &&
 			apiPrefix.trim() &&
 			authHeader.trim() &&
-			(apiKey || connectionConfigured),
+			(connectionConfigured || Boolean(apiKey)),
 	);
 	const connectionPayload = (): UpdateWeKnoraConnectionRequest => ({
 		base_url: baseUrl.trim(),
 		api_prefix: apiPrefix.trim(),
 		auth_header: authHeader.trim(),
-		...(apiKey ? { api_key: apiKey } : {}),
+		...(apiKeyChanged ? { api_key: apiKey } : {}),
 	});
+
+	const toggleApiKeyVisibility = async () => {
+		if (showApiKey) {
+			if (connectionConfigured && savedApiKey !== null && apiKey === savedApiKey) {
+				setApiKey(SAVED_API_KEY_MASK);
+				setSavedApiKey(null);
+			}
+			setShowApiKey(false);
+			return;
+		}
+		if (connectionConfigured && apiKey === SAVED_API_KEY_MASK) {
+			setRevealingApiKey(true);
+			try {
+				const result = await agentApi.revealWeKnoraApiKey();
+				setApiKey(result.api_key);
+				setSavedApiKey(result.api_key);
+				setShowApiKey(true);
+			} finally {
+				setRevealingApiKey(false);
+			}
+			return;
+		}
+		setShowApiKey(true);
+	};
 
 	const saveConnection = async () => {
 		if (!connectionValid) return;
@@ -190,7 +240,9 @@ export function EngineeringKnowledgePage() {
 			setBaseUrl(updated.base_url);
 			setApiPrefix(updated.api_prefix);
 			setAuthHeader(updated.auth_header);
-			setApiKey('');
+			setApiKey(SAVED_API_KEY_MASK);
+			setSavedApiKey(null);
+			setShowApiKey(false);
 			setLastTestMessage('');
 			toast.success(t('engineeringKnowledge.connection.saved'));
 			await loadKnowledgeBases(selectedKnowledgeBaseId || undefined);
@@ -241,6 +293,22 @@ export function EngineeringKnowledgePage() {
 	const selectedKnowledgeBase = knowledgeBases.find(
 		(item) => item.id === selectedKnowledgeBaseId,
 	);
+	const normalisedDocumentQuery = documentQuery.trim().toLocaleLowerCase();
+	const visibleKnowledge = normalisedDocumentQuery
+		? knowledge.filter((item) =>
+				[
+					item.title,
+					item.file_name,
+					item.description,
+					item.file_type,
+					item.type,
+					item.source,
+				]
+					.join(' ')
+					.toLocaleLowerCase()
+					.includes(normalisedDocumentQuery),
+			)
+		: knowledge;
 
 	return (
 		<div className="flex h-full min-h-0 flex-col bg-muted/25">
@@ -447,64 +515,96 @@ export function EngineeringKnowledgePage() {
 											</EmptyHeader>
 										</Empty>
 									) : (
-										<div className="grid gap-4 lg:grid-cols-[19rem_minmax(0,1fr)]">
-											<section className="overflow-hidden rounded-xl border bg-muted/15">
-												<div className="flex items-center justify-between gap-3 border-b px-4 py-3">
-													<h3 className="text-sm font-semibold">
-														{t('engineeringKnowledge.knowledge.basesTitle')}
-													</h3>
-													<Badge variant="secondary">{knowledgeBases.length}</Badge>
-												</div>
-												<div className="space-y-1.5 p-2">
-													{knowledgeBases.map((knowledgeBase) => {
-														const selected = knowledgeBase.id === selectedKnowledgeBaseId;
-														return (
-															<button
-																key={knowledgeBase.id}
-																type="button"
-																aria-pressed={selected}
-																onClick={() => {
-																	setSelectedKnowledgeBaseId(knowledgeBase.id);
-																	void loadKnowledge(knowledgeBase.id);
-																}}
-																className={`w-full rounded-lg border px-3 py-3 text-left transition-colors ${
-																	selected
-																		? 'border-primary/30 bg-background shadow-sm'
-																		: 'border-transparent hover:border-border hover:bg-background/80'
-																}`}
-															>
-																<span className="block truncate text-sm font-semibold">
-																	{knowledgeBase.name || knowledgeBase.id}
-																</span>
-																<p className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-																	{knowledgeBase.description ||
-																		t('engineeringKnowledge.knowledge.noDescription')}
+										<div className="space-y-4">
+											<section className="rounded-xl border bg-background">
+												<div className="flex flex-col gap-4 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+													<div className="flex min-w-0 items-start gap-3.5">
+														<div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/8 text-primary ring-1 ring-primary/10">
+															<Database className="size-5" />
+														</div>
+														<div className="min-w-0">
+															<div className="flex flex-wrap items-center gap-2">
+																<p className="text-xs font-medium tracking-wide text-muted-foreground">
+																	{t('engineeringKnowledge.knowledge.currentBase')}
 																</p>
-															</button>
-														);
-													})}
+																<Badge variant="outline" className="bg-muted/30 font-normal">
+																	WeKnora
+																</Badge>
+															</div>
+															<h3 className="mt-1 truncate text-base font-semibold tracking-tight">
+																{selectedKnowledgeBase?.name || selectedKnowledgeBaseId}
+															</h3>
+															<p className="mt-1 line-clamp-1 max-w-2xl text-sm text-muted-foreground">
+																{selectedKnowledgeBase?.description ||
+																	t('engineeringKnowledge.knowledge.remoteManaged')}
+															</p>
+														</div>
+													</div>
+													<div className="flex shrink-0 items-center gap-2">
+														<div className="hidden items-baseline gap-1.5 border-r pr-3 sm:flex">
+															<span className="font-mono text-base font-semibold tabular-nums">
+																{knowledgeBases.length}
+															</span>
+															<span className="text-xs text-muted-foreground">
+																{t('engineeringKnowledge.knowledge.availableBases')}
+															</span>
+														</div>
+														<Select
+															value={selectedKnowledgeBaseId}
+															onValueChange={(knowledgeBaseId) => {
+																setSelectedKnowledgeBaseId(knowledgeBaseId);
+																setDocumentQuery('');
+																void loadKnowledge(knowledgeBaseId);
+															}}
+														>
+															<SelectTrigger
+																aria-label={t('engineeringKnowledge.knowledge.switchBase')}
+																className="h-9 w-full bg-background sm:w-72"
+															>
+																<SelectValue />
+															</SelectTrigger>
+															<SelectContent>
+																{knowledgeBases.map((knowledgeBase) => (
+																	<SelectItem key={knowledgeBase.id} value={knowledgeBase.id}>
+																		{knowledgeBase.name || knowledgeBase.id}
+																	</SelectItem>
+																))}
+															</SelectContent>
+														</Select>
+													</div>
 												</div>
 											</section>
 
-											<section className="min-w-0 overflow-hidden rounded-xl border">
-												<div className="flex flex-wrap items-start justify-between gap-3 border-b bg-muted/15 px-4 py-3">
+											<section className="min-w-0 overflow-hidden rounded-xl border bg-background">
+												<div className="flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
 													<div className="min-w-0">
-														<p className="text-xs font-medium text-muted-foreground">
-															{t('engineeringKnowledge.knowledge.documentsTitle')}
+														<div className="flex items-center gap-2">
+															<h3 className="text-base font-semibold tracking-tight">
+																{t('engineeringKnowledge.knowledge.documentsTitle')}
+															</h3>
+															<Badge variant="secondary" className="font-mono tabular-nums">
+																{knowledgeTotal}
+															</Badge>
+														</div>
+														<p className="mt-1 text-sm text-muted-foreground">
+															{t('engineeringKnowledge.knowledge.documentsHint')}
 														</p>
-														<h3 className="mt-1 truncate text-base font-semibold">
-															{selectedKnowledgeBase?.name || selectedKnowledgeBaseId}
-														</h3>
 													</div>
-													<Badge variant="outline">
-														{t('engineeringKnowledge.knowledge.documentsCount', {
-															count: knowledgeTotal,
-														})}
-													</Badge>
+													<InputGroup className="h-9 bg-muted/20 sm:w-80">
+														<InputGroupAddon>
+															<Search />
+														</InputGroupAddon>
+														<InputGroupInput
+															value={documentQuery}
+															onChange={(event) => setDocumentQuery(event.target.value)}
+															placeholder={t('engineeringKnowledge.knowledge.searchPlaceholder')}
+															aria-label={t('engineeringKnowledge.knowledge.searchPlaceholder')}
+														/>
+													</InputGroup>
 												</div>
 
 												{knowledgeLoading ? (
-													<div className="flex items-center justify-center gap-2 px-4 py-12 text-sm text-muted-foreground">
+													<div className="flex items-center justify-center gap-2 px-5 py-16 text-sm text-muted-foreground">
 														<Loader2 className="animate-spin" />
 														{t('engineeringKnowledge.knowledge.loadingDocuments')}
 													</div>
@@ -541,41 +641,87 @@ export function EngineeringKnowledgePage() {
 															</EmptyDescription>
 														</EmptyHeader>
 													</Empty>
+												) : visibleKnowledge.length === 0 ? (
+													<Empty className="py-12">
+														<EmptyHeader>
+															<EmptyMedia variant="icon">
+																<Search />
+															</EmptyMedia>
+															<EmptyTitle>
+																{t('engineeringKnowledge.knowledge.noSearchResultsTitle')}
+															</EmptyTitle>
+															<EmptyDescription>
+																{t('engineeringKnowledge.knowledge.noSearchResultsDescription')}
+															</EmptyDescription>
+														</EmptyHeader>
+														<Button variant="outline" onClick={() => setDocumentQuery('')}>
+															{t('engineeringKnowledge.knowledge.clearSearch')}
+														</Button>
+													</Empty>
 												) : (
 													<div className="divide-y">
-														{knowledge.map((item) => {
+														{visibleKnowledge.map((item) => {
 															const title = item.title || item.file_name || item.id;
 															const itemType = item.file_type || item.type;
+															const statusName = item.parse_status.toLocaleLowerCase();
+															const statusLabel = ['completed', 'pending', 'processing', 'finalizing', 'failed'].includes(
+																statusName,
+															)
+																? t(`engineeringKnowledge.knowledge.parseStatus.${statusName}`)
+																: item.parse_status;
+															const statusClass =
+																statusName === 'completed'
+																	? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'
+																	: statusName === 'failed'
+																		? 'border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300'
+																		: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300';
 															const timestamp = formatTimestamp(
 																item.processed_at || item.created_at,
 															);
+															const ItemIcon = item.type === 'url' ? Globe : FileText;
 															return (
-																<article key={item.id} className="flex gap-3 px-4 py-4">
-																	<div className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted">
-																		<FileText className="size-4 text-muted-foreground" />
+																<article
+																	key={item.id}
+																	className="group flex gap-4 px-5 py-4 transition-colors duration-200 hover:bg-muted/25"
+																>
+																	<div className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground ring-1 ring-border/60 transition-colors group-hover:bg-background group-hover:text-foreground">
+																		<ItemIcon className="size-4" />
 																	</div>
 																	<div className="min-w-0 flex-1">
-																		<div className="flex flex-wrap items-start justify-between gap-2">
-																			<h4 className="min-w-0 break-words text-sm font-semibold">
+																		<div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+																			<h4 className="min-w-0 flex-1 break-words text-sm font-semibold leading-5">
 																				{title}
 																			</h4>
 																			<div className="flex flex-wrap items-center gap-1.5">
-																				{itemType && <Badge variant="outline">{itemType}</Badge>}
+																				{itemType && (
+																					<Badge variant="outline" className="bg-background font-mono uppercase">
+																						{itemType}
+																					</Badge>
+																				)}
 																				{item.parse_status && (
-																					<Badge variant="secondary">{item.parse_status}</Badge>
+																					<Badge variant="outline" className={statusClass}>
+																						<span className="mr-1 size-1.5 rounded-full bg-current" />
+																						{statusLabel}
+																					</Badge>
 																				)}
 																			</div>
 																		</div>
 																		{(item.description || item.source) && (
-																			<p className="mt-1 break-words text-xs leading-relaxed text-muted-foreground">
+																			<p className="mt-1.5 line-clamp-2 break-words text-sm leading-6 text-muted-foreground">
 																				{item.description || item.source}
 																			</p>
 																		)}
-																		<div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+																		<div className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
 																			{formatFileSize(item.file_size) && (
 																				<span>{formatFileSize(item.file_size)}</span>
 																			)}
+																			{formatFileSize(item.file_size) && item.channel && (
+																				<span className="size-1 rounded-full bg-border" />
+																			)}
 																			{item.channel && <span>{item.channel}</span>}
+																			{(formatFileSize(item.file_size) || item.channel) && timestamp && (
+																				<span className="size-1 rounded-full bg-border" />
+																			)}
 																			{timestamp && <span>{timestamp}</span>}
 																		</div>
 																	</div>
@@ -678,18 +824,60 @@ export function EngineeringKnowledgePage() {
 												<div className="relative">
 													<LockKeyhole className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
 													<Input
-														type="password"
+														type={
+															apiKey === SAVED_API_KEY_MASK && !showApiKey
+																? 'text'
+																: showApiKey
+																	? 'text'
+																	: 'password'
+														}
 														value={apiKey}
 														onChange={(event) => setApiKey(event.target.value)}
+														onFocus={(event) => {
+															if (apiKey === SAVED_API_KEY_MASK) {
+																event.currentTarget.select();
+															}
+														}}
 														placeholder={t(
 															connectionConfigured
 																? 'engineeringKnowledge.connection.apiKeyConfiguredPlaceholder'
 																: 'engineeringKnowledge.connection.apiKeyPlaceholder',
 														)}
-														className="pl-9"
+														className="pr-10 pl-9"
 														autoComplete="new-password"
 														disabled={connectionLoading || savingConnection}
 													/>
+													<Button
+														type="button"
+														variant="ghost"
+														size="icon"
+														className="absolute top-1/2 right-1 -translate-y-1/2"
+														aria-label={t(
+															showApiKey
+																? 'engineeringKnowledge.connection.hideApiKey'
+																: 'engineeringKnowledge.connection.showApiKey',
+														)}
+														tooltip={t(
+															showApiKey
+																? 'engineeringKnowledge.connection.hideApiKey'
+																: 'engineeringKnowledge.connection.showApiKey',
+														)}
+														disabled={
+															connectionLoading ||
+															savingConnection ||
+															revealingApiKey ||
+															(!apiKey && !connectionConfigured)
+														}
+														onClick={() => void toggleApiKeyVisibility()}
+													>
+														{revealingApiKey ? (
+															<Loader2 className="animate-spin" />
+														) : showApiKey ? (
+															<EyeOff />
+														) : (
+															<Eye />
+														)}
+													</Button>
 												</div>
 												<span className="text-xs font-normal text-muted-foreground">
 													{t('engineeringKnowledge.connection.apiKeyHelp')}
