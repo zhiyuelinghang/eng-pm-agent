@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Request / response schemas for the agent router."""
+from datetime import datetime
 import warnings
 
 from pydantic import BaseModel, Field
@@ -10,6 +11,7 @@ from ...storage import (
     AgentMCPConfig,
     AgentModelPolicy,
     InviteConfig,
+    MemorySettingsData,
     PlatformAgentConfig,
     PlatformMCPVersionBinding,
     SessionKnowledgeConfig,
@@ -187,6 +189,41 @@ class PlatformSettingsResponse(BaseModel):
             "The dedicated agent used by engineering document management."
         ),
     )
+
+
+class MemoryInfrastructureResponse(BaseModel):
+    """Read-only memory infrastructure that is unsafe to hot-edit."""
+
+    storage_backend: str = "PostgreSQL/pgvector"
+    embedding_provider: str
+    embedding_model: str
+    embedding_dimensions: int
+    mem0_collection: str
+    change_notice: str = (
+        "修改嵌入模型或维度需要重建全部记忆向量，不能作为普通在线配置生效。"
+    )
+
+
+class MemorySettingsResponse(BaseModel):
+    """Versioned platform-wide Dobby memory policy."""
+
+    settings: MemorySettingsData
+    revision: int = Field(ge=1)
+    updated_at: datetime
+    infrastructure: MemoryInfrastructureResponse
+
+
+class UpdateMemorySettingsRequest(BaseModel):
+    """Replace the full memory policy with optimistic concurrency."""
+
+    settings: MemorySettingsData
+    expected_revision: int | None = Field(default=None, ge=1)
+
+
+class ResetMemorySettingsRequest(BaseModel):
+    """Restore the reference-branch defaults."""
+
+    expected_revision: int | None = Field(default=None, ge=1)
 
 
 class WeKnoraConnectionResponse(BaseModel):

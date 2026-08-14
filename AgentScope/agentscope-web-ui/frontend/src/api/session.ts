@@ -16,6 +16,17 @@ export interface MessagesResponse {
 	has_more: boolean;
 }
 
+export type SessionRuntimeStatus =
+	| 'running'
+	| 'idle'
+	| 'awaiting_permission'
+	| 'awaiting_external_result';
+
+export interface SessionStatusResponse {
+	session_id: string;
+	status: SessionRuntimeStatus;
+}
+
 export const sessionApi = {
 	list: (agentId: string) => client.get<SessionListResponse>('/sessions/', { agent_id: agentId }),
 
@@ -39,6 +50,12 @@ export const sessionApi = {
 	 */
 	interrupt: (sessionId: string, agentId: string) =>
 		client.post<InterruptSessionResponse>(`/sessions/${sessionId}/interrupt`, null, {
+			agent_id: agentId,
+		}),
+
+	/** Probe whether the complete backend chat task has settled. */
+	status: (sessionId: string, agentId: string) =>
+		client.get<SessionStatusResponse>(`/sessions/${sessionId}/status`, {
 			agent_id: agentId,
 		}),
 

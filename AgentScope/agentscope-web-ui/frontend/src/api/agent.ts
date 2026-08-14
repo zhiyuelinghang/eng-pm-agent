@@ -6,9 +6,11 @@ import type {
 	CreateAgentRequest,
 	CreateAgentResponse,
 	PlatformSettings,
+	MemorySettingsResponse,
 	TestWeKnoraConnectionResponse,
 	UpdateWeKnoraConnectionRequest,
 	UpdatePlatformSettingsRequest,
+	UpdateMemorySettingsRequest,
 	WeKnoraApiKeyResponse,
 	WeKnoraConnection,
 	WeKnoraKnowledgeBaseListResponse,
@@ -33,6 +35,17 @@ export const agentApi = {
 
 	updatePlatformSettings: (body: UpdatePlatformSettingsRequest) =>
 		client.put<PlatformSettings>('/agent/platform/settings', body),
+
+	getMemorySettings: () =>
+		client.get<MemorySettingsResponse>('/agent/platform/memory-settings'),
+
+	updateMemorySettings: (body: UpdateMemorySettingsRequest) =>
+		client.put<MemorySettingsResponse>('/agent/platform/memory-settings', body),
+
+	resetMemorySettings: (expectedRevision: number) =>
+		client.post<MemorySettingsResponse>('/agent/platform/memory-settings/reset', {
+			expected_revision: expectedRevision,
+		}),
 
 	getWeKnoraConnection: () =>
 		client.get<WeKnoraConnection>('/agent/platform/weknora-connection'),

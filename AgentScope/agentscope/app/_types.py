@@ -24,6 +24,12 @@ AgentMiddlewareFactory = Callable[
 # Async factory signature: ``(user_id, agent_id, session_id)`` →
 # awaitable of :class:`~agentscope.middleware.MiddlewareBase` instances.
 
+SessionEndHandler = Callable[
+    [str, str, "SessionRecord"],
+    Awaitable[None],
+]
+# Async callback invoked before a durable session record is deleted.
+
 
 class AgentToolDescriptor(BaseModel):
     """Serializable metadata for one assignable application tool."""

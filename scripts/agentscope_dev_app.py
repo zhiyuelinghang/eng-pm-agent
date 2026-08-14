@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone
 import os
 import logging
 from pathlib import Path
@@ -12,9 +15,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.engine import make_url
 
 from agentscope.app import AgentScopeAuthConfig, create_app
+from agentscope.app.access import DenyAllResourceAccessPolicy
 from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app.mcp_registry import MCPRegistryManager
-from agentscope.app.memory import DobbyMemoryMiddleware, get_memory_runtime
+from agentscope.app.memory import (
+    DobbyMemoryMiddleware,
+    apply_global_memory_settings,
+    configure_platform_memory_model,
+    get_memory_runtime,
+)
 from agentscope.app.database_interactions import (
     DatabaseInteractionGatewayError,
     DatabaseInteractionManager,
@@ -24,9 +33,11 @@ from agentscope.app.rag.blob_store import LocalBlobStore
 from agentscope.app.rag.knowledge_base_manager import CollectionPerKbManager
 from agentscope.app.storage import (
     AsyncSQLAlchemyStorage,
+    MemorySettingsData,
     RedisStorage,
     StorageBase,
 )
+from agentscope.app._service import ResourceAccessService
 from agentscope.app.workspace_manager import LocalWorkspaceManager
 from agentscope.rag import (
     ExcelParser,
@@ -188,6 +199,10 @@ def _create_vector_store() -> PGVectorStore:
 
 
 storage = _create_storage()
+memory_resource_access = ResourceAccessService(
+    storage=storage,
+    policy=DenyAllResourceAccessPolicy(),
+)
 knowledge_base_manager = CollectionPerKbManager(
     storage=storage,
     vector_store=_create_vector_store(),
@@ -214,6 +229,28 @@ database_interaction_manager = DatabaseInteractionManager(
 )
 
 
+async def _memory_platform_context(user_id: str, session: Any) -> Any:
+    """Resolve a worker session to the leader's platform project context."""
+
+    platform_context = session.config.platform_context if session else None
+    if session is not None and platform_context is None and session.team_id:
+        team = await storage.get_team(user_id, session.team_id)
+        if team is not None:
+            leader = await storage.get_session(user_id, "", team.session_id)
+            if leader is not None:
+                platform_context = leader.config.platform_context
+    return platform_context
+
+
+async def _memory_settings(user_id: str) -> MemorySettingsData:
+    """Load the persisted platform policy, including defaults for old rows."""
+
+    record = await storage.get_platform_settings(user_id)
+    if record is None:
+        return MemorySettingsData()
+    return record.data.memory_settings
+
+
 async def _create_memory_middlewares(
     user_id: str,
     agent_id: str,
@@ -222,13 +259,13 @@ async def _create_memory_middlewares(
     """Bind every AgentScope turn to its immutable project memory scope."""
 
     session = await storage.get_session(user_id, agent_id, session_id)
-    platform_context = session.config.platform_context if session else None
-    if session is not None and platform_context is None and session.team_id:
-        team = await storage.get_team(user_id, session.team_id)
-        if team is not None:
-            leader = await storage.get_session(user_id, "", team.session_id)
-            if leader is not None:
-                platform_context = leader.config.platform_context
+    platform_context = await _memory_platform_context(user_id, session)
+    settings = await _memory_settings(user_id)
+    await configure_platform_memory_model(
+        user_id,
+        settings,
+        memory_resource_access,
+    )
 
     runtime = get_memory_runtime()
     scope = runtime.scope(
@@ -241,7 +278,37 @@ async def _create_memory_middlewares(
         agent_id=agent_id,
         session_id=session_id,
     )
-    return [DobbyMemoryMiddleware(runtime, scope)]
+    return [DobbyMemoryMiddleware(runtime, scope, settings)]
+
+
+async def _end_memory_session(
+    user_id: str,
+    agent_id: str,
+    session: Any,
+) -> None:
+    """Flush decay/reflection/experience lifecycle before session deletion."""
+
+    platform_context = await _memory_platform_context(user_id, session)
+    settings = await _memory_settings(user_id)
+    await configure_platform_memory_model(
+        user_id,
+        settings,
+        memory_resource_access,
+    )
+    runtime = get_memory_runtime()
+    scope = runtime.scope(
+        project_id=(
+            platform_context.project_id if platform_context is not None else None
+        ),
+        platform_user_id=(
+            platform_context.user_id if platform_context is not None else user_id
+        ),
+        agent_id=agent_id,
+        session_id=session.id,
+    )
+    await DobbyMemoryMiddleware(runtime, scope, settings).end_persisted_session(
+        session.state,
+    )
 
 
 async def _create_platform_agent_tools(
@@ -317,6 +384,7 @@ app = create_app(
         ),
     ),
     extra_agent_middlewares=_create_memory_middlewares,
+    session_end_handler=_end_memory_session,
     extra_agent_tools=_create_platform_agent_tools,
     extra_middlewares=[
         Middleware(
@@ -328,3 +396,82 @@ app = create_app(
     ],
 )
 app.state.database_interaction_manager = database_interaction_manager
+
+
+def _active_memory_projects() -> list[str]:
+    """Load active Dobby scopes for the upstream Dreamer cron scheduler."""
+
+    import psycopg
+    from utils import config as memory_config
+
+    conn = psycopg.Connection.connect(
+        memory_config.DATABASE_URL,
+        autocommit=True,
+        prepare_threshold=0,
+    )
+    try:
+        rows = conn.execute(
+            """SELECT DISTINCT project_id
+               FROM user_activity
+               WHERE active_on >= CURRENT_DATE - INTERVAL '90 days'
+               ORDER BY project_id""",
+        ).fetchall()
+        return [str(row[0]) for row in rows if row and row[0]]
+    finally:
+        conn.close()
+
+
+async def _memory_maintenance_loop() -> None:
+    """Run the copied Dreamer scheduler for every active memory scope."""
+
+    from utils.memory_manager import MemoryManager
+
+    last_slot = ""
+    while True:
+        slot = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
+        if slot != last_slot:
+            last_slot = slot
+            try:
+                global_config_id = (
+                    os.getenv("AGENTSCOPE_GLOBAL_CONFIG_ID", "default").strip()
+                    or "default"
+                )
+                settings = await _memory_settings(global_config_id)
+                apply_global_memory_settings(settings)
+                await configure_platform_memory_model(
+                    global_config_id,
+                    settings,
+                    memory_resource_access,
+                )
+                if settings.dreamer_enabled:
+                    projects = await asyncio.to_thread(_active_memory_projects)
+                    for project_id in projects:
+                        await MemoryManager(
+                            project_id=project_id,
+                            role_id="dobby_core",
+                            runtime_settings=settings,
+                        ).run_dreamer(project_id=project_id)
+            except Exception:
+                logger.exception("Dobby Dreamer maintenance iteration failed")
+        await asyncio.sleep(30)
+
+
+_agentscope_lifespan = app.router.lifespan_context
+
+
+@asynccontextmanager
+async def _lifespan_with_memory_maintenance(application: Any):
+    async with _agentscope_lifespan(application):
+        maintenance_task = asyncio.create_task(
+            _memory_maintenance_loop(),
+            name="dobby-memory-dreamer",
+        )
+        try:
+            yield
+        finally:
+            maintenance_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await maintenance_task
+
+
+app.router.lifespan_context = _lifespan_with_memory_maintenance

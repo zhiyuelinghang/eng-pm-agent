@@ -32,7 +32,7 @@ interface ProcessedFile {
 }
 
 interface TextInputProps {
-	onSend: (blocks: ContentBlock[]) => void;
+	onSend: (blocks: ContentBlock[]) => Promise<boolean>;
 	placeholder?: string;
 	autoComplete?: (input: string) => string | null;
 	disabled?: boolean;
@@ -64,6 +64,7 @@ interface TextInputProps {
 	 *   - ``idle`` — Send (enabled when there is content to send)
 	 *   - ``streaming`` — Stop (click to interrupt)
 	 *   - ``interrupting`` — Stop (disabled while the interrupt is in flight)
+	 *   - ``settling`` — Save spinner (disabled until backend persistence finishes)
 	 */
 	phase?: ReplyPhase;
 	onInterrupt?: () => void;
@@ -118,9 +119,11 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 		const [value, setValue] = useState('');
 		const [files, setFiles] = useState<ProcessedFile[]>([]);
 		const [isFocused, setIsFocused] = useState(false);
+		const [isSubmitting, setIsSubmitting] = useState(false);
 		const textareaRef = useRef<HTMLTextAreaElement>(null);
 		const fileInputRef = useRef<HTMLInputElement>(null);
 		const measureRef = useRef<HTMLSpanElement>(null);
+		const submittingRef = useRef(false);
 		/** ``true`` — textarea takes the full width, buttons drop to their own row. */
 		const [isStacked, setIsStacked] = useState(false);
 
@@ -132,7 +135,9 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 
 		// Attachment button is disabled when the model explicitly accepts no file types
 		const attachDisabled =
-			disabled || (allowedInputTypes !== undefined && allowedInputTypes.length === 0);
+			disabled ||
+			isSubmitting ||
+			(allowedInputTypes !== undefined && allowedInputTypes.length === 0);
 
 		// Whether any file is still being processed (block send until all done)
 		const hasProcessing = files.some((f) => f.status === 'processing');
@@ -184,12 +189,20 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 			// Enter to send message, Shift+Enter for new line
 			if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
 				e.preventDefault();
-				handleSend();
+				void handleSend();
 			}
 		};
 
-		const handleSend = () => {
-			if ((!value.trim() && !hasReadyFile) || disabled || hasProcessing) return;
+		const handleSend = async () => {
+			if (
+				(!value.trim() && !hasReadyFile) ||
+				disabled ||
+				hasProcessing ||
+				phase !== 'idle' ||
+				submittingRef.current
+			) {
+				return;
+			}
 
 			const blocks: ContentBlock[] = [];
 
@@ -210,9 +223,21 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 				}
 			});
 
-			onSend?.(blocks);
-			setValue('');
-			setFiles([]);
+			submittingRef.current = true;
+			setIsSubmitting(true);
+			try {
+				const accepted = await onSend(blocks);
+				if (accepted) {
+					setValue('');
+					setFiles([]);
+				}
+			} catch {
+				// The parent owns error presentation. Keep the draft so the
+				// user can retry without reconstructing the message.
+			} finally {
+				submittingRef.current = false;
+				setIsSubmitting(false);
+			}
 		};
 
 		/**
@@ -224,6 +249,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 			tooltip: string;
 			disabled: boolean;
 			onClick: (() => void) | undefined;
+			spin?: boolean;
 		} = (() => {
 			if (phase === 'streaming') {
 				return {
@@ -241,11 +267,20 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 					onClick: onInterrupt,
 				};
 			}
+			if (phase === 'settling' || isSubmitting) {
+				return {
+					icon: Loader2,
+					tooltip: t('textInput.saving'),
+					disabled: true,
+					onClick: undefined,
+					spin: true,
+				};
+			}
 			return {
 				icon: Send,
 				tooltip: t('textInput.send'),
 				disabled: disabled || (!value.trim() && !hasReadyFile) || hasProcessing,
-				onClick: handleSend,
+				onClick: () => void handleSend(),
 			};
 		})();
 
@@ -372,7 +407,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 								onFocus={() => setIsFocused(true)}
 								onBlur={() => setIsFocused(false)}
 								placeholder={defaultPlaceholder}
-								disabled={disabled}
+								disabled={disabled || isSubmitting}
 								rows={1}
 								className="block w-full resize-none rounded-md border-0 bg-transparent px-3 text-sm outline-none placeholder:text-muted-foreground focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
 								style={{
@@ -448,7 +483,9 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 										size="icon-lg"
 										className="shrink-0 rounded-full"
 									>
-										<sendButton.icon className="h-4 w-4" />
+										<sendButton.icon
+											className={cn('h-4 w-4', sendButton.spin && 'animate-spin')}
+										/>
 									</Button>
 								</TooltipTrigger>
 								<TooltipContent>{sendButton.tooltip}</TooltipContent>

@@ -25,7 +25,7 @@ if not exist "%AGENTSCOPE_CORE_HOME%\__init__.py" goto ERROR_CORE
 "%PYTHON_EXE%" -c "import agentscope; from agentscope.app.storage import AsyncSQLAlchemyStorage; assert agentscope.__version__ == '2.0.6'" >nul
 if errorlevel 1 goto ERROR_CORE_IMPORT
 
-"%PYTHON_EXE%" -c "import aiosqlite, asyncpg, alembic, psycopg, pgvector, sqlalchemy, pypdf, pandas, pptx, openpyxl, xlrd, docx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime" >nul
+"%PYTHON_EXE%" -c "import aiosqlite, asyncpg, alembic, psycopg, pgvector, sqlalchemy, pypdf, pandas, pptx, openpyxl, xlrd, docx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime, langgraph, graphiti_core, neo4j, sentence_transformers, torch, tiktoken, lightrag" >nul
 if errorlevel 1 goto ERROR_DEPENDENCIES
 if not exist "%WEBUI_HOME%\package.json" goto ERROR_WEBUI
 
@@ -51,7 +51,7 @@ pause
 exit /b 1
 
 :ERROR_DEPENDENCIES
-echo [错误] AgentScope 知识库依赖不完整。
+echo [错误] AgentScope、知识库或完整 Dobby 记忆依赖不完整。
 echo [提示] 请执行："%PYTHON_EXE%" -m pip install -r "%~dp0requirements-agentscope.txt"
 pause
 exit /b 1

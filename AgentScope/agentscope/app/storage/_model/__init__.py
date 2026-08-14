@@ -24,6 +24,7 @@ from ._permission_review import (
     PermissionReviewerConfigRecord,
 )
 from ._platform_settings import (
+    MemorySettingsData,
     PlatformMCPVersionBinding,
     PlatformSettingsData,
     PlatformSettingsRecord,
@@ -62,6 +63,7 @@ __all__ = [
     "PermissionReviewerConfigRecord",
     "PlatformSettingsData",
     "PlatformSettingsRecord",
+    "MemorySettingsData",
     "PlatformMCPVersionBinding",
     "WeKnoraConnectionConfig",
     "ScheduleData",

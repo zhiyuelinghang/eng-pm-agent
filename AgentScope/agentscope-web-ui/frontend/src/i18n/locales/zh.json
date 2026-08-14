@@ -26,6 +26,7 @@
 		"name": "名称",
 		"platformAudit": "平台交互审计",
 		"platformSettings": "平台设置",
+		"memorySettings": "记忆配置",
 		"no": "否",
 		"noData": "暂无数据",
 		"readOnly": "只读",
@@ -136,6 +137,122 @@
 			"save": "保存工程资料配置"
 		}
 	},
+	"memory-settings": {
+		"title": "记忆配置",
+		"description": "统一设置智能体如何查找、保留和整理长期记忆。",
+		"loading": "正在加载记忆配置…",
+		"actions": {
+			"save": "保存并全局生效",
+			"reset": "恢复默认设置"
+		},
+		"messages": {
+			"saved": "记忆配置已保存，将从下一次记忆操作开始生效",
+			"reset": "已恢复默认记忆配置",
+			"resetConfirm": "确定将全部记忆配置恢复为默认设置吗？当前未保存的修改将被替换。"
+		},
+		"tabs": {
+			"model": "处理模型",
+			"retrieval": "召回与融合",
+			"compression": "上下文压缩",
+			"budgets": "内容容量",
+			"maintenance": "后台维护",
+			"prompts": "高级提示词"
+		},
+		"model": {
+			"title": "记忆处理模型",
+			"description": "统一指定长期记忆抽取、上下文压缩、反思和后台整理所使用的模型，不会改变智能体正常回答时使用的模型。",
+			"followDefault": "沿用当前模型规则",
+			"selectedNotice": "保存后，所有智能体的记忆处理将统一使用所选模型。",
+			"defaultNotice": "未单独指定时，上下文压缩沿用当前智能体模型，其他记忆处理沿用服务默认模型。"
+		},
+		"retrieval": {
+			"title": "长期记忆召回",
+			"description": "设置每次最多查找多少条长期记忆，以及需要达到多高的相关程度才会采用。"
+		},
+		"fusion": {
+			"title": "多源记忆融合",
+			"description": "设置不同类型记忆在综合结果中的影响程度，数值越高越优先参考。"
+		},
+		"compression": {
+			"title": "对话压缩与历史归档",
+			"description": "系统会根据每个智能体可承载的对话长度，自动判断何时整理较早内容。"
+		},
+		"budgets": {
+			"title": "各类内容容量上限",
+			"description": "限制各类内容最多可占用的空间，避免单一内容挤占完整对话。"
+		},
+		"prompts": {
+			"notice": "这些提示词统一控制所有智能体的记忆压缩与历史整理方式。仅在明确了解影响时修改，单个智能体无需重复配置。"
+		},
+		"fields": {
+			"memoryModel": "记忆处理模型",
+			"recallTopK": "单次召回数量",
+			"recallThreshold": "相似度阈值",
+			"reinforceThreshold": "召回强化阈值",
+			"sourceLongTerm": "长期记忆",
+			"sourceKnowledge": "工程知识",
+			"sourceTimeline": "时间线",
+			"sourceExperience": "任务经验",
+			"sourceRelations": "关联知识",
+			"diversityBalance": "相关性与多样性",
+			"rankingSmoothing": "排序平滑度",
+			"mem0Infer": "启用记忆要点提取",
+			"mem0InferAsync": "后台提取记忆要点",
+			"compressionTrigger": "压缩触发比例",
+			"keepMessages": "压缩后保留消息数",
+			"compressionMode": "压缩模式",
+			"emergencyRatio": "紧急压缩比例",
+			"historianRatio": "历史归档触发比例",
+			"maxConsecutive": "连续压缩上限",
+			"qualityThreshold": "压缩质量阈值",
+			"minRounds": "两次压缩最小轮次",
+			"backgroundCompression": "启用自动历史归档",
+			"systemBudget": "系统指令上限",
+			"skillBudget": "技能说明上限",
+			"summaryBudget": "摘要上限",
+			"retrievalBudget": "长期记忆与知识上限",
+			"runtimeBudget": "运行信息上限",
+			"historyBudget": "近期对话上限",
+			"outputReserve": "回答生成预留",
+			"dreamer": "启用定期记忆整理",
+			"experienceConsolidation": "启用自动经验归纳",
+			"compressionSystemPrompt": "压缩系统提示词",
+			"compressionUserPrompt": "首次压缩提示词",
+			"compressionIncrementalPrompt": "增量压缩提示词",
+			"historianSystemPrompt": "历史整理提示词"
+		},
+		"options": {
+			"incremental": "增量整理",
+			"full": "完整重整"
+		},
+		"help": {
+			"memoryModel": "用于整理和保存记忆，不参与生成智能体面向用户的正常回答。模型凭证仍由平台统一管理。",
+			"recallTopK": "每次最多选取多少条相关长期记忆。",
+			"recallThreshold": "数值越低，查找范围越宽；数值越高，返回内容越精准。",
+			"reinforceThreshold": "达到该分数的记忆会在后续对话中获得更高优先级。",
+			"fusionWeight": "控制该类信息在综合结果中的影响程度，设为 0 表示不参与。",
+			"mmrLambda": "越接近 1 越重相关性，越接近 0 越重结果多样性。",
+			"rrfK": "数值越大，不同来源的排名差异对最终结果影响越平缓。",
+			"mem0Infer": "从对话中识别偏好、约定和关键事实，形成可复用的长期记忆。",
+			"mem0InferAsync": "先完成当前回复，再在后台整理记忆要点，减少等待时间。",
+			"compressionTrigger": "当前对话内容达到可用容量的该比例时自动开始整理。",
+			"keepMessages": "完成摘要后仍保留在短期上下文中的最新消息数量。",
+			"compressionMode": "增量整理会更新已有摘要；完整重整会根据现有对话重新生成摘要。",
+			"emergencyRatio": "上下文接近容量上限时，用于提前执行更快速的整理。",
+			"historianRatio": "较早对话达到该比例时，自动转入历史归档。",
+			"maxConsecutive": "防止压缩质量不佳时进入连续压缩循环。",
+			"qualityThreshold": "整理结果低于该标准时，系统会采用更稳妥的内容保留方式。",
+			"minRounds": "压缩后至少经过多少轮才允许再次正常压缩。",
+			"backgroundCompression": "将较早内容按时间分组保存，便于后续按需回顾。",
+			"layerBudget": "该类内容最多可使用的模型处理容量。",
+			"outputReserve": "为生成最终回答预留的处理容量。",
+			"dreamer": "定期检查、整理和更新已有记忆，减少过期或重复内容。",
+			"experienceConsolidation": "任务完成后自动整理相似经验，形成更稳定的做事方法。",
+			"compressionSystemPrompt": "定义压缩输出结构和必须保留的信息。",
+			"compressionUserPrompt": "请保留模板中已有的三个变量，否则无法保存。",
+			"historianSystemPrompt": "定义如何归纳较早对话，并提取其中的事实与事件。"
+		}
+	},
 	"error": {
 		"description": "页面遇到意外错误。你可以重试或返回首页。",
 		"retry": "重试",
@@ -183,7 +300,8 @@
 		"attachNotSupported": "当前模型不支持文件附件",
 		"send": "发送",
 		"stop": "停止生成",
-		"stopping": "停止中 ..."
+		"stopping": "停止中 ...",
+		"saving": "正在保存 ..."
 	},
 	"confirmCard": {
 		"toConfirm": "确认",

@@ -25,6 +25,7 @@ from ._router import (
 from ._auth import AgentScopeAuthConfig
 from ._types import (
     AgentMiddlewareFactory,
+    SessionEndHandler,
     AgentToolCatalogFactory,
     AgentToolFactory,
     SubAgentTemplate,
@@ -65,6 +66,7 @@ def create_app(
     extra_credentials: list[Type[CredentialBase]] | None = None,
     extra_middlewares: list[FastAPIMiddleware] | None = None,
     extra_agent_middlewares: AgentMiddlewareFactory | None = None,
+    session_end_handler: SessionEndHandler | None = None,
     extra_agent_tools: AgentToolFactory | None = None,
     extra_agent_tool_catalog: AgentToolCatalogFactory | None = None,
     custom_subagent_templates: list[SubAgentTemplate] | None = None,
@@ -180,6 +182,10 @@ def create_app(
             return user/session-specific middleware (auth, audit logging,
             tenant isolation, etc.).  The returned middlewares are appended
             to the framework-supplied ones (e.g. ``ToolOffloadMiddleware``).
+        session_end_handler (`SessionEndHandler | None`, optional):
+            Async callback invoked with the final durable session record before
+            deletion. Embedded applications can use it for lifecycle flushing,
+            experience extraction, or external audit finalization.
         extra_agent_tools (`AgentToolFactory | None`, optional):
             An async factory ``(user_id, agent_id, session_id) -> awaitable
             of list[ToolBase]`` that produces extra
@@ -239,6 +245,7 @@ def create_app(
     app.state.mcp_registry_manager = mcp_registry_manager
     app.state.knowledge_base_manager = knowledge_base_manager
     app.state.extra_agent_middlewares = extra_agent_middlewares
+    app.state.session_end_handler = session_end_handler
     app.state.extra_agent_tools = extra_agent_tools
     app.state.extra_agent_tool_catalog = extra_agent_tool_catalog
     app.state.custom_agent_cls = custom_agent_cls

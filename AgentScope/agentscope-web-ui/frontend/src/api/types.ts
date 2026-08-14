@@ -113,10 +113,7 @@ export interface DatabaseInteractionJoin {
 	policy: DatabaseTablePolicy | null;
 }
 
-export type DatabaseInteractionJoinRequest = Omit<
-	DatabaseInteractionJoin,
-	'policy'
->;
+export type DatabaseInteractionJoinRequest = Omit<DatabaseInteractionJoin, 'policy'>;
 
 export interface DatabaseInteractionContextBinding {
 	field: string;
@@ -259,6 +256,65 @@ export interface UpdatePlatformSettingsRequest {
 	project_initializer_agent_id?: string | null;
 	project_initializer_validation_mcp?: PlatformMCPVersionBinding | null;
 	engineering_document_agent_id?: string | null;
+}
+
+export interface MemorySettings {
+	memory_model_config: ChatModelConfig | null;
+	recall_top_k: number;
+	recall_threshold: number;
+	recall_reinforce_threshold: number;
+	fusion_weight_mem0: number;
+	fusion_weight_kb: number;
+	fusion_weight_timeline: number;
+	fusion_weight_experience: number;
+	fusion_weight_graphrag: number;
+	fusion_mmr_lambda: number;
+	rrf_k: number;
+	mem0_infer_enabled: boolean;
+	mem0_infer_async: boolean;
+	compression_trigger_ratio: number;
+	compression_keep_messages: number;
+	compression_mode: 'full' | 'incremental';
+	emergency_compression_ratio: number;
+	compression_background: boolean;
+	historian_trigger_ratio: number;
+	compression_max_consecutive: number;
+	compression_quality_threshold: number;
+	compression_min_rounds_between: number;
+	token_budget_system_prompt: number;
+	token_budget_skill_injection: number;
+	token_budget_summary: number;
+	token_budget_ltm_kb_timeline: number;
+	token_budget_runtime: number;
+	token_budget_recent_history: number;
+	token_budget_output_reserve: number;
+	dreamer_enabled: boolean;
+	experience_event_driven_enabled: boolean;
+	compression_system_prompt: string;
+	compression_user_prompt: string;
+	compression_incremental_prompt: string;
+	historian_system_prompt: string;
+}
+
+export interface MemoryInfrastructure {
+	storage_backend: string;
+	embedding_provider: string;
+	embedding_model: string;
+	embedding_dimensions: number;
+	mem0_collection: string;
+	change_notice: string;
+}
+
+export interface MemorySettingsResponse {
+	settings: MemorySettings;
+	revision: number;
+	updated_at: string;
+	infrastructure: MemoryInfrastructure;
+}
+
+export interface UpdateMemorySettingsRequest {
+	settings: MemorySettings;
+	expected_revision: number;
 }
 
 export interface WeKnoraConnection {

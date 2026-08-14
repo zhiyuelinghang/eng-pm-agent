@@ -1,14 +1,26 @@
 # -*- coding: utf-8 -*-
-"""Unified context-control memory runtime for the Dobby platform."""
+"""AgentScope adapter for the copied Dobby context-control module."""
 
-from ._config import MemorySettings
 from ._middleware import DobbyMemoryMiddleware
-from ._runtime import MemoryRuntime, MemoryScope, get_memory_runtime
+from ._model import (
+    MemoryModelRuntimeConfig,
+    build_memory_model_runtime_config,
+    configure_platform_memory_model,
+)
+from ._runtime import (
+    MemoryRuntime,
+    MemoryScope,
+    apply_global_memory_settings,
+    get_memory_runtime,
+)
 
 __all__ = [
     "DobbyMemoryMiddleware",
+    "MemoryModelRuntimeConfig",
     "MemoryRuntime",
     "MemoryScope",
-    "MemorySettings",
+    "apply_global_memory_settings",
+    "build_memory_model_runtime_config",
+    "configure_platform_memory_model",
     "get_memory_runtime",
 ]

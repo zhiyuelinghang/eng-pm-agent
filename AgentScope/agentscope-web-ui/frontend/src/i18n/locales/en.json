@@ -26,6 +26,7 @@
 		"name": "Name",
 		"platformAudit": "Platform interaction audit",
 		"platformSettings": "Platform settings",
+		"memorySettings": "Memory settings",
 		"no": "No",
 		"noData": "No data",
 		"readOnly": "Read-only",
@@ -136,6 +137,122 @@
 			"save": "Save engineering document settings"
 		}
 	},
+	"memory-settings": {
+		"title": "Memory settings",
+		"description": "Control how agents find, retain, and organize long-term memories.",
+		"loading": "Loading memory settings…",
+		"actions": {
+			"save": "Save globally",
+			"reset": "Restore defaults"
+		},
+		"messages": {
+			"saved": "Memory settings saved and will apply from the next memory operation",
+			"reset": "Default memory settings restored",
+			"resetConfirm": "Restore every memory setting to its default value? Unsaved edits will be replaced."
+		},
+		"tabs": {
+			"model": "Processing model",
+			"retrieval": "Retrieval & fusion",
+			"compression": "Context compression",
+			"budgets": "Content capacity",
+			"maintenance": "Maintenance",
+			"prompts": "Advanced prompts"
+		},
+		"model": {
+			"title": "Memory processing model",
+			"description": "Choose one model for long-term memory extraction, context compression, reflection, and background organization. This does not change the model an agent uses for normal replies.",
+			"followDefault": "Use current model rules",
+			"selectedNotice": "After saving, every agent will use the selected model for memory processing.",
+			"defaultNotice": "Without a separate selection, context compression follows the active agent model and other memory work follows the service default."
+		},
+		"retrieval": {
+			"title": "Long-term memory retrieval",
+			"description": "Set how many long-term memories may be considered and how relevant they must be before use."
+		},
+		"fusion": {
+			"title": "Multi-source memory fusion",
+			"description": "Set how strongly each type of memory influences the combined result."
+		},
+		"compression": {
+			"title": "Conversation compression and history archive",
+			"description": "The system uses each agent's available conversation capacity to decide when older content should be organized."
+		},
+		"budgets": {
+			"title": "Content capacity limits",
+			"description": "Limit the space each content type may use so no single source crowds out the whole conversation."
+		},
+		"prompts": {
+			"notice": "These prompts control memory compression and history organization for every agent. Change them only when their impact is understood; individual agents do not need duplicate settings."
+		},
+		"fields": {
+			"memoryModel": "Memory processing model",
+			"recallTopK": "Memories per search",
+			"recallThreshold": "Similarity threshold",
+			"reinforceThreshold": "Recall reinforcement threshold",
+			"sourceLongTerm": "Long-term memory",
+			"sourceKnowledge": "Engineering knowledge",
+			"sourceTimeline": "Timeline",
+			"sourceExperience": "Task experience",
+			"sourceRelations": "Related knowledge",
+			"diversityBalance": "Relevance and diversity",
+			"rankingSmoothing": "Ranking smoothness",
+			"mem0Infer": "Extract memory highlights",
+			"mem0InferAsync": "Extract highlights in the background",
+			"compressionTrigger": "Compression trigger ratio",
+			"keepMessages": "Messages kept after compression",
+			"compressionMode": "Compression mode",
+			"emergencyRatio": "Emergency compression ratio",
+			"historianRatio": "History archive trigger ratio",
+			"maxConsecutive": "Consecutive compression limit",
+			"qualityThreshold": "Compression quality threshold",
+			"minRounds": "Minimum rounds between compression",
+			"backgroundCompression": "Enable automatic history archiving",
+			"systemBudget": "System instruction cap",
+			"skillBudget": "Skill guidance cap",
+			"summaryBudget": "Summary cap",
+			"retrievalBudget": "Long-term memory and knowledge cap",
+			"runtimeBudget": "Runtime information cap",
+			"historyBudget": "Recent conversation cap",
+			"outputReserve": "Answer generation reserve",
+			"dreamer": "Enable scheduled memory organization",
+			"experienceConsolidation": "Enable automatic experience summaries",
+			"compressionSystemPrompt": "Compression system prompt",
+			"compressionUserPrompt": "Initial compression prompt",
+			"compressionIncrementalPrompt": "Incremental compression prompt",
+			"historianSystemPrompt": "History organization prompt"
+		},
+		"options": {
+			"incremental": "Update existing summary",
+			"full": "Rebuild complete summary"
+		},
+		"help": {
+			"memoryModel": "Organizes and stores memory without generating the agent's normal user-facing replies. Credentials remain managed by the platform.",
+			"recallTopK": "The maximum number of relevant long-term memories selected for each search.",
+			"recallThreshold": "Lower values search more broadly; higher values return more precise matches.",
+			"reinforceThreshold": "Memories at or above this score receive higher priority in future conversations.",
+			"fusionWeight": "Controls how strongly this information type affects the combined result; set to 0 to exclude it.",
+			"mmrLambda": "Closer to 1 favors relevance; closer to 0 favors diversity.",
+			"rrfK": "Higher values soften the effect of ranking differences between information sources.",
+			"mem0Infer": "Finds preferences, agreements, and key facts in conversations for future reuse.",
+			"mem0InferAsync": "Finishes the current reply first, then organizes memory highlights in the background.",
+			"compressionTrigger": "Automatically organizes the conversation when it reaches this share of available capacity.",
+			"keepMessages": "Newest messages retained in short-term context after a summary is created.",
+			"compressionMode": "Update existing summary extends the current summary; rebuild complete summary starts again from the available conversation.",
+			"emergencyRatio": "Starts a faster organization pass when the conversation approaches its capacity limit.",
+			"historianRatio": "Moves older conversation into the history archive when it reaches this ratio.",
+			"maxConsecutive": "Prevents poor summaries from causing a compression loop.",
+			"qualityThreshold": "Below this standard, the system uses a safer content-retention method.",
+			"minRounds": "Number of rounds required before normal compression may run again.",
+			"backgroundCompression": "Groups older content by time so it can be recalled when needed.",
+			"layerBudget": "Maximum model-processing capacity available to this content type.",
+			"outputReserve": "Processing capacity reserved for the final answer.",
+			"dreamer": "Periodically reviews and updates stored memories to reduce outdated or duplicate content.",
+			"experienceConsolidation": "Organizes similar experiences after tasks finish to form more reliable working methods.",
+			"compressionSystemPrompt": "Defines the compression output and information that must survive.",
+			"compressionUserPrompt": "Keep the three existing template variables or the setting cannot be saved.",
+			"historianSystemPrompt": "Defines how older conversations are summarized and how facts and events are extracted."
+		}
+	},
 	"error": {
 		"description": "The page hit an unexpected error. You can retry or go back home.",
 		"retry": "Retry",
@@ -183,7 +300,8 @@
 		"attachNotSupported": "This model does not support file attachments",
 		"send": "Send",
 		"stop": "Stop generating",
-		"stopping": "Stopping ..."
+		"stopping": "Stopping ...",
+		"saving": "Saving ..."
 	},
 	"confirmCard": {
 		"toConfirm": "to confirm",

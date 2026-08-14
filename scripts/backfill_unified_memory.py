@@ -6,7 +6,6 @@ import argparse
 import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
-import hashlib
 import os
 from pathlib import Path
 import sys
@@ -17,10 +16,10 @@ from sqlalchemy.engine import make_url
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+for import_root in (PROJECT_ROOT, PROJECT_ROOT / "AgentScope"):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
 
-from agentscope.app.memory._config import MemorySettings  # noqa: E402
 from agentscope.app.memory._runtime import MemoryRuntime  # noqa: E402
 
 
@@ -181,37 +180,22 @@ def _history_messages(rows: list[dict[str, Any]]) -> list[HistoryMessage]:
 
 
 def _already_backfilled(
-    connection: Any,
-    settings: MemorySettings,
-    binding: SessionBinding,
+    mem0: Any,
+    scope_key: str,
     message: HistoryMessage,
 ) -> bool:
-    content_hash = hashlib.sha256(message.text.encode("utf-8")).hexdigest()
-    return bool(
-        connection.execute(
-            text(
-                """
-                SELECT EXISTS (
-                    SELECT 1
-                    FROM memory.memory_audit_log
-                    WHERE tenant_id = :tenant_id
-                      AND project_id = :project_id
-                      AND session_id = :session_id
-                      AND agent_id = :agent_id
-                      AND content_hash = :content_hash
-                      AND action IN ('remember', 'remember_empty')
-                )
-                """,
-            ),
-            {
-                "tenant_id": settings.tenant_id,
-                "project_id": binding.project_id,
-                "session_id": binding.session_id,
-                "agent_id": binding.agent_id,
-                "content_hash": content_hash,
-            },
-        ).scalar_one(),
+    """Use canonical Mem0 metadata for idempotence, not the removed audit table."""
+
+    result = mem0.get_all(
+        filters={
+            "user_id": scope_key,
+            "agent_id": scope_key,
+            "source_message_id": message.message_id,
+        },
+        top_k=1,
     )
+    items = result.get("results", []) if isinstance(result, dict) else result
+    return bool(items)
 
 
 async def backfill_history(
@@ -280,33 +264,40 @@ async def backfill_history(
                 skipped_non_text=skipped_non_text,
             )
 
-        settings = MemorySettings.from_env()
-        runtime = MemoryRuntime(settings)
+        from utils.langgraph_utils import get_mem0
+
+        runtime = MemoryRuntime()
+        mem0 = get_mem0()
         imported = 0
         already = 0
         for message in eligible:
             binding = bindings[message.session_id]
-            with engine.connect() as connection:
-                if _already_backfilled(
-                    connection,
-                    settings,
-                    binding,
-                    message,
-                ):
-                    already += 1
-                    continue
             scope = runtime.scope(
                 project_id=binding.project_id,
                 platform_user_id=binding.platform_user_id,
                 agent_id=binding.agent_id,
                 session_id=binding.session_id,
             )
-            await runtime.scoped_client(scope).add(
+            exists = await asyncio.to_thread(
+                _already_backfilled,
+                mem0,
+                scope.scope_key,
+                message,
+            )
+            if exists:
+                already += 1
+                continue
+
+            await asyncio.to_thread(
+                mem0.add,
                 [{"role": message.role, "content": message.text}],
+                user_id=scope.scope_key,
+                agent_id=scope.scope_key,
                 infer=False,
                 metadata={
                     "source": "legacy_agentscope_history",
                     "source_message_id": message.message_id,
+                    "source_session_id": message.session_id,
                     "source_created_at": str(message.created_at),
                     "backfilled": True,
                 },

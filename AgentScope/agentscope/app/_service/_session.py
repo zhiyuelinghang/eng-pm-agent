@@ -46,7 +46,9 @@ component that touches both in the same call. Storage code never
 imports the bus; bus code never imports storage.
 """
 import asyncio
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
+from typing import Any
 
 from ..message_bus import MessageBus, MessageBusKeys
 from ..mcp_registry import MCPRegistryManager
@@ -123,6 +125,7 @@ class SessionService:
         storage: StorageBase,
         message_bus: MessageBus,
         mcp_registry_manager: MCPRegistryManager | None = None,
+        session_end_handler: Callable[[str, str, Any], Awaitable[None]] | None = None,
     ) -> None:
         """Bind dependencies.
 
@@ -133,6 +136,7 @@ class SessionService:
         self._storage = storage
         self._bus = message_bus
         self._mcp_registry_manager = mcp_registry_manager
+        self._session_end_handler = session_end_handler
         self._projection = SessionProjection(message_bus)
 
     # ------------------------------------------------------------------
@@ -375,11 +379,36 @@ class SessionService:
         )
         all_sids = [session_id, *worker_sids]
 
+        ending_records = []
+        if self._session_end_handler is not None:
+            try:
+                all_records = await self._storage.list_all_sessions(user_id)
+                ending_records = [
+                    record for record in all_records if record.id in all_sids
+                ]
+            except Exception:
+                logger.exception(
+                    "Unable to load session records for end-of-session hooks",
+                )
+
         # Clean leader-side team projections before storage
         # cascades remove the records we need to resolve roles from.
         await self._purge_team_projections(user_id, agent_id, session_id)
 
         await self._cancel_runs(all_sids)
+        if self._session_end_handler is not None:
+            for record in ending_records:
+                try:
+                    await self._session_end_handler(
+                        user_id,
+                        record.agent_id,
+                        record,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Session end hook failed for session %s",
+                        record.id,
+                    )
         if self._mcp_registry_manager is not None:
             await asyncio.gather(
                 *(

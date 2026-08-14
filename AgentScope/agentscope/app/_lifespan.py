@@ -124,6 +124,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             storage=storage,
             message_bus=message_bus,
             mcp_registry_manager=mcp_registry_manager,
+            session_end_handler=app.state.session_end_handler,
         )
 
         # ---------------- Knowledge-base wiring ----------------

@@ -11,6 +11,7 @@ from ..._utils._common import _generate_id
 from ..access import ResourceKind
 from ..deps import (
     get_chat_service,
+    get_chat_run_registry,
     get_current_principal,
     get_current_user_id,
     get_message_bus,
@@ -20,6 +21,7 @@ from ..deps import (
     get_storage,
     get_workspace_manager,
 )
+from .._manager import ChatRunRegistry
 from .._auth import AgentScopePrincipal
 from .._platform_permissions import apply_platform_tool_allow_rules
 from .._session_access import (
@@ -47,6 +49,7 @@ from .._service import (
     ChatService,
     CollaborationProgressProjector,
     SessionService,
+    SessionStatus,
     SessionProjection,
     SubagentHitlProjector,
 )
@@ -785,15 +788,14 @@ async def get_session_status(
     principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     session_service: SessionService = Depends(get_session_service),
+    chat_run_registry: ChatRunRegistry = Depends(get_chat_run_registry),
 ) -> SessionStatusResponse:
     """Return the unified :class:`SessionStatus` for a session.
 
-    Ownership validation, cluster-liveness probing, and parked-state
-    derivation are all delegated to
-    :meth:`SessionService.get_session_status` — see that method for
-    the precedence rules that collapse the two orthogonal signals
-    (message-bus run lock + persisted context tail) into a single
-    four-valued enum.
+    After ownership validation, the local chat-task registry closes the
+    short hand-off window between releasing the distributed run lease and
+    the asyncio task actually returning. All cluster-liveness and parked-state
+    derivation otherwise comes from :meth:`SessionService.get_session_status`.
 
     Args:
         session_id (`str`):
@@ -806,6 +808,9 @@ async def get_session_status(
             Injected session service. Owns both storage and message
             bus dependencies so the composed answer is derived in a
             single layer.
+        chat_run_registry (`ChatRunRegistry`):
+            Injected per-process registry used to keep the status running
+            until the local task has fully exited.
 
     Returns:
         `SessionStatusResponse`:
@@ -823,11 +828,19 @@ async def get_session_status(
         )
     require_runtime_session_access(principal, existing)
 
-    session_status = await session_service.get_session_status(
-        user_id,
-        agent_id,
-        session_id,
-    )
+    local_run = chat_run_registry.get(session_id)
+    if local_run is not None and not local_run.done():
+        # The distributed run lease is released immediately before the
+        # owning asyncio task returns. Cover that tiny local hand-off window
+        # so a client waiting on this endpoint cannot submit a new turn while
+        # ChatRunRegistry would still reject it as active.
+        session_status = SessionStatus.RUNNING
+    else:
+        session_status = await session_service.get_session_status(
+            user_id,
+            agent_id,
+            session_id,
+        )
     if session_status is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

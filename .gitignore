@@ -16,6 +16,7 @@ data/
 # 便携 Python 的新增依赖通过 requirements 文件恢复，不提交安装产物
 /python-3.13.14/Lib/site-packages/
 /python-3.13.14/Scripts/
+/python-3.13.14/share/
 
 # Hermes 第三方项目（NousResearch/hermes-agent，2.2G），从上游获取，不纳入本仓库
 /hermes/*

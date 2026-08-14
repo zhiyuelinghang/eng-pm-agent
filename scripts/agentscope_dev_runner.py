@@ -14,7 +14,8 @@ from watchfiles import Change, watch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_HOME = PROJECT_ROOT / "scripts"
 AGENTSCOPE_CORE_HOME = PROJECT_ROOT / "AgentScope" / "agentscope"
-WATCH_PATHS = (SCRIPTS_HOME, AGENTSCOPE_CORE_HOME)
+MEMORY_HOME = PROJECT_ROOT / "utils"
+WATCH_PATHS = (SCRIPTS_HOME, AGENTSCOPE_CORE_HOME, MEMORY_HOME)
 THIS_FILE = Path(__file__).resolve()
 HOST = os.getenv("AGENTSCOPE_HOST", "127.0.0.1")
 PORT = int(os.getenv("AGENTSCOPE_PORT", "18642"))

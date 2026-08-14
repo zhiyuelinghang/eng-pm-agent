@@ -4,6 +4,7 @@ from datetime import datetime
 import ipaddress
 import json
 import logging
+import os
 import socket
 from urllib.parse import quote, urlsplit
 
@@ -30,6 +31,10 @@ from ._schema import (
     PlatformAgentCatalogItem,
     PlatformAgentCatalogResponse,
     PlatformSettingsResponse,
+    MemoryInfrastructureResponse,
+    MemorySettingsResponse,
+    ResetMemorySettingsRequest,
+    UpdateMemorySettingsRequest,
     ListWeKnoraKnowledgeBasesResponse,
     ListWeKnoraKnowledgeResponse,
     TestWeKnoraConnectionRequest,
@@ -53,6 +58,8 @@ from ..storage import (
     AgentData,
     AgentModelPolicy,
     AgentRecord,
+    ChatModelConfig,
+    MemorySettingsData,
     PlatformMCPVersionBinding,
     PlatformSettingsData,
     PlatformSettingsRecord,
@@ -74,6 +81,53 @@ agent_router = APIRouter(
     tags=["agent"],
     responses={404: {"description": "Not found"}},
 )
+
+
+def _memory_infrastructure_response() -> MemoryInfrastructureResponse:
+    """Return non-secret memory infrastructure details for the settings UI."""
+
+    try:
+        from utils import config as memory_config
+
+        provider = str(memory_config.EMBEDDING_PROVIDER)
+        model = str(memory_config.EMBEDDING_MODEL)
+        dimensions = int(memory_config.EMBEDDING_DIMS)
+        collection = str(memory_config.MEM0_COLLECTION)
+    except (AttributeError, ImportError, TypeError, ValueError):
+        provider = os.getenv("EMBEDDING_PROVIDER", "local")
+        model = os.getenv("EMBEDDING_MODEL", "BAAI/bge-large-zh-v1.5")
+        dimensions = int(os.getenv("EMBEDDING_DIMS", "1024"))
+        collection = os.getenv("MEM0_COLLECTION", "dobby_memories")
+    return MemoryInfrastructureResponse(
+        embedding_provider=provider,
+        embedding_model=model,
+        embedding_dimensions=dimensions,
+        mem0_collection=collection,
+    )
+
+
+def _memory_settings_response(
+    settings: PlatformSettingsRecord,
+) -> MemorySettingsResponse:
+    return MemorySettingsResponse(
+        settings=settings.data.memory_settings,
+        revision=settings.data.memory_settings_revision,
+        updated_at=settings.updated_at,
+        infrastructure=_memory_infrastructure_response(),
+    )
+
+
+def _check_memory_settings_revision(
+    expected_revision: int | None,
+    current_revision: int,
+) -> None:
+    if expected_revision is not None and expected_revision != current_revision:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "记忆配置已被其他操作更新，请刷新页面后重新修改。"
+            ),
+        )
 
 
 def _validate_weknora_endpoint(base_url: str) -> str:
@@ -720,10 +774,16 @@ async def get_agent_schema() -> AgentSchemaResponse:
     }
 
     context_schema = ContextConfig.model_json_schema()
-    # ``summary_schema`` holds a Pydantic JSON Schema describing how the
-    # compression model should structure its output. The end-user is not
-    # expected to edit it from the form, so we hide it.
-    context_schema.get("properties", {}).pop("summary_schema", None)
+    # Dobby owns compression as one platform-wide policy. Keep only the
+    # genuinely agent-specific context option in the agent editor.
+    for memory_owned_field in (
+        "trigger_ratio",
+        "reserve_ratio",
+        "compression_prompt",
+        "summary_template",
+        "summary_schema",
+    ):
+        context_schema.get("properties", {}).pop(memory_owned_field, None)
 
     return AgentSchemaResponse(
         identity=identity,
@@ -768,11 +828,17 @@ async def get_agent_schema_v2() -> AgentSchemaV2Response:
             ``schema`` = the full :class:`AgentData` JSON Schema.
     """
     schema = _flatten_json_schema(AgentData.model_json_schema())
-    # ``summary_schema`` is Pydantic's structured-output spec fed to the
-    # compression model — internal, not user-editable. No pydantic-side
-    # hook covers this deep nested field, so drop it after inlining.
+    # Compression is configured once from the dedicated Memory Settings
+    # page. The agent editor retains only tool_result_limit.
     context_config = schema.get("properties", {}).get("context_config", {})
-    context_config.get("properties", {}).pop("summary_schema", None)
+    for memory_owned_field in (
+        "trigger_ratio",
+        "reserve_ratio",
+        "compression_prompt",
+        "summary_template",
+        "summary_schema",
+    ):
+        context_config.get("properties", {}).pop(memory_owned_field, None)
     return AgentSchemaV2Response(schema=schema)
 
 
@@ -922,6 +988,150 @@ async def get_platform_settings(
             settings.data.engineering_document_agent_id
         ),
     )
+
+
+async def _validate_memory_model_config(
+    user_id: str,
+    config: ChatModelConfig | None,
+    access: ResourceAccessService,
+) -> ChatModelConfig | None:
+    """Validate and normalize the optional global memory model."""
+
+    if config is None:
+        return None
+
+    record = await access.resolve_credential(user_id, config.credential_id)
+    credential = CredentialFactory.from_dict(record.data)
+    credential_type = getattr(credential, "type", None)
+    if config.type != credential_type:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="记忆处理模型与所选凭证类型不匹配。",
+        )
+
+    candidate = next(
+        (
+            model
+            for model in build_credential_model_catalog(credential)
+            if model.name == config.model and model.enabled
+        ),
+        None,
+    )
+    if candidate is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="所选记忆处理模型在该凭证中不存在或已被停用。",
+        )
+
+    try:
+        parameters = normalize_credential_model_parameters(
+            credential,
+            config.model,
+            config.parameters,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+    normalized = config.model_copy(update={"parameters": parameters})
+    try:
+        from ..memory import build_memory_model_runtime_config
+
+        build_memory_model_runtime_config(
+            normalized,
+            credential,
+            context_size=candidate.context_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    return normalized
+
+
+@agent_router.get(
+    "/platform/memory-settings",
+    response_model=MemorySettingsResponse,
+    summary="Get platform-wide Dobby memory settings",
+)
+async def get_memory_settings(
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> MemorySettingsResponse:
+    """Return the active versioned memory policy and safe infrastructure."""
+
+    settings = await _load_platform_settings(storage, user_id)
+    return _memory_settings_response(settings)
+
+
+@agent_router.put(
+    "/platform/memory-settings",
+    response_model=MemorySettingsResponse,
+    summary="Update platform-wide Dobby memory settings",
+)
+async def update_memory_settings(
+    body: UpdateMemorySettingsRequest,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+    access: ResourceAccessService = Depends(get_resource_access_service),
+) -> MemorySettingsResponse:
+    """Atomically replace memory policy while preserving other settings."""
+
+    current = await _load_platform_settings(storage, user_id)
+    _check_memory_settings_revision(
+        body.expected_revision,
+        current.data.memory_settings_revision,
+    )
+    memory_model_config = await _validate_memory_model_config(
+        user_id,
+        body.settings.memory_model_config,
+        access,
+    )
+    normalized_settings = body.settings.model_copy(
+        update={"memory_model_config": memory_model_config},
+    )
+    updated_data = current.data.model_copy(
+        update={
+            "memory_settings": normalized_settings,
+            "memory_settings_revision": (
+                current.data.memory_settings_revision + 1
+            ),
+        },
+    )
+    updated = await storage.upsert_platform_settings(user_id, updated_data)
+    return _memory_settings_response(updated)
+
+
+@agent_router.post(
+    "/platform/memory-settings/reset",
+    response_model=MemorySettingsResponse,
+    summary="Restore reference-branch Dobby memory defaults",
+)
+async def reset_memory_settings(
+    body: ResetMemorySettingsRequest,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> MemorySettingsResponse:
+    """Restore the integrated Dobby memory defaults."""
+
+    current = await _load_platform_settings(storage, user_id)
+    _check_memory_settings_revision(
+        body.expected_revision,
+        current.data.memory_settings_revision,
+    )
+    updated_data = current.data.model_copy(
+        update={
+            "memory_settings": MemorySettingsData(),
+            "memory_settings_revision": (
+                current.data.memory_settings_revision + 1
+            ),
+        },
+    )
+    updated = await storage.upsert_platform_settings(user_id, updated_data)
+    return _memory_settings_response(updated)
 
 
 @agent_router.get(

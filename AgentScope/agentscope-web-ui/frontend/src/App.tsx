@@ -14,6 +14,7 @@ import { ChatPage } from '@/pages/chat';
 import { CredentialPage } from '@/pages/credential';
 import { EngineeringKnowledgePage } from '@/pages/engineering-knowledge';
 import { KnowledgePage } from '@/pages/knowledge';
+import { MemorySettingsPage } from '@/pages/memory-settings';
 import { PlatformAuditPage } from '@/pages/platform-audit';
 import { PlatformSettingsPage } from '@/pages/platform-settings';
 import { SchedulePage } from '@/pages/schedule';
@@ -51,6 +52,7 @@ const router = createBrowserRouter([
 					{ path: '/schedule', element: <SchedulePage /> },
 					{ path: '/credential', element: <CredentialPage /> },
 					{ path: '/platform-settings', element: <PlatformSettingsPage /> },
+					{ path: '/memory-settings', element: <MemorySettingsPage /> },
 					{ path: '/platform-audit', element: <PlatformAuditPage /> },
 					{
 						path: '/engineering-knowledge',
