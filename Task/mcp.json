@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "name": "task-engine",
+  "display_name": "任务引擎",
+  "version": "0.1.0",
+  "description": "通用任务引擎：把自然语言需求转换为多级流转的任务流，支持定时与周期自动布置、节点流转、转办、逾期判定与完整留痕。与具体业务系统解耦，可适配不同的工程或项目管理产品。",
+  "transport": "stdio",
+  "command": "python3",
+  "args": ["server.py"],
+  "env": {
+    "TASK_ENGINE_DB": "task_engine.db",
+    "TASK_ENGINE_TZ": "Asia/Shanghai",
+    "TASK_ENGINE_AI_KEY": "",
+    "TASK_ENGINE_AI_BASE_URL": "https://api.openai.com/v1",
+    "TASK_ENGINE_AI_MODEL": "gpt-4o-mini",
+    "TASK_ENGINE_AI_TIMEOUT": "30"
+  },
+  "platform_capabilities": [],
+  "startup_timeout": 30,
+  "execution_timeout": 60
+}

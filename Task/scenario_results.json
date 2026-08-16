@@ -1,0 +1,938 @@
+[
+  {
+    "group": "责任制-空标识",
+    "scenario": "责任人 ref=空字符串",
+    "expect": "视为未指派（assignee 为 null）",
+    "actual": "未指派",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制-空标识",
+    "scenario": "责任人 ref=纯空格",
+    "expect": "视为未指派（assignee 为 null）",
+    "actual": "未指派",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制-空标识",
+    "scenario": "责任人 ref=制表符",
+    "expect": "视为未指派（assignee 为 null）",
+    "actual": "未指派",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制-空标识",
+    "scenario": "责任人 ref=换行",
+    "expect": "视为未指派（assignee 为 null）",
+    "actual": "未指派",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制-布置校验",
+    "scenario": "全缺 → 布置",
+    "expect": "拒绝并说明缺什么",
+    "actual": "拒绝：以下节点尚未指定责任人，无法布置：第 1 个「发起任务」、第 2 个「执",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制-布置校验",
+    "scenario": "只有责任人 → 布置",
+    "expect": "拒绝并说明缺什么",
+    "actual": "拒绝：任务未指定确认人，无法布置——完成后需要有人验收",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制-布置校验",
+    "scenario": "只有确认人 → 布置",
+    "expect": "拒绝并说明缺什么",
+    "actual": "拒绝：以下节点尚未指定责任人，无法布置：第 1 个「发起任务」、第 2 个「执",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制-布置校验",
+    "scenario": "只有工点 → 布置",
+    "expect": "拒绝并说明缺什么",
+    "actual": "拒绝：以下节点尚未指定责任人，无法布置：第 1 个「发起任务」、第 2 个「执",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制-布置校验",
+    "scenario": "缺工点 → 布置",
+    "expect": "拒绝并说明缺什么",
+    "actual": "拒绝：任务未关联工点，无法布置",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制-布置校验",
+    "scenario": "缺确认人 → 布置",
+    "expect": "拒绝并说明缺什么",
+    "actual": "拒绝：任务未指定确认人，无法布置——完成后需要有人验收",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制-布置校验",
+    "scenario": "缺责任人 → 布置",
+    "expect": "拒绝并说明缺什么",
+    "actual": "拒绝：以下节点尚未指定责任人，无法布置：第 1 个「发起任务」、第 2 个「执",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制-缺失提示",
+    "scenario": "全缺",
+    "expect": "3 项",
+    "actual": "3 项",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "责任制-缺失提示",
+    "scenario": "缺2项",
+    "expect": "2 项",
+    "actual": "2 项",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "责任制-缺失提示",
+    "scenario": "缺1项",
+    "expect": "1 项",
+    "actual": "1 项",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "责任制-缺失提示",
+    "scenario": "齐备",
+    "expect": "0 项",
+    "actual": "0 项",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "责任制-轮转",
+    "scenario": "1 人分配 4 节点",
+    "expect": "全部节点有人（轮转复用）",
+    "actual": "4/4",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "责任制-模板豁免",
+    "scenario": "无三要素时创建模板",
+    "expect": "允许（模板需可复用）",
+    "actual": "允许",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "确认人-越权",
+    "scenario": "节点责任人(actor='u1') 验收",
+    "expect": "拒绝",
+    "actual": "拒绝：只有确认人 王工 可以验收该任务",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "确认人-越权",
+    "scenario": "另一责任人(actor='u2') 验收",
+    "expect": "拒绝",
+    "actual": "拒绝：只有确认人 王工 可以验收该任务",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "确认人-越权",
+    "scenario": "陌生人(actor='hacker') 验收",
+    "expect": "拒绝",
+    "actual": "拒绝：只有确认人 王工 可以验收该任务",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "确认人-越权",
+    "scenario": "大小写变体(actor='BOSS') 验收",
+    "expect": "拒绝",
+    "actual": "拒绝：只有确认人 王工 可以验收该任务",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "确认人-越权",
+    "scenario": "带空格(actor=' boss ') 验收",
+    "expect": "拒绝",
+    "actual": "拒绝：只有确认人 王工 可以验收该任务",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "确认人-越权",
+    "scenario": "姓名而非ref(actor='王工') 验收",
+    "expect": "拒绝",
+    "actual": "拒绝：只有确认人 王工 可以验收该任务",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "确认人-正常",
+    "scenario": "确认人本人验收",
+    "expect": "state=done",
+    "actual": "state=done",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "确认人-越权",
+    "scenario": "非确认人退回",
+    "expect": "拒绝",
+    "actual": "拒绝：只有确认人 王工 可以退回该任务",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "确认人-不可转移",
+    "scenario": "转办后受让人仍无验收权",
+    "expect": "拒绝",
+    "actual": "拒绝：只有确认人 王工 可以验收该任务",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制×定时",
+    "scenario": "不完整流程登记计划",
+    "expect": "拒绝（到点才失败没人看得到）",
+    "actual": "拒绝：以下节点尚未指定责任人，无法布置：第 1 个「发起任务」、第 2 个「执",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制×定时",
+    "scenario": "定时触发的任务保留三要素",
+    "expect": "工点/确认人/责任人齐备",
+    "actual": "site=True conf=True assignee=4/4",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "责任制×定时",
+    "scenario": "完成任务A的节点不影响任务B",
+    "expect": "B 的首节点仍是 active",
+    "actual": "B.steps[0]=active",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "交互-逾期",
+    "scenario": "逾期后责任人不变",
+    "expect": "仍是 u1",
+    "actual": "u1",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "交互-逾期",
+    "scenario": "逾期任务可办完",
+    "expect": "state=review",
+    "actual": "state=review",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "交互-逾期",
+    "scenario": "逾期任务可验收",
+    "expect": "state=done",
+    "actual": "state=done",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "交互-转办",
+    "scenario": "转办不改变确认人",
+    "expect": "confirmer 仍是 boss",
+    "actual": "boss",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "交互-转办",
+    "scenario": "转办不改变工点",
+    "expect": "site 仍是 wbs-3",
+    "actual": "wbs-3",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "交互-退回",
+    "scenario": "退回后当前节点有责任人",
+    "expect": "assignee 非空",
+    "actual": "节点3 assignee={'ref': 'u2', 'name': '李四'}",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "交互-受阻",
+    "scenario": "受阻任务保留三要素",
+    "expect": "三项都在",
+    "actual": "site=True conf=True assignee=True",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "工点-过滤",
+    "scenario": "1号楼 的任务数",
+    "expect": "3 个",
+    "actual": "3 个",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "工点-过滤",
+    "scenario": "2号楼 的任务数",
+    "expect": "3 个",
+    "actual": "3 个",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "工点-过滤",
+    "scenario": "3号楼 的任务数",
+    "expect": "3 个",
+    "actual": "3 个",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "工点-过滤",
+    "scenario": "不存在的工点",
+    "expect": "0 个",
+    "actual": "0 个",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "工点-组合过滤",
+    "scenario": "工点 + open_only",
+    "expect": "未闭环 2，总共 3",
+    "actual": "未闭环 2，总共 3",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "确认人-过滤",
+    "scenario": "按确认人查询",
+    "expect": "9 个",
+    "actual": "9 个",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "确认人-待验收",
+    "scenario": "确认人 + state=review",
+    "expect": "1 个",
+    "actual": "1 个",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "一致性",
+    "scenario": "列表与详情的工点一致",
+    "expect": "两处 site.ref 相同",
+    "actual": "w3 vs w3",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "状态机-终态防护",
+    "scenario": "done 状态下 complete_step",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-终态防护",
+    "scenario": "done 状态下 forward_step",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-终态防护",
+    "scenario": "done 状态下 block_step",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-终态防护",
+    "scenario": "done 状态下 accept_task",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-终态防护",
+    "scenario": "done 状态下 reject_task",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-终态防护",
+    "scenario": "done 状态下 cancel_task",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-终态防护",
+    "scenario": "cancelled 状态下 complete_step",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-终态防护",
+    "scenario": "cancelled 状态下 forward_step",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-终态防护",
+    "scenario": "cancelled 状态下 block_step",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-终态防护",
+    "scenario": "cancelled 状态下 accept_task",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-终态防护",
+    "scenario": "cancelled 状态下 reject_task",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-终态防护",
+    "scenario": "cancelled 状态下 cancel_task",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-合法操作",
+    "scenario": "running 状态下 complete_step",
+    "expect": "允许",
+    "actual": "允许",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-合法操作",
+    "scenario": "running 状态下 forward_step",
+    "expect": "允许",
+    "actual": "允许",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-合法操作",
+    "scenario": "running 状态下 block_step",
+    "expect": "允许",
+    "actual": "允许",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-合法操作",
+    "scenario": "blocked 状态下 complete_step",
+    "expect": "允许",
+    "actual": "允许",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-合法操作",
+    "scenario": "review 状态下 accept_task",
+    "expect": "允许",
+    "actual": "允许",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-合法操作",
+    "scenario": "review 状态下 reject_task",
+    "expect": "允许",
+    "actual": "允许",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-合法操作",
+    "scenario": "overdue 状态下 complete_step",
+    "expect": "允许",
+    "actual": "允许",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-合法操作",
+    "scenario": "running 状态下 accept_task",
+    "expect": "拒绝",
+    "actual": "拒绝：任务当前为 running，只有待验收的任务可以通过",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "状态机-合法操作",
+    "scenario": "running 状态下 reject_task",
+    "expect": "拒绝",
+    "actual": "拒绝：任务当前为 running，只有待验收的任务可以退回",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "长链路-退回",
+    "scenario": "连续退回重做 10 轮",
+    "expect": "状态始终一致",
+    "actual": "完成 10 轮，state=running",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "长链路-历史",
+    "scenario": "10 轮退回的审计轨迹完整",
+    "expect": "14 次节点完成 + 10 次退回重开",
+    "actual": "14 次完成，10 次退回重开，共 51 条",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "长链路-转办",
+    "scenario": "连续转办 50 次",
+    "expect": "最终责任人是最后一个",
+    "actual": "assignee=u49",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "长链路-深历史",
+    "scenario": "200 条备注后查详情",
+    "expect": "< 500ms 且完整",
+    "actual": "2ms，203 条",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "长链路-节点数",
+    "scenario": "超长需求的节点数",
+    "expect": "有上限（≤10）",
+    "actual": "4 个",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "并发-验收",
+    "scenario": "4 客户端同时验收",
+    "expect": "恰好 1 个成功",
+    "actual": "1 个成功",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "并发-转办",
+    "scenario": "4 客户端同时转办",
+    "expect": "最终是其中之一，数据完好",
+    "actual": "assignee=c3",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "并发-终态",
+    "scenario": "A 验收后 B 尝试办理",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "序列化-六要素",
+    "scenario": "1.谁负责",
+    "expect": "有值",
+    "actual": "'张三'",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "序列化-六要素",
+    "scenario": "2.做什么",
+    "expect": "有值",
+    "actual": "'发现并记录隐患'",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "序列化-六要素",
+    "scenario": "3.截止时间",
+    "expect": "有值",
+    "actual": "'2026-08-16T12:27:51.520585+08:00'",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "序列化-六要素",
+    "scenario": "4.哪个工点",
+    "expect": "有值",
+    "actual": "'3号楼-地下室'",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "序列化-六要素",
+    "scenario": "5.交什么材料",
+    "expect": "有值",
+    "actual": "'隐患记录与现场照片'",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "序列化-六要素",
+    "scenario": "6.谁确认",
+    "expect": "有值",
+    "actual": "'王工'",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "序列化-列表视图",
+    "scenario": "列表含 site",
+    "expect": "存在",
+    "actual": "存在",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "序列化-列表视图",
+    "scenario": "列表含 confirmer",
+    "expect": "存在",
+    "actual": "存在",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "序列化-列表视图",
+    "scenario": "列表含 current_assignee",
+    "expect": "存在",
+    "actual": "存在",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "序列化-列表视图",
+    "scenario": "列表含 due_at",
+    "expect": "存在",
+    "actual": "存在",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "序列化-空值",
+    "scenario": "无工点确认人时可序列化",
+    "expect": "为 null 而非报错",
+    "actual": "site=None conf=None",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "序列化-特殊字符",
+    "scenario": "中文与特殊字符",
+    "expect": "正常往返",
+    "actual": "3号楼—地下室（负一层）",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "回归-幂等",
+    "scenario": "同一时刻 tick 20 次",
+    "expect": "1 个任务",
+    "actual": "1 个",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "回归-停机",
+    "scenario": "停机 200 天后 tick 30 次",
+    "expect": "1 个任务",
+    "actual": "1 个",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "回归-月末",
+    "scenario": "1/31 起按月重复",
+    "expect": "['01-31', '02-28', '03-31', '04-30', '05-31']",
+    "actual": "['01-31', '02-28', '03-31', '04-30', '05-31']",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "回归-顺序",
+    "scenario": "跨越节点办理",
+    "expect": "拒绝",
+    "actual": "拒绝：当前应处理节点「发起任务」（第 1 个），不能跨越到「闭",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "回归-附件",
+    "scenario": "要求留证却不传附件",
+    "expect": "拒绝",
+    "actual": "拒绝：节点「发现并记录隐患」要求提交证明材料",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "回归-注入",
+    "scenario": "SQL 注入后数据库完好",
+    "expect": "可正常查询",
+    "actual": "2 个任务",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "性能-写入",
+    "scenario": "创建 200 个带责任制的任务",
+    "expect": "< 60 秒",
+    "actual": "0.2s（1ms/个）",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "性能-查询",
+    "scenario": "按工点（200 任务）",
+    "expect": "< 500ms",
+    "actual": "1ms",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "性能-查询",
+    "scenario": "按确认人（200 任务）",
+    "expect": "< 500ms",
+    "actual": "1ms",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "性能-查询",
+    "scenario": "按责任人（200 任务）",
+    "expect": "< 500ms",
+    "actual": "1ms",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "性能-查询",
+    "scenario": "工点+状态（200 任务）",
+    "expect": "< 500ms",
+    "actual": "1ms",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "性能-存储",
+    "scenario": "200 任务的库体积",
+    "expect": "< 10MB",
+    "actual": "0.6MB",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "时序-计划篡改",
+    "scenario": "已登记的计划能否被架空",
+    "expect": "新流程有独立 id，不影响已登记的计划",
+    "actual": "新id=flow_9e927b5 原id=flow_30d5d85",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "时序-触发完整性",
+    "scenario": "触发出的任务都有确认人",
+    "expect": "全部有",
+    "actual": "1 个任务",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "时序-清空责任人",
+    "scenario": "转办给空 ref",
+    "expect": "拒绝（不能让任务变成无主）",
+    "actual": "拒绝：内部错误：责任人标识不能为空——任务必须落到具体的人",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "时序-清空责任人",
+    "scenario": "转办给纯空白 ref",
+    "expect": "拒绝或保持有主",
+    "actual": "拒绝，assignee=有",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "边界-历史触发",
+    "scenario": "触发时刻在过去时的截止时间",
+    "expect": "基于触发时刻推算（会立即逾期）",
+    "actual": "due=2020-01-06",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "边界-历史触发",
+    "scenario": "过期任务在触发的同一次 tick 内标记逾期",
+    "expect": "state=overdue",
+    "actual": "state=overdue",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "边界-历史触发",
+    "scenario": "已逾期任务不重复标记",
+    "expect": "0 个",
+    "actual": "0 个",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "边界-同秒操作",
+    "scenario": "同一秒内 30 条备注",
+    "expect": "全部记录，不因时间戳相同丢失",
+    "actual": "30 条",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "边界-同秒操作",
+    "scenario": "同秒记录的顺序稳定",
+    "expect": "非递减",
+    "actual": "有序",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "跨任务-隔离",
+    "scenario": "5 个同名任务，操作其一",
+    "expect": "其余不受影响",
+    "actual": "隔离正常",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "跨任务-隔离",
+    "scenario": "取消其中一个",
+    "expect": "其余 4 个存活",
+    "actual": "4 个存活",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "跨任务-同工点",
+    "scenario": "同工点任务互不干扰",
+    "expect": "其余 2 个仍 running",
+    "actual": "2 个正常",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "计划-暂停恢复",
+    "scenario": "暂停期间不触发",
+    "expect": "任务数不变",
+    "actual": "暂停后 1",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "计划-暂停恢复",
+    "scenario": "恢复后继续触发",
+    "expect": "任务数增加",
+    "actual": "恢复后 2",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "计划-次数统计",
+    "scenario": "暂停不消耗触发次数",
+    "expect": "fire_count ≤ 3",
+    "actual": "fire_count=2",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "计划-停用",
+    "scenario": "停用后不再触发",
+    "expect": "任务数不变",
+    "actual": "2 → 2",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "计划-容错",
+    "scenario": "pause_schedule 不存在的计划",
+    "expect": "报错而非崩溃",
+    "actual": "拒绝：触发计划 sched_不存在 不存在",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "计划-容错",
+    "scenario": "cancel_schedule 不存在的计划",
+    "expect": "报错而非崩溃",
+    "actual": "拒绝：触发计划 sched_不存在 不存在",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "附件-数量",
+    "scenario": "多个附件都被记录",
+    "expect": "2 个",
+    "actual": "2 个",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "附件-退回保留",
+    "scenario": "退回后节点的旧附件",
+    "expect": "保留（审计需要）或清空（重新提交），二者皆可但需明确",
+    "actual": "0 个附件",
+    "ok": true,
+    "severity": "低"
+  }
+]

@@ -1,0 +1,1178 @@
+[
+  {
+    "group": "生成-周期解析",
+    "scenario": "标准周期表述：「每周五检查基坑监测数据」",
+    "expect": "生成可用流程",
+    "actual": "recurring/1week",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "周日=ISO 7：「每周日巡检」",
+    "expect": "生成可用流程",
+    "actual": "recurring/1week",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "每天：「每天早上检查设备」",
+    "expect": "生成可用流程",
+    "actual": "recurring/1day",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "每月：「每月底盘点物资」",
+    "expect": "生成可用流程",
+    "actual": "recurring/1month",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "季度——引擎无此单位：「每季度做一次安全评估」",
+    "expect": "生成可用流程",
+    "actual": "once",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "半个月——歧义表述：「每半个月核查一次」",
+    "expect": "生成可用流程",
+    "actual": "recurring/15day",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "「每隔」措辞：「每隔一天巡查」",
+    "expect": "生成可用流程",
+    "actual": "recurring/1day",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "多个星期几：「每周一和周四都要检查」",
+    "expect": "生成可用流程",
+    "actual": "recurring/1week",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "「下周五」非周期：「下周五检查数据」",
+    "expect": "生成可用流程",
+    "actual": "once",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "明天——一次性：「明天上午完成整改」",
+    "expect": "生成可用流程",
+    "actual": "once",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "立刻——一次性：「立刻处理这个隐患」",
+    "expect": "生成可用流程",
+    "actual": "once",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "小数间隔：「每 0.5 天检查」",
+    "expect": "生成可用流程",
+    "actual": "once",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "负数间隔：「每-3天检查」",
+    "expect": "生成可用流程",
+    "actual": "once",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "大间隔但合法：「每365天检查一次」",
+    "expect": "生成可用流程",
+    "actual": "recurring/365day",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-周期解析",
+    "scenario": "超大间隔：「每1000个月检查」",
+    "expect": "生成可用流程",
+    "actual": "recurring/1000month",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "生成-时间合理性",
+    "scenario": "「每周五检查」首次触发在未来",
+    "expect": "first_at > 现在",
+    "actual": "08-21 09:00",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "生成-时间合理性",
+    "scenario": "「明天整改」首次触发在未来",
+    "expect": "first_at > 现在",
+    "actual": "08-15 09:00",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "生成-时间合理性",
+    "scenario": "「立刻处理」首次触发在未来",
+    "expect": "first_at > 现在",
+    "actual": "08-15 09:00",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "生成-时间合理性",
+    "scenario": "「每天巡检」首次触发在未来",
+    "expect": "first_at > 现在",
+    "actual": "08-15 09:00",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "空白字符",
+    "expect": "生成流程或合理拒绝",
+    "actual": "拒绝：内部错误：需求描述太短，至少需要 4 个字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "仅标点",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 3 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "超长输入(50KB)",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 60 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "控制字符",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 10 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "emoji",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 11 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "繁体中文",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 10 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "中英混合",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 24 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "纯英文",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 38 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "SQL注入",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 1 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "路径穿越",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 19 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "模板注入",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 33 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "JSON注入",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 27 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "换行轰炸",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 2 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "零宽字符",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 6 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "RTL覆盖",
+    "expect": "生成可用流程且标题有界",
+    "actual": "4 节点，标题 7 字",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "生成-输入攻击",
+    "scenario": "攻击后数据库完好",
+    "expect": "可正常查询",
+    "actual": "14 个任务流",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "模板",
+    "scenario": "模板数量",
+    "expect": "7 个",
+    "actual": "7 个",
+    "ok": true,
+    "severity": ""
+  },
+  {
+    "group": "模板",
+    "scenario": "「隐患整改」可跑通全流程",
+    "expect": "state=review",
+    "actual": "state=review",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "模板",
+    "scenario": "「条件核查」可跑通全流程",
+    "expect": "state=review",
+    "actual": "state=review",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "模板",
+    "scenario": "「资料补全」可跑通全流程",
+    "expect": "state=review",
+    "actual": "state=review",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "模板",
+    "scenario": "「风险处置」可跑通全流程",
+    "expect": "state=review",
+    "actual": "state=review",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "模板",
+    "scenario": "「报告审核」可跑通全流程",
+    "expect": "state=review",
+    "actual": "state=review",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "模板",
+    "scenario": "「周期巡检」可跑通全流程",
+    "expect": "state=review",
+    "actual": "state=review",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "模板",
+    "scenario": "「通用流程」可跑通全流程",
+    "expect": "state=review",
+    "actual": "state=review",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "模板",
+    "scenario": "模板名「hazard_rectification」",
+    "expect": "接受",
+    "actual": "接受",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "模板",
+    "scenario": "模板名「隐患整改」",
+    "expect": "接受",
+    "actual": "接受",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "模板",
+    "scenario": "模板名「HAZARD_RECTIFICATION」",
+    "expect": "拒绝并提示可用模板",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "模板",
+    "scenario": "模板名「隐患整改 」",
+    "expect": "拒绝并提示可用模板",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "模板",
+    "scenario": "模板名「」",
+    "expect": "拒绝并提示可用模板",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "模板",
+    "scenario": "模板名「不存在」",
+    "expect": "拒绝并提示可用模板",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "模板",
+    "scenario": "模板名「None」",
+    "expect": "拒绝并提示可用模板",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "计划-时间解析",
+    "scenario": "标准格式：「2026-08-14 09:00」",
+    "expect": "接受",
+    "actual": "接受",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "计划-时间解析",
+    "scenario": "ISO格式：「2026-08-14T09:00:00」",
+    "expect": "接受",
+    "actual": "接受",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "计划-时间解析",
+    "scenario": "带时区：「2026-08-14T09:00:00+08:00」",
+    "expect": "接受",
+    "actual": "接受",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "计划-时间解析",
+    "scenario": "仅日期：「2026-08-14」",
+    "expect": "接受",
+    "actual": "接受",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "计划-时间解析",
+    "scenario": "斜杠分隔：「2026/08/14 09:00」",
+    "expect": "接受",
+    "actual": "接受",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "计划-时间解析",
+    "scenario": "过去时刻：「2020-01-01 09:00」",
+    "expect": "接受",
+    "actual": "接受",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "计划-时间解析",
+    "scenario": "非法月份：「2026-13-01 09:00」",
+    "expect": "拒绝",
+    "actual": "拒绝：无法解析时间：2026-13-01 09:00",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "计划-时间解析",
+    "scenario": "非法日期：「2026-02-30 09:00」",
+    "expect": "拒绝",
+    "actual": "拒绝：无法解析时间：2026-02-30 09:00",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "计划-时间解析",
+    "scenario": "纯文字：「下周五」",
+    "expect": "拒绝",
+    "actual": "拒绝：无法解析时间：下周五",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "计划-时间解析",
+    "scenario": "空串：「」",
+    "expect": "接受",
+    "actual": "接受",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "计划-时间解析",
+    "scenario": "数字：「12345」",
+    "expect": "拒绝",
+    "actual": "拒绝：无法解析时间：12345",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "计划-间隔参数",
+    "scenario": "零间隔(0 day)",
+    "expect": "归一化到合法值",
+    "actual": "2026-08-14 09:00 首次执行，之后每 1 天执行一次",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "计划-间隔参数",
+    "scenario": "负间隔(-5 day)",
+    "expect": "归一化到合法值",
+    "actual": "2026-08-14 09:00 首次执行，之后每 1 天执行一次",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "计划-间隔参数",
+    "scenario": "超大间隔(999999 day)",
+    "expect": "归一化到合法值",
+    "actual": "2026-08-14 09:00 首次执行，之后每 999999 天执行一次",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "计划-间隔参数",
+    "scenario": "小数间隔(1.5 day)",
+    "expect": "归一化到合法值",
+    "actual": "2026-08-14 09:00 首次执行，之后每 1 天执行一次",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "计划-间隔参数",
+    "scenario": "字符串间隔(三 day)",
+    "expect": "归一化到合法值",
+    "actual": "2026-08-14 09:00 首次执行，之后每 1 天执行一次",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "计划-间隔参数",
+    "scenario": "非法单位(1 century)",
+    "expect": "归一化到合法值",
+    "actual": "2026-08-14 09:00 首次执行，之后每 1 天执行一次",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "计划-次数上限",
+    "scenario": "max_fires=0",
+    "expect": "归一化为≥1 或拒绝",
+    "actual": "2026-08-14 09:00 首次执行，之后每 1 天执行一次，共 1 次",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "计划-矛盾配置",
+    "scenario": "until 早于 first_at",
+    "expect": "next_fire_at 为空（永不触发）",
+    "actual": "next=None, active=True",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "tick-补偿",
+    "scenario": "首次时刻在过去，tick 时应立即触发一次",
+    "expect": "创建 1 个",
+    "actual": "创建 1 个",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "tick-时间倒流",
+    "scenario": "now 早于上次 tick 不应重复创建",
+    "expect": "任务数不变",
+    "actual": "1 → 1",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "tick-高频",
+    "scenario": "6小时每分钟tick(360次)，每小时触发→应6个",
+    "expect": "6 个任务",
+    "actual": "6 个（耗时 0.0s）",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "tick-次数上限",
+    "scenario": "max_fires=3，连续14天tick",
+    "expect": "恰好 3 个",
+    "actual": "3 个",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "tick-截止边界",
+    "scenario": "until=8/3，含边界应触发 8/1、8/2、8/3",
+    "expect": "3 个",
+    "actual": "3 个",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "月末-闰年",
+    "scenario": "2028(闰年)1/31起按月，2月应为29日",
+    "expect": "['01-31', '02-29', '03-31', '04-30', '05-31', '06-30', '07-31']",
+    "actual": "['01-31', '02-29', '03-31', '04-30', '05-31', '06-30', '07-31']",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "月末-30日",
+    "scenario": "1/30起按月，2月夹到28日后应回到30日",
+    "expect": "['01-30', '02-28', '03-30', '04-30', '05-30']",
+    "actual": "['01-30', '02-28', '03-30', '04-30', '05-30']",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "月末-跨年",
+    "scenario": "每2月，从2026-11-30跨年",
+    "expect": "['2026-11-30', '2027-01-30', '2027-03-30', '2027-05-30', '2027-07-30']",
+    "actual": "['2026-11-30', '2027-01-30', '2027-03-30', '2027-05-30', '2027-07-30']",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "流转-序号校验",
+    "scenario": "跨越到第2个 (seq=1)",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "流转-序号校验",
+    "scenario": "跨越到最后 (seq=3)",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "流转-序号校验",
+    "scenario": "超大序号 (seq=99999)",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "流转-序号校验",
+    "scenario": "负序号 (seq=-1)",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "流转-序号校验",
+    "scenario": "负序号-2 (seq=-2)",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "流转-序号校验",
+    "scenario": "小数序号 (seq=1.5)",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "流转-序号校验",
+    "scenario": "字符串序号 (seq='0')",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "流转-序号校验",
+    "scenario": "布尔序号 (seq=True)",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "流转-回头操作",
+    "scenario": "重复完成已完成节点",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "流转-回头操作",
+    "scenario": "改派已完成节点（篡改历史）",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "流转-回头操作",
+    "scenario": "阻塞已完成节点",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "流转-跳过",
+    "scenario": "跳过必经节点",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "附件约束",
+    "scenario": "不传附件字段",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "附件约束",
+    "scenario": "空数组",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "附件约束",
+    "scenario": "空字符串元素",
+    "expect": "通过",
+    "actual": "通过",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "附件约束",
+    "scenario": "正常附件",
+    "expect": "通过",
+    "actual": "通过",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "附件约束",
+    "scenario": "多个附件",
+    "expect": "通过",
+    "actual": "通过",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "附件约束",
+    "scenario": "超长文件名",
+    "expect": "通过",
+    "actual": "通过",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "附件约束",
+    "scenario": "路径穿越文件名",
+    "expect": "通过",
+    "actual": "通过",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "受阻-一致性",
+    "scenario": "完成受阻节点后任务状态恢复",
+    "expect": "state=running",
+    "actual": "state=running",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "受阻-幂等",
+    "scenario": "重复阻塞同一节点",
+    "expect": "不崩溃",
+    "actual": "接受",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "受阻-非法解除",
+    "scenario": "解除未受阻的节点",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "受阻-转办",
+    "scenario": "受阻节点可转办给他人",
+    "expect": "允许（换人可能正是解阻手段）",
+    "actual": "允许，state=blocked",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "验收-状态校验",
+    "scenario": "运行中的任务直接验收",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "验收-正常",
+    "scenario": "全部完成后验收",
+    "expect": "state=done",
+    "actual": "state=done",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "验收-重复",
+    "scenario": "重复验收已完成任务",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "退回-重开节点",
+    "scenario": "退回后最后节点重新打开",
+    "expect": "state=running 且有当前节点",
+    "actual": "state=running, current=闭环归档",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "退回-多次",
+    "scenario": "连续退回3次不破坏状态",
+    "expect": "state=running",
+    "actual": "state=running",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "终态-防护",
+    "scenario": "已取消任务上调用 complete_step",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "终态-防护",
+    "scenario": "已取消任务上调用 forward_step",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "终态-防护",
+    "scenario": "已取消任务上调用 accept_task",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "终态-防护",
+    "scenario": "已取消任务上调用 cancel_task",
+    "expect": "拒绝",
+    "actual": "拒绝",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "逾期-边界",
+    "scenario": "恰好在截止时刻 tick",
+    "expect": "不标记逾期",
+    "actual": "0 个被标记",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "逾期-边界",
+    "scenario": "超过截止 1 秒",
+    "expect": "标记逾期",
+    "actual": "1 个被标记",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "逾期-幂等",
+    "scenario": "重复 tick 不重复标记",
+    "expect": "0 个",
+    "actual": "0 个",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "逾期-可恢复",
+    "scenario": "逾期任务完成节点后恢复运行",
+    "expect": "允许且 state=running",
+    "actual": "允许，state=running",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "逾期-终态豁免",
+    "scenario": "已完成任务不被标记逾期",
+    "expect": "不在逾期列表",
+    "actual": "不在",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "查询-参数",
+    "scenario": "默认分页",
+    "expect": "不崩溃且结果合理",
+    "actual": "20 条",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "查询-参数",
+    "scenario": "limit=5",
+    "expect": "不崩溃且结果合理",
+    "actual": "5 条",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "查询-参数",
+    "scenario": "limit=0",
+    "expect": "不崩溃且结果合理",
+    "actual": "1 条",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "查询-参数",
+    "scenario": "limit=-1",
+    "expect": "不崩溃且结果合理",
+    "actual": "1 条",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "查询-参数",
+    "scenario": "limit超上限",
+    "expect": "不崩溃且结果合理",
+    "actual": "25 条",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "查询-参数",
+    "scenario": "offset超范围",
+    "expect": "不崩溃且结果合理",
+    "actual": "0 条",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "查询-参数",
+    "scenario": "offset负数",
+    "expect": "不崩溃且结果合理",
+    "actual": "20 条",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "查询-参数",
+    "scenario": "不存在的人",
+    "expect": "不崩溃且结果合理",
+    "actual": "0 条",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "查询-参数",
+    "scenario": "不存在的状态",
+    "expect": "不崩溃且结果合理",
+    "actual": "0 条",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "查询-参数",
+    "scenario": "空字符串assignee",
+    "expect": "不崩溃且结果合理",
+    "actual": "20 条",
+    "ok": true,
+    "severity": "低"
+  },
+  {
+    "group": "查询-类型校验",
+    "scenario": "limit非数字",
+    "expect": "返回工具错误并说明需要整数",
+    "actual": "拒绝：limit 必须是整数，收到 str：'很多'",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "查询-类型校验",
+    "scenario": "limit为字符串数字",
+    "expect": "返回工具错误并说明需要整数",
+    "actual": "拒绝：limit 必须是整数，收到 str：'10'",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "查询-类型校验",
+    "scenario": "offset非数字",
+    "expect": "返回工具错误并说明需要整数",
+    "actual": "拒绝：offset 必须是整数，收到 str：'第二页'",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "查询-分页",
+    "scenario": "翻页覆盖全部记录",
+    "expect": "25 条",
+    "actual": "25 条",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "并发-可见性",
+    "scenario": "4 个客户端都能看到新任务",
+    "expect": "4 个",
+    "actual": "4 个",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "并发-抢占",
+    "scenario": "4 客户端同时完成同一节点",
+    "expect": "恰好 1 个成功",
+    "actual": "1 个成功",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "并发-tick",
+    "scenario": "4 客户端同时 tick 同一到期计划",
+    "expect": "共创建 1 个",
+    "actual": "共创建 1 个",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "持久化-重启",
+    "scenario": "重启后任务与历史完整",
+    "expect": "任务可读且有历史",
+    "actual": "2 个任务，5 条历史",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "协议-畸形输入",
+    "scenario": "非JSON",
+    "expect": "返回错误而非崩溃",
+    "actual": "有响应",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "协议-畸形输入",
+    "scenario": "JSON数组",
+    "expect": "返回错误而非崩溃",
+    "actual": "有响应",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "协议-畸形输入",
+    "scenario": "JSON字符串",
+    "expect": "返回错误而非崩溃",
+    "actual": "有响应",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "协议-畸形输入",
+    "scenario": "缺method",
+    "expect": "返回错误而非崩溃",
+    "actual": "有响应",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "协议-畸形输入",
+    "scenario": "method为数字",
+    "expect": "返回错误而非崩溃",
+    "actual": "有响应",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "协议-畸形输入",
+    "scenario": "params为数组",
+    "expect": "返回错误而非崩溃",
+    "actual": "有响应",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "协议-畸形输入",
+    "scenario": "超深嵌套",
+    "expect": "返回错误而非崩溃",
+    "actual": "有响应",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "协议-恢复",
+    "scenario": "畸形输入轰炸后服务仍可用",
+    "expect": "正常返回",
+    "actual": "7 个模板",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "协议-空参数",
+    "scenario": "全部 21 个工具空参数调用",
+    "expect": "均不崩溃",
+    "actual": "0 个崩溃：[]",
+    "ok": true,
+    "severity": "严重"
+  },
+  {
+    "group": "协议-null参数",
+    "scenario": "全部工具 arguments=null",
+    "expect": "均不崩溃",
+    "actual": "0 个崩溃",
+    "ok": true,
+    "severity": "高"
+  },
+  {
+    "group": "规模-写入",
+    "scenario": "创建 200 个任务",
+    "expect": "< 30 秒",
+    "actual": "0.1 秒（1ms/个）",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "规模-查询",
+    "scenario": "200 任务下分页查询",
+    "expect": "< 500ms",
+    "actual": "3ms",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "规模-过滤",
+    "scenario": "按责任人过滤",
+    "expect": "< 500ms",
+    "actual": "0ms",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "规模-深历史",
+    "scenario": "100+ 条历史的任务详情",
+    "expect": "< 1000ms 且历史完整",
+    "actual": "1ms，103 条历史",
+    "ok": true,
+    "severity": "中"
+  },
+  {
+    "group": "规模-存储",
+    "scenario": "200 任务的数据库体积",
+    "expect": "< 10MB",
+    "actual": "0.5 MB",
+    "ok": true,
+    "severity": "低"
+  }
+]
