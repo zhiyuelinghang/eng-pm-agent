@@ -84,16 +84,25 @@ def _compute_recency_score(
     )
 
 
-def _search_all_memories(user_id: str, limit: int = 200) -> list[dict]:
+def _search_all_memories(
+    user_id: str,
+    limit: int = 200,
+    agent_id: str | None = None,
+) -> list[dict]:
     """Retrieve all memories for a user_id using a broad search.
 
-    Mem0 search() returns a list of dicts (verified against mem0ai 2.0.12).
-    user_id must be passed via filters=, not as a top-level kwarg.
-    Uses a minimal query '.' because Mem0 rejects empty queries.
+    Mem0 get_all() returns every item in the exact namespace without relying
+    on an arbitrary semantic query.
     """
     m = get_mem0()
     try:
-        result = m.search(".", filters={"user_id": user_id}, top_k=limit, threshold=0.0)
+        filters = {"user_id": user_id}
+        if agent_id:
+            filters["agent_id"] = agent_id
+        result = m.get_all(
+            filters=filters,
+            top_k=limit,
+        )
     except Exception:
         return []
 
@@ -166,6 +175,7 @@ def _get_db_conn():
 async def apply_decay(
     project_id: str,
     user_id: str | None = None,
+    agent_id: str | None = None,
 ) -> dict:
     """@deprecated: Use MemoryManager.run_dreamer(task_name="decay") instead.
 
@@ -192,7 +202,7 @@ async def apply_decay(
     from .decay_curves import compute_strength
 
     m = get_mem0()
-    memories = _search_all_memories(user_id)
+    memories = _search_all_memories(user_id, agent_id=agent_id)
 
     pruned = 0
     updated = 0
@@ -281,6 +291,7 @@ async def reflect_if_needed(
     project_id: str,
     user_id: str | None = None,
     agent_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> dict:
     """Check cumulative importance and trigger reflection if threshold met.
 
@@ -318,7 +329,11 @@ async def reflect_if_needed(
         pass  # first run or table not yet created → proceed
 
     # 2. Retrieve memories and check cumulative importance
-    memories = _search_all_memories(user_id, limit=_cfg.REFLECTION_MAX_MEMORIES)
+    memories = _search_all_memories(
+        user_id,
+        limit=_cfg.REFLECTION_MAX_MEMORIES,
+        agent_id=agent_id,
+    )
     if not memories:
         return {"skipped": True, "reason": "no_memories"}
 
@@ -400,6 +415,7 @@ async def reflect_if_needed(
                         "memory_type": "reflection",
                         "importance": imp,
                         "evidence": ev,
+                        **(metadata or {}),
                     },
                     infer=False,  # store directly without LLM extraction
                 ),

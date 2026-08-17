@@ -1,6 +1,7 @@
 import {
 	BotMessageSquare,
 	BrainCircuit,
+	BookUser,
 	Calendars,
 	Compass,
 	Crown,
@@ -97,6 +98,19 @@ export function AppSidebar() {
 									className="px-2"
 								>
 									<MessageSquareText />
+								</SidebarMenuButton>
+							</SidebarMenuItem>
+							<SidebarMenuItem>
+								<SidebarMenuButton
+									tooltip={{
+										children: t('common.memoryManagement'),
+										hidden: false,
+									}}
+									isActive={location.pathname === '/memory-management'}
+									onClick={() => navigate('/memory-management')}
+									className="px-2"
+								>
+									<BookUser />
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>

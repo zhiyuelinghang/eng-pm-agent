@@ -16,6 +16,7 @@ from ._router import (
     knowledge_base_router,
     model_router,
     mcp_registry_router,
+    memory_management_router,
     platform_audit_router,
     tts_model_router,
     schedule_router,
@@ -306,6 +307,7 @@ def create_app(
         session_router,
         workspace_router,
         mcp_registry_router,
+        memory_management_router,
         model_router,
         tts_model_router,
     ):

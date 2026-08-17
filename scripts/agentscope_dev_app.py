@@ -277,6 +277,11 @@ async def _create_memory_middlewares(
         ),
         agent_id=agent_id,
         session_id=session_id,
+        project_name=(
+            platform_context.project_name
+            if platform_context is not None
+            else None
+        ),
     )
     return [DobbyMemoryMiddleware(runtime, scope, settings)]
 
@@ -305,6 +310,11 @@ async def _end_memory_session(
         ),
         agent_id=agent_id,
         session_id=session.id,
+        project_name=(
+            platform_context.project_name
+            if platform_context is not None
+            else None
+        ),
     )
     await DobbyMemoryMiddleware(runtime, scope, settings).end_persisted_session(
         session.state,

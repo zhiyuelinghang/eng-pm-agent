@@ -58,6 +58,7 @@ class AutoHinter:
         weknora_client: Any,
         kb_id: str,
         project_id: str,
+        memory_targets: list[dict[str, Any]] | None = None,
     ) -> str:
         """Run background search, return formatted hint text or empty string.
 
@@ -75,14 +76,28 @@ class AutoHinter:
             Formatted <auto-hint> string, or "" if no relevant hits
         """
         try:
-            mem0_task = asyncio.to_thread(
-                lambda: mem0_client.search(
+            targets = [
+                item
+                for item in (memory_targets or [])
+                if isinstance(item, dict)
+                and str(item.get("user_id") or "").strip()
+                and str(item.get("agent_id") or "").strip()
+            ]
+            if not targets:
+                targets = [{"user_id": project_id, "agent_id": project_id}]
+            mem0_tasks = [
+                asyncio.to_thread(
+                    mem0_client.search,
                     query,
-                    filters={"user_id": project_id},
+                    filters={
+                        "user_id": str(target["user_id"]),
+                        "agent_id": str(target["agent_id"]),
+                    },
                     top_k=2,
                     threshold=self.threshold,
                 )
-            )
+                for target in targets
+            ]
             kb_task = asyncio.to_thread(
                 lambda: weknora_client.hybrid_search(
                     kb_id=kb_id,
@@ -93,23 +108,31 @@ class AutoHinter:
                 )
             )
 
-            mem0_results, kb_results = await asyncio.wait_for(
-                asyncio.gather(mem0_task, kb_task, return_exceptions=True),
+            gathered = await asyncio.wait_for(
+                asyncio.gather(*mem0_tasks, kb_task, return_exceptions=True),
                 timeout=self.timeout,
             )
+            mem0_batches = gathered[:-1]
+            kb_results = gathered[-1]
         except asyncio.TimeoutError:
             return ""
 
         # Collect snippets above threshold
         snippets: list[str] = []
 
-        for r in (mem0_results if isinstance(mem0_results, list) else []):
-            text = r.get("memory", str(r)) if isinstance(r, dict) else str(r)
-            score = r.get("score", 0) if isinstance(r, dict) else 0
-            if score >= self.threshold:
-                snippets.append(
-                    f"[memory s={score:.2f}] {text[:self.max_chars]}"
-                )
+        seen_memories: set[str] = set()
+        for batch in mem0_batches:
+            if isinstance(batch, dict):
+                batch = batch.get("results", [])
+            for r in (batch if isinstance(batch, list) else []):
+                text = r.get("memory", str(r)) if isinstance(r, dict) else str(r)
+                score = r.get("score", 0) if isinstance(r, dict) else 0
+                key = str(r.get("id") or text).casefold() if isinstance(r, dict) else text.casefold()
+                if score >= self.threshold and key not in seen_memories:
+                    seen_memories.add(key)
+                    snippets.append(
+                        f"[memory s={score:.2f}] {text[:self.max_chars]}"
+                    )
 
         for r in (kb_results if isinstance(kb_results, list) else []):
             content = r.get("content", str(r)) if isinstance(r, dict) else str(r)

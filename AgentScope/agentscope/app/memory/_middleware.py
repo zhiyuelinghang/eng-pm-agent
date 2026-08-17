@@ -14,7 +14,8 @@ from ...message import Msg, TextBlock, ToolResultState
 from ...middleware import MiddlewareBase
 from ...permission import PermissionBehavior, PermissionDecision
 from ...tool import ToolBase, ToolChunk, ToolResponse
-from ._runtime import MemoryRuntime, MemoryScope
+from ._runtime import MemoryRuntime, MemoryScope, MemoryTarget
+from ._scope_router import route_memory_content
 
 if TYPE_CHECKING:
     from ...agent import Agent
@@ -126,15 +127,48 @@ class _DobbyMemoryTool(ToolBase):
         from utils.memory_tools import execute_tool
 
         state = self._middleware.active_state or {}
-        result = await execute_tool(
-            self.name,
-            kwargs,
-            user_id=self._middleware.scope.scope_key,
-            agent_id=self._middleware.scope.scope_key,
-            state=state,
-            kb_names=state.get("bound_knowledge_bases") or None,
-            project_id=self._middleware.scope.scope_key,
-        )
+        if self.name == "search_memory":
+            results = await self._middleware.manager.recall_scopes(
+                str(kwargs.get("query") or ""),
+                [target.as_dict() for target in self._middleware.scope.memory_targets],
+                top_k=min(max(int(kwargs.get("top_k") or 5), 1), 10),
+            )
+            if not results:
+                result = "未找到相关记忆。"
+            else:
+                lines = []
+                for index, item in enumerate(results, 1):
+                    content = str(item.get("memory") or item)
+                    score = float(item.get("score") or 0)
+                    lines.append(f"{index}. {content} (相关度: {score:.2f})")
+                result = "\n".join(lines)
+        elif self.name == "add_memory":
+            agent = self._middleware.active_agent
+            if agent is None:
+                result = "写入记忆失败: 当前没有活动中的智能体会话。"
+            else:
+                count = await self._middleware._remember_routed(
+                    agent,
+                    str(kwargs.get("content") or ""),
+                    importance=float(kwargs.get("importance") or 0.5),
+                    memory_type="explicit",
+                    source="explicit_tool",
+                )
+                result = (
+                    f"已保存 {count} 条记忆。"
+                    if count
+                    else "写入记忆失败: 没有可保存的内容。"
+                )
+        else:
+            result = await execute_tool(
+                self.name,
+                kwargs,
+                user_id=self._middleware.scope.scope_key,
+                agent_id=self._middleware.scope.scope_key,
+                state=state,
+                kb_names=state.get("bound_knowledge_bases") or None,
+                project_id=self._middleware.scope.scope_key,
+            )
         failed = "失败:" in result or result.startswith("未知工具:")
         return ToolChunk(
             content=[TextBlock(text=result)],
@@ -162,6 +196,7 @@ class DobbyMemoryMiddleware(MiddlewareBase):
         )
         self.manager = runtime.manager(scope, settings)
         self.active_state: dict[str, Any] | None = None
+        self.active_agent: Agent | None = None
         self._tool_names: list[str] = []
 
     async def get_middleware_key(self) -> str:
@@ -188,6 +223,7 @@ class DobbyMemoryMiddleware(MiddlewareBase):
             )
         self._sync_from_agent(agent, state)
         self.active_state = state
+        self.active_agent = agent
         return state
 
     async def end_persisted_session(self, agent_state: Any) -> None:
@@ -206,6 +242,10 @@ class DobbyMemoryMiddleware(MiddlewareBase):
         state["thread_id"] = self.scope.session_id
         state["project_id"] = self.scope.scope_key
         state["current_role"] = self.scope.agent_id
+        state["memory_targets"] = [
+            target.as_dict()
+            for target in self.scope.memory_targets
+        ]
         state["summary"] = _summary_text(agent.state.summary)
         state["tasks"] = _task_map(agent)
         state["messages"] = [
@@ -225,7 +265,11 @@ class DobbyMemoryMiddleware(MiddlewareBase):
         )
 
     @staticmethod
-    async def _call_agent_model(agent: "Agent", messages: list[Msg]) -> Msg:
+    async def _call_agent_model(
+        agent: "Agent",
+        messages: list[Msg],
+        intent: str = "compress",
+    ) -> Msg:
         """Use the dedicated memory model, or preserve the legacy fallback."""
 
         from agentscope.message import AssistantMsg
@@ -235,11 +279,11 @@ class DobbyMemoryMiddleware(MiddlewareBase):
         )
 
         if has_runtime_memory_model():
-            return await fallback_call(messages, intent="compress")
+            return await fallback_call(messages, intent=intent)
 
         model = getattr(agent, "model", None)
         if model is None:
-            return await fallback_call(messages)
+            return await fallback_call(messages, intent=intent)
 
         def first_text(content: Any) -> str:
             if isinstance(content, str):
@@ -270,6 +314,103 @@ class DobbyMemoryMiddleware(MiddlewareBase):
         else:
             last_content = first_text(getattr(result, "content", result))
         return AssistantMsg("assistant", last_content or "(empty response)")
+
+    @staticmethod
+    def _target_metadata(
+        target: MemoryTarget,
+        *,
+        session_id: str,
+        source_agent_id: str,
+        source: str,
+    ) -> dict[str, Any]:
+        metadata = {
+            key: value
+            for key, value in target.as_dict().items()
+            if key not in {"user_id", "agent_id"} and value is not None
+        }
+        metadata.update({
+            "source": source,
+            "source_session_id": session_id,
+            "source_agent_id": source_agent_id,
+        })
+        return metadata
+
+    async def _remember_routed(
+        self,
+        agent: "Agent",
+        content: str,
+        *,
+        importance: float,
+        memory_type: str,
+        source: str,
+    ) -> int:
+        """Classify and persist content without widening an uncertain scope."""
+
+        from ..storage._model._platform_settings import (
+            DEFAULT_MEMORY_SCOPE_PROMPT,
+        )
+
+        routed = await route_memory_content(
+            content=content,
+            scope=self.scope,
+            prompt_template=str(
+                self.settings.get("memory_scope_prompt")
+                or DEFAULT_MEMORY_SCOPE_PROMPT
+            ),
+            call_model=lambda messages: self._call_agent_model(
+                agent,
+                messages,
+                intent="scope",
+            ),
+        )
+        infer_sync = (
+            bool(self.settings.get("mem0_infer_enabled", False))
+            and not bool(self.settings.get("mem0_infer_async", True))
+        )
+        infer_async = (
+            bool(self.settings.get("mem0_infer_enabled", False))
+            and bool(self.settings.get("mem0_infer_async", True))
+        )
+        stored = 0
+        for item in routed:
+            target = self.scope.memory_target(item.scope_type)
+            metadata = self._target_metadata(
+                target,
+                session_id=self.scope.session_id,
+                source_agent_id=self.scope.agent_id,
+                source=source,
+            )
+            created = await self.manager.remember(
+                item.content,
+                importance=max(0.0, min(1.0, importance)),
+                memory_type=memory_type,
+                user_id=target.user_id,
+                agent_id=target.agent_id,
+                metadata=metadata,
+                infer=infer_sync,
+            )
+            stored += len(created)
+            if infer_async:
+                from utils.langgraph_utils import _background_enrich_memory
+
+                asyncio.create_task(
+                    _background_enrich_memory(
+                        item.content,
+                        target.user_id,
+                        target.agent_id,
+                        {
+                            "memory_type": memory_type,
+                            "importance": max(0.0, min(1.0, importance)),
+                            "role": self.scope.agent_id,
+                            **metadata,
+                        },
+                    ),
+                    name=(
+                        "dobby-memory-enrich:"
+                        f"{self.scope.session_id}:{item.scope_type}"
+                    ),
+                )
+        return stored
 
     def _save_state(self, agent: "Agent", state: dict[str, Any]) -> None:
         agent.state.middle_context[_STATE_KEY] = _serializable_state(state)
@@ -408,36 +549,13 @@ class DobbyMemoryMiddleware(MiddlewareBase):
                 project_id=self.scope.scope_key,
             )
 
-        infer_sync = (
-            bool(self.settings.get("mem0_infer_enabled", False))
-            and not bool(self.settings.get("mem0_infer_async", True))
-        )
-        await self.manager.remember(
+        await self._remember_routed(
+            agent,
             query,
             importance=0.5,
             memory_type="interaction",
-            agent_id=self.scope.scope_key,
-            infer=infer_sync,
+            source="conversation",
         )
-        if (
-            bool(self.settings.get("mem0_infer_enabled", False))
-            and bool(self.settings.get("mem0_infer_async", True))
-        ):
-            from utils.langgraph_utils import _background_enrich_memory
-
-            asyncio.create_task(
-                _background_enrich_memory(
-                    query,
-                    self.scope.scope_key,
-                    self.scope.scope_key,
-                    {
-                        "memory_type": "interaction",
-                        "importance": 0.5,
-                        "role": self.scope.agent_id,
-                    },
-                ),
-                name=f"dobby-memory-enrich:{self.scope.session_id}",
-            )
 
         if _extract_correction_rule(query):
             await record_user_correction(

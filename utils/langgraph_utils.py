@@ -49,6 +49,7 @@ _MEMORY_MODEL_INTENTS = frozenset({
     "extract",
     "historian",
     "reflect",
+    "scope",
 })
 _runtime_model_factory: Callable[[], Awaitable[Any]] | None = None
 _runtime_mem0_llm_config: dict[str, Any] | None = None

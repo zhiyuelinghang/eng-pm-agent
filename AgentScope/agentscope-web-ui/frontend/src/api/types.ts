@@ -294,6 +294,7 @@ export interface MemorySettings {
 	compression_user_prompt: string;
 	compression_incremental_prompt: string;
 	historian_system_prompt: string;
+	memory_scope_prompt: string;
 }
 
 export interface MemoryInfrastructure {
@@ -315,6 +316,49 @@ export interface MemorySettingsResponse {
 export interface UpdateMemorySettingsRequest {
 	settings: MemorySettings;
 	expected_revision: number;
+}
+
+export type MemoryScopeType = 'user' | 'user_project';
+
+export interface ManagedMemoryItem {
+	id: string;
+	content: string;
+	scope_type: MemoryScopeType;
+	platform_user_id: string;
+	project_id: string | null;
+	memory_type: string;
+	importance: number;
+	source: string;
+	source_agent_id: string | null;
+	source_session_id: string | null;
+	created_at: string | null;
+	updated_at: string | null;
+}
+
+export interface MemoryManagementProject {
+	project_id: string;
+	project_name: string;
+	memory_count: number;
+}
+
+export interface MemoryManagementUser {
+	user_id: string;
+	username: string;
+	display_name: string;
+	memory_count: number;
+	user_memory_count: number;
+	projects: MemoryManagementProject[];
+}
+
+export interface MemoryManagementResponse {
+	users: MemoryManagementUser[];
+	memories: ManagedMemoryItem[];
+	total: number;
+}
+
+export interface UpdateMemoryScopeRequest {
+	scope_type: MemoryScopeType;
+	project_id?: string | null;
 }
 
 export interface WeKnoraConnection {

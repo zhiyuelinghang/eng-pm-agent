@@ -647,6 +647,13 @@ export function MemorySettingsPage() {
 							<p className="leading-relaxed">{t('memory-settings.prompts.notice')}</p>
 						</div>
 						<PromptEditor
+							label={t('memory-settings.fields.memoryScopePrompt')}
+							description={t('memory-settings.help.memoryScopePrompt')}
+							value={settings.memory_scope_prompt}
+							onChange={(value) => update('memory_scope_prompt', value)}
+							rows={18}
+						/>
+						<PromptEditor
 							label={t('memory-settings.fields.compressionSystemPrompt')}
 							description={t('memory-settings.help.compressionSystemPrompt')}
 							value={settings.compression_system_prompt}

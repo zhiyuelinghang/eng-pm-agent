@@ -181,15 +181,16 @@ def _history_messages(rows: list[dict[str, Any]]) -> list[HistoryMessage]:
 
 def _already_backfilled(
     mem0: Any,
-    scope_key: str,
+    user_id: str,
+    agent_id: str,
     message: HistoryMessage,
 ) -> bool:
     """Use canonical Mem0 metadata for idempotence, not the removed audit table."""
 
     result = mem0.get_all(
         filters={
-            "user_id": scope_key,
-            "agent_id": scope_key,
+            "user_id": user_id,
+            "agent_id": agent_id,
             "source_message_id": message.message_id,
         },
         top_k=1,
@@ -278,10 +279,15 @@ async def backfill_history(
                 agent_id=binding.agent_id,
                 session_id=binding.session_id,
             )
+            # Historical text cannot be proven to be stable across projects
+            # without rerunning a model. The safe migration default is the
+            # narrower user + project namespace.
+            target = scope.memory_target("user_project")
             exists = await asyncio.to_thread(
                 _already_backfilled,
                 mem0,
-                scope.scope_key,
+                target.user_id,
+                target.agent_id,
                 message,
             )
             if exists:
@@ -291,10 +297,16 @@ async def backfill_history(
             await asyncio.to_thread(
                 mem0.add,
                 [{"role": message.role, "content": message.text}],
-                user_id=scope.scope_key,
-                agent_id=scope.scope_key,
+                user_id=target.user_id,
+                agent_id=target.agent_id,
                 infer=False,
                 metadata={
+                    **{
+                        key: value
+                        for key, value in target.as_dict().items()
+                        if key not in {"user_id", "agent_id"}
+                        and value is not None
+                    },
                     "source": "legacy_agentscope_history",
                     "source_message_id": message.message_id,
                     "source_session_id": message.session_id,

@@ -11,15 +11,20 @@ from agentscope.app.memory._model import (
 )
 from agentscope.app.memory._middleware import DobbyMemoryMiddleware
 from agentscope.app.memory._runtime import MemoryRuntime, MemoryScope
+from agentscope.app.memory._scope_router import route_memory_content
 from agentscope.app.storage import ChatModelConfig, MemorySettingsData
+from agentscope.app.storage._model._platform_settings import (
+    DEFAULT_MEMORY_SCOPE_PROMPT,
+)
 from agentscope.credential import CustomOpenAICredential
 from agentscope.event import ReplyEndEvent, ReplyStartEvent
 from agentscope.message import AssistantMsg, SystemMsg, UserMsg
 from utils import langgraph_utils
+from utils.memory_manager import MemoryManager
 
 
 class MemoryScopeTest(TestCase):
-    def test_project_scope_is_shared_by_users_but_not_projects(self) -> None:
+    def test_project_resources_are_shared_but_personal_memory_is_isolated(self) -> None:
         runtime = MemoryRuntime(tenant_id="tenant-a")
 
         first = runtime.scope(
@@ -45,6 +50,23 @@ class MemoryScopeTest(TestCase):
         self.assertNotEqual(first.scope_key, other.scope_key)
         self.assertEqual(first.scope_key, "project_7")
         self.assertNotIn(":", first.scope_key)
+        self.assertNotEqual(first.memory_owner_key, second.memory_owner_key)
+        self.assertEqual(
+            first.memory_target("user").agent_id,
+            second.memory_target("user").agent_id,
+        )
+        self.assertNotEqual(
+            first.memory_target("user").user_id,
+            second.memory_target("user").user_id,
+        )
+        self.assertEqual(
+            first.memory_target("user").user_id,
+            other.memory_target("user").user_id,
+        )
+        self.assertNotEqual(
+            first.memory_target("user_project").agent_id,
+            other.memory_target("user_project").agent_id,
+        )
 
     def test_platform_model_is_translated_for_all_memory_clients(self) -> None:
         config = ChatModelConfig(
@@ -152,15 +174,151 @@ class MemoryModelConfigurationTest(IsolatedAsyncioTestCase):
         )
 
 
-class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
+class MemoryScopeRouterTest(IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.scope = MemoryScope(
-            tenant_id="tenant-a",
+        self.scope = MemoryRuntime(tenant_id="tenant-a").scope(
+            project_id="7",
+            project_name="机场改造",
+            platform_user_id="2",
+            agent_id="agent-a",
+            session_id="session-a",
+        )
+
+    async def test_classifier_can_split_global_and_project_facts(self) -> None:
+        call_model = AsyncMock(
+            return_value=AssistantMsg(
+                "assistant",
+                '{"user":[{"content":"我长期偏好中文",'
+                '"evidence":"我长期偏好中文","stable":true,'
+                '"confidence":0.98}],'
+                '"user_project":["本项目使用 PostgreSQL"]}',
+            ),
+        )
+
+        routed = await route_memory_content(
+            content="我长期偏好中文，本项目使用 PostgreSQL。",
+            scope=self.scope,
+            prompt_template=DEFAULT_MEMORY_SCOPE_PROMPT,
+            call_model=call_model,
+        )
+
+        self.assertEqual(
+            [(item.scope_type, item.content) for item in routed],
+            [
+                ("user", "我长期偏好中文"),
+                ("user_project", "本项目使用 PostgreSQL"),
+            ],
+        )
+        rendered = call_model.await_args.args[0][-1].get_text_content()
+        self.assertIn("机场改造", rendered)
+
+    async def test_invalid_classifier_output_falls_back_to_user_project(self) -> None:
+        routed = await route_memory_content(
+            content="以后就按这个来。",
+            scope=self.scope,
+            prompt_template=DEFAULT_MEMORY_SCOPE_PROMPT,
+            call_model=AsyncMock(return_value=AssistantMsg("assistant", "不确定")),
+        )
+
+        self.assertEqual(len(routed), 1)
+        self.assertEqual(routed[0].scope_type, "user_project")
+        self.assertEqual(routed[0].content, "以后就按这个来。")
+
+    async def test_unverified_user_classification_is_downgraded(self) -> None:
+        routed = await route_memory_content(
+            content="这次请用中文。",
+            scope=self.scope,
+            prompt_template=DEFAULT_MEMORY_SCOPE_PROMPT,
+            call_model=AsyncMock(
+                return_value=AssistantMsg(
+                    "assistant",
+                    '{"user":[{"content":"用户永远偏好中文",'
+                    '"evidence":"并不存在的原文","stable":true,'
+                    '"confidence":0.99}],"user_project":[]}',
+                ),
+            ),
+        )
+
+        self.assertEqual(len(routed), 1)
+        self.assertEqual(routed[0].scope_type, "user_project")
+        self.assertEqual(routed[0].content, "这次请用中文。")
+
+
+class MemoryManagerScopeTest(IsolatedAsyncioTestCase):
+    async def test_recall_queries_only_global_and_current_project_targets(self) -> None:
+        scope = MemoryRuntime(tenant_id="tenant-a").scope(
             project_id="7",
             platform_user_id="2",
             agent_id="agent-a",
             session_id="session-a",
-            scope_key="project_7",
+        )
+        manager = MemoryManager(project_id=scope.scope_key, role_id="agent-a")
+
+        async def recall(_query, *, top_k, user_id, agent_id):
+            self.assertEqual(top_k, 3)
+            if agent_id == "memory_v2_user":
+                return [{"id": "global", "memory": "跨项目偏好", "score": 0.8}]
+            return [{"id": "project", "memory": "项目约定", "score": 0.9}]
+
+        manager.recall = AsyncMock(side_effect=recall)
+        results = await manager.recall_scopes(
+            "之前怎么约定的？",
+            [target.as_dict() for target in scope.memory_targets],
+            top_k=3,
+        )
+
+        self.assertEqual(manager.recall.await_count, 2)
+        self.assertEqual([item["id"] for item in results], ["project", "global"])
+        self.assertEqual(results[0]["scope_type"], "user_project")
+        self.assertEqual(results[1]["scope_type"], "user")
+
+    async def test_session_lifecycle_uses_exact_target_filters(self) -> None:
+        scope = MemoryRuntime(tenant_id="tenant-a").scope(
+            project_id="7",
+            platform_user_id="2",
+            agent_id="agent-a",
+            session_id="session-a",
+        )
+        manager = MemoryManager(project_id=scope.scope_key, role_id="agent-a")
+        decay = AsyncMock(return_value={"pruned": 0, "updated": 1, "scanned": 1})
+        reflect = AsyncMock(return_value={"skipped": True})
+        audit = SimpleNamespace(log_session_end=AsyncMock())
+
+        with (
+            patch("utils.memory_manager.apply_decay", decay),
+            patch("utils.memory_manager.reflect_if_needed", reflect),
+            patch("utils.memory_manager.get_audit_logger", return_value=audit),
+            patch("utils.memory_manager._cfg.EXPERIENCE_EVENT_DRIVEN_ENABLED", False),
+        ):
+            await manager.end_session({
+                "project_id": scope.scope_key,
+                "thread_id": scope.session_id,
+                "memory_targets": [
+                    target.as_dict()
+                    for target in scope.memory_targets
+                ],
+                "tasks": {},
+                "messages": [],
+            })
+
+        self.assertEqual(decay.await_count, 2)
+        for target, call in zip(scope.memory_targets, decay.await_args_list):
+            self.assertEqual(call.kwargs["user_id"], target.user_id)
+            self.assertEqual(call.kwargs["agent_id"], target.agent_id)
+            self.assertTrue(call.args[0].startswith("memory_scope_"))
+        for target, call in zip(scope.memory_targets, reflect.await_args_list):
+            self.assertEqual(call.kwargs["user_id"], target.user_id)
+            self.assertEqual(call.kwargs["agent_id"], target.agent_id)
+
+
+class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.scope = MemoryRuntime(tenant_id="tenant-a").scope(
+            project_id="7",
+            project_name="机场改造",
+            platform_user_id="2",
+            agent_id="agent-a",
+            session_id="session-a",
         )
         self.manager = SimpleNamespace(
             start_session=AsyncMock(
@@ -189,11 +347,16 @@ class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
                 ),
             ),
             remember=AsyncMock(return_value=[]),
+            recall_scopes=AsyncMock(return_value=[]),
             compress_if_needed=AsyncMock(return_value=False),
             end_session=AsyncMock(return_value={}),
         )
         runtime = SimpleNamespace(manager=MagicMock(return_value=self.manager))
-        self.middleware = DobbyMemoryMiddleware(runtime, self.scope)
+        self.middleware = DobbyMemoryMiddleware(
+            runtime,
+            self.scope,
+            MemorySettingsData(),
+        )
 
     @staticmethod
     def _agent() -> SimpleNamespace:
@@ -259,6 +422,43 @@ class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
         self.manager.assemble_context.assert_awaited_once()
         self.middleware._record_completed_turn.assert_awaited_once()
         self.assertIn("dobby_memory_state", agent.state.middle_context)
+        persisted = agent.state.middle_context["dobby_memory_state"]
+        self.assertEqual(
+            [item["scope_type"] for item in persisted["memory_targets"]],
+            ["user", "user_project"],
+        )
+
+    async def test_completed_turn_is_split_into_explicit_personal_scopes(self) -> None:
+        agent = self._agent()
+        self.middleware._call_agent_model = AsyncMock(
+            return_value=AssistantMsg(
+                "assistant",
+                '{"user":[{"content":"我一直使用中文",'
+                '"evidence":"我一直使用中文","stable":true,'
+                '"confidence":0.98}],'
+                '"user_project":["本项目统一使用 PostgreSQL"]}',
+            ),
+        )
+        self.manager.remember.return_value = [{"id": "memory-a"}]
+
+        stored = await self.middleware._remember_routed(
+            agent,
+            "我一直使用中文，本项目统一使用 PostgreSQL。",
+            importance=0.5,
+            memory_type="interaction",
+            source="conversation",
+        )
+
+        self.assertEqual(stored, 2)
+        self.assertEqual(self.manager.remember.await_count, 2)
+        calls = self.manager.remember.await_args_list
+        self.assertEqual(calls[0].kwargs["agent_id"], "memory_v2_user")
+        self.assertIn("memory_v2_user_project_7", calls[1].kwargs["agent_id"])
+        self.assertEqual(calls[0].kwargs["metadata"]["scope_type"], "user")
+        self.assertEqual(
+            calls[1].kwargs["metadata"]["scope_type"],
+            "user_project",
+        )
 
     async def test_reply_end_waits_until_memory_state_is_persisted(self) -> None:
         agent = self._agent()

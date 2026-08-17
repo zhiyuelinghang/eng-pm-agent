@@ -8,18 +8,22 @@ from ._model import (
     configure_platform_memory_model,
 )
 from ._runtime import (
+    MemoryTarget,
     MemoryRuntime,
     MemoryScope,
     apply_global_memory_settings,
+    build_business_memory_target,
     get_memory_runtime,
 )
 
 __all__ = [
     "DobbyMemoryMiddleware",
     "MemoryModelRuntimeConfig",
+    "MemoryTarget",
     "MemoryRuntime",
     "MemoryScope",
     "apply_global_memory_settings",
+    "build_business_memory_target",
     "build_memory_model_runtime_config",
     "configure_platform_memory_model",
     "get_memory_runtime",

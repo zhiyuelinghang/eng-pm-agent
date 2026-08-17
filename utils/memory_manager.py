@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -76,6 +77,7 @@ class ContextAssembly:
     budget_warnings: list[str] = field(default_factory=list)
     layer_tokens: dict[str, int] = field(default_factory=dict)
     fused_results: list = field(default_factory=list)
+    memory_results: list = field(default_factory=list)
     mode_used: str = "standard"
 
 
@@ -112,7 +114,15 @@ class MemoryManager:
         # Entity graph cache survives settings refreshes between chat runs.
         self._entity_graph: EntityGraph | None = None
         self._entity_graph_ts: float = 0.0
+        self._entity_graph_signature: tuple[tuple[str, str], ...] = ()
         self.configure(runtime_settings)
+
+    def invalidate_entity_graph(self) -> None:
+        """Drop cached entity expansion after a memory mutation."""
+
+        self._entity_graph = None
+        self._entity_graph_ts = 0.0
+        self._entity_graph_signature = ()
 
     @staticmethod
     def _as_settings_dict(settings: Any | None) -> dict[str, Any]:
@@ -284,7 +294,9 @@ class MemoryManager:
             }
         """
         project_id = state.get("project_id", self.project_id)
-        user_id = project_id or _cfg.MEM0_USER_ID
+        memory_targets = self._normalise_memory_targets(
+            state.get("memory_targets", []),
+        )
         tasks = state.get("tasks", {})
         messages = state.get("messages", [])
         session_id = state.get("thread_id", "")
@@ -292,10 +304,62 @@ class MemoryManager:
         # 1. Decay — @deprecated old path: lifecycle.apply_decay() still exists
         # for backward compatibility. New code should use:
         #   self.run_dreamer(task_name="decay") → DecayV2Task via DreamerScheduler
-        decay_result = await apply_decay(project_id, user_id=user_id)
-
-        # 2. Reflection
-        reflection_result = await reflect_if_needed(project_id, user_id=user_id)
+        if memory_targets:
+            decay_scopes = []
+            reflection_scopes = []
+            for target in memory_targets:
+                namespace = (
+                    f"{target['user_id']}\0{target['agent_id']}"
+                ).encode("utf-8")
+                lifecycle_scope = (
+                    "memory_scope_"
+                    + hashlib.sha256(namespace).hexdigest()[:32]
+                )
+                decay_scopes.append({
+                    "scope_type": target.get("scope_type", ""),
+                    **await apply_decay(
+                        lifecycle_scope,
+                        user_id=str(target["user_id"]),
+                        agent_id=str(target["agent_id"]),
+                    ),
+                })
+                reflection_scopes.append({
+                    "scope_type": target.get("scope_type", ""),
+                    **await reflect_if_needed(
+                        lifecycle_scope,
+                        user_id=str(target["user_id"]),
+                        agent_id=str(target["agent_id"]),
+                        metadata={
+                            key: value
+                            for key, value in target.items()
+                            if key not in {"user_id", "agent_id"}
+                            and value is not None
+                        },
+                    ),
+                })
+            decay_result = {
+                "pruned": sum(int(item.get("pruned", 0)) for item in decay_scopes),
+                "updated": sum(int(item.get("updated", 0)) for item in decay_scopes),
+                "scanned": sum(int(item.get("scanned", 0)) for item in decay_scopes),
+                "scopes": decay_scopes,
+            }
+            reflection_result = {
+                "insights": [
+                    insight
+                    for item in reflection_scopes
+                    for insight in item.get("insights", [])
+                ],
+                "written": sum(int(item.get("written", 0)) for item in reflection_scopes),
+                "scopes": reflection_scopes,
+            }
+            self.invalidate_entity_graph()
+        else:
+            user_id = project_id or _cfg.MEM0_USER_ID
+            decay_result = await apply_decay(project_id, user_id=user_id)
+            reflection_result = await reflect_if_needed(
+                project_id,
+                user_id=user_id,
+            )
 
         # 3. Experience extraction (if tasks exist)
         experience_result = {"extracted": {}, "total_inserts": 0}
@@ -338,7 +402,10 @@ class MemoryManager:
         try:
             await get_audit_logger().log_session_end(
                 session_id, project_id, stats={
-                    "decay_deleted": decay_result.get("deleted", 0),
+                    "decay_deleted": decay_result.get(
+                        "pruned",
+                        decay_result.get("deleted", 0),
+                    ),
                     "reflection_insights": len(reflection_result.get("insights", [])),
                     "experiences_extracted": experience_result.get("total_inserts", 0),
                     "message_count": len(messages) if messages else 0,
@@ -380,6 +447,9 @@ class MemoryManager:
         """
         project_id = state.get("project_id", self.project_id)
         role_id = state.get("current_role", self.role_id)
+        memory_targets = state.get("memory_targets", [])
+        if not isinstance(memory_targets, list):
+            memory_targets = []
         summary = state.get("summary", "")
         tasks = state.get("tasks", {})
         messages = state.get("messages", [])
@@ -397,6 +467,7 @@ class MemoryManager:
 
         # ── Layers ③④⑤ + Experience: conditional retrieval ──
         fused = []
+        mem0_results = []
         reminder = ""
 
         if mode == "minimal":
@@ -410,7 +481,12 @@ class MemoryManager:
             if mode in ("standard", "full"):
                 # 5-source: Mem0 + KB + Graphiti + Experience + GraphRAG
                 mem0_results, kb_results, graphiti_data, exp_results, graphrag_result = await asyncio.gather(
-                    self._search_memory(user_input, project_id, role_id),
+                    self._search_memory(
+                        user_input,
+                        project_id,
+                        role_id,
+                        memory_targets=memory_targets,
+                    ),
                     self._search_knowledge(user_input),
                     _graphiti_search(project_id, user_input),
                     _search_experiences_structured(user_input, project_id),
@@ -494,6 +570,7 @@ class MemoryManager:
                     _build_weknora_client(),
                     _get_kb_id_by_name(_cfg.WEKNORA_KB_NAME),
                     project_id,
+                    memory_targets=memory_targets,
                 )
                 if hints:
                     msgs.insert(1, _make_system(hints))
@@ -557,6 +634,7 @@ class MemoryManager:
                 for name, c in layers.items()
             },
             fused_results=fused,
+            memory_results=mem0_results,
             mode_used=actual_mode,
         )
 
@@ -732,6 +810,8 @@ class MemoryManager:
         importance: float = 0.5,
         memory_type: str = "fact",
         agent_id: str | None = None,
+        user_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
         infer: bool = False,
     ) -> list:
         """Write to Mem0 long-term memory.
@@ -741,6 +821,8 @@ class MemoryManager:
             importance: 0-1 importance score
             memory_type: "fact" | "decision" | "preference" | "reflection"
             agent_id: Mem0 agent isolation key (defaults to role_id)
+            user_id: Mem0 owner key (defaults to the legacy project pool)
+            metadata: additional platform scope and source metadata
             infer: whether Mem0 should run LLM fact extraction
 
         Returns:
@@ -749,7 +831,18 @@ class MemoryManager:
         if agent_id is None:
             agent_id = self.project_id or _cfg.MEM0_USER_ID  # ← shared project pool
 
-        user_id = self.project_id or _cfg.MEM0_USER_ID
+        if user_id is None:
+            user_id = self.project_id or _cfg.MEM0_USER_ID
+
+        memory_metadata = {
+            "memory_type": memory_type,
+            "importance": importance,
+            "role": self.role_id,
+            "recall_count": 0,
+            "strength": 1.0,
+        }
+        if metadata:
+            memory_metadata.update(metadata)
 
         try:
             def _sync_add():
@@ -758,13 +851,7 @@ class MemoryManager:
                     content,
                     user_id=user_id,
                     agent_id=agent_id,
-                    metadata={
-                        "memory_type": memory_type,
-                        "importance": importance,
-                        "role": self.role_id,
-                        "recall_count": 0,   # P0-1: initialize recall counter
-                        "strength": 1.0,     # P0-1: initialize at full strength
-                    },
+                    metadata=memory_metadata,
                     infer=infer,
                 )
 
@@ -794,6 +881,7 @@ class MemoryManager:
         query: str,
         top_k: int = 5,
         agent_id: str | None = None,
+        user_id: str | None = None,
     ) -> list:
         """Search Mem0 long-term memory.
 
@@ -801,6 +889,7 @@ class MemoryManager:
             query: search query
             top_k: max results
             agent_id: Mem0 agent isolation key (defaults to role_id)
+            user_id: Mem0 owner key (defaults to the legacy project pool)
 
         Returns:
             list of memory dicts from Mem0
@@ -808,7 +897,8 @@ class MemoryManager:
         if agent_id is None:
             agent_id = self.project_id or _cfg.MEM0_USER_ID  # ← shared project pool
 
-        user_id = self.project_id or _cfg.MEM0_USER_ID
+        if user_id is None:
+            user_id = self.project_id or _cfg.MEM0_USER_ID
 
         try:
             def _sync_search():
@@ -860,6 +950,97 @@ class MemoryManager:
         except Exception:
             return []
 
+    @staticmethod
+    def _normalise_memory_targets(value: Any) -> list[dict[str, Any]]:
+        """Keep only complete, unique Mem0 namespace descriptors."""
+
+        if not isinstance(value, (list, tuple)):
+            return []
+        targets: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            user_id = str(item.get("user_id") or "").strip()
+            agent_id = str(item.get("agent_id") or "").strip()
+            if not user_id or not agent_id:
+                continue
+            key = (user_id, agent_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            targets.append({**item, "user_id": user_id, "agent_id": agent_id})
+        return targets
+
+    async def recall_scopes(
+        self,
+        query: str,
+        memory_targets: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+        top_k: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Search all personal scopes visible to the current user and project."""
+
+        targets = self._normalise_memory_targets(memory_targets)
+        if not targets:
+            return []
+        limit = max(1, int(top_k))
+        batches = await asyncio.gather(
+            *(
+                self.recall(
+                    query,
+                    top_k=limit,
+                    user_id=str(target["user_id"]),
+                    agent_id=str(target["agent_id"]),
+                )
+                for target in targets
+            ),
+            return_exceptions=True,
+        )
+
+        by_key: dict[str, dict[str, Any]] = {}
+        for target, batch in zip(targets, batches):
+            if isinstance(batch, Exception) or not isinstance(batch, list):
+                continue
+            for item in batch:
+                if not isinstance(item, dict):
+                    continue
+                tagged = dict(item)
+                metadata = dict(tagged.get("metadata") or {})
+                for name in (
+                    "scope_version",
+                    "scope_type",
+                    "tenant_id",
+                    "identity_type",
+                    "platform_user_id",
+                    "project_id",
+                ):
+                    if target.get(name) is not None:
+                        metadata.setdefault(name, target.get(name))
+                tagged["metadata"] = metadata
+                tagged["scope_type"] = metadata.get("scope_type")
+                content = str(tagged.get("memory") or "").strip()
+                key = (
+                    f"text:{' '.join(content.casefold().split())}"
+                    if content
+                    else str(tagged.get("id") or "")
+                )
+                if not key:
+                    continue
+                previous = by_key.get(key)
+                if previous is None or float(tagged.get("score") or 0) > float(
+                    previous.get("score") or 0,
+                ):
+                    by_key[key] = tagged
+
+        return sorted(
+            by_key.values(),
+            key=lambda item: (
+                float(item.get("score") or 0),
+                str(item.get("updated_at") or item.get("created_at") or ""),
+            ),
+            reverse=True,
+        )[:limit]
+
     async def forget(self, memory_id: str) -> bool:
         """Delete a single memory by ID.
 
@@ -873,6 +1054,7 @@ class MemoryManager:
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 pool.submit(_sync_delete).result(timeout=15)
+                self.invalidate_entity_graph()
                 return True
         except Exception:
             return False
@@ -985,7 +1167,10 @@ class MemoryManager:
     # ================================================================
 
     async def _get_entity_graph(
-        self, project_id: str, role_id: str,
+        self,
+        project_id: str,
+        role_id: str,
+        memory_targets: list[dict[str, Any]] | None = None,
     ) -> EntityGraph | None:
         """懒加载实体图: 首次调用时从 mem0 全量拉取建图, TTL 300s 缓存.
 
@@ -995,33 +1180,55 @@ class MemoryManager:
         保证默认构造 (project_id=\"\") 也能按共享项目池建图, 扩散不静默失效.
         """
         import time
+        targets = self._normalise_memory_targets(memory_targets or [])
+        if not targets:
+            user_id = project_id or _cfg.MEM0_USER_ID
+            targets = [{"user_id": user_id, "agent_id": user_id}]
+        signature = tuple(sorted(
+            (str(item["user_id"]), str(item["agent_id"]))
+            for item in targets
+        ))
         now = time.monotonic()
         if (self._entity_graph is not None
+                and self._entity_graph_signature == signature
                 and now - self._entity_graph_ts < self._ENTITY_GRAPH_TTL):
             return self._entity_graph
 
-        user_id = project_id or _cfg.MEM0_USER_ID  # 与 recall/remember 一致的回退
         try:
             def _sync_get_all():
                 m = get_mem0()
-                return m.get_all(
-                    filters={"user_id": user_id, "agent_id": user_id},
-                    top_k=500,  # 全量拉取 (demo 规模)
-                )
+                merged: list[dict[str, Any]] = []
+                for target in targets:
+                    result = m.get_all(
+                        filters={
+                            "user_id": str(target["user_id"]),
+                            "agent_id": str(target["agent_id"]),
+                        },
+                        top_k=500,
+                    )
+                    items = (
+                        result.get("results", [])
+                        if isinstance(result, dict)
+                        else result
+                    )
+                    if isinstance(items, list):
+                        merged.extend(item for item in items if isinstance(item, dict))
+                return merged
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 all_mems = pool.submit(_sync_get_all).result(timeout=30)
-            # mem0 v2 返回 {"results": [...]} — 与 recall() 相同的解包 (memory_manager.py:633-634)
-            if isinstance(all_mems, dict):
-                all_mems = all_mems.get("results", [])
         except Exception:
             return None  # 优雅降级: mem0 不可用时无图, 走原检索路径
 
         graph = EntityGraph()
         extractor = EntityExtractor()
+        seen_ids: set[str] = set()
         for item in all_mems or []:
             if not isinstance(item, dict):
                 continue
             mid = str(item.get("id", ""))
+            if not mid or mid in seen_ids:
+                continue
+            seen_ids.add(mid)
             content = str(item.get("memory", ""))
             created = item.get("created_at") or item.get("updated_at")
             if mid and content:
@@ -1032,6 +1239,7 @@ class MemoryManager:
 
         self._entity_graph = graph
         self._entity_graph_ts = now
+        self._entity_graph_signature = signature
         return graph
 
     async def _search_memory(
@@ -1039,20 +1247,30 @@ class MemoryManager:
         query: str,
         project_id: str,
         role_id: str,
+        memory_targets: list[dict[str, Any]] | None = None,
     ) -> list:
         """Internal: Mem0 search with proper scoping + 实体图扩散扩展候选集.
 
         对标 agentmemory V4 _candidates() entity-centric retrieval:
         recall() 基础结果之上, 用实体图 2 跳扩散补充跨会话关联记忆.
         """
-        results = await self.recall(
-            query,
-            top_k=int(self._setting("recall_top_k", _cfg.MEMORY_TOP_K)),
-            agent_id=project_id or _cfg.MEM0_USER_ID,
-        )
+        top_k = int(self._setting("recall_top_k", _cfg.MEMORY_TOP_K))
+        targets = self._normalise_memory_targets(memory_targets or [])
+        if targets:
+            results = await self.recall_scopes(query, targets, top_k=top_k)
+        else:
+            results = await self.recall(
+                query,
+                top_k=top_k,
+                agent_id=project_id or _cfg.MEM0_USER_ID,
+            )
 
         # 实体图扩散: 扩展候选集 (对标 agentmemory V4 _candidates() entity-centric retrieval)
-        graph = await self._get_entity_graph(project_id, role_id)
+        graph = await self._get_entity_graph(
+            project_id,
+            role_id,
+            memory_targets=targets,
+        )
         if graph:
             try:
                 query_entities = EntityExtractor.extract(query)
@@ -1060,7 +1278,44 @@ class MemoryManager:
                 existing_ids = {
                     str(r.get("id", "")) for r in results if isinstance(r, dict)
                 }
-                for mem_id, act in activation.items():
+                candidates = [
+                    (mem_id, act)
+                    for mem_id, act in sorted(
+                        activation.items(),
+                        key=lambda item: float(item[1]),
+                        reverse=True,
+                    )
+                    if mem_id not in existing_ids
+                ][: max(top_k * 4, 20)]
+                allowed_pairs = {
+                    (str(target["user_id"]), str(target["agent_id"]))
+                    for target in targets
+                }
+
+                def _validate_candidates() -> set[str]:
+                    if not allowed_pairs:
+                        return {str(mem_id) for mem_id, _ in candidates}
+                    memory = get_mem0()
+                    valid: set[str] = set()
+                    for mem_id, _ in candidates:
+                        try:
+                            current = memory.get(str(mem_id))
+                        except Exception:
+                            continue
+                        if not isinstance(current, dict):
+                            continue
+                        pair = (
+                            str(current.get("user_id") or ""),
+                            str(current.get("agent_id") or ""),
+                        )
+                        if pair in allowed_pairs:
+                            valid.add(str(mem_id))
+                    return valid
+
+                valid_ids = await asyncio.to_thread(_validate_candidates)
+                for mem_id, act in candidates:
+                    if str(mem_id) not in valid_ids:
+                        continue
                     if mem_id not in existing_ids:
                         content = graph.get_content(mem_id)
                         created = graph.get_created_at(mem_id)
@@ -1075,7 +1330,31 @@ class MemoryManager:
             except Exception:
                 pass  # 扩散失败不影响基础检索
 
-        return results
+        deduped: dict[str, Any] = {}
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("memory") or "").strip()
+            key = (
+                f"text:{' '.join(content.casefold().split())}"
+                if content
+                else str(item.get("id") or "")
+            )
+            if not key:
+                continue
+            previous = deduped.get(key)
+            if previous is None or float(item.get("score") or 0) > float(
+                previous.get("score") or 0,
+            ):
+                deduped[key] = item
+
+        return sorted(
+            deduped.values(),
+            key=lambda item: float(item.get("score") or 0)
+            if isinstance(item, dict)
+            else 0.0,
+            reverse=True,
+        )[:top_k]
 
     async def _search_knowledge(self, query: str) -> list[dict]:
         """Internal: WeKnora search."""

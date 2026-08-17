@@ -27,6 +27,7 @@
 		"platformAudit": "Platform interaction audit",
 		"platformSettings": "Platform settings",
 		"memorySettings": "Memory settings",
+		"memoryManagement": "Memory management",
 		"no": "No",
 		"noData": "No data",
 		"readOnly": "Read-only",
@@ -219,7 +220,8 @@
 			"compressionSystemPrompt": "Compression system prompt",
 			"compressionUserPrompt": "Initial compression prompt",
 			"compressionIncrementalPrompt": "Incremental compression prompt",
-			"historianSystemPrompt": "History organization prompt"
+			"historianSystemPrompt": "History organization prompt",
+			"memoryScopePrompt": "Long-term memory scope prompt"
 		},
 		"options": {
 			"incremental": "Update existing summary",
@@ -250,7 +252,55 @@
 			"experienceConsolidation": "Organizes similar experiences after tasks finish to form more reliable working methods.",
 			"compressionSystemPrompt": "Defines the compression output and information that must survive.",
 			"compressionUserPrompt": "Keep the three existing template variables or the setting cannot be saved.",
-			"historianSystemPrompt": "Defines how older conversations are summarized and how facts and events are extracted."
+			"historianSystemPrompt": "Defines how older conversations are summarized and how facts and events are extracted.",
+			"memoryScopePrompt": "Decides whether information can follow a user across projects or must stay within the current user and project. Keep {content}, {project_context}, and the default evidence, stable, and confidence output fields. Missing evidence or classification failures are downgraded to user + project."
+		}
+	},
+	"memory-management": {
+		"title": "Memory management",
+		"description": "Review business-user long-term memories and correct whether they belong to the user or to one user and project.",
+		"refresh": "Refresh",
+		"allUsers": "All users",
+		"allMemories": "All long-term memories",
+		"resultCount": "{{count}} memories",
+		"resultLimited": "Showing the first {{count}} results. Narrow the list by user, project, or keyword.",
+		"search": "Search",
+		"searchPlaceholder": "Search memory content",
+		"loading": "Loading long-term memories…",
+		"adjustScope": "Change scope",
+		"delete": "Delete",
+		"scopes": {
+			"user": "User",
+			"user_project": "User + project"
+		},
+		"messages": {
+			"scopeUpdated": "Memory scope updated",
+			"deleted": "Memory deleted",
+			"deleteConfirm": "Delete this long-term memory? This action cannot be undone."
+		},
+		"meta": {
+			"type": "Type",
+			"importance": "Importance",
+			"source": "Source",
+			"updated": "Updated"
+		},
+		"sources": {
+			"conversation": "Recorded from conversation",
+			"explicit_tool": "Explicit remember request",
+			"legacy_agentscope_history": "Historical conversation backfill",
+			"memory": "Memory system"
+		},
+		"empty": {
+			"title": "No matching long-term memories",
+			"description": "New business conversations are stored at user or user + project scope. Legacy project-shared memories remain isolated and are not assigned to a user automatically."
+		},
+		"dialog": {
+			"title": "Change memory scope",
+			"description": "User memories can be recalled in every project for that user. User + project memories are recalled only inside the selected project.",
+			"scope": "Memory scope",
+			"project": "Project",
+			"selectProject": "Select a project",
+			"save": "Save change"
 		}
 	},
 	"error": {
