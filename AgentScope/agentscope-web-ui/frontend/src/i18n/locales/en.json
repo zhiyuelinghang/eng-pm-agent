@@ -793,6 +793,12 @@
 				"loading": "Loading",
 				"failed": "Load failed",
 				"synced": "Loaded {{count}} knowledge bases"
+			},
+			"assistant": {
+				"title": "Agent Q&A",
+				"description": "Call the configured WeKnora agent for multi-step knowledge Q&A.",
+				"status": "Not configured",
+				"ready": "Agent configured"
 			}
 		},
 		"connection": {
@@ -808,6 +814,8 @@
 			"notConfigured": "Not configured",
 			"configured": "Configured",
 			"baseUrl": "Service URL",
+			"agentId": "WeKnora agent ID",
+			"agentIdHelp": "Used by the new /agent-chat endpoint. Regular AgentScope knowledge retrieval still uses hybrid search.",
 			"apiKey": "API key",
 			"apiKeyPlaceholder": "Enter the WeKnora tenant API key",
 			"apiKeyConfiguredPlaceholder": "Saved; leave blank to keep it unchanged",
@@ -828,6 +836,22 @@
 			"refresh": "Reload",
 			"addUrl": "Add URL",
 			"upload": "Upload content",
+			"uploadFailed": "Content upload failed",
+			"preview": "Preview",
+			"download": "Download",
+			"delete": "Delete",
+			"deleteConfirm": "Delete “{{name}}” from WeKnora? This cannot be undone.",
+			"deleted": "Content deleted",
+			"searchTitle": "Hybrid search test",
+			"searchDescription": "Run the documented vector and keyword hybrid search and return source metadata.",
+			"searchQueryPlaceholder": "Enter a question to search in the current knowledge base",
+			"searchAction": "Search",
+			"searchEmpty": "No relevant content was found",
+			"urlDialogTitle": "Add content from a URL",
+			"urlDialogDescription": "WeKnora will fetch the page and parse, chunk, and embed it in the background.",
+			"url": "Content URL",
+			"urlTitle": "Title (optional)",
+			"urlTitlePlaceholder": "For example: Site safety inspection standard",
 			"connectTitle": "Configure the WeKnora connection first",
 			"connectDescription": "Enter the service URL and tenant API key. Saving immediately loads remote knowledge bases and engineering content.",
 			"connectAction": "Open connection settings",
@@ -861,6 +885,22 @@
 				"failed": "Parse failed"
 			},
 			"noDescription": "No description"
+		},
+		"assistant": {
+			"eyebrow": "WeKnora Agent chat",
+			"title": "Engineering knowledge Q&A",
+			"description": "Use the documented session and SSE Agent chat APIs and return the answer with knowledge citations. Regular AgentScope agent retrieval continues to use hybrid search.",
+			"notConfiguredTitle": "No WeKnora agent configured",
+			"notConfiguredDescription": "Save the service URL, API key, and WeKnora agent ID first.",
+			"queryLabel": "Question",
+			"queryPlaceholder": "For example: Compare the two construction approaches in these documents and explain when each applies.",
+			"knowledgeBase": "Knowledge scope",
+			"allKnowledgeBases": "All knowledge bases",
+			"agentId": "Current agent ID",
+			"ask": "Ask agent",
+			"answerTitle": "Agent answer",
+			"referencesTitle": "Cited content",
+			"reference": "Reference"
 		}
 	},
 	"knowledge": {

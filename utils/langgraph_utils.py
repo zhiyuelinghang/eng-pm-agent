@@ -782,6 +782,8 @@ def _build_weknora_client():
         base_url=_cfg.WEKNORA_BASE_URL,
         api_key=_cfg.WEKNORA_API_KEY,
         timeout=(_cfg.WEKNORA_TIMEOUT_CONNECT, _cfg.WEKNORA_TIMEOUT_READ),
+        agent_id=_cfg.WEKNORA_AGENT_ID,
+        chat_timeout=_cfg.WEKNORA_CHAT_TIMEOUT,
     )
 
 
@@ -790,6 +792,14 @@ def _build_weknora_client():
 _kb_cache: dict[str, str] = {}       # KB name → KB id
 _kb_cache_ts: float = 0.0
 _KBCACHE_TTL: float = 300.0           # 5 minute TTL
+
+
+def invalidate_weknora_kb_cache() -> None:
+    """Discard tenant-specific knowledge-base IDs after connection changes."""
+
+    global _kb_cache, _kb_cache_ts
+    _kb_cache = {}
+    _kb_cache_ts = 0.0
 
 
 def _get_kb_id_by_name(name: str) -> str | None:
@@ -1466,8 +1476,8 @@ async def safety_director_node(state: dict) -> dict:
             kb_results = wc.hybrid_search(
                 kb_id=kb_id,
                 query=query,
-                vector_threshold=0.15,
-                keyword_threshold=0.15,
+                vector_threshold=0.5,
+                keyword_threshold=0.3,
             )
     except Exception as e:
         kb_results = [{"content": f"(WeKnora 检索失败: {e})", "score": 0}]
@@ -1817,8 +1827,8 @@ def build_role_node(role_config):
                         results = wc.hybrid_search(
                             kb_id=kb_id,
                             query=query,
-                            vector_threshold=0.15,
-                            keyword_threshold=0.15,
+                            vector_threshold=0.5,
+                            keyword_threshold=0.3,
                         )
                         for j, r in enumerate(results[:3], 1):
                             content = r.get("content", str(r))

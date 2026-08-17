@@ -255,11 +255,40 @@ async def _execute_search_knowledge_base(
             try:
                 results = wc.hybrid_search(
                     kb_id=kb_id, query=query,
-                    vector_threshold=0.15, keyword_threshold=0.15,
+                    vector_threshold=0.5, keyword_threshold=0.3,
+                    match_count=5,
                 )
+                knowledge_ids = [
+                    str(item.get("knowledge_id") or "")
+                    for item in results
+                    if isinstance(item, dict) and item.get("knowledge_id")
+                ]
+                try:
+                    details = {
+                        str(item.get("id")): item
+                        for item in wc.get_knowledge_batch(knowledge_ids)
+                        if item.get("id")
+                    }
+                except Exception:
+                    details = {}
                 for j, r in enumerate(results[:3], 1):
                     content = r.get("content", str(r))
-                    lines.append(f"[{kb_name} #{j}] {content[:600]}")
+                    knowledge_id = str(r.get("knowledge_id") or "")
+                    detail = details.get(knowledge_id, {})
+                    source = (
+                        r.get("knowledge_filename")
+                        or detail.get("file_name")
+                        or r.get("knowledge_title")
+                        or detail.get("title")
+                        or knowledge_id
+                        or "未知来源"
+                    )
+                    score = float(r.get("score") or 0)
+                    lines.append(
+                        f"[{kb_name} #{j}] 来源: {source}; "
+                        f"相关度: {score:.3f}; knowledge_id: {knowledge_id}\n"
+                        f"{content[:1200]}",
+                    )
             except Exception:
                 continue
 

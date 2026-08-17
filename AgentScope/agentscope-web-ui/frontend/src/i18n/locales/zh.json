@@ -793,6 +793,12 @@
 				"loading": "正在拉取",
 				"failed": "拉取失败",
 				"synced": "已拉取 {{count}} 个知识库"
+			},
+			"assistant": {
+				"title": "智能问答",
+				"description": "调用已配置的 WeKnora 智能体进行多步知识问答。",
+				"status": "尚未配置",
+				"ready": "智能体已配置"
 			}
 		},
 		"connection": {
@@ -808,6 +814,8 @@
 			"notConfigured": "未配置",
 			"configured": "已配置",
 			"baseUrl": "服务地址",
+			"agentId": "WeKnora 智能体 ID",
+			"agentIdHelp": "用于新版 /agent-chat 接口；普通 AgentScope 知识检索仍使用混合检索。",
 			"apiKey": "API Key",
 			"apiKeyPlaceholder": "填写 WeKnora 租户 API Key",
 			"apiKeyConfiguredPlaceholder": "已保存；留空表示保持不变",
@@ -828,6 +836,22 @@
 			"refresh": "重新拉取",
 			"addUrl": "添加 URL",
 			"upload": "上传资料",
+			"uploadFailed": "资料上传失败",
+			"preview": "预览",
+			"download": "下载",
+			"delete": "删除",
+			"deleteConfirm": "确定删除“{{name}}”吗？此操作会同时删除 WeKnora 中的资料。",
+			"deleted": "资料已删除",
+			"searchTitle": "混合检索测试",
+			"searchDescription": "按新版协议执行向量与关键词混合检索，并返回文件溯源。",
+			"searchQueryPlaceholder": "输入需要从当前知识库查找的问题",
+			"searchAction": "检索",
+			"searchEmpty": "没有检索到相关资料",
+			"urlDialogTitle": "从 URL 添加资料",
+			"urlDialogDescription": "WeKnora 将抓取网页内容并在后台完成解析、分块和向量化。",
+			"url": "资料 URL",
+			"urlTitle": "资料标题（可选）",
+			"urlTitlePlaceholder": "例如：施工安全检查规范",
 			"connectTitle": "先配置 WeKnora 连接",
 			"connectDescription": "填写服务地址和租户 API Key，保存后会立即拉取远程知识库与工程资料。",
 			"connectAction": "前往接入配置",
@@ -861,6 +885,22 @@
 				"failed": "解析失败"
 			},
 			"noDescription": "暂无说明"
+		},
+		"assistant": {
+			"eyebrow": "WeKnora Agent 对话",
+			"title": "工程知识智能问答",
+			"description": "使用新版会话与 SSE Agent 对话接口，返回回答及知识引用。AgentScope 自身智能体的常规知识检索仍走混合检索。",
+			"notConfiguredTitle": "尚未配置 WeKnora 智能体",
+			"notConfiguredDescription": "请先保存服务地址、API Key 和 WeKnora 智能体 ID。",
+			"queryLabel": "问题",
+			"queryPlaceholder": "例如：对比这套资料中的两种施工方案，并说明适用条件。",
+			"knowledgeBase": "知识库范围",
+			"allKnowledgeBases": "全部知识库",
+			"agentId": "当前智能体 ID",
+			"ask": "开始问答",
+			"answerTitle": "智能体回答",
+			"referencesTitle": "引用资料",
+			"reference": "引用"
 		}
 	},
 	"knowledge": {

@@ -365,6 +365,7 @@ export interface WeKnoraConnection {
 	base_url: string;
 	api_prefix: string;
 	auth_header: string;
+	agent_id: string;
 	api_key_configured: boolean;
 }
 
@@ -376,12 +377,15 @@ export interface UpdateWeKnoraConnectionRequest {
 	base_url: string;
 	api_prefix: string;
 	auth_header: string;
+	agent_id: string;
 	api_key?: string;
 }
 
 export interface TestWeKnoraConnectionResponse {
 	success: boolean;
 	knowledge_base_count: number;
+	agent_validated: boolean;
+	agent_name: string;
 	message: string;
 }
 
@@ -420,6 +424,64 @@ export interface WeKnoraKnowledgeListResponse {
 	total: number;
 	page: number;
 	page_size: number;
+}
+
+export interface SearchWeKnoraKnowledgeRequest {
+	query: string;
+	top_k?: number;
+	vector_threshold?: number;
+	keyword_threshold?: number;
+}
+
+export interface WeKnoraSearchReference {
+	knowledge_id: string;
+	title: string;
+	filename: string;
+	content: string;
+	score: number;
+	chunk_index: number;
+	start_at: number;
+	end_at: number;
+	match_type: string;
+	file_type: string;
+	file_size: number | null;
+	source: string;
+	knowledge_type: string;
+	parse_status: string;
+	download_url: string;
+	preview_url: string;
+}
+
+export interface SearchWeKnoraKnowledgeResponse {
+	query: string;
+	total: number;
+	references: WeKnoraSearchReference[];
+}
+
+export interface CreateWeKnoraUrlKnowledgeRequest {
+	url: string;
+	title?: string;
+	enable_multimodel?: boolean;
+}
+
+export interface WeKnoraKnowledgeMutationResponse {
+	knowledge_id: string;
+	file_name: string;
+	title: string;
+	parse_status: string;
+	message: string;
+}
+
+export interface AskWeKnoraAgentRequest {
+	query: string;
+	knowledge_base_ids?: string[];
+	session_id?: string;
+}
+
+export interface AskWeKnoraAgentResponse {
+	session_id: string;
+	answer: string;
+	references: Record<string, unknown>[];
 }
 
 /**

@@ -143,6 +143,7 @@ MEM0_AGENT_ID = _env("MEM0_AGENT_ID", "role_safety")
 # ---- WeKnora (Step 2) ----
 WEKNORA_BASE_URL = _env("WEKNORA_BASE_URL", "http://localhost:8080/api/v1")
 WEKNORA_API_KEY = _env("WEKNORA_API_KEY", "")
+WEKNORA_AGENT_ID = _env("WEKNORA_AGENT_ID", "")
 WEKNORA_KB_NAME = _env("WEKNORA_KB_NAME", "dobby_engineering_safety")
 WEKNORA_ENABLED = _env(
     "WEKNORA_ENABLED",
@@ -150,6 +151,7 @@ WEKNORA_ENABLED = _env(
 ).lower() == "true"
 WEKNORA_TIMEOUT_CONNECT = float(_env("WEKNORA_TIMEOUT_CONNECT", "5.0"))
 WEKNORA_TIMEOUT_READ = float(_env("WEKNORA_TIMEOUT_READ", "30.0"))
+WEKNORA_CHAT_TIMEOUT = float(_env("WEKNORA_CHAT_TIMEOUT", "300.0"))
 
 # ---- mem0 infer control ----
 # When True, mem0 add() calls the LLM to extract structured facts from memory text.

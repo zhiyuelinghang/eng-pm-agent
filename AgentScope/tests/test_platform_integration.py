@@ -16,6 +16,8 @@ from agentscope.app._router._agent import (
     _fetch_weknora_knowledge,
     _fetch_weknora_knowledge_bases,
     _normalise_platform_agent_data,
+    _search_weknora_knowledge,
+    ask_weknora_agent,
     delete_agent,
     get_platform_agent_catalog,
     get_weknora_connection,
@@ -27,7 +29,9 @@ from agentscope.app._router._agent import (
     update_weknora_connection,
 )
 from agentscope.app._router._schema import (
+    AskWeKnoraAgentRequest,
     CreateSessionRequest,
+    SearchWeKnoraKnowledgeRequest,
     UpdateMessageMetadataRequest,
     UpdatePlatformSettingsRequest,
     TestWeKnoraConnectionRequest as WeKnoraConnectionTestRequest,
@@ -397,6 +401,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                 base_url="https://weknora.example.com/",
                 api_prefix="api/v1/",
                 auth_header="X-API-Key",
+                agent_id="agent-001",
                 api_key="tenant-secret",
             ),
             user_id=USER_ID,
@@ -405,6 +410,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(response.base_url, "https://weknora.example.com")
         self.assertEqual(response.api_prefix, "/api/v1")
+        self.assertEqual(response.agent_id, "agent-001")
         self.assertTrue(response.api_key_configured)
         self.assertNotIn("api_key", response.model_dump())
         self.assertEqual(
@@ -443,6 +449,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             base_url="https://weknora.example.com",
             api_prefix="/api/v1",
             auth_header="X-API-Key",
+            agent_id="agent-001",
             api_key="saved-secret",
         )
         storage = SimpleNamespace(
@@ -457,7 +464,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             list_agents=AsyncMock(return_value=[]),
             upsert_agent=AsyncMock(return_value="agent"),
         )
-        probe = AsyncMock(return_value=3)
+        probe = AsyncMock(return_value=(3, True, "工程知识助手"))
 
         with patch(
             "agentscope.app._router._agent._probe_weknora",
@@ -468,6 +475,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                     base_url="https://weknora.example.com",
                     api_prefix="/api/v1",
                     auth_header="X-API-Key",
+                    agent_id="agent-001",
                 ),
                 user_id=USER_ID,
                 storage=storage,
@@ -475,6 +483,8 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
 
         self.assertTrue(response.success)
         self.assertEqual(response.knowledge_base_count, 3)
+        self.assertTrue(response.agent_validated)
+        self.assertEqual(response.agent_name, "工程知识助手")
         probed = probe.await_args.args[0]
         self.assertEqual(probed.api_key.get_secret_value(), "saved-secret")
 
@@ -676,6 +686,158 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         self.assertEqual(
             request.await_args_list[1].kwargs,
             {"params": {"page": 2, "page_size": 20}},
+        )
+
+    async def test_weknora_hybrid_search_uses_documented_contract(self) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        request = AsyncMock(
+            side_effect=[
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "knowledge_id": "knowledge-1",
+                            "knowledge_title": "VPN 配置手册",
+                            "knowledge_filename": "vpn-guide.pdf",
+                            "content": "VPN 连接配置步骤",
+                            "score": 0.92,
+                            "chunk_index": 3,
+                            "start_at": 1200,
+                            "end_at": 1800,
+                            "match_type": "hybrid",
+                        },
+                    ],
+                },
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "id": "knowledge-1",
+                            "file_name": "vpn-guide.pdf",
+                            "file_type": "pdf",
+                            "file_size": 2048000,
+                            "parse_status": "completed",
+                        },
+                    ],
+                },
+            ],
+        )
+
+        with patch(
+            "agentscope.app._router._agent._request_weknora_json",
+            new=request,
+        ):
+            references = await _search_weknora_knowledge(
+                connection,
+                "kb/1",
+                SearchWeKnoraKnowledgeRequest(query="如何配置 VPN？"),
+            )
+
+        self.assertEqual(len(references), 1)
+        self.assertEqual(references[0].filename, "vpn-guide.pdf")
+        self.assertEqual(references[0].file_type, "pdf")
+        self.assertEqual(references[0].score, 0.92)
+        self.assertEqual(
+            request.await_args_list[0].args,
+            (connection, "/knowledge-bases/kb%2F1/hybrid-search"),
+        )
+        self.assertEqual(
+            request.await_args_list[0].kwargs,
+            {
+                "method": "POST",
+                "json_body": {
+                    "query_text": "如何配置 VPN？",
+                    "vector_threshold": 0.5,
+                    "keyword_threshold": 0.3,
+                    "match_count": 5,
+                },
+            },
+        )
+        self.assertEqual(
+            request.await_args_list[1].args,
+            (connection, "/knowledge/batch"),
+        )
+        self.assertEqual(
+            request.await_args_list[1].kwargs,
+            {"params": {"ids": "knowledge-1"}},
+        )
+
+    async def test_weknora_agent_query_uses_configured_agent_id(self) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            agent_id="agent-001",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        request = AsyncMock(
+            return_value={
+                "success": True,
+                "data": {"id": "session-001"},
+            },
+        )
+        sse = AsyncMock(
+            return_value=[
+                {"response_type": "answer", "content": "第一段"},
+                {"response_type": "answer", "content": "第二段"},
+                {
+                    "response_type": "references",
+                    "knowledge_references": [
+                        {"knowledge_id": "knowledge-1", "score": 0.9},
+                    ],
+                },
+                {"response_type": "complete"},
+            ],
+        )
+
+        with (
+            patch(
+                "agentscope.app._router._agent._request_weknora_json",
+                new=request,
+            ),
+            patch(
+                "agentscope.app._router._agent._request_weknora_sse",
+                new=sse,
+            ),
+        ):
+            response = await ask_weknora_agent(
+                body=AskWeKnoraAgentRequest(
+                    query="对比两种方案",
+                    knowledge_base_ids=["kb-001"],
+                ),
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertEqual(response.session_id, "session-001")
+        self.assertEqual(response.answer, "第一段第二段")
+        self.assertEqual(response.references[0]["knowledge_id"], "knowledge-1")
+        self.assertEqual(request.await_args.args, (connection, "/sessions"))
+        self.assertEqual(
+            sse.await_args.args,
+            (
+                connection,
+                "/agent-chat/session-001",
+                {
+                    "query": "对比两种方案",
+                    "agent_id": "agent-001",
+                    "knowledge_base_ids": ["kb-001"],
+                    "channel": "api",
+                },
+            ),
         )
 
     async def test_platform_settings_selects_an_exact_validation_version(

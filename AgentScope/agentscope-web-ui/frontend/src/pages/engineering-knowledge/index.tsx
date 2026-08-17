@@ -1,24 +1,29 @@
 import {
 	Cloud,
 	CheckCircle2,
+	Bot,
 	Database,
+	Download,
 	Eye,
 	EyeOff,
+	ExternalLink,
 	FileText,
 	Globe,
 	Link2,
 	Loader2,
 	LockKeyhole,
+	MessageSquareText,
 	RefreshCw,
 	Save,
 	Search,
 	Server,
 	ShieldCheck,
+	Trash2,
 	TriangleAlert,
 	Upload,
 	WifiOff,
 } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { agentApi } from '@/api';
@@ -27,10 +32,19 @@ import type {
 	WeKnoraConnection,
 	WeKnoraKnowledgeBase,
 	WeKnoraKnowledgeItem,
+	WeKnoraSearchReference,
 } from '@/api';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from '@/components/ui/dialog';
 import {
 	Empty,
 	EmptyDescription,
@@ -44,6 +58,7 @@ import {
 	InputGroupAddon,
 	InputGroupInput,
 } from '@/components/ui/input-group';
+import { Label } from '@/components/ui/label';
 import {
 	Select,
 	SelectContent,
@@ -51,11 +66,13 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from '@/components/ui/select';
+import { Textarea } from '@/components/ui/textarea';
 import { useTranslation } from '@/i18n/useI18n';
 
-type SectionKey = 'knowledge' | 'connection';
+type SectionKey = 'knowledge' | 'assistant' | 'connection';
 
-const DEFAULT_WEKNORA_BASE_URL = 'http://z2fpf345.tcp01.cn';
+const DEFAULT_WEKNORA_BASE_URL = 'http://uy8rk3wy.duankouyingshe.net';
+const DEFAULT_WEKNORA_AGENT_ID = 'be4c1c12-2c0f-4fd1-ac5c-0663bc86d356';
 const SAVED_API_KEY_MASK = '************';
 
 function formatFileSize(size: number | null) {
@@ -83,6 +100,7 @@ export function EngineeringKnowledgePage() {
 	const [baseUrl, setBaseUrl] = useState(DEFAULT_WEKNORA_BASE_URL);
 	const [apiPrefix, setApiPrefix] = useState('/api/v1');
 	const [authHeader, setAuthHeader] = useState('X-API-Key');
+	const [agentId, setAgentId] = useState(DEFAULT_WEKNORA_AGENT_ID);
 	const [apiKey, setApiKey] = useState('');
 	const [savedApiKey, setSavedApiKey] = useState<string | null>(null);
 	const [showApiKey, setShowApiKey] = useState(false);
@@ -100,6 +118,20 @@ export function EngineeringKnowledgePage() {
 	const [knowledgeLoading, setKnowledgeLoading] = useState(false);
 	const [knowledgeError, setKnowledgeError] = useState('');
 	const [documentQuery, setDocumentQuery] = useState('');
+	const [searchQuery, setSearchQuery] = useState('');
+	const [searching, setSearching] = useState(false);
+	const [searchResults, setSearchResults] = useState<WeKnoraSearchReference[]>([]);
+	const [uploading, setUploading] = useState(false);
+	const uploadInputRef = useRef<HTMLInputElement>(null);
+	const [urlDialogOpen, setUrlDialogOpen] = useState(false);
+	const [urlValue, setUrlValue] = useState('');
+	const [urlTitle, setUrlTitle] = useState('');
+	const [submittingUrl, setSubmittingUrl] = useState(false);
+	const [agentQuery, setAgentQuery] = useState('');
+	const [agentAnswer, setAgentAnswer] = useState('');
+	const [agentReferences, setAgentReferences] = useState<Record<string, unknown>[]>([]);
+	const [agentSessionId, setAgentSessionId] = useState('');
+	const [agentQuerying, setAgentQuerying] = useState(false);
 
 	const loadKnowledge = useCallback(async (knowledgeBaseId: string) => {
 		setKnowledgeLoading(true);
@@ -168,6 +200,7 @@ export function EngineeringKnowledgePage() {
 				setBaseUrl(value.base_url || DEFAULT_WEKNORA_BASE_URL);
 				setApiPrefix(value.api_prefix);
 				setAuthHeader(value.auth_header);
+				setAgentId(value.agent_id || DEFAULT_WEKNORA_AGENT_ID);
 				setApiKey(value.api_key_configured ? SAVED_API_KEY_MASK : '');
 				setSavedApiKey(null);
 				setShowApiKey(false);
@@ -190,18 +223,21 @@ export function EngineeringKnowledgePage() {
 		apiKeyChanged ||
 			baseUrl !== (connection?.base_url ?? '') ||
 			apiPrefix !== (connection?.api_prefix ?? '/api/v1') ||
-			authHeader !== (connection?.auth_header ?? 'X-API-Key'),
+			authHeader !== (connection?.auth_header ?? 'X-API-Key') ||
+			agentId !== (connection?.agent_id ?? ''),
 	);
 	const connectionValid = Boolean(
 		baseUrl.trim() &&
 			apiPrefix.trim() &&
 			authHeader.trim() &&
+			agentId.trim() &&
 			(connectionConfigured || Boolean(apiKey)),
 	);
 	const connectionPayload = (): UpdateWeKnoraConnectionRequest => ({
 		base_url: baseUrl.trim(),
 		api_prefix: apiPrefix.trim(),
 		auth_header: authHeader.trim(),
+		agent_id: agentId.trim(),
 		...(apiKeyChanged ? { api_key: apiKey } : {}),
 	});
 
@@ -240,6 +276,7 @@ export function EngineeringKnowledgePage() {
 			setBaseUrl(updated.base_url);
 			setApiPrefix(updated.api_prefix);
 			setAuthHeader(updated.auth_header);
+			setAgentId(updated.agent_id);
 			setApiKey(SAVED_API_KEY_MASK);
 			setSavedApiKey(null);
 			setShowApiKey(false);
@@ -264,6 +301,120 @@ export function EngineeringKnowledgePage() {
 		}
 	};
 
+	const runKnowledgeSearch = async () => {
+		const query = searchQuery.trim();
+		if (!selectedKnowledgeBaseId || !query) return;
+		setSearching(true);
+		try {
+			const result = await agentApi.searchWeKnoraKnowledge(
+				selectedKnowledgeBaseId,
+				{ query, top_k: 5, vector_threshold: 0.5, keyword_threshold: 0.3 },
+			);
+			setSearchResults(result.references);
+			if (result.references.length === 0) {
+				toast.info(t('engineeringKnowledge.knowledge.searchEmpty'));
+			}
+		} finally {
+			setSearching(false);
+		}
+	};
+
+	const uploadKnowledge = async (file: File) => {
+		if (!selectedKnowledgeBaseId) return;
+		setUploading(true);
+		try {
+			const result = await agentApi.uploadWeKnoraKnowledge(
+				selectedKnowledgeBaseId,
+				file,
+			);
+			toast.success(result.message);
+			await loadKnowledge(selectedKnowledgeBaseId);
+		} catch (error) {
+			toast.error(
+				error instanceof Error
+					? error.message
+					: t('engineeringKnowledge.knowledge.uploadFailed'),
+			);
+		} finally {
+			setUploading(false);
+			if (uploadInputRef.current) uploadInputRef.current.value = '';
+		}
+	};
+
+	const submitUrlKnowledge = async () => {
+		if (!selectedKnowledgeBaseId || !urlValue.trim()) return;
+		setSubmittingUrl(true);
+		try {
+			const result = await agentApi.createWeKnoraUrlKnowledge(
+				selectedKnowledgeBaseId,
+				{
+					url: urlValue.trim(),
+					title: urlTitle.trim() || undefined,
+					enable_multimodel: true,
+				},
+			);
+			toast.success(result.message);
+			setUrlDialogOpen(false);
+			setUrlValue('');
+			setUrlTitle('');
+			await loadKnowledge(selectedKnowledgeBaseId);
+		} finally {
+			setSubmittingUrl(false);
+		}
+	};
+
+	const deleteKnowledge = async (item: WeKnoraKnowledgeItem) => {
+		const label = item.file_name || item.title || item.id;
+		if (!window.confirm(t('engineeringKnowledge.knowledge.deleteConfirm', { name: label }))) {
+			return;
+		}
+		await agentApi.deleteWeKnoraKnowledge(item.id);
+		toast.success(t('engineeringKnowledge.knowledge.deleted'));
+		await loadKnowledge(selectedKnowledgeBaseId);
+	};
+
+	const openKnowledgeContent = async (
+		knowledgeId: string,
+		mode: 'download' | 'preview',
+		filename = '',
+	) => {
+		const response =
+			mode === 'download'
+				? await agentApi.downloadWeKnoraKnowledge(knowledgeId)
+				: await agentApi.previewWeKnoraKnowledge(knowledgeId);
+		const blob = await response.blob();
+		const objectUrl = URL.createObjectURL(blob);
+		if (mode === 'download') {
+			const anchor = document.createElement('a');
+			anchor.href = objectUrl;
+			anchor.download = filename || knowledgeId;
+			anchor.click();
+		} else {
+			window.open(objectUrl, '_blank', 'noopener,noreferrer');
+		}
+		window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+	};
+
+	const runAgentQuery = async () => {
+		const query = agentQuery.trim();
+		if (!query) return;
+		setAgentQuerying(true);
+		try {
+			const result = await agentApi.askWeKnoraAgent({
+				query,
+				knowledge_base_ids: selectedKnowledgeBaseId
+					? [selectedKnowledgeBaseId]
+					: undefined,
+				session_id: agentSessionId || undefined,
+			});
+			setAgentSessionId(result.session_id);
+			setAgentAnswer(result.answer);
+			setAgentReferences(result.references);
+		} finally {
+			setAgentQuerying(false);
+		}
+	};
+
 	const sectionItems = [
 		{
 			key: 'knowledge' as const,
@@ -279,6 +430,16 @@ export function EngineeringKnowledgePage() {
 						: t('engineeringKnowledge.sections.knowledge.synced', {
 							count: knowledgeBases.length,
 						}),
+		},
+		{
+			key: 'assistant' as const,
+			icon: Bot,
+			title: t('engineeringKnowledge.sections.assistant.title'),
+			description: t('engineeringKnowledge.sections.assistant.description'),
+			status:
+				connectionConfigured && agentId.trim()
+					? t('engineeringKnowledge.sections.assistant.ready')
+					: t('engineeringKnowledge.sections.assistant.status'),
 		},
 		{
 			key: 'connection' as const,
@@ -437,14 +598,30 @@ export function EngineeringKnowledgePage() {
 											/>
 											{t('engineeringKnowledge.knowledge.refresh')}
 										</Button>
-										<Button variant="outline" disabled>
+										<Button
+											variant="outline"
+											disabled={!selectedKnowledgeBaseId}
+											onClick={() => setUrlDialogOpen(true)}
+										>
 											<Globe />
 											{t('engineeringKnowledge.knowledge.addUrl')}
 										</Button>
-										<Button disabled>
-											<Upload />
+										<Button
+											disabled={!selectedKnowledgeBaseId || uploading}
+											onClick={() => uploadInputRef.current?.click()}
+										>
+											{uploading ? <Loader2 className="animate-spin" /> : <Upload />}
 											{t('engineeringKnowledge.knowledge.upload')}
 										</Button>
+										<input
+											ref={uploadInputRef}
+											type="file"
+											className="hidden"
+											onChange={(event) => {
+												const file = event.target.files?.[0];
+												if (file) void uploadKnowledge(file);
+											}}
+										/>
 									</div>
 								</header>
 
@@ -573,6 +750,83 @@ export function EngineeringKnowledgePage() {
 														</Select>
 													</div>
 												</div>
+											</section>
+
+											<section className="rounded-xl border bg-background p-5">
+												<div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+													<div className="min-w-0 flex-1">
+														<Label htmlFor="weknora-search">
+															{t('engineeringKnowledge.knowledge.searchTitle')}
+														</Label>
+														<p className="mt-1 text-sm text-muted-foreground">
+															{t('engineeringKnowledge.knowledge.searchDescription')}
+														</p>
+														<InputGroup className="mt-3 bg-muted/20">
+															<InputGroupAddon>
+																<Search />
+															</InputGroupAddon>
+															<InputGroupInput
+																id="weknora-search"
+																value={searchQuery}
+																onChange={(event) => setSearchQuery(event.target.value)}
+																onKeyDown={(event) => {
+																	if (event.key === 'Enter') void runKnowledgeSearch();
+																}}
+																placeholder={t('engineeringKnowledge.knowledge.searchQueryPlaceholder')}
+															/>
+														</InputGroup>
+													</div>
+													<Button
+														disabled={!searchQuery.trim() || searching}
+														onClick={() => void runKnowledgeSearch()}
+													>
+														{searching ? <Loader2 className="animate-spin" /> : <Search />}
+														{t('engineeringKnowledge.knowledge.searchAction')}
+													</Button>
+												</div>
+												{searchResults.length > 0 && (
+													<div className="mt-4 space-y-3 border-t pt-4">
+														{searchResults.map((reference, index) => (
+															<div
+																key={`${reference.knowledge_id}-${reference.chunk_index}-${index}`}
+																className="rounded-lg border bg-muted/20 p-4"
+															>
+																<div className="flex flex-wrap items-center justify-between gap-2">
+																	<div className="flex min-w-0 items-center gap-2">
+																		<FileText className="size-4 shrink-0 text-primary" />
+																		<span className="truncate text-sm font-semibold">
+																			{reference.filename || reference.title || reference.knowledge_id}
+																		</span>
+																		<Badge variant="secondary">
+																			{reference.score.toFixed(3)}
+																		</Badge>
+																	</div>
+																	<div className="flex items-center gap-1">
+																		<Button
+																			variant="ghost"
+																			size="sm"
+																			onClick={() => void openKnowledgeContent(reference.knowledge_id, 'preview')}
+																		>
+																			<ExternalLink />
+																			{t('engineeringKnowledge.knowledge.preview')}
+																		</Button>
+																		<Button
+																			variant="ghost"
+																			size="sm"
+																			onClick={() => void openKnowledgeContent(reference.knowledge_id, 'download', reference.filename)}
+																		>
+																			<Download />
+																			{t('engineeringKnowledge.knowledge.download')}
+																		</Button>
+																	</div>
+																</div>
+																<p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+																	{reference.content}
+																</p>
+															</div>
+														))}
+													</div>
+												)}
 											</section>
 
 											<section className="min-w-0 overflow-hidden rounded-xl border bg-background">
@@ -725,6 +979,33 @@ export function EngineeringKnowledgePage() {
 																			{timestamp && <span>{timestamp}</span>}
 																		</div>
 																	</div>
+																	<div className="flex shrink-0 items-start gap-1 opacity-80 transition-opacity group-hover:opacity-100">
+																		<Button
+																			variant="ghost"
+																			size="icon-sm"
+																			title={t('engineeringKnowledge.knowledge.preview')}
+																			onClick={() => void openKnowledgeContent(item.id, 'preview')}
+																		>
+																			<ExternalLink />
+																		</Button>
+																		<Button
+																			variant="ghost"
+																			size="icon-sm"
+																			title={t('engineeringKnowledge.knowledge.download')}
+																			onClick={() => void openKnowledgeContent(item.id, 'download', item.file_name || item.title)}
+																		>
+																			<Download />
+																		</Button>
+																		<Button
+																			variant="ghost"
+																			size="icon-sm"
+																			className="text-destructive hover:text-destructive"
+																			title={t('engineeringKnowledge.knowledge.delete')}
+																			onClick={() => void deleteKnowledge(item)}
+																		>
+																			<Trash2 />
+																		</Button>
+																	</div>
 																</article>
 															);
 														})}
@@ -732,6 +1013,147 @@ export function EngineeringKnowledgePage() {
 												)}
 											</section>
 										</div>
+									)}
+								</div>
+							</div>
+						)}
+
+						{activeSection === 'assistant' && (
+							<div className="min-h-0 flex-1 overflow-y-auto px-6 py-6 sm:px-8">
+								<div className="mx-auto max-w-4xl space-y-5">
+									<div className="flex items-start gap-3">
+										<div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted">
+											<Bot className="size-5" />
+										</div>
+										<div>
+											<p className="text-xs font-medium tracking-wide text-muted-foreground">
+												{t('engineeringKnowledge.assistant.eyebrow')}
+											</p>
+											<h2 className="mt-1 text-xl font-semibold">
+												{t('engineeringKnowledge.assistant.title')}
+											</h2>
+											<p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+												{t('engineeringKnowledge.assistant.description')}
+											</p>
+										</div>
+									</div>
+
+									{!connectionConfigured || !agentId.trim() ? (
+										<Empty className="rounded-xl border border-dashed py-14">
+											<EmptyHeader>
+												<EmptyMedia variant="icon">
+													<Bot />
+												</EmptyMedia>
+												<EmptyTitle>
+													{t('engineeringKnowledge.assistant.notConfiguredTitle')}
+												</EmptyTitle>
+												<EmptyDescription>
+													{t('engineeringKnowledge.assistant.notConfiguredDescription')}
+												</EmptyDescription>
+											</EmptyHeader>
+											<Button onClick={() => setActiveSection('connection')}>
+												<Link2 />
+												{t('engineeringKnowledge.knowledge.connectAction')}
+											</Button>
+										</Empty>
+									) : (
+										<>
+											<section className="rounded-xl border bg-background p-5">
+												<div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_18rem]">
+													<div>
+														<Label htmlFor="weknora-agent-query">
+															{t('engineeringKnowledge.assistant.queryLabel')}
+														</Label>
+														<Textarea
+															id="weknora-agent-query"
+															value={agentQuery}
+															onChange={(event) => setAgentQuery(event.target.value)}
+															placeholder={t('engineeringKnowledge.assistant.queryPlaceholder')}
+															className="mt-2 min-h-28"
+														/>
+													</div>
+													<div>
+														<Label>{t('engineeringKnowledge.assistant.knowledgeBase')}</Label>
+														<Select
+															value={selectedKnowledgeBaseId}
+															onValueChange={(value) => {
+																setSelectedKnowledgeBaseId(value);
+																setAgentSessionId('');
+															}}
+														>
+															<SelectTrigger className="mt-2 w-full">
+																<SelectValue placeholder={t('engineeringKnowledge.assistant.allKnowledgeBases')} />
+															</SelectTrigger>
+															<SelectContent>
+																{knowledgeBases.map((knowledgeBase) => (
+																	<SelectItem key={knowledgeBase.id} value={knowledgeBase.id}>
+																		{knowledgeBase.name || knowledgeBase.id}
+																	</SelectItem>
+																))}
+															</SelectContent>
+														</Select>
+														<div className="mt-4 rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
+															{t('engineeringKnowledge.assistant.agentId')}
+															<span className="mt-1 block break-all font-mono text-foreground">
+																{agentId}
+															</span>
+														</div>
+													</div>
+												</div>
+												<div className="mt-4 flex justify-end">
+													<Button
+														disabled={!agentQuery.trim() || agentQuerying}
+														onClick={() => void runAgentQuery()}
+													>
+														{agentQuerying ? <Loader2 className="animate-spin" /> : <MessageSquareText />}
+														{t('engineeringKnowledge.assistant.ask')}
+													</Button>
+												</div>
+											</section>
+
+											{agentAnswer && (
+												<section className="rounded-xl border bg-background p-5">
+													<div className="flex items-center gap-2">
+														<Bot className="size-4 text-primary" />
+														<h3 className="text-base font-semibold">
+															{t('engineeringKnowledge.assistant.answerTitle')}
+														</h3>
+													</div>
+													<p className="mt-4 whitespace-pre-wrap text-sm leading-7">
+														{agentAnswer}
+													</p>
+													{agentReferences.length > 0 && (
+														<div className="mt-5 border-t pt-4">
+															<p className="text-sm font-semibold">
+																{t('engineeringKnowledge.assistant.referencesTitle')}
+															</p>
+															<div className="mt-2 space-y-2">
+																{agentReferences.map((reference, index) => {
+																	const title =
+																		typeof reference.knowledge_title === 'string'
+																			? reference.knowledge_title
+																			: typeof reference.title === 'string'
+																				? reference.title
+																				: `${t('engineeringKnowledge.assistant.reference')} ${index + 1}`;
+																	const content =
+																		typeof reference.content === 'string' ? reference.content : '';
+																	return (
+																		<div key={`${title}-${index}`} className="rounded-lg bg-muted/40 p-3">
+																			<p className="text-sm font-medium">{title}</p>
+																			{content && (
+																				<p className="mt-1 line-clamp-3 text-sm text-muted-foreground">
+																					{content}
+																				</p>
+																			)}
+																		</div>
+																	);
+																})}
+															</div>
+														</div>
+													)}
+												</section>
+											)}
+										</>
 									)}
 								</div>
 							</div>
@@ -818,6 +1240,18 @@ export function EngineeringKnowledgePage() {
 													onChange={(event) => setBaseUrl(event.target.value)}
 													disabled={connectionLoading || savingConnection}
 												/>
+											</label>
+											<label className="grid gap-2 text-sm font-medium">
+												{t('engineeringKnowledge.connection.agentId')}
+												<Input
+													placeholder={DEFAULT_WEKNORA_AGENT_ID}
+													value={agentId}
+													onChange={(event) => setAgentId(event.target.value)}
+													disabled={connectionLoading || savingConnection}
+												/>
+												<span className="text-xs font-normal text-muted-foreground">
+													{t('engineeringKnowledge.connection.agentIdHelp')}
+												</span>
 											</label>
 											<label className="grid gap-2 text-sm font-medium">
 												{t('engineeringKnowledge.connection.apiKey')}
@@ -942,6 +1376,51 @@ export function EngineeringKnowledgePage() {
 					</section>
 				</div>
 			</main>
+
+			<Dialog open={urlDialogOpen} onOpenChange={setUrlDialogOpen}>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>{t('engineeringKnowledge.knowledge.urlDialogTitle')}</DialogTitle>
+						<DialogDescription>
+							{t('engineeringKnowledge.knowledge.urlDialogDescription')}
+						</DialogDescription>
+					</DialogHeader>
+					<div className="grid gap-4 py-2">
+						<div className="grid gap-2">
+							<Label htmlFor="weknora-url">{t('engineeringKnowledge.knowledge.url')}</Label>
+							<Input
+								id="weknora-url"
+								value={urlValue}
+								onChange={(event) => setUrlValue(event.target.value)}
+								placeholder="https://example.com/document"
+							/>
+						</div>
+						<div className="grid gap-2">
+							<Label htmlFor="weknora-url-title">
+								{t('engineeringKnowledge.knowledge.urlTitle')}
+							</Label>
+							<Input
+								id="weknora-url-title"
+								value={urlTitle}
+								onChange={(event) => setUrlTitle(event.target.value)}
+								placeholder={t('engineeringKnowledge.knowledge.urlTitlePlaceholder')}
+							/>
+						</div>
+					</div>
+					<DialogFooter>
+						<Button variant="outline" onClick={() => setUrlDialogOpen(false)}>
+							{t('common.cancel')}
+						</Button>
+						<Button
+							disabled={!urlValue.trim() || submittingUrl}
+							onClick={() => void submitUrlKnowledge()}
+						>
+							{submittingUrl ? <Loader2 className="animate-spin" /> : <Globe />}
+							{t('engineeringKnowledge.knowledge.addUrl')}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
 		</div>
 	);
 }

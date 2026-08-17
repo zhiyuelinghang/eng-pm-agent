@@ -41,6 +41,14 @@ class WeKnoraConnectionConfig(BaseModel):
         min_length=1,
         max_length=256,
     )
+    agent_id: str = Field(
+        default="",
+        max_length=128,
+        description=(
+            "Optional WeKnora agent used by the documented agent-chat API. "
+            "AgentScope knowledge retrieval continues to use hybrid search."
+        ),
+    )
     api_key: SecretStr = Field(min_length=1, max_length=4096)
 
     @field_validator("base_url")
@@ -65,6 +73,11 @@ class WeKnoraConnectionConfig(BaseModel):
         if not re.fullmatch(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+", value):
             raise ValueError("Authentication header must be a valid HTTP token.")
         return value
+
+    @field_validator("agent_id")
+    @classmethod
+    def _normalise_agent_id(cls, value: str) -> str:
+        return value.strip()
 
 
 DEFAULT_COMPRESSION_SYSTEM_PROMPT = """你是 Dobby 对话压缩器。你的任务是将长对话历史压缩为结构化摘要。

@@ -9,7 +9,18 @@ import socket
 from urllib.parse import quote, urlsplit
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from pydantic import ValidationError
 
 from ...agent import ContextConfig, ReActConfig
@@ -44,6 +55,13 @@ from ._schema import (
     WeKnoraConnectionResponse,
     WeKnoraKnowledgeBaseItem,
     WeKnoraKnowledgeItem,
+    SearchWeKnoraKnowledgeRequest,
+    SearchWeKnoraKnowledgeResponse,
+    WeKnoraSearchReference,
+    CreateWeKnoraUrlKnowledgeRequest,
+    WeKnoraKnowledgeMutationResponse,
+    AskWeKnoraAgentRequest,
+    AskWeKnoraAgentResponse,
     UpdatePlatformSettingsRequest,
     UpdateAgentRequest,
 )
@@ -188,6 +206,7 @@ def _weknora_response(
         base_url=config.base_url,
         api_prefix=config.api_prefix,
         auth_header=config.auth_header,
+        agent_id=config.agent_id,
         api_key_configured=bool(config.api_key.get_secret_value()),
     )
 
@@ -222,6 +241,7 @@ def _build_weknora_config(
             base_url=base_url,
             api_prefix=body.api_prefix,
             auth_header=body.auth_header,
+            agent_id=body.agent_id,
             api_key=api_key,
         )
     except ValidationError as exc:
@@ -236,22 +256,32 @@ async def _request_weknora_json(
     path: str,
     *,
     params: dict[str, int | str] | None = None,
+    method: str = "GET",
+    json_body: dict | None = None,
+    data: dict[str, str] | None = None,
+    files: dict | None = None,
+    timeout_seconds: float = 30.0,
+    max_response_bytes: int = 5 * 1024 * 1024,
 ) -> dict:
     """Call one WeKnora JSON endpoint through the management backend."""
     _validate_weknora_probe_target(config.base_url)
     url = f"{config.base_url}{config.api_prefix}{path}"
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(10.0),
+            timeout=httpx.Timeout(timeout_seconds, connect=10.0),
             follow_redirects=False,
         ) as client:
-            response = await client.get(
+            response = await client.request(
+                method.upper(),
                 url,
                 headers={
                     config.auth_header: config.api_key.get_secret_value(),
                     "Accept": "application/json",
                 },
                 params=params,
+                json=json_body,
+                data=data,
+                files=files,
             )
     except httpx.TimeoutException as exc:
         raise HTTPException(
@@ -263,6 +293,42 @@ async def _request_weknora_json(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="无法连接 WeKnora，请检查服务地址和网络。",
         ) from exc
+    _validate_weknora_response(response)
+    if response.status_code == status.HTTP_204_NO_CONTENT:
+        return {"success": True, "data": {}}
+    if len(response.content) > max_response_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 返回内容过大，已拒绝处理。",
+        )
+    try:
+        payload = json.loads(response.content)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 返回的不是有效 JSON。",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 返回了无效的响应结构。",
+        )
+    if payload.get("success") is False:
+        remote_message = _text(payload.get("message"))
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                f"WeKnora 返回失败：{remote_message[:300]}"
+                if remote_message
+                else "WeKnora 返回了失败响应。"
+            ),
+        )
+    return payload
+
+
+def _validate_weknora_response(response: httpx.Response) -> None:
+    """Translate remote HTTP status codes to stable management errors."""
+
     if response.status_code in {301, 302, 303, 307, 308}:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -276,31 +342,110 @@ async def _request_weknora_json(
     if response.status_code == 404:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="WeKnora 中不存在所请求的知识库或资料。",
+            detail="WeKnora 中不存在所请求的智能体、知识库或资料。",
         )
     if not 200 <= response.status_code < 300:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"WeKnora 返回 HTTP {response.status_code}，请检查配置。",
         )
-    if len(response.content) > 5 * 1024 * 1024:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="WeKnora 知识库列表响应过大，已拒绝处理。",
-        )
+
+
+async def _request_weknora_bytes(
+    config: WeKnoraConnectionConfig,
+    path: str,
+    *,
+    max_response_bytes: int = 64 * 1024 * 1024,
+) -> tuple[bytes, str, str]:
+    """Download one authenticated WeKnora file or preview response."""
+
+    _validate_weknora_probe_target(config.base_url)
+    url = f"{config.base_url}{config.api_prefix}{path}"
     try:
-        payload = json.loads(response.content)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(120.0, connect=10.0),
+            follow_redirects=False,
+        ) as client:
+            response = await client.get(
+                url,
+                headers={
+                    config.auth_header: config.api_key.get_secret_value(),
+                    "Accept": "*/*",
+                },
+            )
+    except httpx.TimeoutException as exc:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="WeKnora 返回的不是有效 JSON。",
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="下载 WeKnora 资料超时。",
         ) from exc
-    if not isinstance(payload, dict) or payload.get("success") is False:
+    except httpx.RequestError as exc:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="WeKnora 返回了失败或无效的响应。",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="无法连接 WeKnora 下载资料。",
+        ) from exc
+    _validate_weknora_response(response)
+    if len(response.content) > max_response_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="WeKnora 返回的资料超过平台代理大小限制。",
         )
-    return payload
+    return (
+        response.content,
+        response.headers.get("content-type", "application/octet-stream"),
+        response.headers.get("content-disposition", ""),
+    )
+
+
+async def _request_weknora_sse(
+    config: WeKnoraConnectionConfig,
+    path: str,
+    body: dict,
+) -> list[dict]:
+    """Read and parse the documented WeKnora SSE chat response."""
+
+    _validate_weknora_probe_target(config.base_url)
+    url = f"{config.base_url}{config.api_prefix}{path}"
+    events: list[dict] = []
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(300.0, connect=10.0),
+            follow_redirects=False,
+        ) as client:
+            async with client.stream(
+                "POST",
+                url,
+                headers={
+                    config.auth_header: config.api_key.get_secret_value(),
+                    "Accept": "text/event-stream",
+                },
+                json=body,
+            ) as response:
+                _validate_weknora_response(response)
+                async for raw_line in response.aiter_lines():
+                    line = raw_line.strip()
+                    if not line or not line.startswith("data:"):
+                        continue
+                    try:
+                        event = json.loads(line[5:].lstrip())
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(event, dict):
+                        events.append(event)
+                        if event.get("response_type") in {"complete", "error"}:
+                            break
+    except HTTPException:
+        raise
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="WeKnora 智能体响应超时。",
+        ) from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="无法连接 WeKnora 智能体。",
+        ) from exc
+    return events
 
 
 def _weknora_list_payload(payload: dict) -> tuple[list[dict], dict]:
@@ -321,6 +466,75 @@ def _weknora_list_payload(payload: dict) -> tuple[list[dict], dict]:
 
 def _text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def _integer(value: object, default: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _number(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _weknora_knowledge_item(
+    item: dict,
+    knowledge_base_id: str | None = None,
+) -> WeKnoraKnowledgeItem:
+    """Normalise one documented knowledge object for management APIs."""
+
+    file_size = item.get("file_size")
+    normalised_file_size = (
+        _integer(file_size) if file_size is not None else None
+    )
+    return WeKnoraKnowledgeItem(
+        id=_text(item.get("id")),
+        knowledge_base_id=(
+            _text(item.get("knowledge_base_id"))
+            or knowledge_base_id
+        ),
+        type=_text(item.get("type")),
+        title=_text(item.get("title")),
+        description=_text(item.get("description")),
+        file_name=_text(item.get("file_name")),
+        file_type=_text(item.get("file_type")),
+        file_size=normalised_file_size,
+        source=_text(item.get("source")),
+        channel=_text(item.get("channel")),
+        parse_status=_text(item.get("parse_status")),
+        enable_status=_text(item.get("enable_status")),
+        created_at=_text(item.get("created_at")) or None,
+        processed_at=_text(item.get("processed_at")) or None,
+    )
+
+
+async def _fetch_weknora_agent(
+    config: WeKnoraConnectionConfig,
+) -> tuple[str, str]:
+    """Validate the configured WeKnora agent and return its id and name."""
+
+    if not config.agent_id:
+        return "", ""
+    encoded_id = quote(config.agent_id, safe="")
+    payload = await _request_weknora_json(config, f"/agents/{encoded_id}")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 智能体详情响应结构无效。",
+        )
+    remote_id = _text(data.get("id"))
+    if remote_id and remote_id != config.agent_id:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 返回的智能体 ID 与配置不一致。",
+        )
+    return remote_id or config.agent_id, _text(data.get("name"))
 
 
 async def _fetch_weknora_knowledge_bases(
@@ -364,34 +578,7 @@ async def _fetch_weknora_knowledge(
         item_id = _text(item.get("id"))
         if not item_id:
             continue
-        file_size = item.get("file_size")
-        try:
-            normalised_file_size = (
-                int(file_size) if file_size is not None else None
-            )
-        except (TypeError, ValueError):
-            normalised_file_size = None
-        result.append(
-            WeKnoraKnowledgeItem(
-                id=item_id,
-                knowledge_base_id=(
-                    _text(item.get("knowledge_base_id"))
-                    or knowledge_base_id
-                ),
-                type=_text(item.get("type")),
-                title=_text(item.get("title")),
-                description=_text(item.get("description")),
-                file_name=_text(item.get("file_name")),
-                file_type=_text(item.get("file_type")),
-                file_size=normalised_file_size,
-                source=_text(item.get("source")),
-                channel=_text(item.get("channel")),
-                parse_status=_text(item.get("parse_status")),
-                enable_status=_text(item.get("enable_status")),
-                created_at=_text(item.get("created_at")) or None,
-                processed_at=_text(item.get("processed_at")) or None,
-            ),
-        )
+        result.append(_weknora_knowledge_item(item, knowledge_base_id))
     raw_total = metadata.get("total", len(result))
     try:
         total = max(int(raw_total), len(result))
@@ -400,8 +587,149 @@ async def _fetch_weknora_knowledge(
     return result, total
 
 
-async def _probe_weknora(config: WeKnoraConnectionConfig) -> int:
-    return len(await _fetch_weknora_knowledge_bases(config))
+async def _fetch_weknora_knowledge_batch(
+    config: WeKnoraConnectionConfig,
+    knowledge_ids: list[str],
+) -> dict[str, WeKnoraKnowledgeItem]:
+    """Fetch source metadata for a set of hybrid-search references."""
+
+    unique_ids = list(dict.fromkeys(item for item in knowledge_ids if item))
+    if not unique_ids:
+        return {}
+    payload = await _request_weknora_json(
+        config,
+        "/knowledge/batch",
+        params={"ids": ",".join(unique_ids)},
+    )
+    raw_items, _ = _weknora_list_payload(payload)
+    result: dict[str, WeKnoraKnowledgeItem] = {}
+    for item in raw_items:
+        item_id = _text(item.get("id"))
+        if item_id:
+            result[item_id] = _weknora_knowledge_item(item)
+    return result
+
+
+async def _search_weknora_knowledge(
+    config: WeKnoraConnectionConfig,
+    knowledge_base_id: str,
+    request: SearchWeKnoraKnowledgeRequest,
+) -> list[WeKnoraSearchReference]:
+    """Run hybrid search and enrich each hit with source-file metadata."""
+
+    encoded_id = quote(knowledge_base_id, safe="")
+    payload = await _request_weknora_json(
+        config,
+        f"/knowledge-bases/{encoded_id}/hybrid-search",
+        method="POST",
+        json_body={
+            "query_text": request.query,
+            "vector_threshold": request.vector_threshold,
+            "keyword_threshold": request.keyword_threshold,
+            "match_count": request.top_k,
+        },
+    )
+    raw_results = payload.get("data", [])
+    if isinstance(raw_results, dict):
+        raw_results = raw_results.get(
+            "results",
+            raw_results.get("items", raw_results.get("list", [])),
+        )
+    if not isinstance(raw_results, list):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 混合检索响应结构无效。",
+        )
+    hits = [item for item in raw_results if isinstance(item, dict)]
+    knowledge_ids = [
+        _text(item.get("knowledge_id"))
+        for item in hits
+        if _text(item.get("knowledge_id"))
+    ]
+    file_info = await _fetch_weknora_knowledge_batch(config, knowledge_ids)
+    references: list[WeKnoraSearchReference] = []
+    for item in hits[: request.top_k]:
+        knowledge_id = _text(item.get("knowledge_id"))
+        details = file_info.get(knowledge_id)
+        references.append(
+            WeKnoraSearchReference(
+                knowledge_id=knowledge_id,
+                title=(
+                    _text(item.get("knowledge_title"))
+                    or (details.title if details else "")
+                ),
+                filename=(
+                    _text(item.get("knowledge_filename"))
+                    or (details.file_name if details else "")
+                ),
+                content=_text(item.get("content")),
+                score=_number(item.get("score")),
+                chunk_index=_integer(item.get("chunk_index")),
+                start_at=_integer(item.get("start_at")),
+                end_at=_integer(item.get("end_at")),
+                match_type=_text(item.get("match_type")),
+                file_type=details.file_type if details else "",
+                file_size=details.file_size if details else None,
+                source=(
+                    details.source
+                    if details
+                    else _text(item.get("knowledge_source"))
+                ),
+                knowledge_type=details.type if details else "",
+                parse_status=details.parse_status if details else "",
+                download_url=(
+                    f"/agent/platform/weknora/knowledge/"
+                    f"{quote(knowledge_id, safe='')}/download"
+                    if knowledge_id
+                    else ""
+                ),
+                preview_url=(
+                    f"/agent/platform/weknora/knowledge/"
+                    f"{quote(knowledge_id, safe='')}/preview"
+                    if knowledge_id
+                    else ""
+                ),
+            ),
+        )
+    return references
+
+
+def _weknora_mutation_result(
+    payload: dict,
+    *,
+    default_message: str,
+) -> WeKnoraKnowledgeMutationResponse:
+    """Normalise the response shared by file and URL ingestion."""
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 入库响应结构无效。",
+        )
+    knowledge_id = _text(data.get("id"))
+    if not knowledge_id:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 入库成功响应缺少知识 ID。",
+        )
+    return WeKnoraKnowledgeMutationResponse(
+        knowledge_id=knowledge_id,
+        file_name=_text(data.get("file_name")),
+        title=_text(data.get("title")),
+        parse_status=_text(data.get("parse_status")),
+        message=_text(payload.get("message")) or default_message,
+    )
+
+
+async def _probe_weknora(
+    config: WeKnoraConnectionConfig,
+) -> tuple[int, bool, str]:
+    knowledge_base_count = len(await _fetch_weknora_knowledge_bases(config))
+    if not config.agent_id:
+        return knowledge_base_count, False, ""
+    _, agent_name = await _fetch_weknora_agent(config)
+    return knowledge_base_count, True, agent_name
 
 
 def _is_initialization_validation_package(record: MCPPackageRecord) -> bool:
@@ -1203,11 +1531,23 @@ async def test_weknora_connection(
         body,
         current.data.weknora_connection,
     )
-    knowledge_base_count = await _probe_weknora(connection)
+    knowledge_base_count, agent_validated, agent_name = await _probe_weknora(
+        connection,
+    )
+    agent_message = (
+        f"，智能体“{agent_name or connection.agent_id}”验证通过"
+        if agent_validated
+        else ""
+    )
     return TestWeKnoraConnectionResponse(
         success=True,
         knowledge_base_count=knowledge_base_count,
-        message=f"连接成功，读取到 {knowledge_base_count} 个知识库。",
+        agent_validated=agent_validated,
+        agent_name=agent_name,
+        message=(
+            f"连接成功，读取到 {knowledge_base_count} 个知识库"
+            f"{agent_message}。"
+        ),
     )
 
 
@@ -1254,6 +1594,289 @@ async def list_weknora_knowledge(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+@agent_router.post(
+    "/platform/weknora/knowledge-bases/{knowledge_base_id}/search",
+    response_model=SearchWeKnoraKnowledgeResponse,
+    summary="Run WeKnora hybrid search with source metadata",
+)
+async def search_weknora_knowledge(
+    knowledge_base_id: str,
+    body: SearchWeKnoraKnowledgeRequest,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> SearchWeKnoraKnowledgeResponse:
+    settings = await _load_platform_settings(storage, user_id)
+    references = await _search_weknora_knowledge(
+        _require_weknora_connection(settings),
+        knowledge_base_id,
+        body,
+    )
+    return SearchWeKnoraKnowledgeResponse(
+        query=body.query,
+        total=len(references),
+        references=references,
+    )
+
+
+@agent_router.post(
+    "/platform/weknora/knowledge-bases/{knowledge_base_id}/knowledge/file",
+    response_model=WeKnoraKnowledgeMutationResponse,
+    summary="Proxy a file upload to WeKnora",
+)
+async def upload_weknora_knowledge(
+    knowledge_base_id: str,
+    file: UploadFile = File(...),
+    enable_multimodel: bool = Form(default=True),
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> WeKnoraKnowledgeMutationResponse:
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="请选择需要上传的文件。",
+        )
+    max_upload_bytes = 50 * 1024 * 1024
+    content = await file.read(max_upload_bytes + 1)
+    await file.close()
+    if len(content) > max_upload_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="上传文件不能超过 50 MB。",
+        )
+    settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    encoded_id = quote(knowledge_base_id, safe="")
+    payload = await _request_weknora_json(
+        connection,
+        f"/knowledge-bases/{encoded_id}/knowledge/file",
+        method="POST",
+        data={
+            "enable_multimodel": str(enable_multimodel).lower(),
+            "channel": "api",
+        },
+        files={
+            "file": (
+                file.filename,
+                content,
+                file.content_type or "application/octet-stream",
+            ),
+        },
+        timeout_seconds=120.0,
+    )
+    return _weknora_mutation_result(
+        payload,
+        default_message="文件上传成功，WeKnora 正在后台解析。",
+    )
+
+
+@agent_router.post(
+    "/platform/weknora/knowledge-bases/{knowledge_base_id}/knowledge/url",
+    response_model=WeKnoraKnowledgeMutationResponse,
+    summary="Create WeKnora knowledge from a URL",
+)
+async def create_weknora_url_knowledge(
+    knowledge_base_id: str,
+    body: CreateWeKnoraUrlKnowledgeRequest,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> WeKnoraKnowledgeMutationResponse:
+    parsed = urlsplit(body.url.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="资料 URL 必须是完整的 HTTP(S) 地址。",
+        )
+    settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    encoded_id = quote(knowledge_base_id, safe="")
+    request_body: dict[str, object] = {
+        "url": body.url.strip(),
+        "enable_multimodel": body.enable_multimodel,
+        "channel": "api",
+    }
+    if body.title.strip():
+        request_body["title"] = body.title.strip()
+        request_body["file_name"] = body.title.strip()
+    payload = await _request_weknora_json(
+        connection,
+        f"/knowledge-bases/{encoded_id}/knowledge/url",
+        method="POST",
+        json_body=request_body,
+        timeout_seconds=120.0,
+    )
+    return _weknora_mutation_result(
+        payload,
+        default_message="URL 已提交，WeKnora 正在后台解析。",
+    )
+
+
+@agent_router.delete(
+    "/platform/weknora/knowledge/{knowledge_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete one WeKnora knowledge item",
+)
+async def delete_weknora_knowledge(
+    knowledge_id: str,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> Response:
+    settings = await _load_platform_settings(storage, user_id)
+    encoded_id = quote(knowledge_id, safe="")
+    await _request_weknora_json(
+        _require_weknora_connection(settings),
+        f"/knowledge/{encoded_id}",
+        method="DELETE",
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+async def _proxy_weknora_knowledge_content(
+    knowledge_id: str,
+    operation: str,
+    *,
+    user_id: str,
+    storage: StorageBase,
+) -> Response:
+    settings = await _load_platform_settings(storage, user_id)
+    encoded_id = quote(knowledge_id, safe="")
+    content, content_type, content_disposition = await _request_weknora_bytes(
+        _require_weknora_connection(settings),
+        f"/knowledge/{encoded_id}/{operation}",
+    )
+    headers = {
+        "Content-Type": content_type,
+        "Cache-Control": "private, no-store",
+    }
+    if content_disposition:
+        headers["Content-Disposition"] = content_disposition
+    return Response(content=content, headers=headers)
+
+
+@agent_router.get(
+    "/platform/weknora/knowledge/{knowledge_id}/download",
+    summary="Proxy an authenticated WeKnora file download",
+)
+async def download_weknora_knowledge(
+    knowledge_id: str,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> Response:
+    return await _proxy_weknora_knowledge_content(
+        knowledge_id,
+        "download",
+        user_id=user_id,
+        storage=storage,
+    )
+
+
+@agent_router.get(
+    "/platform/weknora/knowledge/{knowledge_id}/preview",
+    summary="Proxy an authenticated WeKnora file preview",
+)
+async def preview_weknora_knowledge(
+    knowledge_id: str,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> Response:
+    return await _proxy_weknora_knowledge_content(
+        knowledge_id,
+        "preview",
+        user_id=user_id,
+        storage=storage,
+    )
+
+
+@agent_router.post(
+    "/platform/weknora/agent-query",
+    response_model=AskWeKnoraAgentResponse,
+    summary="Call the configured WeKnora agent-chat endpoint",
+)
+async def ask_weknora_agent(
+    body: AskWeKnoraAgentRequest,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> AskWeKnoraAgentResponse:
+    settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    if not connection.agent_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="请先配置 WeKnora 智能体 ID。",
+        )
+    knowledge_base_ids = list(dict.fromkeys(body.knowledge_base_ids))
+    if not knowledge_base_ids:
+        knowledge_base_ids = [
+            item.id
+            for item in await _fetch_weknora_knowledge_bases(connection)
+        ]
+    if not knowledge_base_ids:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="WeKnora 中没有可用于对话的知识库。",
+        )
+    session_id = body.session_id or ""
+    if not session_id:
+        session_payload = await _request_weknora_json(
+            connection,
+            "/sessions",
+            method="POST",
+            json_body={
+                "knowledge_base_id": knowledge_base_ids[0],
+                "title": "AgentScope 工程知识问答",
+                "description": "AgentScope 管理平台代理会话",
+                "session_strategy": {
+                    "max_rounds": 10,
+                    "enable_rewrite": True,
+                    "fallback_strategy": "FIXED_RESPONSE",
+                    "fallback_response": "抱歉，我暂时无法回答这个问题。",
+                },
+            },
+        )
+        session_data = session_payload.get("data")
+        if isinstance(session_data, dict):
+            session_id = _text(session_data.get("id"))
+        if not session_id:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="WeKnora 创建会话后未返回 session_id。",
+            )
+    events = await _request_weknora_sse(
+        connection,
+        f"/agent-chat/{quote(session_id, safe='')}",
+        {
+            "query": body.query,
+            "agent_id": connection.agent_id,
+            "knowledge_base_ids": knowledge_base_ids,
+            "channel": "api",
+        },
+    )
+    answer_parts: list[str] = []
+    references: list[dict] = []
+    for event in events:
+        response_type = _text(event.get("response_type"))
+        if response_type == "answer":
+            answer_parts.append(_text(event.get("content")))
+        elif response_type == "references":
+            raw_references = event.get("knowledge_references")
+            if isinstance(raw_references, list):
+                references.extend(
+                    item for item in raw_references if isinstance(item, dict)
+                )
+        elif response_type == "error":
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    _text(event.get("content"))
+                    or "WeKnora 智能体返回错误。"
+                ),
+            )
+    return AskWeKnoraAgentResponse(
+        session_id=session_id,
+        answer="".join(answer_parts),
+        references=references,
     )
 
 

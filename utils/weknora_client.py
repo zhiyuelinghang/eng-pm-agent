@@ -1,13 +1,14 @@
-"""
-Lightweight WeKnora REST client for demo Step 2.
+"""WeKnora REST client for the AgentScope 2.0 knowledge integration.
 
-Extracted from wk_mcp-server_weknora_mcp_server.py — keeps only the parts
-needed for KB management and hybrid search. No MCP protocol layer.
+The client follows the project integration guide for knowledge management,
+hybrid retrieval, source metadata, sessions, and SSE chat.  It deliberately
+uses WeKnora as an HTTP service rather than adding an MCP transport layer.
 """
 
+import json
 import logging
 import os
-from typing import Any
+from typing import Any, Iterator
 
 import requests
 from requests.exceptions import RequestException
@@ -16,11 +17,21 @@ logger = logging.getLogger(__name__)
 
 
 class WeKnoraClient:
-    """Minimal WeKnora REST client for KB search + document management."""
+    """WeKnora REST client aligned with the AgentScope 2.0 guide."""
 
-    def __init__(self, base_url: str, api_key: str = "", timeout: tuple | None = None):
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str = "",
+        timeout: tuple | None = None,
+        *,
+        agent_id: str = "",
+        chat_timeout: float = 300.0,
+    ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        self.agent_id = agent_id.strip()
+        self.chat_timeout = max(float(chat_timeout), 30.0)
         self.verify_ssl = os.getenv("WEKNORA_VERIFY_SSL", "true").lower() != "false"
         if not self.verify_ssl:
             import urllib3
@@ -53,7 +64,14 @@ class WeKnoraClient:
         try:
             resp = self.session.request(method, url, timeout=self.timeout, **kwargs)
             resp.raise_for_status()
-            return resp.json()
+            payload = resp.json()
+            if not isinstance(payload, dict):
+                raise ValueError("WeKnora returned a non-object JSON response")
+            if payload.get("success") is False:
+                raise RuntimeError(
+                    str(payload.get("message") or "WeKnora request failed"),
+                )
+            return payload
         except RequestException as e:
             logger.error(f"WeKnora API error: {e}")
             raise
@@ -63,7 +81,7 @@ class WeKnoraClient:
     def health_check(self) -> bool:
         """Check WeKnora API is reachable."""
         try:
-            self._request("GET", "/tenants")
+            self.list_knowledge_bases()
             return True
         except Exception:
             return False
@@ -106,7 +124,14 @@ class WeKnoraClient:
 
     # ── Knowledge (Documents) ─────────────────────────────────────────
 
-    def upload_file(self, kb_id: str, file_path: str, enable_multimodel: bool = False) -> dict:
+    def upload_file(
+        self,
+        kb_id: str,
+        file_path: str,
+        enable_multimodel: bool = True,
+        *,
+        custom_filename: str = "",
+    ) -> dict:
         """Upload a local file to a knowledge base."""
         import os as _os
         abs_path = _os.path.abspath(file_path)
@@ -114,7 +139,12 @@ class WeKnoraClient:
             raise FileNotFoundError(f"File not found: {abs_path}")
         with open(abs_path, "rb") as f:
             files = {"file": f}
-            data = {"enable_multimodel": str(enable_multimodel).lower()}
+            data = {
+                "enable_multimodel": str(enable_multimodel).lower(),
+                "channel": "api",
+            }
+            if custom_filename:
+                data["fileName"] = custom_filename
             headers = {k: v for k, v in self.session.headers.items() if k != "Content-Type"}
             resp = self.session.post(
                 f"{self.base_url}/knowledge-bases/{kb_id}/knowledge/file",
@@ -126,9 +156,16 @@ class WeKnoraClient:
             resp.raise_for_status()
             return resp.json()
 
-    def list_knowledge(self, kb_id: str, page: int = 1, page_size: int = 20) -> dict:
+    def list_knowledge(
+        self,
+        kb_id: str,
+        page: int = 1,
+        page_size: int = 20,
+        **filters: str,
+    ) -> dict:
         """List knowledge entries in a KB."""
         params = {"page": page, "page_size": page_size}
+        params.update({key: value for key, value in filters.items() if value})
         return self._request("GET", f"/knowledge-bases/{kb_id}/knowledge", params=params)
 
     def delete_knowledge(self, knowledge_id: str) -> dict:
@@ -137,7 +174,181 @@ class WeKnoraClient:
 
     def get_knowledge(self, knowledge_id: str) -> dict:
         """Get a single knowledge entry."""
-        return self._request("GET", f"/knowledge/{knowledge_id}")
+        payload = self._request("GET", f"/knowledge/{knowledge_id}")
+        data = payload.get("data", {})
+        return data if isinstance(data, dict) else {}
+
+    def get_knowledge_batch(self, knowledge_ids: list[str]) -> list[dict]:
+        """Fetch file metadata for multiple knowledge items in one request."""
+
+        unique_ids = list(dict.fromkeys(item for item in knowledge_ids if item))
+        if not unique_ids:
+            return []
+        payload = self._request(
+            "GET",
+            "/knowledge/batch",
+            params={"ids": ",".join(unique_ids)},
+        )
+        data = payload.get("data", [])
+        if isinstance(data, dict):
+            data = data.get("list", data.get("items", []))
+        if not isinstance(data, list):
+            return []
+        return [item for item in data if isinstance(item, dict)]
+
+    def create_from_url(
+        self,
+        kb_id: str,
+        url: str,
+        enable_multimodel: bool = True,
+        *,
+        title: str = "",
+    ) -> dict:
+        """Create a knowledge item by asking WeKnora to fetch a URL."""
+
+        body: dict[str, Any] = {
+            "url": url,
+            "enable_multimodel": enable_multimodel,
+            "channel": "api",
+        }
+        if title:
+            body.update({"title": title, "file_name": title})
+        return self._request(
+            "POST",
+            f"/knowledge-bases/{kb_id}/knowledge/url",
+            json=body,
+        )
+
+    def download_file(self, knowledge_id: str) -> bytes:
+        """Download an authenticated original file."""
+
+        response = self.session.get(
+            f"{self.base_url}/knowledge/{knowledge_id}/download",
+            timeout=self.timeout_upload,
+        )
+        response.raise_for_status()
+        return response.content
+
+    def preview_file(self, knowledge_id: str) -> requests.Response:
+        """Return the authenticated preview response without altering its type."""
+
+        response = self.session.get(
+            f"{self.base_url}/knowledge/{knowledge_id}/preview",
+            timeout=self.timeout_upload,
+        )
+        response.raise_for_status()
+        return response
+
+    # ── Agents and chat ───────────────────────────────────────────────
+
+    def list_agents(self) -> list[dict]:
+        """List custom WeKnora agents visible to the configured tenant."""
+
+        payload = self._request("GET", "/agents")
+        data = payload.get("data", [])
+        if isinstance(data, dict):
+            data = data.get("list", data.get("items", []))
+        return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+    def get_agent(self, agent_id: str | None = None) -> dict:
+        """Get one custom WeKnora agent by ID."""
+
+        target = (agent_id or self.agent_id).strip()
+        if not target:
+            raise ValueError("WeKnora agent_id is required")
+        payload = self._request("GET", f"/agents/{target}")
+        data = payload.get("data", {})
+        return data if isinstance(data, dict) else {}
+
+    def create_session(
+        self,
+        kb_id: str,
+        *,
+        title: str = "AgentScope 工程知识问答",
+        max_rounds: int = 10,
+    ) -> str:
+        """Create a WeKnora chat session and return its ID."""
+
+        payload = self._request(
+            "POST",
+            "/sessions",
+            json={
+                "knowledge_base_id": kb_id,
+                "title": title,
+                "session_strategy": {
+                    "max_rounds": max(1, int(max_rounds)),
+                    "enable_rewrite": True,
+                    "fallback_strategy": "FIXED_RESPONSE",
+                    "fallback_response": "抱歉，我暂时无法回答这个问题。",
+                },
+            },
+        )
+        data = payload.get("data", {})
+        return str(data.get("id") or "") if isinstance(data, dict) else ""
+
+    def _chat_events(self, endpoint: str, body: dict[str, Any]) -> Iterator[dict]:
+        response = self.session.post(
+            f"{self.base_url}{endpoint}",
+            json=body,
+            stream=True,
+            timeout=(self.timeout[0], self.chat_timeout),
+        )
+        response.raise_for_status()
+        for raw_line in response.iter_lines():
+            if not raw_line:
+                continue
+            line = raw_line.decode("utf-8") if isinstance(raw_line, bytes) else raw_line
+            if not line.startswith("data:"):
+                continue
+            try:
+                event = json.loads(line[5:].lstrip())
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            yield event
+            if event.get("response_type") in {"complete", "error"}:
+                break
+
+    def chat_stream(
+        self,
+        session_id: str,
+        query: str,
+        kb_ids: list[str] | None = None,
+    ) -> Iterator[dict]:
+        """Stream the documented WeKnora knowledge-chat events."""
+
+        body: dict[str, Any] = {
+            "query": query,
+            "web_search_enabled": False,
+            "enable_memory": False,
+            "channel": "api",
+        }
+        if kb_ids:
+            body["knowledge_base_ids"] = kb_ids
+        return self._chat_events(f"/knowledge-chat/{session_id}", body)
+
+    def agent_chat_stream(
+        self,
+        session_id: str,
+        query: str,
+        kb_ids: list[str] | None = None,
+        *,
+        agent_id: str | None = None,
+    ) -> Iterator[dict]:
+        """Stream the documented WeKnora agent-chat events."""
+
+        target_agent_id = (agent_id or self.agent_id).strip()
+        if not target_agent_id:
+            raise ValueError("WeKnora agent_id is required")
+        body: dict[str, Any] = {
+            "query": query,
+            "agent_id": target_agent_id,
+            "channel": "api",
+        }
+        if kb_ids:
+            body["knowledge_base_ids"] = kb_ids
+        return self._chat_events(f"/agent-chat/{session_id}", body)
 
     # ── Search ★ Core ─────────────────────────────────────────────────
 

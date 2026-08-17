@@ -1135,9 +1135,6 @@ class MemoryManager:
         Returns:
             list of result dicts with content/score
         """
-        if kb_names is None:
-            kb_names = [_cfg.WEKNORA_KB_NAME]
-
         if not _cfg.WEKNORA_ENABLED:
             return []
 
@@ -1145,18 +1142,67 @@ class MemoryManager:
         try:
             wc = _build_weknora_client()
 
+            if kb_names is None:
+                configured_name = str(_cfg.WEKNORA_KB_NAME or "").strip()
+                if configured_name:
+                    kb_names = [configured_name]
+                else:
+                    kb_names = [
+                        str(item.get("name") or "")
+                        for item in wc.list_knowledge_bases()
+                        if item.get("name")
+                    ]
+
             for kb_name in kb_names:
                 kb_id = _get_kb_id_by_name(kb_name)
                 if kb_id:
                     results = wc.hybrid_search(
                         kb_id=kb_id,
                         query=query,
-                        vector_threshold=0.15,
-                        keyword_threshold=0.15,
+                        vector_threshold=0.5,
+                        keyword_threshold=0.3,
+                        match_count=top_k,
                     )
-                    for r in results[:top_k]:
-                        r["kb_name"] = kb_name
-                        all_results.append(r)
+                    knowledge_ids = [
+                        str(item.get("knowledge_id") or "")
+                        for item in results
+                        if isinstance(item, dict) and item.get("knowledge_id")
+                    ]
+                    try:
+                        details = {
+                            str(item.get("id")): item
+                            for item in wc.get_knowledge_batch(knowledge_ids)
+                            if item.get("id")
+                        }
+                    except Exception:
+                        details = {}
+                    for raw_result in results[:top_k]:
+                        if not isinstance(raw_result, dict):
+                            continue
+                        result = dict(raw_result)
+                        knowledge_id = str(
+                            result.get("knowledge_id") or "",
+                        )
+                        detail = details.get(knowledge_id, {})
+                        result["kb_name"] = kb_name
+                        result["title"] = (
+                            result.get("knowledge_title")
+                            or detail.get("title")
+                            or ""
+                        )
+                        result["file_name"] = (
+                            result.get("knowledge_filename")
+                            or detail.get("file_name")
+                            or ""
+                        )
+                        result["file_type"] = detail.get("file_type") or ""
+                        result["file_size"] = detail.get("file_size")
+                        result["source"] = (
+                            result.get("knowledge_source")
+                            or detail.get("source")
+                            or ""
+                        )
+                        all_results.append(result)
         except Exception:
             pass
 

@@ -24,7 +24,7 @@ WeKnora 是一个完整的知识管理平台，为 AgentScope 2.0 智能体提�
 
 | 配置项 | 值 |
 |---|---|
-| **Base URL** | `http://z2fpf345.tcp01.cn` |
+| **Base URL** | `http://uy8rk3wy.duankouyingshe.net` |
 | **API 前缀** | `/api/v1` |
 | **API Key** | `<your-api-key>` |
 | **鉴权方式** | 请求头 `X-API-Key: <your-api-key>` |
@@ -57,7 +57,7 @@ WeKnora 是一个完整的知识管理平台，为 AgentScope 2.0 智能体提�
 ```python
 import requests
 
-BASE_URL = "http://z2fpf345.tcp01.cn/api/v1"
+BASE_URL = "http://uy8rk3wy.duankouyingshe.net/api/v1"
 API_KEY = "<your-api-key>"
 
 session = requests.Session()
@@ -155,7 +155,7 @@ GET /api/v1/knowledge-bases
 **curl 示例**：
 
 ```bash
-curl -X GET "http://z2fpf345.tcp01.cn/api/v1/knowledge-bases" \
+curl -X GET "http://uy8rk3wy.duankouyingshe.net/api/v1/knowledge-bases" \
   -H "X-API-Key: <your-api-key>"
 ```
 
@@ -165,7 +165,7 @@ curl -X GET "http://z2fpf345.tcp01.cn/api/v1/knowledge-bases" \
 import requests
 
 resp = requests.get(
-    "http://z2fpf345.tcp01.cn/api/v1/knowledge-bases",
+    "http://uy8rk3wy.duankouyingshe.net/api/v1/knowledge-bases",
     headers={"X-API-Key": "<your-api-key>"},
 )
 kbs = resp.json().get("data", [])
@@ -609,7 +609,7 @@ from dataclasses import dataclass
 @dataclass
 class WeKnoraConfig:
     """WeKnora 连接配置"""
-    base_url: str = "http://z2fpf345.tcp01.cn/api/v1"
+    base_url: str = "http://uy8rk3wy.duankouyingshe.net/api/v1"
     api_key: str = ""
     timeout: int = 30        # 普通请求超时（秒）
     chat_timeout: int = 300  # SSE 流式读取超时（秒）
@@ -923,7 +923,7 @@ from agentscope.message import Msg
 
 # 初始化 WeKnora 客户端
 client = WeKnoraClient(WeKnoraConfig(
-    base_url="http://z2fpf345.tcp01.cn/api/v1",
+    base_url="http://uy8rk3wy.duankouyingshe.net/api/v1",
     api_key="<your-api-key>",
 ))
 
@@ -1291,7 +1291,7 @@ import requests
 
 app = FastAPI()
 
-WEKNORA_BASE_URL = "http://z2fpf345.tcp01.cn/api/v1"
+WEKNORA_BASE_URL = "http://uy8rk3wy.duankouyingshe.net/api/v1"
 WEKNORA_API_KEY = "<your-api-key>"
 
 

@@ -245,6 +245,66 @@ class MemoryScopeRouterTest(IsolatedAsyncioTestCase):
 
 
 class MemoryManagerScopeTest(IsolatedAsyncioTestCase):
+    async def test_weknora_search_preserves_documented_source_metadata(
+        self,
+    ) -> None:
+        manager = MemoryManager(project_id="project_7", role_id="agent-a")
+        client = SimpleNamespace(
+            hybrid_search=MagicMock(
+                return_value=[
+                    {
+                        "knowledge_id": "knowledge-1",
+                        "knowledge_title": "VPN 配置手册",
+                        "knowledge_filename": "vpn-guide.pdf",
+                        "content": "VPN 连接配置步骤",
+                        "score": 0.92,
+                    },
+                ],
+            ),
+            get_knowledge_batch=MagicMock(
+                return_value=[
+                    {
+                        "id": "knowledge-1",
+                        "title": "VPN 配置手册",
+                        "file_name": "vpn-guide.pdf",
+                        "file_type": "pdf",
+                        "file_size": 2048000,
+                        "source": "",
+                    },
+                ],
+            ),
+        )
+
+        with (
+            patch("utils.memory_manager._cfg.WEKNORA_ENABLED", True),
+            patch(
+                "utils.memory_manager._build_weknora_client",
+                return_value=client,
+            ),
+            patch(
+                "utils.memory_manager._get_kb_id_by_name",
+                return_value="kb-001",
+            ),
+        ):
+            results = await manager.search_knowledge(
+                "如何配置 VPN？",
+                top_k=2,
+                kb_names=["工程规范"],
+            )
+
+        client.hybrid_search.assert_called_once_with(
+            kb_id="kb-001",
+            query="如何配置 VPN？",
+            vector_threshold=0.5,
+            keyword_threshold=0.3,
+            match_count=2,
+        )
+        client.get_knowledge_batch.assert_called_once_with(["knowledge-1"])
+        self.assertEqual(results[0]["title"], "VPN 配置手册")
+        self.assertEqual(results[0]["file_name"], "vpn-guide.pdf")
+        self.assertEqual(results[0]["file_type"], "pdf")
+        self.assertEqual(results[0]["file_size"], 2048000)
+
     async def test_recall_queries_only_global_and_current_project_targets(self) -> None:
         scope = MemoryRuntime(tenant_id="tenant-a").scope(
             project_id="7",

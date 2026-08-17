@@ -15,6 +15,12 @@ import type {
 	WeKnoraConnection,
 	WeKnoraKnowledgeBaseListResponse,
 	WeKnoraKnowledgeListResponse,
+	SearchWeKnoraKnowledgeRequest,
+	SearchWeKnoraKnowledgeResponse,
+	CreateWeKnoraUrlKnowledgeRequest,
+	WeKnoraKnowledgeMutationResponse,
+	AskWeKnoraAgentRequest,
+	AskWeKnoraAgentResponse,
 	UpdateAgentRequest,
 } from './types';
 
@@ -79,5 +85,58 @@ export const agentApi = {
 				page: String(params.page ?? 1),
 				page_size: String(params.page_size ?? 50),
 			},
+		),
+
+	searchWeKnoraKnowledge: (
+		knowledgeBaseId: string,
+		body: SearchWeKnoraKnowledgeRequest,
+	) =>
+		client.post<SearchWeKnoraKnowledgeResponse>(
+			`/agent/platform/weknora/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/search`,
+			body,
+		),
+
+	uploadWeKnoraKnowledge: (
+		knowledgeBaseId: string,
+		file: File,
+		enableMultimodel = true,
+	) => {
+		const form = new FormData();
+		form.append('file', file);
+		form.append('enable_multimodel', String(enableMultimodel));
+		return client.upload<WeKnoraKnowledgeMutationResponse>(
+			`/agent/platform/weknora/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge/file`,
+			form,
+		);
+	},
+
+	createWeKnoraUrlKnowledge: (
+		knowledgeBaseId: string,
+		body: CreateWeKnoraUrlKnowledgeRequest,
+	) =>
+		client.post<WeKnoraKnowledgeMutationResponse>(
+			`/agent/platform/weknora/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge/url`,
+			body,
+		),
+
+	deleteWeKnoraKnowledge: (knowledgeId: string) =>
+		client.delete(
+			`/agent/platform/weknora/knowledge/${encodeURIComponent(knowledgeId)}`,
+		),
+
+	downloadWeKnoraKnowledge: (knowledgeId: string) =>
+		client.stream(
+			`/agent/platform/weknora/knowledge/${encodeURIComponent(knowledgeId)}/download`,
+		),
+
+	previewWeKnoraKnowledge: (knowledgeId: string) =>
+		client.stream(
+			`/agent/platform/weknora/knowledge/${encodeURIComponent(knowledgeId)}/preview`,
+		),
+
+	askWeKnoraAgent: (body: AskWeKnoraAgentRequest) =>
+		client.post<AskWeKnoraAgentResponse>(
+			'/agent/platform/weknora/agent-query',
+			body,
 		),
 };

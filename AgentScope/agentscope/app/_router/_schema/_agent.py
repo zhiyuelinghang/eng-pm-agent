@@ -232,6 +232,7 @@ class WeKnoraConnectionResponse(BaseModel):
     base_url: str = ""
     api_prefix: str = "/api/v1"
     auth_header: str = "X-API-Key"
+    agent_id: str = ""
     api_key_configured: bool = False
 
 
@@ -247,6 +248,7 @@ class UpdateWeKnoraConnectionRequest(BaseModel):
     base_url: str = Field(min_length=1, max_length=2048)
     api_prefix: str = Field(default="/api/v1", min_length=1, max_length=256)
     auth_header: str = Field(default="X-API-Key", min_length=1, max_length=256)
+    agent_id: str = Field(default="", max_length=128)
     api_key: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
@@ -255,10 +257,12 @@ class TestWeKnoraConnectionRequest(UpdateWeKnoraConnectionRequest):
 
 
 class TestWeKnoraConnectionResponse(BaseModel):
-    """Result returned after listing WeKnora knowledge bases."""
+    """Result returned after validating the tenant and optional agent."""
 
     success: bool
     knowledge_base_count: int = 0
+    agent_validated: bool = False
+    agent_name: str = ""
     message: str
 
 
@@ -307,6 +311,78 @@ class ListWeKnoraKnowledgeResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class SearchWeKnoraKnowledgeRequest(BaseModel):
+    """Run the documented WeKnora hybrid search for one knowledge base."""
+
+    query: str = Field(min_length=1, max_length=4000)
+    top_k: int = Field(default=5, ge=1, le=20)
+    vector_threshold: float = Field(default=0.5, ge=0, le=1)
+    keyword_threshold: float = Field(default=0.3, ge=0, le=1)
+
+
+class WeKnoraSearchReference(BaseModel):
+    """One cited search result enriched with its source-file metadata."""
+
+    knowledge_id: str = ""
+    title: str = ""
+    filename: str = ""
+    content: str = ""
+    score: float = 0
+    chunk_index: int = 0
+    start_at: int = 0
+    end_at: int = 0
+    match_type: str = ""
+    file_type: str = ""
+    file_size: int | None = None
+    source: str = ""
+    knowledge_type: str = ""
+    parse_status: str = ""
+    download_url: str = ""
+    preview_url: str = ""
+
+
+class SearchWeKnoraKnowledgeResponse(BaseModel):
+    """Hybrid-search results ready for AgentScope and frontend citation UI."""
+
+    query: str
+    total: int
+    references: list[WeKnoraSearchReference] = Field(default_factory=list)
+
+
+class CreateWeKnoraUrlKnowledgeRequest(BaseModel):
+    """Create one WeKnora knowledge item from a remote URL."""
+
+    url: str = Field(min_length=1, max_length=4096)
+    title: str = Field(default="", max_length=512)
+    enable_multimodel: bool = True
+
+
+class WeKnoraKnowledgeMutationResponse(BaseModel):
+    """Result of a WeKnora upload or URL-ingestion request."""
+
+    knowledge_id: str
+    file_name: str = ""
+    title: str = ""
+    parse_status: str = ""
+    message: str
+
+
+class AskWeKnoraAgentRequest(BaseModel):
+    """Call the configured WeKnora agent and aggregate its SSE response."""
+
+    query: str = Field(min_length=1, max_length=4000)
+    knowledge_base_ids: list[str] = Field(default_factory=list, max_length=50)
+    session_id: str | None = Field(default=None, max_length=128)
+
+
+class AskWeKnoraAgentResponse(BaseModel):
+    """Aggregated answer and citations from the documented agent-chat API."""
+
+    session_id: str
+    answer: str
+    references: list[dict] = Field(default_factory=list)
 
 
 class UpdatePlatformSettingsRequest(BaseModel):

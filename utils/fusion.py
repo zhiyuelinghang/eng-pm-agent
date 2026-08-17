@@ -209,7 +209,25 @@ class MemoryFusion:
                 metadata={
                     "knowledge_id": item.get("knowledge_id", ""),
                     "document_id": item.get("document_id", ""),
-                    "title": item.get("title", ""),
+                    "title": (
+                        item.get("title")
+                        or item.get("knowledge_title")
+                        or item.get("file_name")
+                        or item.get("knowledge_filename")
+                        or ""
+                    ),
+                    "file_name": (
+                        item.get("file_name")
+                        or item.get("knowledge_filename")
+                        or ""
+                    ),
+                    "file_type": item.get("file_type", ""),
+                    "file_size": item.get("file_size"),
+                    "source": (
+                        item.get("source")
+                        or item.get("knowledge_source")
+                        or ""
+                    ),
                     "score_raw": item.get("score", 0),
                 },
             )))

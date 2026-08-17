@@ -34,6 +34,13 @@ from ._agent import (
     ListWeKnoraKnowledgeResponse,
     WeKnoraKnowledgeBaseItem,
     WeKnoraKnowledgeItem,
+    SearchWeKnoraKnowledgeRequest,
+    SearchWeKnoraKnowledgeResponse,
+    WeKnoraSearchReference,
+    CreateWeKnoraUrlKnowledgeRequest,
+    WeKnoraKnowledgeMutationResponse,
+    AskWeKnoraAgentRequest,
+    AskWeKnoraAgentResponse,
     UpdatePlatformSettingsRequest,
 )
 from ._credential import (
@@ -105,6 +112,13 @@ __all__ = [
     "ListWeKnoraKnowledgeResponse",
     "WeKnoraKnowledgeBaseItem",
     "WeKnoraKnowledgeItem",
+    "SearchWeKnoraKnowledgeRequest",
+    "SearchWeKnoraKnowledgeResponse",
+    "WeKnoraSearchReference",
+    "CreateWeKnoraUrlKnowledgeRequest",
+    "WeKnoraKnowledgeMutationResponse",
+    "AskWeKnoraAgentRequest",
+    "AskWeKnoraAgentResponse",
     "UpdatePlatformSettingsRequest",
     "ListSchedulesResponse",
     # Chat
