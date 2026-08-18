@@ -170,6 +170,28 @@ type ApiWeKnoraSearch = { query: string; total: number; references: ApiWeKnoraSe
 type ApiWeKnoraAnswer = { session_id: string; answer: string; references?: Array<Record<string, unknown>> }
 type ApiWeKnoraSession = { session_id: string }
 type ApiWeKnoraStop = { session_id: string; message_id?: string | null; stopped: boolean; message: string }
+export type EngineeringKnowledgeConversationRecord = {
+  id: number
+  project_id: number
+  user_id: number
+  title: string
+  scope_type: 'project' | 'document'
+  knowledge_id?: string | null
+  knowledge_name?: string | null
+  knowledge_base_id?: string | null
+  weknora_session_id?: string | null
+  created_at: string
+  updated_at: string
+}
+export type EngineeringKnowledgeMessageRecord = {
+  id: number
+  conversation_id: number
+  role: 'user' | 'assistant'
+  content: string
+  references?: Array<Record<string, unknown>>
+  failed?: boolean
+  created_at: string
+}
 type ProjectDashboard = { progress_rate: number; progress_status?: string; planned_delta?: string; risk_warnings: number; safety_issues: number; quality_issues: number; task_completion_rate: number; open_changes: number; unread_notifications: number; main_risk: string; main_safety?: string; main_quality: string; overall?: string }
 type ProjectChangeRecord = { id: number; category: string; title: string; content: string; status: string; source_refs: string[]; created_at: string }
 type ApiInformationRecord = { id: number; project_id: number; source_type: string; source_name: string; author?: string; recorded_at: string; status: string; confidence: string; content: string; source_refs: string[] }
@@ -925,6 +947,91 @@ export const useAppStore = defineStore('app', () => {
     if (!created) throw new Error('目录已提交创建，但 WeKnora 尚未返回该目录，请稍后刷新。')
     return created
   }
+  async function updateDocumentFolder(
+    folderId: string,
+    payload: { name: string; parentId: string },
+  ): Promise<DocumentFolderRecord> {
+    const projectId = currentProjectId.value
+    if (!projectId) throw new Error('请先选择项目。')
+    const folder = documentFolders.value.find(item => item.id === folderId)
+    if (!folder?.knowledgeBaseId || folder.isKnowledgeBase) {
+      throw new Error('知识库根节点不能移动或重命名。')
+    }
+    const targetParent = documentFolders.value.find(item => item.id === payload.parentId)
+    if (!targetParent?.knowledgeBaseId || targetParent.knowledgeBaseId !== folder.knowledgeBaseId) {
+      throw new Error('目标目录必须位于同一个知识库。')
+    }
+    const name = payload.name.trim()
+    if (!name || name === '.' || name === '..' || /[\\/\0]/.test(name)) {
+      throw new Error('目录名称不能为空，且不能包含斜杠。')
+    }
+    if (name.length > 255) throw new Error('目录名称不能超过 255 个字符。')
+
+    const sourcePath = normalizeWeKnoraFolderPath(folder.path)
+    const targetParentPath = normalizeWeKnoraFolderPath(targetParent.path)
+    if (!sourcePath) throw new Error('目录原路径无效。')
+    if (targetParentPath === sourcePath || targetParentPath.startsWith(`${sourcePath}/`)) {
+      throw new Error('目录不能移动到自身或自己的子目录中。')
+    }
+    const targetPath = normalizeWeKnoraFolderPath(targetParentPath ? `${targetParentPath}/${name}` : name)
+    if (targetPath === sourcePath) throw new Error('目录名称和位置均未发生变化。')
+    const duplicate = documentFolders.value.find(item => (
+      item.id !== folder.id
+      && item.knowledgeBaseId === folder.knowledgeBaseId
+      && normalizeWeKnoraFolderPath(item.path) === targetPath
+    ))
+    if (duplicate) throw new Error('目标位置已存在同名目录。')
+
+    await api.put(`/projects/${projectId}/engineering-documents/folder`, {
+      knowledge_base_id: folder.knowledgeBaseId,
+      source_path: sourcePath,
+      target_path: targetPath,
+    })
+
+    let updated: DocumentFolderRecord | undefined
+    for (const delay of [0, 250, 750]) {
+      if (delay) await new Promise(resolve => setTimeout(resolve, delay))
+      await loadEngineeringDocuments(projectId, true)
+      updated = documentFolders.value.find(item => (
+        item.knowledgeBaseId === folder.knowledgeBaseId
+        && normalizeWeKnoraFolderPath(item.path) === targetPath
+      ))
+      if (updated) break
+    }
+    if (!updated) throw new Error('目录已提交更新，但 WeKnora 尚未返回新路径，请稍后刷新。')
+    return updated
+  }
+  async function moveEngineeringDocuments(
+    knowledgeIds: string[],
+    targetFolderId: string,
+  ): Promise<DocumentFolderRecord> {
+    const projectId = currentProjectId.value
+    if (!projectId) throw new Error('请先选择项目。')
+    const targetFolder = documentFolders.value.find(item => item.id === targetFolderId)
+    if (!targetFolder?.knowledgeBaseId) throw new Error('请选择有效的目标目录。')
+    const uniqueIds = [...new Set(knowledgeIds.map(item => item.trim()).filter(Boolean))]
+    if (!uniqueIds.length) throw new Error('请选择需要移动的资料。')
+    if (uniqueIds.length > 200) throw new Error('单次最多移动 200 份资料。')
+    const knownItems = uniqueIds
+      .map(knowledgeId => attachments.value.find(item => item.id === knowledgeId))
+      .filter((item): item is AttachmentRecord => Boolean(item))
+    if (knownItems.some(item => item.knowledgeBaseId && item.knowledgeBaseId !== targetFolder.knowledgeBaseId)) {
+      throw new Error('资料只能移动到所属知识库内的目录。')
+    }
+
+    await api.post(`/projects/${projectId}/engineering-documents/move`, {
+      knowledge_base_id: targetFolder.knowledgeBaseId,
+      knowledge_ids: uniqueIds,
+      folder_path: normalizeWeKnoraFolderPath(targetFolder.path),
+    })
+    await loadEngineeringDocuments(projectId, true)
+    return documentFolders.value.find(item => item.id === targetFolderId)
+      || documentFolders.value.find(item => (
+        item.knowledgeBaseId === targetFolder.knowledgeBaseId
+        && normalizeWeKnoraFolderPath(item.path) === normalizeWeKnoraFolderPath(targetFolder.path)
+      ))
+      || targetFolder
+  }
   async function deleteDocumentFolder(folderId: string) {
     const projectId = currentProjectId.value
     if (!projectId) throw new Error('请先选择项目。')
@@ -1055,6 +1162,81 @@ export const useAppStore = defineStore('app', () => {
     )
     return response.data.data
   }
+  async function loadEngineeringKnowledgeConversations() {
+    if (!currentProjectId.value) return [] as EngineeringKnowledgeConversationRecord[]
+    const response = await api.get<ApiEnvelope<EngineeringKnowledgeConversationRecord[]>>(
+      `/projects/${currentProjectId.value}/engineering-knowledge-conversations`,
+    )
+    return response.data.data
+  }
+  async function createEngineeringKnowledgeConversation(payload: {
+    title?: string
+    scopeType: 'project' | 'document'
+    knowledgeId?: string
+    knowledgeName?: string
+    knowledgeBaseId?: string
+    firstMessage: string
+  }) {
+    if (!currentProjectId.value) throw new Error('请先选择项目。')
+    const response = await api.post<ApiEnvelope<{
+      conversation: EngineeringKnowledgeConversationRecord
+      messages: EngineeringKnowledgeMessageRecord[]
+    }>>(
+      `/projects/${currentProjectId.value}/engineering-knowledge-conversations`,
+      {
+        title: payload.title,
+        scope_type: payload.scopeType,
+        knowledge_id: payload.knowledgeId,
+        knowledge_name: payload.knowledgeName,
+        knowledge_base_id: payload.knowledgeBaseId,
+        first_message: payload.firstMessage,
+      },
+    )
+    return response.data.data
+  }
+  async function loadEngineeringKnowledgeMessages(conversationId: number) {
+    if (!currentProjectId.value) return [] as EngineeringKnowledgeMessageRecord[]
+    const response = await api.get<ApiEnvelope<EngineeringKnowledgeMessageRecord[]>>(
+      `/projects/${currentProjectId.value}/engineering-knowledge-conversations/${encodeURIComponent(String(conversationId))}/messages`,
+    )
+    return response.data.data
+  }
+  async function updateEngineeringKnowledgeConversation(
+    conversationId: number,
+    payload: { title?: string; sessionId?: string | null },
+  ) {
+    if (!currentProjectId.value) throw new Error('请先选择项目。')
+    const body: Record<string, string | null> = {}
+    if ('title' in payload) body.title = payload.title || ''
+    if ('sessionId' in payload) body.weknora_session_id = payload.sessionId || null
+    const response = await api.patch<ApiEnvelope<EngineeringKnowledgeConversationRecord>>(
+      `/projects/${currentProjectId.value}/engineering-knowledge-conversations/${encodeURIComponent(String(conversationId))}`,
+      body,
+    )
+    return response.data.data
+  }
+  async function appendEngineeringKnowledgeMessage(
+    conversationId: number,
+    payload: {
+      role: 'user' | 'assistant'
+      content: string
+      references?: Array<Record<string, unknown>>
+      failed?: boolean
+    },
+  ) {
+    if (!currentProjectId.value) throw new Error('请先选择项目。')
+    const response = await api.post<ApiEnvelope<EngineeringKnowledgeMessageRecord>>(
+      `/projects/${currentProjectId.value}/engineering-knowledge-conversations/${encodeURIComponent(String(conversationId))}/messages`,
+      payload,
+    )
+    return response.data.data
+  }
+  async function deleteEngineeringKnowledgeConversation(conversationId: number) {
+    if (!currentProjectId.value) throw new Error('请先选择项目。')
+    await api.delete(
+      `/projects/${currentProjectId.value}/engineering-knowledge-conversations/${encodeURIComponent(String(conversationId))}`,
+    )
+  }
   async function parseDailyAttachment(attachmentId: string) { await api.post(`/attachments/${attachmentId}/parse-daily`); await loadProjectData() }
   async function createRiskDraft(payload: { risk_source_id: string; title: string; content: string; source_refs?: string[]; missing_items?: string[] }) { await api.post(`/projects/${currentProjectId.value}/risk-drafts`, { ...payload, risk_source_id: Number(payload.risk_source_id) }); await loadProjectData() }
   async function assistRiskDraft(riskId: string) { await api.post(`/projects/${currentProjectId.value}/risk-drafts/assist/${riskId}`); await loadProjectData() }
@@ -1099,5 +1281,5 @@ export const useAppStore = defineStore('app', () => {
   async function removeWbsRiskLink(linkId: string) { await api.delete(`/wbs-risk-links/${linkId}`); await loadProjectData() }
   function addLog(log: OperationLog) { if (!currentProjectId.value) return; void api.post(`/projects/${currentProjectId.value}/operation-logs`, { action: log.action, detail: log.detail }).then(() => loadProjectData()) }
 
-  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, weknoraKnowledgeBases, engineeringDocumentsLoading, engineeringDocumentFolderLoading, engineeringDocumentsError, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, uploadAttachment, updateAttachmentCategory, createDocumentFolder, deleteDocumentFolder, deleteEngineeringDocument, searchDocuments, createEngineeringDocumentSession, stopEngineeringDocumentAnswer, askEngineeringDocuments, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, loadEngineeringDocuments, loadEngineeringDocumentFolder, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
+  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, weknoraKnowledgeBases, engineeringDocumentsLoading, engineeringDocumentFolderLoading, engineeringDocumentsError, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, uploadAttachment, updateAttachmentCategory, createDocumentFolder, updateDocumentFolder, deleteDocumentFolder, moveEngineeringDocuments, deleteEngineeringDocument, searchDocuments, createEngineeringDocumentSession, stopEngineeringDocumentAnswer, askEngineeringDocuments, loadEngineeringKnowledgeConversations, createEngineeringKnowledgeConversation, loadEngineeringKnowledgeMessages, updateEngineeringKnowledgeConversation, appendEngineeringKnowledgeMessage, deleteEngineeringKnowledgeConversation, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, loadEngineeringDocuments, loadEngineeringDocumentFolder, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
 })

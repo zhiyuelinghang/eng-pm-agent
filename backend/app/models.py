@@ -517,6 +517,93 @@ class CollaborationMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class EngineeringKnowledgeConversation(TimestampMixin, Base):
+    """One account-private WeKnora conversation inside a project."""
+
+    __tablename__ = "engineering_knowledge_conversations"
+    __table_args__ = (
+        CheckConstraint(
+            "scope_type IN ('project', 'document')",
+            name="ck_engineering_knowledge_conversations_scope",
+        ),
+        Index(
+            "ix_engineering_knowledge_conversations_owner_updated",
+            "project_id",
+            "user_id",
+            "updated_at",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(300))
+    scope_type: Mapped[str] = mapped_column(
+        String(20),
+        default="project",
+        server_default="project",
+    )
+    knowledge_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+    knowledge_name: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+    )
+    knowledge_base_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+    weknora_session_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+        index=True,
+    )
+
+
+class EngineeringKnowledgeMessage(Base):
+    """A locally persisted user or assistant message from WeKnora Q&A."""
+
+    __tablename__ = "engineering_knowledge_messages"
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('user', 'assistant')",
+            name="ck_engineering_knowledge_messages_role",
+        ),
+        Index(
+            "ix_engineering_knowledge_messages_conversation_created",
+            "conversation_id",
+            "created_at",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey(
+            "engineering_knowledge_conversations.id",
+            ondelete="CASCADE",
+        ),
+        index=True,
+    )
+    role: Mapped[str] = mapped_column(String(16))
+    content: Mapped[str] = mapped_column(Text)
+    references: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    failed: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
 class AgentConversation(TimestampMixin, Base):
     """Account-private mapping to one AgentScope conversation session."""
 

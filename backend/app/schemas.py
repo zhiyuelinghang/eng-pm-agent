@@ -85,6 +85,27 @@ class EngineeringDocumentAskInput(BaseModel):
     session_id: str | None = Field(default=None, max_length=128)
 
 
+class EngineeringKnowledgeConversationCreateInput(BaseModel):
+    title: str | None = Field(default=None, max_length=300)
+    scope_type: Literal["project", "document"] = "project"
+    knowledge_id: str | None = Field(default=None, max_length=128)
+    knowledge_name: str | None = Field(default=None, max_length=500)
+    knowledge_base_id: str | None = Field(default=None, max_length=128)
+    first_message: str = Field(min_length=1, max_length=4000)
+
+
+class EngineeringKnowledgeConversationUpdateInput(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    weknora_session_id: str | None = Field(default=None, max_length=128)
+
+
+class EngineeringKnowledgeMessageInput(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=100000)
+    references: list[dict[str, Any]] = Field(default_factory=list, max_length=100)
+    failed: bool = False
+
+
 class MemberInput(BaseModel):
     username: str | None = Field(default=None, max_length=64)
     real_name: str = Field(min_length=1, max_length=100)

@@ -2,11 +2,9 @@
 """Agent router — CRUD endpoints for agent configurations."""
 import asyncio
 from datetime import datetime
-import ipaddress
 import json
 import logging
 import os
-import socket
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -193,38 +191,6 @@ def _validate_weknora_endpoint(base_url: str) -> str:
     return normalised
 
 
-def _validate_weknora_probe_target(base_url: str) -> None:
-    """Resolve a configured host and reject unsafe special-use targets."""
-    parsed = urlsplit(base_url)
-    try:
-        addresses = {
-            item[4][0]
-            for item in socket.getaddrinfo(
-                parsed.hostname,
-                parsed.port or (443 if parsed.scheme == "https" else 80),
-                type=socket.SOCK_STREAM,
-            )
-        }
-    except socket.gaierror as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="无法解析 WeKnora 服务地址，请检查域名。",
-        ) from exc
-    for address in addresses:
-        ip = ipaddress.ip_address(address)
-        if (
-            ip.is_loopback
-            or ip.is_link_local
-            or ip.is_multicast
-            or ip.is_unspecified
-            or ip.is_reserved
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="WeKnora 服务地址不能指向本机或保留网络。",
-            )
-
-
 def _weknora_response(
     config: WeKnoraConnectionConfig | None,
 ) -> WeKnoraConnectionResponse:
@@ -290,7 +256,6 @@ async def _request_weknora_json(
     max_response_bytes: int = 5 * 1024 * 1024,
 ) -> dict:
     """Call one WeKnora JSON endpoint through the management backend."""
-    _validate_weknora_probe_target(config.base_url)
     url = f"{config.base_url}{config.api_prefix}{path}"
     try:
         async with httpx.AsyncClient(
@@ -466,8 +431,6 @@ async def _request_weknora_bytes(
     max_response_bytes: int = 64 * 1024 * 1024,
 ) -> tuple[bytes, str, str]:
     """Download one authenticated WeKnora file or preview response."""
-
-    _validate_weknora_probe_target(config.base_url)
     url = f"{config.base_url}{config.api_prefix}{path}"
     try:
         async with httpx.AsyncClient(
@@ -512,8 +475,6 @@ async def _request_weknora_sse(
     session_id: str = "",
 ) -> list[dict]:
     """Read WeKnora SSE without imposing a deadline on answer generation."""
-
-    _validate_weknora_probe_target(config.base_url)
     url = f"{config.base_url}{config.api_prefix}{path}"
     events: list[dict] = []
     try:

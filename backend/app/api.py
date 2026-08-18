@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.responses import StreamingResponse
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .agentscope_client import (
@@ -23,7 +23,7 @@ from .agentscope_client import (
 )
 from .config import get_settings
 from .db import SessionLocal, get_db
-from .models import (AgentConversation, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectInitializationDraft, ProjectInitializationFile, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectSettings, ProjectStatusSnapshot,
+from .models import (AgentConversation, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, EngineeringKnowledgeConversation, EngineeringKnowledgeMessage, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectInitializationDraft, ProjectInitializationFile, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectSettings, ProjectStatusSnapshot,
                       QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsPredecessor, WbsRiskLink)
 from .initialization_validation import (
     InitializationValidationError,
@@ -56,7 +56,7 @@ from .schemas import (AttachmentUpdate, DailyReportInput, DailyReportUpdate, Dra
                       LoginRequest, MemberInput, PasswordChangeInput, ProfileUpdate, ProjectInput, RiskInput, TaskFlowGenerateInput, TaskInput, TaskTransitionInput,
                       WbsInput, WbsRiskLinkInput, OperationLogInput, PlatformFieldMappingInput, ProjectSettingsInput,
                        AgentConversationConfirmInput, AgentConversationInput, AgentConversationMessageInput, CollaborationMessageInput, CollaborationSessionInput, DocumentFolderInput, ProjectChangeInput, ProjectInformationDispositionInput, QualityMetricInput, TaskNoteInput, TaskReassignInput, TaskStepUpdate,
-                       EngineeringDocumentAskInput, EngineeringDocumentFolderCreateInput, EngineeringDocumentFolderUpdateInput, EngineeringDocumentMoveInput, EngineeringDocumentSearchInput, EngineeringDocumentUrlInput)
+                       EngineeringDocumentAskInput, EngineeringDocumentFolderCreateInput, EngineeringDocumentFolderUpdateInput, EngineeringDocumentMoveInput, EngineeringDocumentSearchInput, EngineeringDocumentUrlInput, EngineeringKnowledgeConversationCreateInput, EngineeringKnowledgeConversationUpdateInput, EngineeringKnowledgeMessageInput)
 from .security import create_access_token, decode_access_token, hash_password, verify_password
 from .system_attachment_parser import (
     SystemAttachmentParserError,
@@ -412,6 +412,35 @@ def _agent_conversation_or_404(
         raise HTTPException(status_code=403, detail="无权访问该智能体会话")
     project_for_user_or_403(db, conversation.project_id, user)
     return conversation
+
+
+def _engineering_knowledge_conversation_or_404(
+    db: Session,
+    project_id: int,
+    conversation_id: int,
+    user: User,
+) -> EngineeringKnowledgeConversation:
+    conversation = db.get(EngineeringKnowledgeConversation, conversation_id)
+    if (
+        conversation is None
+        or conversation.project_id != project_id
+        or conversation.user_id != user.id
+    ):
+        raise HTTPException(status_code=404, detail="知识库对话不存在")
+    project_for_user_or_403(db, project_id, user)
+    return conversation
+
+
+def _engineering_knowledge_conversation_view(
+    conversation: EngineeringKnowledgeConversation,
+) -> dict[str, Any]:
+    return serialize(conversation)
+
+
+def _engineering_knowledge_message_view(
+    message: EngineeringKnowledgeMessage,
+) -> dict[str, Any]:
+    return serialize(message)
 
 
 INITIALIZATION_FILE_SUFFIXES = {
@@ -4127,6 +4156,229 @@ def preview_engineering_document(
         db,
         user,
     )
+
+
+@router.get("/projects/{project_id}/engineering-knowledge-conversations")
+def list_engineering_knowledge_conversations(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    rows = db.scalars(
+        select(EngineeringKnowledgeConversation)
+        .where(
+            EngineeringKnowledgeConversation.project_id == project_id,
+            EngineeringKnowledgeConversation.user_id == user.id,
+        )
+        .order_by(
+            EngineeringKnowledgeConversation.updated_at.desc(),
+            EngineeringKnowledgeConversation.id.desc(),
+        )
+        .limit(100),
+    ).all()
+    return ok([
+        _engineering_knowledge_conversation_view(row)
+        for row in rows
+    ])
+
+
+@router.post("/projects/{project_id}/engineering-knowledge-conversations")
+def create_engineering_knowledge_conversation(
+    project_id: int,
+    payload: EngineeringKnowledgeConversationCreateInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project = project_for_user_or_403(db, project_id, user)
+    first_message = payload.first_message.strip()
+    if not first_message:
+        raise HTTPException(status_code=422, detail="首条消息不能为空")
+    knowledge_id = (payload.knowledge_id or "").strip() or None
+    knowledge_name = (payload.knowledge_name or "").strip() or None
+    knowledge_base_id = (payload.knowledge_base_id or "").strip() or None
+    if payload.scope_type == "document" and knowledge_id is None:
+        raise HTTPException(status_code=422, detail="单文件问答必须指定资料")
+    if payload.scope_type == "project":
+        knowledge_id = None
+        knowledge_name = None
+        knowledge_base_id = None
+    title = (payload.title or first_message[:60]).strip()
+    conversation = EngineeringKnowledgeConversation(
+        project_id=project.id,
+        user_id=user.id,
+        title=title[:300],
+        scope_type=payload.scope_type,
+        knowledge_id=knowledge_id,
+        knowledge_name=knowledge_name,
+        knowledge_base_id=knowledge_base_id,
+    )
+    db.add(conversation)
+    db.flush()
+    message = EngineeringKnowledgeMessage(
+        conversation_id=conversation.id,
+        role="user",
+        content=first_message,
+        references=[],
+        failed=False,
+    )
+    db.add(message)
+    audit(
+        db,
+        user,
+        "创建知识库对话",
+        f"创建知识库对话「{conversation.title}」",
+        project.id,
+        "engineering_knowledge_conversation",
+        conversation.id,
+    )
+    db.commit()
+    db.refresh(conversation)
+    db.refresh(message)
+    return ok(
+        {
+            "conversation": _engineering_knowledge_conversation_view(
+                conversation,
+            ),
+            "messages": [_engineering_knowledge_message_view(message)],
+        },
+        "知识库对话已创建",
+    )
+
+
+@router.patch(
+    "/projects/{project_id}/engineering-knowledge-conversations/"
+    "{conversation_id}",
+)
+def update_engineering_knowledge_conversation(
+    project_id: int,
+    conversation_id: int,
+    payload: EngineeringKnowledgeConversationUpdateInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    conversation = _engineering_knowledge_conversation_or_404(
+        db,
+        project_id,
+        conversation_id,
+        user,
+    )
+    fields = payload.model_fields_set
+    if "title" in fields:
+        title = (payload.title or "").strip()
+        if not title:
+            raise HTTPException(status_code=422, detail="对话标题不能为空")
+        conversation.title = title[:300]
+    if "weknora_session_id" in fields:
+        conversation.weknora_session_id = (
+            (payload.weknora_session_id or "").strip() or None
+        )
+    conversation.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(conversation)
+    return ok(
+        _engineering_knowledge_conversation_view(conversation),
+        "知识库对话已更新",
+    )
+
+
+@router.get(
+    "/projects/{project_id}/engineering-knowledge-conversations/"
+    "{conversation_id}/messages",
+)
+def list_engineering_knowledge_messages(
+    project_id: int,
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    _engineering_knowledge_conversation_or_404(
+        db,
+        project_id,
+        conversation_id,
+        user,
+    )
+    rows = db.scalars(
+        select(EngineeringKnowledgeMessage)
+        .where(
+            EngineeringKnowledgeMessage.conversation_id == conversation_id,
+        )
+        .order_by(
+            EngineeringKnowledgeMessage.created_at,
+            EngineeringKnowledgeMessage.id,
+        ),
+    ).all()
+    return ok([_engineering_knowledge_message_view(row) for row in rows])
+
+
+@router.post(
+    "/projects/{project_id}/engineering-knowledge-conversations/"
+    "{conversation_id}/messages",
+)
+def create_engineering_knowledge_message(
+    project_id: int,
+    conversation_id: int,
+    payload: EngineeringKnowledgeMessageInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    conversation = _engineering_knowledge_conversation_or_404(
+        db,
+        project_id,
+        conversation_id,
+        user,
+    )
+    content = payload.content.strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="消息内容不能为空")
+    row = EngineeringKnowledgeMessage(
+        conversation_id=conversation.id,
+        role=payload.role,
+        content=content,
+        references=payload.references,
+        failed=payload.failed,
+    )
+    db.add(row)
+    conversation.updated_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(row)
+    return ok(_engineering_knowledge_message_view(row), "知识库消息已保存")
+
+
+@router.delete(
+    "/projects/{project_id}/engineering-knowledge-conversations/"
+    "{conversation_id}",
+)
+def delete_engineering_knowledge_conversation(
+    project_id: int,
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    conversation = _engineering_knowledge_conversation_or_404(
+        db,
+        project_id,
+        conversation_id,
+        user,
+    )
+    title = conversation.title
+    db.execute(
+        delete(EngineeringKnowledgeMessage).where(
+            EngineeringKnowledgeMessage.conversation_id == conversation.id,
+        ),
+    )
+    audit(
+        db,
+        user,
+        "删除知识库对话",
+        f"删除知识库对话「{title}」及其聊天记录",
+        project_id,
+        "engineering_knowledge_conversation",
+        conversation.id,
+    )
+    db.delete(conversation)
+    db.commit()
+    return ok({"id": conversation_id}, "知识库对话已删除")
 
 
 @router.post("/projects/{project_id}/engineering-documents/ask")

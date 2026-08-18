@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from fastapi import HTTPException, Response, UploadFile
 
 from agentscope.agent import ContextConfig, ReActConfig
@@ -20,6 +21,7 @@ from agentscope.app._router._agent import (
     _fetch_weknora_knowledge,
     _fetch_weknora_knowledge_bases,
     _normalise_platform_agent_data,
+    _request_weknora_json,
     _search_weknora_knowledge,
     ask_weknora_agent,
     create_weknora_folder,
@@ -499,6 +501,40 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         self.assertEqual(response.knowledge_base_count, 3)
         probed = probe.await_args.args[0]
         self.assertEqual(probed.api_key.get_secret_value(), "saved-secret")
+
+    async def test_weknora_requests_allow_loopback_and_private_endpoints(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="http://127.219.0.240:8080",
+            api_prefix="/api/v1",
+            auth_header="X-API-Key",
+            api_key="saved-secret",
+        )
+        response = httpx.Response(
+            200,
+            json={"success": True, "data": {"items": []}},
+            request=httpx.Request(
+                "GET",
+                "http://127.219.0.240:8080/api/v1/knowledge-bases",
+            ),
+        )
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = False
+        client.request.return_value = response
+
+        with patch(
+            "agentscope.app._router._agent.httpx.AsyncClient",
+            return_value=client,
+        ):
+            payload = await _request_weknora_json(
+                connection,
+                "/knowledge-bases",
+            )
+
+        self.assertTrue(payload["success"])
+        client.request.assert_awaited_once()
 
     async def test_project_robot_bindings_are_loaded_from_business_db(
         self,
