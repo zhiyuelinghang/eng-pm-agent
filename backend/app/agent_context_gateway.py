@@ -12,6 +12,7 @@ import hmac
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,7 @@ from .models import (
     AgentConversation,
     Project,
     ProjectMember,
+    ProjectSettings,
     User,
 )
 
@@ -51,6 +53,13 @@ class ToolContext:
     def can_submit_initialization_draft(self) -> bool:
         """Initialization agents may write only assigned draft interactions."""
         return self.conversation.conversation_type == "initialization"
+
+
+class ProjectWeKnoraBindingInput(BaseModel):
+    """Trusted management request for one project's WeKnora robot."""
+
+    weknora_agent_id: str | None = Field(default=None, max_length=128)
+
 
 def ok(data: Any, message: str = "ok") -> dict[str, Any]:
     return {"success": True, "data": data, "message": message}
@@ -131,4 +140,73 @@ def get_agent_tool_context(
                 ),
             },
         },
+    )
+
+
+@router.get(
+    "/weknora-project-bindings",
+    dependencies=[Depends(require_service_token)],
+)
+def list_weknora_project_bindings(
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """List every existing project and its persisted WeKnora robot binding."""
+
+    rows = db.execute(
+        select(Project, ProjectSettings)
+        .outerjoin(ProjectSettings, ProjectSettings.project_id == Project.id)
+        .order_by(Project.id),
+    ).all()
+    return ok(
+        [
+            {
+                "project_id": project.id,
+                "project_name": project.name,
+                "weknora_agent_id": (
+                    settings.weknora_agent_id if settings is not None else None
+                ),
+                "updated_at": (
+                    settings.updated_at.isoformat()
+                    if settings is not None and settings.updated_at is not None
+                    else None
+                ),
+            }
+            for project, settings in rows
+        ],
+    )
+
+
+@router.put(
+    "/weknora-project-bindings/{project_id}",
+    dependencies=[Depends(require_service_token)],
+)
+def update_weknora_project_binding(
+    project_id: int,
+    payload: ProjectWeKnoraBindingInput,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Persist the robot selected by the AgentScope management platform."""
+
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    row = db.get(ProjectSettings, project_id)
+    if row is None:
+        row = ProjectSettings(project_id=project_id)
+        db.add(row)
+    row.weknora_agent_id = (
+        (payload.weknora_agent_id or "").strip() or None
+    )
+    db.commit()
+    db.refresh(row)
+    return ok(
+        {
+            "project_id": project.id,
+            "project_name": project.name,
+            "weknora_agent_id": row.weknora_agent_id,
+            "updated_at": (
+                row.updated_at.isoformat() if row.updated_at is not None else None
+            ),
+        },
+        "项目知识库机器人绑定已保存",
     )

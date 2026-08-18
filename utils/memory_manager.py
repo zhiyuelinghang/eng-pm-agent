@@ -1195,6 +1195,9 @@ class MemoryManager:
                             or detail.get("file_name")
                             or ""
                         )
+                        result["folder_path"] = (
+                            detail.get("folder_path") or ""
+                        )
                         result["file_type"] = detail.get("file_type") or ""
                         result["file_size"] = detail.get("file_size")
                         result["source"] = (

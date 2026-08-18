@@ -780,6 +780,12 @@
 			"description": "配置 WeKnora 服务并管理远程工程资料。"
 		},
 		"sections": {
+			"assignments": {
+				"title": "项目分配",
+				"description": "为已有项目绑定各自的 WeKnora 机器人。",
+				"loading": "正在读取",
+				"assigned": "已绑定 {{count}} / {{total}}"
+			},
 			"connection": {
 				"title": "WeKnora 接入",
 				"description": "配置独立服务地址和租户级鉴权。",
@@ -800,6 +806,28 @@
 				"status": "尚未配置",
 				"ready": "智能体已配置"
 			}
+		},
+		"assignments": {
+			"loadFailed": "项目绑定列表加载失败",
+			"eyebrow": "项目知识库分配",
+			"title": "为已有项目绑定 WeKnora 机器人",
+			"description": "一个项目绑定一个机器人 ID；该机器人在 WeKnora 中获准读取的知识库，就是该项目的工程资料范围。",
+			"connectionRequiredTitle": "请先完成 WeKnora 服务接入",
+			"connectionRequiredDescription": "保存机器人 ID 前需要读取并验证该机器人的知识库权限。",
+			"loadFailedTitle": "项目列表加载失败",
+			"retry": "重试",
+			"loading": "正在读取项目列表…",
+			"emptyTitle": "暂无可分配的项目",
+			"emptyDescription": "业务平台中还没有已创建项目。",
+			"listTitle": "项目与机器人",
+			"listDescription": "项目列表来自工程管理业务数据库，机器人 ID 保存后立即对用户端生效。",
+			"refresh": "刷新项目",
+			"bound": "已绑定",
+			"unbound": "未绑定",
+			"robotId": "WeKnora 机器人 ID",
+			"robotIdPlaceholder": "输入该项目对应的机器人 ID",
+			"save": "保存分配",
+			"saved": "项目机器人分配已保存"
 		},
 		"connection": {
 			"eyebrow": "HTTP(S) 服务配置",
@@ -830,9 +858,6 @@
 			"saved": "WeKnora 连接配置已保存"
 		},
 		"knowledge": {
-			"eyebrow": "远程资料管理",
-			"title": "WeKnora 知识库与工程资料",
-			"description": "接入后在此加载远程知识库，管理文件、URL、解析状态、预览和下载。",
 			"refresh": "重新拉取",
 			"addUrl": "添加 URL",
 			"upload": "上传资料",
@@ -846,6 +871,7 @@
 			"searchDescription": "按新版协议执行向量与关键词混合检索，并返回文件溯源。",
 			"searchQueryPlaceholder": "输入需要从当前知识库查找的问题",
 			"searchAction": "检索",
+			"hybridSearchToggle": "混合检索",
 			"searchEmpty": "没有检索到相关资料",
 			"urlDialogTitle": "从 URL 添加资料",
 			"urlDialogDescription": "WeKnora 将抓取网页内容并在后台完成解析、分块和向量化。",
@@ -867,9 +893,21 @@
 			"availableBases": "个可用知识库",
 			"switchBase": "切换知识库",
 			"documentsTitle": "工程资料",
-			"documentsHint": "按文件快速浏览资料、解析状态和来源信息。",
+			"documentsHint": "按目录树浏览资料，展开文件夹后仅加载当前目录内容。",
 			"documentsCount": "{{count}} 条",
 			"searchPlaceholder": "搜索文件名或资料内容",
+			"filterAction": "筛选",
+			"folderTreeTitle": "资料目录",
+			"folderTreeHint": "展开目录并选择需要查看的文件夹。",
+			"allDocuments": "全部资料",
+			"loadingFolders": "正在加载目录…",
+			"directFilesHint": "仅显示当前目录的直属文件；上传资料会保存到此目录。",
+			"allFilesHint": "显示所有目录中的资料；上传资料会保存到根目录。",
+			"expandFolder": "展开文件夹",
+			"collapseFolder": "收起文件夹",
+			"pageStatus": "第 {{page}} / {{pages}} 页",
+			"previousPage": "上一页",
+			"nextPage": "下一页",
 			"loadingDocuments": "正在拉取工程资料…",
 			"documentsLoadFailed": "工程资料拉取失败",
 			"noDocumentsTitle": "该知识库暂无资料",

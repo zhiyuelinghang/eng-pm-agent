@@ -140,6 +140,11 @@ class ProjectSettings(TimestampMixin, Base):
     scan_interval: Mapped[int] = mapped_column(Integer, default=30)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     reminder_rules: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    weknora_agent_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+        index=True,
+    )
 
 
 class ProjectMember(TimestampMixin, Base):

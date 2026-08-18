@@ -411,6 +411,42 @@ def _ensure_attachment_text_pipeline_fields(engine: Engine) -> None:
         )
 
 
+def _ensure_project_settings_weknora_agent_field(engine: Engine) -> None:
+    """Persist the one WeKnora robot assigned to each existing project."""
+
+    table_name = "project_settings"
+    inspector = inspect(engine)
+    if table_name not in inspector.get_table_names():
+        return
+    columns = {
+        str(column["name"])
+        for column in inspector.get_columns(table_name)
+    }
+    if "weknora_agent_id" not in columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"ALTER TABLE {table_name} ADD COLUMN "
+                    "weknora_agent_id VARCHAR(128)",
+                ),
+            )
+    refreshed = inspect(engine)
+    index_name = "ix_project_settings_weknora_agent_id"
+    index_names = {
+        str(index["name"])
+        for index in refreshed.get_indexes(table_name)
+        if index.get("name")
+    }
+    if index_name not in index_names:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    f"CREATE INDEX {index_name} ON {table_name} "
+                    "(weknora_agent_id)",
+                ),
+            )
+
+
 def _ensure_initialization_draft_record_version_fields(engine: Engine) -> None:
     """Keep addressable draft-row history compatible with older installs."""
     table_name = "project_initialization_draft_records"
@@ -563,6 +599,7 @@ def upgrade_database_schema(
         _ensure_database_interaction_join_rules(engine)
         _ensure_database_interaction_runtime_rules(engine)
         _ensure_attachment_text_pipeline_fields(engine)
+        _ensure_project_settings_weknora_agent_field(engine)
         _ensure_initialization_draft_record_version_fields(engine)
         return
 
@@ -571,6 +608,7 @@ def upgrade_database_schema(
     _ensure_database_interaction_join_rules(engine)
     _ensure_database_interaction_runtime_rules(engine)
     _ensure_attachment_text_pipeline_fields(engine)
+    _ensure_project_settings_weknora_agent_field(engine)
     _ensure_initialization_draft_record_version_fields(engine)
     _backfill_initialization_draft_records(engine)
     if legacy_layout:

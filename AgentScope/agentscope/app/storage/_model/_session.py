@@ -30,6 +30,14 @@ class PlatformSessionContext(BaseModel):
     conversation_title: str
     conversation_type: str
     agent_name: str
+    weknora_agent_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "WeKnora robot bound to this platform project. The value is "
+            "supplied by the authenticated platform service."
+        ),
+    )
     session_role: Literal["primary", "worker"] = "primary"
     root_session_id: str | None = None
     auto_allowed_tool_names: list[str] = Field(

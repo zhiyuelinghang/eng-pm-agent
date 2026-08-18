@@ -65,6 +65,133 @@ class AgentScopeClientTest(TestCase):
         )
         self.assertNotIn("X-User-ID", client.headers)
 
+    def test_weknora_answer_wait_has_no_read_deadline(self) -> None:
+        client = _client()
+        response = Mock()
+        response.is_error = False
+        response.status_code = 200
+        response.json.return_value = {
+            "session_id": "session-1",
+            "answer": "完成",
+            "references": [],
+        }
+
+        with patch(
+            "backend.app.agentscope_client.httpx.request",
+            return_value=response,
+        ) as request:
+            result = client.ask_weknora_agent(
+                "robot-1",
+                {"query": "请分析资料"},
+            )
+
+        timeout = request.call_args.kwargs["timeout"]
+        self.assertIsNone(timeout.read)
+        self.assertEqual(result["answer"], "完成")
+
+    def test_weknora_session_control_uses_robot_scope(self) -> None:
+        client = _client()
+        client._request = Mock(return_value={"session_id": "session-1"})
+
+        client.create_weknora_agent_session("robot-1")
+        client.stop_weknora_agent_session("robot-1", "session/1")
+
+        self.assertEqual(
+            client._request.call_args_list[0].args,
+            ("POST", "/agent/platform/weknora/sessions"),
+        )
+        self.assertEqual(
+            client._request.call_args_list[0].kwargs["json"],
+            {"weknora_agent_id": "robot-1"},
+        )
+        self.assertEqual(
+            client._request.call_args_list[1].args,
+            (
+                "POST",
+                "/agent/platform/weknora/sessions/session%2F1/stop",
+            ),
+        )
+
+    def test_weknora_folder_creation_uses_robot_scope(self) -> None:
+        client = _client()
+        client._request = Mock(return_value={"knowledge_id": "marker-1"})
+
+        result = client.create_weknora_folder(
+            "robot-1",
+            "kb/1",
+            folder_path="方案/新目录",
+        )
+
+        self.assertEqual(result["knowledge_id"], "marker-1")
+        self.assertEqual(
+            client._request.call_args.args,
+            (
+                "POST",
+                "/agent/platform/weknora/knowledge-bases/"
+                "kb%2F1/knowledge/folders",
+            ),
+        )
+        self.assertEqual(
+            client._request.call_args.kwargs,
+            {
+                "params": {"weknora_agent_id": "robot-1"},
+                "json": {"folder_path": "方案/新目录"},
+            },
+        )
+
+    def test_weknora_folder_deletion_uses_robot_scope(self) -> None:
+        client = _client()
+        client._request = Mock(return_value=None)
+
+        client.delete_weknora_folder(
+            "robot-1",
+            "kb/1",
+            folder_path="方案/空目录",
+        )
+
+        self.assertEqual(
+            client._request.call_args.args,
+            (
+                "DELETE",
+                "/agent/platform/weknora/knowledge-bases/"
+                "kb%2F1/knowledge/folders",
+            ),
+        )
+        self.assertEqual(
+            client._request.call_args.kwargs,
+            {
+                "params": {
+                    "weknora_agent_id": "robot-1",
+                    "folder_path": "方案/空目录",
+                    "recursive": "false",
+                },
+                "wait_for_response": False,
+            },
+        )
+
+    def test_recursive_weknora_folder_deletion_has_no_read_deadline(self) -> None:
+        client = _client()
+        client._request = Mock(return_value=None)
+
+        client.delete_weknora_folder(
+            "robot-1",
+            "kb/1",
+            folder_path="方案/父目录",
+            recursive=True,
+        )
+
+        self.assertEqual(
+            client._request.call_args.kwargs,
+            {
+                "params": {
+                    "weknora_agent_id": "robot-1",
+                    "folder_path": "方案/父目录",
+                    "recursive": "true",
+                },
+                "wait_for_response": True,
+            },
+        )
+
     def test_platform_sessions_never_auto_allow_initialization_tools(self) -> None:
         user = SimpleNamespace(id=1, username="admin", real_name="管理员")
         project = SimpleNamespace(id=2, name="测试项目")

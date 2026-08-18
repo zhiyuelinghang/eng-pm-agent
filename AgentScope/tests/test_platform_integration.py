@@ -1,42 +1,59 @@
 """Regression tests for the engineering-platform integration contract."""
 
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, patch
 
-from fastapi import HTTPException, Response
+from fastapi import HTTPException, Response, UploadFile
 
 from agentscope.agent import ContextConfig, ReActConfig
 from agentscope.message import UserMsg
 from agentscope.app._auth import AgentScopePrincipal
 from agentscope.app._router._agent import (
+    WEKNORA_FOLDER_PLACEHOLDER_CONTENT_TYPE,
+    WEKNORA_FOLDER_PLACEHOLDER_FILENAME,
     _demote_other_global_main_agents,
+    _fetch_weknora_folder_tree,
     _fetch_weknora_knowledge,
     _fetch_weknora_knowledge_bases,
     _normalise_platform_agent_data,
     _search_weknora_knowledge,
     ask_weknora_agent,
+    create_weknora_folder,
+    create_weknora_agent_session,
     delete_agent,
+    delete_weknora_folder,
     get_platform_agent_catalog,
     get_weknora_connection,
+    list_weknora_project_bindings,
     list_weknora_knowledge as _list_weknora_knowledge_endpoint,
     list_weknora_knowledge_bases as _list_weknora_knowledge_bases_endpoint,
     reveal_weknora_api_key,
+    stop_weknora_agent_session,
     test_weknora_connection as _test_weknora_connection_endpoint,
+    upload_weknora_knowledge as _upload_weknora_knowledge_endpoint,
     update_platform_settings,
+    update_weknora_project_binding,
     update_weknora_connection,
 )
 from agentscope.app._router._schema import (
     AskWeKnoraAgentRequest,
+    CreateWeKnoraAgentSessionRequest,
+    CreateWeKnoraFolderRequest,
     CreateSessionRequest,
     SearchWeKnoraKnowledgeRequest,
+    StopWeKnoraAgentSessionRequest,
     UpdateMessageMetadataRequest,
     UpdatePlatformSettingsRequest,
+    UpdateWeKnoraProjectBindingRequest,
     TestWeKnoraConnectionRequest as WeKnoraConnectionTestRequest,
     UpdateWeKnoraConnectionRequest,
     UpdateSessionRequest,
+    WeKnoraFolderItem,
+    WeKnoraFolderTreeResponse,
     WeKnoraKnowledgeBaseItem,
     WeKnoraKnowledgeItem,
 )
@@ -401,7 +418,6 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                 base_url="https://weknora.example.com/",
                 api_prefix="api/v1/",
                 auth_header="X-API-Key",
-                agent_id="agent-001",
                 api_key="tenant-secret",
             ),
             user_id=USER_ID,
@@ -410,7 +426,6 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(response.base_url, "https://weknora.example.com")
         self.assertEqual(response.api_prefix, "/api/v1")
-        self.assertEqual(response.agent_id, "agent-001")
         self.assertTrue(response.api_key_configured)
         self.assertNotIn("api_key", response.model_dump())
         self.assertEqual(
@@ -464,7 +479,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             list_agents=AsyncMock(return_value=[]),
             upsert_agent=AsyncMock(return_value="agent"),
         )
-        probe = AsyncMock(return_value=(3, True, "工程知识助手"))
+        probe = AsyncMock(return_value=3)
 
         with patch(
             "agentscope.app._router._agent._probe_weknora",
@@ -475,7 +490,6 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                     base_url="https://weknora.example.com",
                     api_prefix="/api/v1",
                     auth_header="X-API-Key",
-                    agent_id="agent-001",
                 ),
                 user_id=USER_ID,
                 storage=storage,
@@ -483,10 +497,88 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
 
         self.assertTrue(response.success)
         self.assertEqual(response.knowledge_base_count, 3)
-        self.assertTrue(response.agent_validated)
-        self.assertEqual(response.agent_name, "工程知识助手")
         probed = probe.await_args.args[0]
         self.assertEqual(probed.api_key.get_secret_value(), "saved-secret")
+
+    async def test_project_robot_bindings_are_loaded_from_business_db(
+        self,
+    ) -> None:
+        projects = [
+            {
+                "project_id": 7,
+                "project_name": "滨江项目",
+                "weknora_agent_id": "robot-007",
+                "updated_at": None,
+            },
+            {
+                "project_id": 8,
+                "project_name": "城北项目",
+                "weknora_agent_id": None,
+                "updated_at": None,
+            },
+        ]
+        with patch(
+            "agentscope.app._router._agent._request_dobby_project_bindings",
+            new=AsyncMock(return_value=projects),
+        ):
+            response = await list_weknora_project_bindings(user_id=USER_ID)
+
+        self.assertEqual(response.total, 2)
+        self.assertEqual(response.projects[0].weknora_agent_id, "robot-007")
+        self.assertIsNone(response.projects[1].weknora_agent_id)
+
+    async def test_project_robot_is_validated_before_it_is_persisted(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(weknora_connection=connection),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(),
+        )
+        persisted = {
+            "project_id": 7,
+            "project_name": "滨江项目",
+            "weknora_agent_id": "robot-007",
+            "updated_at": None,
+        }
+        persist_mock = AsyncMock(return_value=persisted)
+        with (
+            patch(
+                "agentscope.app._router._agent._fetch_weknora_agent",
+                new=AsyncMock(
+                    return_value=("robot-007", "滨江资料机器人", ["kb-1"]),
+                ),
+            ) as fetch_mock,
+            patch(
+                "agentscope.app._router._agent._request_dobby_project_bindings",
+                new=persist_mock,
+            ),
+        ):
+            response = await update_weknora_project_binding(
+                project_id=7,
+                body=UpdateWeKnoraProjectBindingRequest(
+                    weknora_agent_id=" robot-007 ",
+                ),
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertEqual(response.weknora_agent_id, "robot-007")
+        fetch_mock.assert_awaited_once_with(connection, "robot-007")
+        persist_mock.assert_awaited_once_with(
+            "/7",
+            method="PUT",
+            json_body={"weknora_agent_id": "robot-007"},
+        )
 
     async def test_weknora_api_key_is_revealed_only_by_explicit_endpoint(
         self,
@@ -613,6 +705,9 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                 knowledge_base_id="kb/1",
                 page=2,
                 page_size=20,
+                folder_path="01_合同图纸与方案/图纸",
+                folder_recursive=False,
+                keyword="人防",
                 user_id=USER_ID,
                 storage=storage,
             )
@@ -621,9 +716,20 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         self.assertEqual(response.page, 2)
         self.assertEqual(response.knowledge[0].parse_status, "completed")
         self.assertEqual(fetch.await_args.args[1], "kb/1")
-        self.assertEqual(fetch.await_args.kwargs, {"page": 2, "page_size": 20})
+        self.assertEqual(
+            fetch.await_args.kwargs,
+            {
+                "page": 2,
+                "page_size": 20,
+                "folder_path": "01_合同图纸与方案/图纸",
+                "folder_recursive": False,
+                "keyword": "人防",
+            },
+        )
 
-    async def test_weknora_documented_list_shapes_are_normalised(self) -> None:
+    async def test_weknora_list_shapes_and_root_pagination_are_normalised(
+        self,
+    ) -> None:
         connection = WeKnoraConnectionConfig(
             base_url="https://weknora.example.com",
             api_key="saved-secret",
@@ -642,19 +748,25 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                 },
                 {
                     "success": True,
-                    "data": {
-                        "list": [
-                            {
-                                "id": "knowledge-1",
-                                "title": "施工组织设计",
-                                "file_name": "施工组织设计.pdf",
-                                "file_type": "pdf",
-                                "file_size": "2048",
-                                "parse_status": "completed",
-                            },
-                        ],
-                        "total": 7,
-                    },
+                    "data": [
+                        {
+                            "id": "knowledge-1",
+                            "title": "施工组织设计",
+                            "file_name": "施工组织设计.pdf",
+                            "folder_path": "01_合同图纸与方案/方案",
+                            "file_type": "pdf",
+                            "file_size": "2048",
+                            "parse_status": "completed",
+                        },
+                    ],
+                    "total": 877,
+                    "page": 2,
+                    "page_size": 20,
+                },
+                {
+                    "success": True,
+                    "data": [],
+                    "total": 0,
                 },
             ],
         )
@@ -674,7 +786,11 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         self.assertEqual(knowledge_bases[0].name, "工程规范")
         self.assertEqual(knowledge[0].file_size, 2048)
         self.assertEqual(knowledge[0].knowledge_base_id, "kb/1")
-        self.assertEqual(total, 7)
+        self.assertEqual(
+            knowledge[0].folder_path,
+            "01_合同图纸与方案/方案",
+        )
+        self.assertEqual(total, 877)
         self.assertEqual(
             request.await_args_list[0].args,
             (connection, "/knowledge-bases"),
@@ -686,6 +802,531 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         self.assertEqual(
             request.await_args_list[1].kwargs,
             {"params": {"page": 2, "page_size": 20}},
+        )
+
+    async def test_weknora_folder_tree_uses_documented_contract(self) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        request = AsyncMock(
+            side_effect=[{
+                "success": True,
+                "data": {
+                    "root_document_count": 2,
+                    "total_document_count": 12,
+                    "folders": [
+                        {
+                            "path": "01_合同图纸与方案",
+                            "name": "01_合同图纸与方案",
+                            "document_count": 3,
+                            "total_count": 10,
+                            "children": [
+                                {
+                                    "path": "01_合同图纸与方案/图纸",
+                                    "name": "图纸",
+                                    "document_count": 7,
+                                    "total_count": 7,
+                                },
+                            ],
+                        },
+                    ],
+                },
+            }, {
+                "success": True,
+                "data": [],
+                "total": 0,
+            }],
+        )
+
+        with patch(
+            "agentscope.app._router._agent._request_weknora_json",
+            new=request,
+        ):
+            tree = await _fetch_weknora_folder_tree(connection, "kb/1")
+
+        self.assertEqual(tree.root_document_count, 2)
+        self.assertEqual(tree.total_document_count, 12)
+        self.assertEqual(tree.folders[0].children[0].name, "图纸")
+        self.assertEqual(
+            request.await_args_list[0].args,
+            (connection, "/knowledge-bases/kb%2F1/knowledge/folders"),
+        )
+
+    async def test_weknora_folder_markers_are_hidden_from_file_lists(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        marker = {
+            "id": "folder-marker-1",
+            "file_name": WEKNORA_FOLDER_PLACEHOLDER_FILENAME,
+            "folder_path": "方案/空目录",
+            "file_size": 0,
+        }
+        request = AsyncMock(
+            side_effect=[
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "id": "knowledge-1",
+                            "file_name": "施工方案.pdf",
+                            "folder_path": "方案/空目录",
+                        },
+                        marker,
+                    ],
+                    "total": 2,
+                },
+                {"success": True, "data": [marker], "total": 1},
+            ],
+        )
+
+        with patch(
+            "agentscope.app._router._agent._request_weknora_json",
+            new=request,
+        ):
+            knowledge, total = await _fetch_weknora_knowledge(
+                connection,
+                "kb-1",
+                page=1,
+                page_size=100,
+                folder_path="方案/空目录",
+                folder_recursive=False,
+            )
+
+        self.assertEqual([item.id for item in knowledge], ["knowledge-1"])
+        self.assertEqual(total, 1)
+
+    async def test_weknora_folder_markers_are_hidden_from_counts(self) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        request = AsyncMock(
+            side_effect=[
+                {
+                    "success": True,
+                    "data": {
+                        "root_document_count": 0,
+                        "total_document_count": 3,
+                        "folders": [
+                            {
+                                "path": "方案",
+                                "name": "方案",
+                                "document_count": 1,
+                                "total_count": 3,
+                                "children": [
+                                    {
+                                        "path": "方案/空目录",
+                                        "name": "空目录",
+                                        "document_count": 1,
+                                        "total_count": 1,
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                },
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "id": "folder-marker-1",
+                            "file_name": WEKNORA_FOLDER_PLACEHOLDER_FILENAME,
+                            "folder_path": "方案/空目录",
+                        },
+                    ],
+                    "total": 1,
+                },
+            ],
+        )
+
+        with patch(
+            "agentscope.app._router._agent._request_weknora_json",
+            new=request,
+        ):
+            tree = await _fetch_weknora_folder_tree(connection, "kb-1")
+
+        self.assertEqual(tree.total_document_count, 2)
+        self.assertEqual(tree.folders[0].document_count, 1)
+        self.assertEqual(tree.folders[0].total_count, 2)
+        self.assertEqual(tree.folders[0].children[0].document_count, 0)
+        self.assertEqual(tree.folders[0].children[0].total_count, 0)
+
+    async def test_weknora_folder_creation_uploads_empty_private_marker(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        request = AsyncMock(
+            side_effect=[
+                {
+                    "success": True,
+                    "data": {
+                        "root_document_count": 0,
+                        "total_document_count": 0,
+                        "folders": [],
+                    },
+                },
+                {"success": True, "data": [], "total": 0},
+                {
+                    "success": True,
+                    "data": {
+                        "id": "folder-marker-1",
+                        "file_name": WEKNORA_FOLDER_PLACEHOLDER_FILENAME,
+                        "folder_path": "方案/新目录",
+                    },
+                },
+            ],
+        )
+
+        with patch(
+            "agentscope.app._router._agent._request_weknora_json",
+            new=request,
+        ):
+            response = await create_weknora_folder(
+                knowledge_base_id="kb/1",
+                body=CreateWeKnoraFolderRequest(
+                    folder_path="/方案/新目录/",
+                ),
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        upload_call = request.await_args_list[2]
+        self.assertEqual(response.knowledge_id, "folder-marker-1")
+        self.assertEqual(
+            upload_call.kwargs["data"],
+            {
+                "enable_multimodel": "false",
+                "channel": "api",
+                "fileName": (
+                    f"方案/新目录/{WEKNORA_FOLDER_PLACEHOLDER_FILENAME}"
+                ),
+                "folder_path": "方案/新目录",
+            },
+        )
+        self.assertEqual(
+            upload_call.kwargs["files"]["file"],
+            (
+                WEKNORA_FOLDER_PLACEHOLDER_FILENAME,
+                b"",
+                WEKNORA_FOLDER_PLACEHOLDER_CONTENT_TYPE,
+            ),
+        )
+
+    async def test_weknora_empty_folder_deletion_removes_its_marker(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        tree = WeKnoraFolderTreeResponse(
+            folders=[WeKnoraFolderItem(
+                path="方案/空目录",
+                name="空目录",
+            )],
+        )
+        marker = WeKnoraKnowledgeItem(
+            id="folder-marker/1",
+            file_name=WEKNORA_FOLDER_PLACEHOLDER_FILENAME,
+            folder_path="方案/空目录",
+        )
+        request = AsyncMock(return_value={"success": True})
+
+        with (
+            patch(
+                "agentscope.app._router._agent._weknora_agent_knowledge_base_ids",
+                new=AsyncMock(return_value=["kb/1"]),
+            ),
+            patch(
+                "agentscope.app._router._agent._fetch_weknora_folder_tree",
+                new=AsyncMock(return_value=tree),
+            ),
+            patch(
+                "agentscope.app._router._agent._fetch_weknora_folder_placeholders",
+                new=AsyncMock(return_value=[marker]),
+            ),
+            patch(
+                "agentscope.app._router._agent._request_weknora_json",
+                new=request,
+            ),
+        ):
+            response = await delete_weknora_folder(
+                knowledge_base_id="kb/1",
+                folder_path="/方案/空目录/",
+                weknora_agent_id="robot-1",
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(
+            request.await_args.args,
+            (connection, "/knowledge/folder-marker%2F1"),
+        )
+        self.assertEqual(request.await_args.kwargs, {"method": "DELETE"})
+
+    async def test_weknora_folder_deletion_rejects_child_folders(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        tree = WeKnoraFolderTreeResponse(
+            folders=[WeKnoraFolderItem(
+                path="方案/父目录",
+                name="父目录",
+                children=[WeKnoraFolderItem(
+                    path="方案/父目录/子目录",
+                    name="子目录",
+                )],
+            )],
+        )
+
+        with (
+            patch(
+                "agentscope.app._router._agent._weknora_agent_knowledge_base_ids",
+                new=AsyncMock(return_value=["kb-1"]),
+            ),
+            patch(
+                "agentscope.app._router._agent._fetch_weknora_folder_tree",
+                new=AsyncMock(return_value=tree),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as caught:
+                await delete_weknora_folder(
+                    knowledge_base_id="kb-1",
+                    folder_path="方案/父目录",
+                    weknora_agent_id="robot-1",
+                    user_id=USER_ID,
+                    storage=storage,
+                )
+
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertIn("只能删除空目录", str(caught.exception.detail))
+
+    async def test_recursive_weknora_folder_deletion_removes_all_content(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        tree = WeKnoraFolderTreeResponse(
+            folders=[WeKnoraFolderItem(
+                path="方案/父目录",
+                name="父目录",
+                document_count=1,
+                total_count=2,
+                children=[WeKnoraFolderItem(
+                    path="方案/父目录/子目录",
+                    name="子目录",
+                    document_count=1,
+                    total_count=1,
+                )],
+            )],
+        )
+        markers = [
+            WeKnoraKnowledgeItem(
+                id="marker-root",
+                file_name=WEKNORA_FOLDER_PLACEHOLDER_FILENAME,
+                folder_path="方案/父目录",
+            ),
+            WeKnoraKnowledgeItem(
+                id="marker-child",
+                file_name=WEKNORA_FOLDER_PLACEHOLDER_FILENAME,
+                folder_path="方案/父目录/子目录",
+            ),
+        ]
+        request = AsyncMock(
+            side_effect=[
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "id": "knowledge/root",
+                            "file_name": "根目录方案.pdf",
+                            "folder_path": "方案/父目录",
+                        },
+                        {
+                            "id": "knowledge-child",
+                            "file_name": "子目录方案.pdf",
+                            "folder_path": "方案/父目录/子目录",
+                        },
+                        {
+                            "id": "marker-root",
+                            "file_name": WEKNORA_FOLDER_PLACEHOLDER_FILENAME,
+                            "folder_path": "方案/父目录",
+                        },
+                    ],
+                    "total": 3,
+                },
+                {"success": True},
+                {"success": True},
+                {"success": True},
+                {"success": True},
+            ],
+        )
+
+        with (
+            patch(
+                "agentscope.app._router._agent._weknora_agent_knowledge_base_ids",
+                new=AsyncMock(return_value=["kb/1"]),
+            ),
+            patch(
+                "agentscope.app._router._agent._fetch_weknora_folder_tree",
+                new=AsyncMock(return_value=tree),
+            ),
+            patch(
+                "agentscope.app._router._agent._fetch_weknora_folder_placeholders",
+                new=AsyncMock(return_value=markers),
+            ),
+            patch(
+                "agentscope.app._router._agent._request_weknora_json",
+                new=request,
+            ),
+        ):
+            response = await delete_weknora_folder(
+                knowledge_base_id="kb/1",
+                folder_path="方案/父目录",
+                recursive=True,
+                weknora_agent_id="robot-1",
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(
+            request.await_args_list[0].kwargs["params"],
+            {
+                "page": 1,
+                "page_size": 100,
+                "folder_path": "方案/父目录",
+                "folder_recursive": "true",
+            },
+        )
+        self.assertEqual(
+            [call.args[1] for call in request.await_args_list[1:]],
+            [
+                "/knowledge/knowledge%2Froot",
+                "/knowledge/knowledge-child",
+                "/knowledge/marker-child",
+                "/knowledge/marker-root",
+            ],
+        )
+
+    async def test_weknora_upload_separates_filename_and_folder_path(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        request = AsyncMock(
+            return_value={
+                "success": True,
+                "data": {
+                    "id": "knowledge-1",
+                    "file_name": "监测报表.pdf",
+                    "parse_status": "pending",
+                },
+            },
+        )
+        upload = UploadFile(
+            file=BytesIO(b"pdf-content"),
+            filename="监测报表.pdf",
+        )
+
+        with patch(
+            "agentscope.app._router._agent._request_weknora_json",
+            new=request,
+        ):
+            response = await _upload_weknora_knowledge_endpoint(
+                knowledge_base_id="kb/1",
+                file=upload,
+                enable_multimodel=True,
+                folder_path="/04_监测检测与试验/",
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertEqual(response.knowledge_id, "knowledge-1")
+        self.assertEqual(
+            request.await_args.kwargs["data"],
+            {
+                "enable_multimodel": "true",
+                "channel": "api",
+                "fileName": "监测报表.pdf",
+                "folder_path": "04_监测检测与试验",
+            },
         )
 
     async def test_weknora_hybrid_search_uses_documented_contract(self) -> None:
@@ -717,6 +1358,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                         {
                             "id": "knowledge-1",
                             "file_name": "vpn-guide.pdf",
+                            "folder_path": "运维/VPN",
                             "file_type": "pdf",
                             "file_size": 2048000,
                             "parse_status": "completed",
@@ -739,6 +1381,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         self.assertEqual(len(references), 1)
         self.assertEqual(references[0].filename, "vpn-guide.pdf")
         self.assertEqual(references[0].file_type, "pdf")
+        self.assertEqual(references[0].folder_path, "运维/VPN")
         self.assertEqual(references[0].score, 0.92)
         self.assertEqual(
             request.await_args_list[0].args,
@@ -765,7 +1408,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             {"params": {"ids": "knowledge-1"}},
         )
 
-    async def test_weknora_agent_query_uses_configured_agent_id(self) -> None:
+    async def test_weknora_agent_query_uses_project_robot_id(self) -> None:
         connection = WeKnoraConnectionConfig(
             base_url="https://weknora.example.com",
             agent_id="agent-001",
@@ -812,10 +1455,15 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                 "agentscope.app._router._agent._request_weknora_sse",
                 new=sse,
             ),
+            patch(
+                "agentscope.app._router._agent._weknora_agent_knowledge_base_ids",
+                new=AsyncMock(return_value=["kb-001"]),
+            ),
         ):
             response = await ask_weknora_agent(
                 body=AskWeKnoraAgentRequest(
                     query="对比两种方案",
+                    weknora_agent_id="project-robot-001",
                     knowledge_base_ids=["kb-001"],
                 ),
                 user_id=USER_ID,
@@ -833,11 +1481,126 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                 "/agent-chat/session-001",
                 {
                     "query": "对比两种方案",
-                    "agent_id": "agent-001",
+                    "agent_enabled": True,
+                    "agent_id": "project-robot-001",
                     "knowledge_base_ids": ["kb-001"],
+                    "knowledge_ids": [],
                     "channel": "api",
                 },
             ),
+        )
+        self.assertEqual(
+            sse.await_args.kwargs,
+            {"session_id": "session-001"},
+        )
+
+    async def test_weknora_session_is_created_before_long_answer(self) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            agent_id="agent-001",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        request = AsyncMock(
+            return_value={"success": True, "data": {"id": "session-002"}},
+        )
+        with (
+            patch(
+                "agentscope.app._router._agent._request_weknora_json",
+                new=request,
+            ),
+            patch(
+                "agentscope.app._router._agent._weknora_agent_knowledge_base_ids",
+                new=AsyncMock(return_value=["kb-001"]),
+            ),
+        ):
+            response = await create_weknora_agent_session(
+                body=CreateWeKnoraAgentSessionRequest(
+                    weknora_agent_id="project-robot-001",
+                ),
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertEqual(response.session_id, "session-002")
+        self.assertEqual(request.await_args.args, (connection, "/sessions"))
+
+    async def test_weknora_stop_resolves_active_assistant_message(self) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            agent_id="agent-001",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        request = AsyncMock(
+            side_effect=[
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "id": "message-001",
+                            "role": "assistant",
+                            "is_completed": False,
+                        },
+                    ],
+                },
+                {"success": True, "message": "Generation stopped"},
+            ],
+        )
+        with (
+            patch(
+                "agentscope.app._router._agent._request_weknora_json",
+                new=request,
+            ),
+            patch(
+                "agentscope.app._router._agent._weknora_agent_knowledge_base_ids",
+                new=AsyncMock(return_value=["kb-001"]),
+            ),
+        ):
+            response = await stop_weknora_agent_session(
+                session_id="session-001",
+                body=StopWeKnoraAgentSessionRequest(
+                    weknora_agent_id="project-robot-001",
+                ),
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertTrue(response.stopped)
+        self.assertEqual(response.message_id, "message-001")
+        self.assertEqual(
+            request.await_args_list[0].args,
+            (connection, "/messages/session-001/load"),
+        )
+        self.assertEqual(
+            request.await_args_list[1].args,
+            (connection, "/sessions/session-001/stop"),
+        )
+        self.assertEqual(
+            request.await_args_list[1].kwargs["json_body"],
+            {"message_id": "message-001"},
         )
 
     async def test_platform_settings_selects_an_exact_validation_version(

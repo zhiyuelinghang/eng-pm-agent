@@ -35,6 +35,7 @@ from ._agent_invite import AgentInvite
 from ._team_create import TeamCreate
 from ._team_delete import TeamDelete
 from ._team_say import TeamSay
+from ._weknora_project_knowledge import WeKnoraProjectKnowledgeTool
 
 __all__ = [
     "AgentCreate",
@@ -43,4 +44,5 @@ __all__ = [
     "TeamCreate",
     "TeamDelete",
     "TeamSay",
+    "WeKnoraProjectKnowledgeTool",
 ]

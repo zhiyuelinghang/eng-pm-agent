@@ -39,6 +39,7 @@ from agentscope.app.storage import (
     WeKnoraConnectionConfig,
 )
 from agentscope.app._service import ResourceAccessService
+from agentscope.app._tool import WeKnoraProjectKnowledgeTool
 from agentscope.app.workspace_manager import LocalWorkspaceManager
 from agentscope.rag import (
     ExcelParser,
@@ -385,18 +386,37 @@ async def _create_platform_agent_tools(
             if leader_session is not None:
                 platform_session_id = leader_session.id
                 platform_agent_id = leader_session.agent_id
+    tools = []
     try:
-        return await create_database_interaction_tools(
+        tools.extend(await create_database_interaction_tools(
             manager=database_interaction_manager,
             agent_id=agent_id,
             session_id=session_id,
             platform_session_id=platform_session_id,
             platform_agent_id=platform_agent_id,
             legacy_allowed_names=legacy_allowed_names,
-        )
+        ))
     except DatabaseInteractionGatewayError as exc:
         logger.warning("Unable to load database interactions: %s", exc)
-        return []
+    platform_context = session.config.platform_context if session else None
+    robot_id = (
+        (platform_context.weknora_agent_id or "").strip()
+        if platform_context is not None
+        else ""
+    )
+    if robot_id:
+        settings = await storage.get_platform_settings(user_id)
+        connection = (
+            settings.data.weknora_connection if settings is not None else None
+        )
+        if connection is not None and connection.api_key.get_secret_value():
+            tools.append(
+                WeKnoraProjectKnowledgeTool(
+                    connection=connection,
+                    robot_id=robot_id,
+                ),
+            )
+    return tools
 
 app = create_app(
     storage=storage,

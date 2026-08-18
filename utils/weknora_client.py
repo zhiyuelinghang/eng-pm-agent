@@ -130,9 +130,9 @@ class WeKnoraClient:
         file_path: str,
         enable_multimodel: bool = True,
         *,
-        custom_filename: str = "",
+        folder_path: str = "",
     ) -> dict:
-        """Upload a local file to a knowledge base."""
+        """Upload a file using v0.7.2's separate file/folder fields."""
         import os as _os
         abs_path = _os.path.abspath(file_path)
         if not _os.path.exists(abs_path):
@@ -142,9 +142,11 @@ class WeKnoraClient:
             data = {
                 "enable_multimodel": str(enable_multimodel).lower(),
                 "channel": "api",
+                "fileName": _os.path.basename(abs_path),
             }
-            if custom_filename:
-                data["fileName"] = custom_filename
+            normalised_folder_path = folder_path.strip().strip("/")
+            if normalised_folder_path:
+                data["folder_path"] = normalised_folder_path
             headers = {k: v for k, v in self.session.headers.items() if k != "Content-Type"}
             resp = self.session.post(
                 f"{self.base_url}/knowledge-bases/{kb_id}/knowledge/file",
@@ -161,12 +163,30 @@ class WeKnoraClient:
         kb_id: str,
         page: int = 1,
         page_size: int = 20,
+        *,
+        folder_path: str | None = None,
+        folder_recursive: bool = True,
         **filters: str,
     ) -> dict:
         """List knowledge entries in a KB."""
         params = {"page": page, "page_size": page_size}
+        if folder_path is not None:
+            params.update({
+                "folder_path": folder_path,
+                "folder_recursive": str(folder_recursive).lower(),
+            })
         params.update({key: value for key, value in filters.items() if value})
         return self._request("GET", f"/knowledge-bases/{kb_id}/knowledge", params=params)
+
+    def get_folder_tree(self, kb_id: str) -> dict:
+        """Return WeKnora's complete v0.7.2 folder tree."""
+
+        payload = self._request(
+            "GET",
+            f"/knowledge-bases/{kb_id}/knowledge/folders",
+        )
+        data = payload.get("data", {})
+        return data if isinstance(data, dict) else {}
 
     def delete_knowledge(self, knowledge_id: str) -> dict:
         """Delete a knowledge entry."""

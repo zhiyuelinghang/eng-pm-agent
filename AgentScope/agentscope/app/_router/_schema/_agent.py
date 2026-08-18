@@ -232,7 +232,6 @@ class WeKnoraConnectionResponse(BaseModel):
     base_url: str = ""
     api_prefix: str = "/api/v1"
     auth_header: str = "X-API-Key"
-    agent_id: str = ""
     api_key_configured: bool = False
 
 
@@ -248,7 +247,6 @@ class UpdateWeKnoraConnectionRequest(BaseModel):
     base_url: str = Field(min_length=1, max_length=2048)
     api_prefix: str = Field(default="/api/v1", min_length=1, max_length=256)
     auth_header: str = Field(default="X-API-Key", min_length=1, max_length=256)
-    agent_id: str = Field(default="", max_length=128)
     api_key: str | None = Field(default=None, min_length=1, max_length=4096)
 
 
@@ -261,8 +259,6 @@ class TestWeKnoraConnectionResponse(BaseModel):
 
     success: bool
     knowledge_base_count: int = 0
-    agent_validated: bool = False
-    agent_name: str = ""
     message: str
 
 
@@ -294,6 +290,7 @@ class WeKnoraKnowledgeItem(BaseModel):
     title: str = ""
     description: str = ""
     file_name: str = ""
+    folder_path: str = ""
     file_type: str = ""
     file_size: int | None = None
     source: str = ""
@@ -313,6 +310,44 @@ class ListWeKnoraKnowledgeResponse(BaseModel):
     page_size: int
 
 
+class WeKnoraFolderItem(BaseModel):
+    """One node in WeKnora's documented folder tree."""
+
+    path: str
+    name: str
+    document_count: int = 0
+    total_count: int = 0
+    children: list["WeKnoraFolderItem"] = Field(default_factory=list)
+
+
+class WeKnoraFolderTreeResponse(BaseModel):
+    """The complete folder hierarchy for one remote knowledge base."""
+
+    root_document_count: int = 0
+    total_document_count: int = 0
+    folders: list[WeKnoraFolderItem] = Field(default_factory=list)
+
+
+class CreateWeKnoraFolderRequest(BaseModel):
+    """Create one persistent WeKnora folder through a hidden marker file."""
+
+    folder_path: str = Field(min_length=1, max_length=4096)
+
+
+class UpdateWeKnoraFolderRequest(BaseModel):
+    """Rename or move a real WeKnora folder by its current path."""
+
+    source_path: str = Field(min_length=1, max_length=4096)
+    target_path: str = Field(min_length=1, max_length=4096)
+
+
+class MoveWeKnoraKnowledgeRequest(BaseModel):
+    """Move existing knowledge items without reparsing them."""
+
+    knowledge_ids: list[str] = Field(min_length=1, max_length=200)
+    folder_path: str = Field(default="", max_length=4096)
+
+
 class SearchWeKnoraKnowledgeRequest(BaseModel):
     """Run the documented WeKnora hybrid search for one knowledge base."""
 
@@ -328,6 +363,7 @@ class WeKnoraSearchReference(BaseModel):
     knowledge_id: str = ""
     title: str = ""
     filename: str = ""
+    folder_path: str = ""
     content: str = ""
     score: float = 0
     chunk_index: int = 0
@@ -373,7 +409,9 @@ class AskWeKnoraAgentRequest(BaseModel):
     """Call the configured WeKnora agent and aggregate its SSE response."""
 
     query: str = Field(min_length=1, max_length=4000)
+    weknora_agent_id: str = Field(min_length=1, max_length=128)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=50)
+    knowledge_ids: list[str] = Field(default_factory=list, max_length=200)
     session_id: str | None = Field(default=None, max_length=128)
 
 
@@ -383,6 +421,55 @@ class AskWeKnoraAgentResponse(BaseModel):
     session_id: str
     answer: str
     references: list[dict] = Field(default_factory=list)
+
+
+class CreateWeKnoraAgentSessionRequest(BaseModel):
+    """Create a WeKnora conversation for one project-bound robot."""
+
+    weknora_agent_id: str = Field(min_length=1, max_length=128)
+
+
+class WeKnoraAgentSessionResponse(BaseModel):
+    """Identifier of a WeKnora conversation prepared for a long answer."""
+
+    session_id: str
+
+
+class StopWeKnoraAgentSessionRequest(BaseModel):
+    """Stop the active assistant generation in a WeKnora conversation."""
+
+    weknora_agent_id: str = Field(min_length=1, max_length=128)
+
+
+class StopWeKnoraAgentSessionResponse(BaseModel):
+    """Result returned after forwarding a stop request to WeKnora."""
+
+    session_id: str
+    message_id: str | None = None
+    stopped: bool
+    message: str
+
+
+class WeKnoraProjectBindingItem(BaseModel):
+    """One existing engineering project and its assigned WeKnora robot."""
+
+    project_id: int
+    project_name: str
+    weknora_agent_id: str | None = None
+    updated_at: str | None = None
+
+
+class ListWeKnoraProjectBindingsResponse(BaseModel):
+    """Projects loaded from the engineering platform's authoritative DB."""
+
+    projects: list[WeKnoraProjectBindingItem] = Field(default_factory=list)
+    total: int
+
+
+class UpdateWeKnoraProjectBindingRequest(BaseModel):
+    """Assign or clear a WeKnora robot for one existing project."""
+
+    weknora_agent_id: str | None = Field(default=None, max_length=128)
 
 
 class UpdatePlatformSettingsRequest(BaseModel):

@@ -32,6 +32,37 @@ def _app() -> FastAPI:
     ) -> dict[str, str]:
         return {"config_id": config_id}
 
+    @app.get("/agent/platform/weknora/knowledge-bases")
+    async def weknora_runtime_probe(
+        config_id: str = Depends(get_current_user_id),
+    ) -> dict[str, str]:
+        return {"config_id": config_id}
+
+    @app.post("/agent/platform/weknora/agent-query")
+    async def weknora_agent_query_probe(
+        config_id: str = Depends(get_current_user_id),
+    ) -> dict[str, str]:
+        return {"config_id": config_id}
+
+    @app.post("/agent/platform/weknora/sessions")
+    async def weknora_session_probe(
+        config_id: str = Depends(get_current_user_id),
+    ) -> dict[str, str]:
+        return {"config_id": config_id}
+
+    @app.post("/agent/platform/weknora/sessions/{session_id}/stop")
+    async def weknora_session_stop_probe(
+        session_id: str,
+        config_id: str = Depends(get_current_user_id),
+    ) -> dict[str, str]:
+        return {"config_id": config_id, "session_id": session_id}
+
+    @app.get("/agent/platform/weknora/project-bindings")
+    async def weknora_binding_probe(
+        config_id: str = Depends(get_current_user_id),
+    ) -> dict[str, str]:
+        return {"config_id": config_id}
+
     return app
 
 
@@ -76,6 +107,47 @@ def test_platform_service_can_read_catalog_but_not_management_api() -> None:
     assert catalog.status_code == 200
     assert catalog.json() == {"config_id": "platform-global-config"}
     assert forbidden.status_code == 403
+
+
+def test_platform_service_can_only_use_robot_scoped_weknora_runtime() -> None:
+    client = TestClient(_app())
+    headers = {
+        "Authorization": "Bearer engineering-platform-service-token",
+    }
+
+    scoped = client.get(
+        "/agent/platform/weknora/knowledge-bases",
+        params={"weknora_agent_id": "project-robot"},
+        headers=headers,
+    )
+    unscoped = client.get(
+        "/agent/platform/weknora/knowledge-bases",
+        headers=headers,
+    )
+    agent_query = client.post(
+        "/agent/platform/weknora/agent-query",
+        headers=headers,
+    )
+    session = client.post(
+        "/agent/platform/weknora/sessions",
+        headers=headers,
+    )
+    session_stop = client.post(
+        "/agent/platform/weknora/sessions/session-1/stop",
+        headers=headers,
+    )
+    project_bindings = client.get(
+        "/agent/platform/weknora/project-bindings",
+        headers=headers,
+    )
+
+    assert scoped.status_code == 200
+    assert scoped.json() == {"config_id": "platform-global-config"}
+    assert agent_query.status_code == 200
+    assert session.status_code == 200
+    assert session_stop.status_code == 200
+    assert unscoped.status_code == 403
+    assert project_bindings.status_code == 403
 
 
 def test_invalid_management_password_is_rejected() -> None:

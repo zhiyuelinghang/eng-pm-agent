@@ -284,8 +284,12 @@ async def _execute_search_knowledge_base(
                         or "未知来源"
                     )
                     score = float(r.get("score") or 0)
+                    folder_path = str(detail.get("folder_path") or "")
+                    source_path = (
+                        f"{folder_path}/{source}" if folder_path else source
+                    )
                     lines.append(
-                        f"[{kb_name} #{j}] 来源: {source}; "
+                        f"[{kb_name} #{j}] 来源: {source_path}; "
                         f"相关度: {score:.3f}; knowledge_id: {knowledge_id}\n"
                         f"{content[:1200]}",
                     )

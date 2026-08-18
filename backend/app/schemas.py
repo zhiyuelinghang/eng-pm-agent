@@ -46,6 +46,45 @@ class AttachmentUpdate(BaseModel):
     category: str = Field(min_length=1, max_length=100)
 
 
+class EngineeringDocumentSearchInput(BaseModel):
+    knowledge_base_id: str = Field(min_length=1, max_length=128)
+    query: str = Field(min_length=1, max_length=4000)
+    top_k: int = Field(default=8, ge=1, le=20)
+    vector_threshold: float = Field(default=0.5, ge=0, le=1)
+    keyword_threshold: float = Field(default=0.3, ge=0, le=1)
+
+
+class EngineeringDocumentUrlInput(BaseModel):
+    knowledge_base_id: str = Field(min_length=1, max_length=128)
+    url: str = Field(min_length=1, max_length=4096)
+    title: str = Field(default="", max_length=512)
+    enable_multimodel: bool = True
+
+
+class EngineeringDocumentFolderCreateInput(BaseModel):
+    knowledge_base_id: str = Field(min_length=1, max_length=128)
+    folder_path: str = Field(min_length=1, max_length=4096)
+
+
+class EngineeringDocumentFolderUpdateInput(BaseModel):
+    knowledge_base_id: str = Field(min_length=1, max_length=128)
+    source_path: str = Field(min_length=1, max_length=4096)
+    target_path: str = Field(min_length=1, max_length=4096)
+
+
+class EngineeringDocumentMoveInput(BaseModel):
+    knowledge_base_id: str = Field(min_length=1, max_length=128)
+    knowledge_ids: list[str] = Field(min_length=1, max_length=200)
+    folder_path: str = Field(default="", max_length=4096)
+
+
+class EngineeringDocumentAskInput(BaseModel):
+    query: str = Field(min_length=1, max_length=4000)
+    knowledge_base_ids: list[str] = Field(default_factory=list, max_length=50)
+    knowledge_ids: list[str] = Field(default_factory=list, max_length=200)
+    session_id: str | None = Field(default=None, max_length=128)
+
+
 class MemberInput(BaseModel):
     username: str | None = Field(default=None, max_length=64)
     real_name: str = Field(min_length=1, max_length=100)

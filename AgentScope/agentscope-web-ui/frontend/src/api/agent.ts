@@ -15,12 +15,16 @@ import type {
 	WeKnoraConnection,
 	WeKnoraKnowledgeBaseListResponse,
 	WeKnoraKnowledgeListResponse,
+	WeKnoraFolderTreeResponse,
 	SearchWeKnoraKnowledgeRequest,
 	SearchWeKnoraKnowledgeResponse,
 	CreateWeKnoraUrlKnowledgeRequest,
 	WeKnoraKnowledgeMutationResponse,
 	AskWeKnoraAgentRequest,
 	AskWeKnoraAgentResponse,
+	UpdateWeKnoraProjectBindingRequest,
+	WeKnoraProjectBinding,
+	WeKnoraProjectBindingListResponse,
 	UpdateAgentRequest,
 } from './types';
 
@@ -77,14 +81,31 @@ export const agentApi = {
 
 	listWeKnoraKnowledge: (
 		knowledgeBaseId: string,
-		params: { page?: number; page_size?: number } = {},
+		params: {
+			page?: number;
+			page_size?: number;
+			folder_path?: string;
+			folder_recursive?: boolean;
+			keyword?: string;
+		} = {},
 	) =>
 		client.get<WeKnoraKnowledgeListResponse>(
 			`/agent/platform/weknora/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge`,
-			{
+			Object.fromEntries(Object.entries({
 				page: String(params.page ?? 1),
 				page_size: String(params.page_size ?? 50),
-			},
+				folder_path: params.folder_path,
+				folder_recursive:
+					params.folder_path !== undefined
+						? String(params.folder_recursive ?? false)
+						: undefined,
+				keyword: params.keyword?.trim() || undefined,
+			}).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+		),
+
+	getWeKnoraFolderTree: (knowledgeBaseId: string) =>
+		client.get<WeKnoraFolderTreeResponse>(
+			`/agent/platform/weknora/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge/folders`,
 		),
 
 	searchWeKnoraKnowledge: (
@@ -100,10 +121,12 @@ export const agentApi = {
 		knowledgeBaseId: string,
 		file: File,
 		enableMultimodel = true,
+		folderPath = '',
 	) => {
 		const form = new FormData();
 		form.append('file', file);
 		form.append('enable_multimodel', String(enableMultimodel));
+		if (folderPath) form.append('folder_path', folderPath);
 		return client.upload<WeKnoraKnowledgeMutationResponse>(
 			`/agent/platform/weknora/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge/file`,
 			form,
@@ -137,6 +160,20 @@ export const agentApi = {
 	askWeKnoraAgent: (body: AskWeKnoraAgentRequest) =>
 		client.post<AskWeKnoraAgentResponse>(
 			'/agent/platform/weknora/agent-query',
+			body,
+		),
+
+	listWeKnoraProjectBindings: () =>
+		client.get<WeKnoraProjectBindingListResponse>(
+			'/agent/platform/weknora/project-bindings',
+		),
+
+	updateWeKnoraProjectBinding: (
+		projectId: number,
+		body: UpdateWeKnoraProjectBindingRequest,
+	) =>
+		client.put<WeKnoraProjectBinding>(
+			`/agent/platform/weknora/project-bindings/${projectId}`,
 			body,
 		),
 };

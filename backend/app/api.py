@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.responses import StreamingResponse
 import httpx
@@ -55,7 +55,8 @@ from .project_initialization import (
 from .schemas import (AttachmentUpdate, DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
                       LoginRequest, MemberInput, PasswordChangeInput, ProfileUpdate, ProjectInput, RiskInput, TaskFlowGenerateInput, TaskInput, TaskTransitionInput,
                       WbsInput, WbsRiskLinkInput, OperationLogInput, PlatformFieldMappingInput, ProjectSettingsInput,
-                       AgentConversationConfirmInput, AgentConversationInput, AgentConversationMessageInput, CollaborationMessageInput, CollaborationSessionInput, DocumentFolderInput, ProjectChangeInput, ProjectInformationDispositionInput, QualityMetricInput, TaskNoteInput, TaskReassignInput, TaskStepUpdate)
+                       AgentConversationConfirmInput, AgentConversationInput, AgentConversationMessageInput, CollaborationMessageInput, CollaborationSessionInput, DocumentFolderInput, ProjectChangeInput, ProjectInformationDispositionInput, QualityMetricInput, TaskNoteInput, TaskReassignInput, TaskStepUpdate,
+                       EngineeringDocumentAskInput, EngineeringDocumentFolderCreateInput, EngineeringDocumentFolderUpdateInput, EngineeringDocumentMoveInput, EngineeringDocumentSearchInput, EngineeringDocumentUrlInput)
 from .security import create_access_token, decode_access_token, hash_password, verify_password
 from .system_attachment_parser import (
     SystemAttachmentParserError,
@@ -282,6 +283,20 @@ def _agentscope_client() -> AgentScopeClient:
     return AgentScopeClient(get_settings())
 
 
+def _project_weknora_agent_id(db: Session, project_id: int) -> str:
+    settings = db.get(ProjectSettings, project_id)
+    agent_id = (settings.weknora_agent_id or "").strip() if settings else ""
+    if not agent_id:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "当前项目尚未绑定 WeKnora 机器人，请先在智能体管理平台的"
+                "“工程知识库 > 项目分配”中完成绑定。"
+            ),
+        )
+    return agent_id
+
+
 def _raise_agentscope_http_error(exc: AgentScopeGatewayError) -> None:
     raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
@@ -360,8 +375,15 @@ def _platform_session_context(
     user: User,
     project: Project,
     conversation: AgentConversation,
+    db: Session | None = None,
 ) -> dict[str, Any]:
     """Build the grouping snapshot stored with the AgentScope session."""
+    project_settings = db.get(ProjectSettings, project.id) if db else None
+    weknora_agent_id = (
+        (project_settings.weknora_agent_id or "").strip() or None
+        if project_settings is not None
+        else None
+    )
     return {
         "user_id": str(user.id),
         "username": user.username,
@@ -372,6 +394,7 @@ def _platform_session_context(
         "conversation_title": conversation.title,
         "conversation_type": conversation.conversation_type,
         "agent_name": conversation.agent_name,
+        "weknora_agent_id": weknora_agent_id,
         "session_role": "primary",
         "auto_allowed_tool_names": [],
     }
@@ -518,32 +541,11 @@ def _build_agent_project_context(
         .order_by(Task.updated_at.desc())
         .limit(30),
     ).all()
-    documents = db.execute(
-        select(
-            Attachment,
-            AttachmentText.content,
-            AttachmentText.parse_status,
-            AttachmentText.parse_error,
-        )
-        .outerjoin(
-            AttachmentText,
-            AttachmentText.attachment_id == Attachment.id,
-        )
-        .where(Attachment.project_id == project.id)
-        .order_by(Attachment.updated_at.desc())
-        .limit(12),
-    ).all()
-    document_summaries: list[str] = []
-    for attachment, extracted_text, parse_status, parse_error in documents:
-        summary = f"{attachment.file_name}（{attachment.category}）"
-        compact_text = " ".join((extracted_text or "").split())
-        if parse_status == "ready" and compact_text:
-            summary += f"：{compact_text[:1200]}"
-        elif parse_status == "failed":
-            summary += f"：[附件解析失败：{parse_error or '未知原因'}]"
-        elif parse_status == "legacy":
-            summary += "：[历史资料尚未经过统一附件解析]"
-        document_summaries.append(summary)
+    project_settings = db.get(ProjectSettings, project.id)
+    weknora_bound = bool(
+        project_settings
+        and (project_settings.weknora_agent_id or "").strip()
+    )
     return (
         "<platform-context>\n"
         "以下内容由工程管理平台后端按当前登录用户和项目权限注入，只能作为"
@@ -587,11 +589,12 @@ def _build_agent_project_context(
         )
         + "\n工程资料："
         + (
-            "；".join(
-                item
-                for item in document_summaries
-            )
-            or "暂无"
+            "由当前项目绑定的 WeKnora 机器人统一管理。只有用户问题确实需要"
+            "查阅资料、规范、图纸、方案或历史文件时，才调用 "
+            "weknora_query_project_knowledge；普通对话不要调用。不得使用旧的"
+            "本地附件表推断工程资料内容。"
+            if weknora_bound
+            else "当前项目尚未绑定 WeKnora 机器人，不能声称已经查询工程资料。"
         )
         + "\n</platform-context>"
     )
@@ -1275,7 +1278,7 @@ def create_agent_conversation(
                 f"platform-u{user.id}-p{project.id}-conversation-{row.id}"
             ),
             name=row.title,
-            platform_context=_platform_session_context(user, project, row),
+            platform_context=_platform_session_context(user, project, row, db),
         )
         row.status = "active"
         audit(
@@ -1530,6 +1533,7 @@ def create_agent_conversation_message(
                 user,
                 project,
                 conversation,
+                db,
             ),
         )
     except AgentScopeGatewayError as exc:
@@ -1662,6 +1666,7 @@ def stream_agent_conversation_message(
                 user,
                 project,
                 conversation,
+                db,
             ),
         )
     except AgentScopeGatewayError as exc:
@@ -2573,7 +2578,7 @@ def validate_project_initialization_draft(
 def get_project_settings(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
     project_or_404(db, project_id)
     row = db.get(ProjectSettings, project_id)
-    return ok(serialize(row) if row else {"project_id": project_id, "main_dir": "", "archive_dir": "", "temp_dir": "", "failed_dir": "", "backup_dir": "", "scan_interval": 30, "enabled": False, "reminder_rules": []})
+    return ok(serialize(row) if row else {"project_id": project_id, "main_dir": "", "archive_dir": "", "temp_dir": "", "failed_dir": "", "backup_dir": "", "scan_interval": 30, "enabled": False, "reminder_rules": [], "weknora_agent_id": None})
 
 
 @router.put("/projects/{project_id}/settings")
@@ -2583,10 +2588,22 @@ def save_project_settings(project_id: int, payload: ProjectSettingsInput, db: Se
     if not row:
         row = ProjectSettings(project_id=project_id)
         db.add(row)
-    for key, value in payload.model_dump().items(): setattr(row, key, value)
-    db.flush(); audit(db, user, "更新目录与预警配置", "更新资料目录监控及预警规则", project_id, "project_settings", project_id)
-    db.commit(); db.refresh(row)
-    return ok(serialize(row), "目录与预警配置已保存")
+    values = payload.model_dump()
+    for key, value in values.items():
+        setattr(row, key, value)
+    db.flush()
+    audit(
+        db,
+        user,
+        "更新项目资料配置",
+        "更新资料来源及预警规则",
+        project_id,
+        "project_settings",
+        project_id,
+    )
+    db.commit()
+    db.refresh(row)
+    return ok(serialize(row), "项目资料配置已保存")
 
 
 def refresh_project_notifications(project_id: int, db: Session) -> None:
@@ -3727,6 +3744,446 @@ def create_meeting_minute(session_id: int, db: Session = Depends(get_db), user: 
     row = MeetingMinute(project_id=session.project_id, session_id=session.id, title=f"会议纪要 — {session.title}", summary=f"会话结论：{discussion}", action_items=actions)
     db.add(row); db.flush(); audit(db, user, "生成会议纪要", f"从会话「{session.title}」生成会议纪要", session.project_id, "meeting_minute", row.id); db.commit(); db.refresh(row)
     return ok(serialize(row), "会议纪要已生成")
+
+
+@router.get("/projects/{project_id}/engineering-documents/workspace")
+def get_engineering_document_workspace(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project = project_for_user_or_403(db, project_id, user)
+    agent_id = _project_weknora_agent_id(db, project_id)
+    try:
+        knowledge_bases = _agentscope_client().list_weknora_knowledge_bases(
+            agent_id,
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    return ok(
+        {
+            "project_id": project.id,
+            "project_name": project.name,
+            "weknora_configured": True,
+            "weknora_agent_id": agent_id,
+            "knowledge_bases": knowledge_bases.get("knowledge_bases", []),
+            "total": knowledge_bases.get("total", 0),
+        },
+    )
+
+
+@router.get(
+    "/projects/{project_id}/engineering-documents/knowledge-bases/"
+    "{knowledge_base_id}/folders",
+)
+def get_engineering_document_folders(
+    project_id: int,
+    knowledge_base_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    try:
+        result = _agentscope_client().get_weknora_folder_tree(
+            _project_weknora_agent_id(db, project_id),
+            knowledge_base_id,
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    return ok(result)
+
+
+@router.get(
+    "/projects/{project_id}/engineering-documents/knowledge-bases/"
+    "{knowledge_base_id}/knowledge",
+)
+def list_engineering_documents(
+    project_id: int,
+    knowledge_base_id: str,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
+    folder_path: str | None = Query(default=None, max_length=4096),
+    folder_recursive: bool = Query(default=False),
+    keyword: str = Query(default="", max_length=512),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    try:
+        result = _agentscope_client().list_weknora_knowledge(
+            _project_weknora_agent_id(db, project_id),
+            knowledge_base_id,
+            page=page,
+            page_size=page_size,
+            folder_path=folder_path,
+            folder_recursive=folder_recursive,
+            keyword=keyword.strip(),
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    return ok(result)
+
+
+@router.post("/projects/{project_id}/engineering-documents/search")
+def search_engineering_documents(
+    project_id: int,
+    payload: EngineeringDocumentSearchInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    try:
+        result = _agentscope_client().search_weknora_knowledge(
+            _project_weknora_agent_id(db, project_id),
+            payload.knowledge_base_id,
+            payload.model_dump(exclude={"knowledge_base_id"}),
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    return ok(result)
+
+
+@router.post("/projects/{project_id}/engineering-documents/upload")
+async def upload_engineering_document(
+    project_id: int,
+    knowledge_base_id: str = Form(..., min_length=1, max_length=128),
+    folder_path: str = Form(default="", max_length=4096),
+    enable_multimodel: bool = Form(default=True),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    filename = Path(file.filename or "").name
+    if not filename:
+        raise HTTPException(status_code=422, detail="请选择需要上传的资料。")
+    content = await file.read(50 * 1024 * 1024 + 1)
+    await file.close()
+    if len(content) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="上传文件不能超过 50 MB。")
+    try:
+        result = _agentscope_client().upload_weknora_knowledge(
+            _project_weknora_agent_id(db, project_id),
+            knowledge_base_id,
+            filename=filename,
+            content=content,
+            content_type=file.content_type or "application/octet-stream",
+            folder_path=folder_path.strip().strip("/"),
+            enable_multimodel=enable_multimodel,
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    audit(
+        db,
+        user,
+        "上传工程资料",
+        f"上传「{filename}」到 WeKnora",
+        project_id,
+        "weknora_knowledge",
+    )
+    db.commit()
+    return ok(result, result.get("message", "资料已提交 WeKnora 解析"))
+
+
+@router.post("/projects/{project_id}/engineering-documents/url")
+def create_engineering_document_from_url(
+    project_id: int,
+    payload: EngineeringDocumentUrlInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    try:
+        result = _agentscope_client().create_weknora_url_knowledge(
+            _project_weknora_agent_id(db, project_id),
+            payload.knowledge_base_id,
+            payload.model_dump(exclude={"knowledge_base_id"}),
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    audit(
+        db,
+        user,
+        "添加工程资料 URL",
+        f"提交 URL「{payload.url}」到 WeKnora",
+        project_id,
+        "weknora_knowledge",
+    )
+    db.commit()
+    return ok(result, result.get("message", "URL 已提交 WeKnora 解析"))
+
+
+@router.post("/projects/{project_id}/engineering-documents/folder")
+def create_engineering_document_folder(
+    project_id: int,
+    payload: EngineeringDocumentFolderCreateInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    try:
+        result = _agentscope_client().create_weknora_folder(
+            _project_weknora_agent_id(db, project_id),
+            payload.knowledge_base_id,
+            folder_path=payload.folder_path,
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    audit(
+        db,
+        user,
+        "创建工程资料目录",
+        f"在 WeKnora 创建目录「{payload.folder_path}」",
+        project_id,
+        "weknora_folder",
+    )
+    db.commit()
+    return ok(result, result.get("message", "文件夹已创建"))
+
+
+@router.delete("/projects/{project_id}/engineering-documents/folder")
+def delete_engineering_document_folder(
+    project_id: int,
+    knowledge_base_id: str = Query(min_length=1, max_length=128),
+    folder_path: str = Query(min_length=1, max_length=4096),
+    recursive: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    try:
+        _agentscope_client().delete_weknora_folder(
+            _project_weknora_agent_id(db, project_id),
+            knowledge_base_id,
+            folder_path=folder_path,
+            recursive=recursive,
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    audit(
+        db,
+        user,
+        "删除工程资料目录",
+        (
+            f"从 WeKnora 递归删除目录「{folder_path}」及全部内容"
+            if recursive
+            else f"从 WeKnora 删除空目录「{folder_path}」"
+        ),
+        project_id,
+        "weknora_folder",
+    )
+    db.commit()
+    return ok(None, "目录及其内容已删除" if recursive else "空目录已删除")
+
+
+@router.put("/projects/{project_id}/engineering-documents/folder")
+def update_engineering_document_folder(
+    project_id: int,
+    payload: EngineeringDocumentFolderUpdateInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    try:
+        result = _agentscope_client().update_weknora_folder(
+            _project_weknora_agent_id(db, project_id),
+            payload.knowledge_base_id,
+            source_path=payload.source_path,
+            target_path=payload.target_path,
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    audit(
+        db,
+        user,
+        "调整工程资料目录",
+        f"将「{payload.source_path}」调整为「{payload.target_path}」",
+        project_id,
+        "weknora_folder",
+    )
+    db.commit()
+    return ok(result, "文件夹已更新")
+
+
+@router.post("/projects/{project_id}/engineering-documents/move")
+def move_engineering_documents(
+    project_id: int,
+    payload: EngineeringDocumentMoveInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    try:
+        result = _agentscope_client().move_weknora_knowledge(
+            _project_weknora_agent_id(db, project_id),
+            payload.knowledge_base_id,
+            knowledge_ids=payload.knowledge_ids,
+            folder_path=payload.folder_path,
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    audit(
+        db,
+        user,
+        "移动工程资料",
+        f"移动 {len(payload.knowledge_ids)} 份 WeKnora 资料",
+        project_id,
+        "weknora_knowledge",
+    )
+    db.commit()
+    return ok(result, "资料已移动")
+
+
+@router.delete(
+    "/projects/{project_id}/engineering-documents/knowledge/{knowledge_id}",
+)
+def delete_engineering_document(
+    project_id: int,
+    knowledge_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    try:
+        _agentscope_client().delete_weknora_knowledge(
+            _project_weknora_agent_id(db, project_id),
+            knowledge_id,
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    audit(
+        db,
+        user,
+        "删除工程资料",
+        f"从 WeKnora 删除资料 {knowledge_id}",
+        project_id,
+        "weknora_knowledge",
+    )
+    db.commit()
+    return ok(None, "资料已删除")
+
+
+def _engineering_document_content_response(
+    project_id: int,
+    knowledge_id: str,
+    operation: str,
+    db: Session,
+    user: User,
+) -> StreamingResponse:
+    project_for_user_or_403(db, project_id, user)
+    try:
+        content, content_type, content_disposition = (
+            _agentscope_client().get_weknora_knowledge_content(
+                _project_weknora_agent_id(db, project_id),
+                knowledge_id,
+                operation,
+            )
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    headers = {"Cache-Control": "private, no-store"}
+    if content_disposition and "\n" not in content_disposition and "\r" not in content_disposition:
+        headers["Content-Disposition"] = content_disposition
+    return StreamingResponse(
+        iter([content]),
+        media_type=content_type,
+        headers=headers,
+    )
+
+
+@router.get(
+    "/projects/{project_id}/engineering-documents/knowledge/"
+    "{knowledge_id}/download",
+)
+def download_engineering_document(
+    project_id: int,
+    knowledge_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    return _engineering_document_content_response(
+        project_id,
+        knowledge_id,
+        "download",
+        db,
+        user,
+    )
+
+
+@router.get(
+    "/projects/{project_id}/engineering-documents/knowledge/"
+    "{knowledge_id}/preview",
+)
+def preview_engineering_document(
+    project_id: int,
+    knowledge_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    return _engineering_document_content_response(
+        project_id,
+        knowledge_id,
+        "preview",
+        db,
+        user,
+    )
+
+
+@router.post("/projects/{project_id}/engineering-documents/ask")
+def ask_engineering_documents(
+    project_id: int,
+    payload: EngineeringDocumentAskInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    try:
+        result = _agentscope_client().ask_weknora_agent(
+            _project_weknora_agent_id(db, project_id),
+            payload.model_dump(exclude_none=True),
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    return ok(result)
+
+
+@router.post("/projects/{project_id}/engineering-documents/sessions")
+def create_engineering_document_session(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    try:
+        result = _agentscope_client().create_weknora_agent_session(
+            _project_weknora_agent_id(db, project_id),
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    return ok(result)
+
+
+@router.post(
+    "/projects/{project_id}/engineering-documents/sessions/"
+    "{session_id}/stop",
+)
+def stop_engineering_document_answer(
+    project_id: int,
+    session_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    if not 1 <= len(session_id) <= 128:
+        raise HTTPException(status_code=422, detail="WeKnora 会话 ID 无效。")
+    try:
+        result = _agentscope_client().stop_weknora_agent_session(
+            _project_weknora_agent_id(db, project_id),
+            session_id,
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    return ok(result)
 
 
 @router.get("/projects/{project_id}/document-folders")

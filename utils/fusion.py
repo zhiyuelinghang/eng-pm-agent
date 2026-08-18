@@ -221,6 +221,7 @@ class MemoryFusion:
                         or item.get("knowledge_filename")
                         or ""
                     ),
+                    "folder_path": item.get("folder_path", ""),
                     "file_type": item.get("file_type", ""),
                     "file_size": item.get("file_size"),
                     "source": (

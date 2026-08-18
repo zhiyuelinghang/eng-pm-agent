@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import httpx
@@ -83,9 +84,20 @@ class AgentScopeClient:
         method: str,
         path: str,
         *,
-        params: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
+        wait_for_response: bool = False,
     ) -> Any:
+        timeout: float | httpx.Timeout
+        if wait_for_response:
+            timeout = httpx.Timeout(
+                connect=min(self._request_timeout, 30.0),
+                read=None,
+                write=min(self._request_timeout, 30.0),
+                pool=min(self._request_timeout, 30.0),
+            )
+        else:
+            timeout = min(self._request_timeout, 30.0)
         try:
             response = httpx.request(
                 method,
@@ -93,7 +105,7 @@ class AgentScopeClient:
                 headers=self.headers,
                 params=params,
                 json=json,
-                timeout=min(self._request_timeout, 30.0),
+                timeout=timeout,
             )
         except httpx.HTTPError as exc:
             raise AgentScopeGatewayError(
@@ -113,6 +125,72 @@ class AgentScopeClient:
         if response.status_code == 204:
             return None
         return response.json()
+
+    def _request_multipart(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any],
+        data: dict[str, str],
+        files: dict[str, tuple[str, bytes, str]],
+    ) -> Any:
+        try:
+            response = httpx.post(
+                f"{self._base_url}{path}",
+                headers=self.headers,
+                params=params,
+                data=data,
+                files=files,
+                timeout=max(self._request_timeout, 120.0),
+            )
+        except httpx.HTTPError as exc:
+            raise AgentScopeGatewayError(
+                f"无法连接 AgentScope：{exc}",
+                status_code=503,
+            ) from exc
+        if response.is_error:
+            try:
+                detail = response.json().get("detail", response.json())
+            except ValueError:
+                detail = response.text or response.reason_phrase
+            raise AgentScopeGatewayError(
+                f"AgentScope 请求失败（{response.status_code}）：{detail}",
+                status_code=502 if response.status_code >= 500 else 409,
+            )
+        return response.json()
+
+    def _request_bytes(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any],
+    ) -> tuple[bytes, str, str]:
+        try:
+            response = httpx.get(
+                f"{self._base_url}{path}",
+                headers=self.headers,
+                params=params,
+                timeout=max(self._request_timeout, 120.0),
+            )
+        except httpx.HTTPError as exc:
+            raise AgentScopeGatewayError(
+                f"无法连接 AgentScope：{exc}",
+                status_code=503,
+            ) from exc
+        if response.is_error:
+            try:
+                detail = response.json().get("detail", response.json())
+            except ValueError:
+                detail = response.text or response.reason_phrase
+            raise AgentScopeGatewayError(
+                f"AgentScope 请求失败（{response.status_code}）：{detail}",
+                status_code=502 if response.status_code >= 500 else 409,
+            )
+        return (
+            response.content,
+            response.headers.get("content-type", "application/octet-stream"),
+            response.headers.get("content-disposition", ""),
+        )
 
     @asynccontextmanager
     async def event_stream(
@@ -206,6 +284,236 @@ class AgentScopeClient:
 
     def get_catalog(self) -> dict[str, Any]:
         return self._request("GET", "/agent/platform/catalog")
+
+    @staticmethod
+    def _weknora_scope_params(agent_id: str) -> dict[str, str]:
+        return {"weknora_agent_id": agent_id}
+
+    def list_weknora_knowledge_bases(self, agent_id: str) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            "/agent/platform/weknora/knowledge-bases",
+            params=self._weknora_scope_params(agent_id),
+        )
+
+    def get_weknora_folder_tree(
+        self,
+        agent_id: str,
+        knowledge_base_id: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            "/agent/platform/weknora/knowledge-bases/"
+            f"{quote(knowledge_base_id, safe='')}/knowledge/folders",
+            params=self._weknora_scope_params(agent_id),
+        )
+
+    def list_weknora_knowledge(
+        self,
+        agent_id: str,
+        knowledge_base_id: str,
+        *,
+        page: int = 1,
+        page_size: int = 50,
+        folder_path: str | None = None,
+        folder_recursive: bool = False,
+        keyword: str = "",
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            **self._weknora_scope_params(agent_id),
+            "page": page,
+            "page_size": page_size,
+            "folder_recursive": str(folder_recursive).lower(),
+        }
+        if folder_path is not None:
+            params["folder_path"] = folder_path
+        if keyword:
+            params["keyword"] = keyword
+        return self._request(
+            "GET",
+            "/agent/platform/weknora/knowledge-bases/"
+            f"{quote(knowledge_base_id, safe='')}/knowledge",
+            params=params,
+        )
+
+    def search_weknora_knowledge(
+        self,
+        agent_id: str,
+        knowledge_base_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/agent/platform/weknora/knowledge-bases/"
+            f"{quote(knowledge_base_id, safe='')}/search",
+            params=self._weknora_scope_params(agent_id),
+            json=payload,
+        )
+
+    def update_weknora_folder(
+        self,
+        agent_id: str,
+        knowledge_base_id: str,
+        *,
+        source_path: str,
+        target_path: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "PUT",
+            "/agent/platform/weknora/knowledge-bases/"
+            f"{quote(knowledge_base_id, safe='')}/knowledge/folders",
+            params=self._weknora_scope_params(agent_id),
+            json={"source_path": source_path, "target_path": target_path},
+        )
+
+    def create_weknora_folder(
+        self,
+        agent_id: str,
+        knowledge_base_id: str,
+        *,
+        folder_path: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/agent/platform/weknora/knowledge-bases/"
+            f"{quote(knowledge_base_id, safe='')}/knowledge/folders",
+            params=self._weknora_scope_params(agent_id),
+            json={"folder_path": folder_path},
+        )
+
+    def delete_weknora_folder(
+        self,
+        agent_id: str,
+        knowledge_base_id: str,
+        *,
+        folder_path: str,
+        recursive: bool = False,
+    ) -> None:
+        self._request(
+            "DELETE",
+            "/agent/platform/weknora/knowledge-bases/"
+            f"{quote(knowledge_base_id, safe='')}/knowledge/folders",
+            params={
+                **self._weknora_scope_params(agent_id),
+                "folder_path": folder_path,
+                "recursive": str(recursive).lower(),
+            },
+            wait_for_response=recursive,
+        )
+
+    def move_weknora_knowledge(
+        self,
+        agent_id: str,
+        knowledge_base_id: str,
+        *,
+        knowledge_ids: list[str],
+        folder_path: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/agent/platform/weknora/knowledge-bases/"
+            f"{quote(knowledge_base_id, safe='')}/knowledge/move",
+            params=self._weknora_scope_params(agent_id),
+            json={
+                "knowledge_ids": knowledge_ids,
+                "folder_path": folder_path,
+            },
+        )
+
+    def create_weknora_url_knowledge(
+        self,
+        agent_id: str,
+        knowledge_base_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/agent/platform/weknora/knowledge-bases/"
+            f"{quote(knowledge_base_id, safe='')}/knowledge/url",
+            params=self._weknora_scope_params(agent_id),
+            json=payload,
+        )
+
+    def ask_weknora_agent(
+        self,
+        agent_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/agent/platform/weknora/agent-query",
+            json={"weknora_agent_id": agent_id, **payload},
+            wait_for_response=True,
+        )
+
+    def create_weknora_agent_session(
+        self,
+        agent_id: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/agent/platform/weknora/sessions",
+            json={"weknora_agent_id": agent_id},
+        )
+
+    def stop_weknora_agent_session(
+        self,
+        agent_id: str,
+        session_id: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/agent/platform/weknora/sessions/"
+            f"{quote(session_id, safe='')}/stop",
+            json={"weknora_agent_id": agent_id},
+        )
+
+    def upload_weknora_knowledge(
+        self,
+        agent_id: str,
+        knowledge_base_id: str,
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str,
+        folder_path: str,
+        enable_multimodel: bool = True,
+    ) -> dict[str, Any]:
+        return self._request_multipart(
+            "/agent/platform/weknora/knowledge-bases/"
+            f"{quote(knowledge_base_id, safe='')}/knowledge/file",
+            params=self._weknora_scope_params(agent_id),
+            data={
+                "enable_multimodel": str(enable_multimodel).lower(),
+                "folder_path": folder_path,
+            },
+            files={"file": (filename, content, content_type)},
+        )
+
+    def delete_weknora_knowledge(
+        self,
+        agent_id: str,
+        knowledge_id: str,
+    ) -> None:
+        self._request(
+            "DELETE",
+            f"/agent/platform/weknora/knowledge/{quote(knowledge_id, safe='')}",
+            params=self._weknora_scope_params(agent_id),
+        )
+
+    def get_weknora_knowledge_content(
+        self,
+        agent_id: str,
+        knowledge_id: str,
+        operation: str,
+    ) -> tuple[bytes, str, str]:
+        if operation not in {"download", "preview"}:
+            raise ValueError("operation must be download or preview")
+        return self._request_bytes(
+            "/agent/platform/weknora/knowledge/"
+            f"{quote(knowledge_id, safe='')}/{operation}",
+            params=self._weknora_scope_params(agent_id),
+        )
 
     def validate_project_initialization(
         self,

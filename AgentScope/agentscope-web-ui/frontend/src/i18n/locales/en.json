@@ -780,6 +780,12 @@
 			"description": "Configure the WeKnora service and manage remote engineering content."
 		},
 		"sections": {
+			"assignments": {
+				"title": "Project assignments",
+				"description": "Assign a dedicated WeKnora robot to each existing project.",
+				"loading": "Loading",
+				"assigned": "{{count}} of {{total}} assigned"
+			},
 			"connection": {
 				"title": "WeKnora connection",
 				"description": "Configure the independent service URL and tenant authentication.",
@@ -800,6 +806,28 @@
 				"status": "Not configured",
 				"ready": "Agent configured"
 			}
+		},
+		"assignments": {
+			"loadFailed": "Could not load project assignments",
+			"eyebrow": "Project knowledge assignment",
+			"title": "Assign WeKnora robots to existing projects",
+			"description": "Each project uses one robot ID. The knowledge bases granted to that robot in WeKnora define the project's engineering-content scope.",
+			"connectionRequiredTitle": "Configure the WeKnora service first",
+			"connectionRequiredDescription": "The robot and its knowledge-base permissions must be verified before the assignment can be saved.",
+			"loadFailedTitle": "Could not load projects",
+			"retry": "Retry",
+			"loading": "Loading projects…",
+			"emptyTitle": "No projects available",
+			"emptyDescription": "No projects have been created in the engineering platform yet.",
+			"listTitle": "Projects and robots",
+			"listDescription": "Projects come from the engineering database. Saved robot IDs take effect in the user application immediately.",
+			"refresh": "Refresh projects",
+			"bound": "Assigned",
+			"unbound": "Unassigned",
+			"robotId": "WeKnora robot ID",
+			"robotIdPlaceholder": "Enter the robot ID for this project",
+			"save": "Save assignment",
+			"saved": "Project robot assignment saved"
 		},
 		"connection": {
 			"eyebrow": "HTTP(S) service configuration",
@@ -830,9 +858,6 @@
 			"saved": "WeKnora connection settings saved"
 		},
 		"knowledge": {
-			"eyebrow": "Remote content management",
-			"title": "WeKnora knowledge bases and engineering content",
-			"description": "After integration, load remote knowledge bases and manage files, URLs, parsing status, previews, and downloads here.",
 			"refresh": "Reload",
 			"addUrl": "Add URL",
 			"upload": "Upload content",
@@ -846,6 +871,7 @@
 			"searchDescription": "Run the documented vector and keyword hybrid search and return source metadata.",
 			"searchQueryPlaceholder": "Enter a question to search in the current knowledge base",
 			"searchAction": "Search",
+			"hybridSearchToggle": "Hybrid search",
 			"searchEmpty": "No relevant content was found",
 			"urlDialogTitle": "Add content from a URL",
 			"urlDialogDescription": "WeKnora will fetch the page and parse, chunk, and embed it in the background.",
@@ -867,9 +893,21 @@
 			"availableBases": "available knowledge bases",
 			"switchBase": "Switch knowledge base",
 			"documentsTitle": "Engineering content",
-			"documentsHint": "Scan files, parsing status, and source details at a glance.",
+			"documentsHint": "Browse content by folder and load only the selected directory.",
 			"documentsCount": "{{count}} items",
 			"searchPlaceholder": "Search file names or content",
+			"filterAction": "Filter",
+			"folderTreeTitle": "Content folders",
+			"folderTreeHint": "Expand the tree and select a folder to view.",
+			"allDocuments": "All content",
+			"loadingFolders": "Loading folders…",
+			"directFilesHint": "Shows direct files only. Uploads are saved to this folder.",
+			"allFilesHint": "Shows every folder. Uploads are saved at the root level.",
+			"expandFolder": "Expand folder",
+			"collapseFolder": "Collapse folder",
+			"pageStatus": "Page {{page}} of {{pages}}",
+			"previousPage": "Previous",
+			"nextPage": "Next",
 			"loadingDocuments": "Loading engineering content…",
 			"documentsLoadFailed": "Could not load engineering content",
 			"noDocumentsTitle": "No content in this knowledge base",

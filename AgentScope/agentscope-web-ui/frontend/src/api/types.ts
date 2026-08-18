@@ -365,7 +365,6 @@ export interface WeKnoraConnection {
 	base_url: string;
 	api_prefix: string;
 	auth_header: string;
-	agent_id: string;
 	api_key_configured: boolean;
 }
 
@@ -377,15 +376,12 @@ export interface UpdateWeKnoraConnectionRequest {
 	base_url: string;
 	api_prefix: string;
 	auth_header: string;
-	agent_id: string;
 	api_key?: string;
 }
 
 export interface TestWeKnoraConnectionResponse {
 	success: boolean;
 	knowledge_base_count: number;
-	agent_validated: boolean;
-	agent_name: string;
 	message: string;
 }
 
@@ -409,6 +405,7 @@ export interface WeKnoraKnowledgeItem {
 	title: string;
 	description: string;
 	file_name: string;
+	folder_path: string;
 	file_type: string;
 	file_size: number | null;
 	source: string;
@@ -417,6 +414,20 @@ export interface WeKnoraKnowledgeItem {
 	enable_status: string;
 	created_at: string | null;
 	processed_at: string | null;
+}
+
+export interface WeKnoraFolderNode {
+	path: string;
+	name: string;
+	document_count: number;
+	total_count: number;
+	children: WeKnoraFolderNode[];
+}
+
+export interface WeKnoraFolderTreeResponse {
+	root_document_count: number;
+	total_document_count: number;
+	folders: WeKnoraFolderNode[];
 }
 
 export interface WeKnoraKnowledgeListResponse {
@@ -437,6 +448,7 @@ export interface WeKnoraSearchReference {
 	knowledge_id: string;
 	title: string;
 	filename: string;
+	folder_path: string;
 	content: string;
 	score: number;
 	chunk_index: number;
@@ -474,7 +486,9 @@ export interface WeKnoraKnowledgeMutationResponse {
 
 export interface AskWeKnoraAgentRequest {
 	query: string;
+	weknora_agent_id: string;
 	knowledge_base_ids?: string[];
+	knowledge_ids?: string[];
 	session_id?: string;
 }
 
@@ -482,6 +496,22 @@ export interface AskWeKnoraAgentResponse {
 	session_id: string;
 	answer: string;
 	references: Record<string, unknown>[];
+}
+
+export interface WeKnoraProjectBinding {
+	project_id: number;
+	project_name: string;
+	weknora_agent_id: string | null;
+	updated_at: string | null;
+}
+
+export interface WeKnoraProjectBindingListResponse {
+	projects: WeKnoraProjectBinding[];
+	total: number;
+}
+
+export interface UpdateWeKnoraProjectBindingRequest {
+	weknora_agent_id: string | null;
 }
 
 /**

@@ -4,7 +4,12 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from backend.app.agent_context_gateway import resolve_tool_context
+from backend.app.agent_context_gateway import (
+    ProjectWeKnoraBindingInput,
+    list_weknora_project_bindings,
+    resolve_tool_context,
+    update_weknora_project_binding,
+)
 from backend.app.database_interactions import (
     TableInteractionInput,
     TablePolicyInput,
@@ -38,6 +43,7 @@ from backend.app.models import (
     ProjectMember,
     ProjectMemberPosition,
     ProjectPosition,
+    ProjectSettings,
     RiskSource,
     Task,
     User,
@@ -137,6 +143,41 @@ def _valid_wbs_payload() -> list[dict]:
             "level": 1,
         },
     ]
+
+
+def test_project_weknora_robot_binding_uses_existing_projects(
+    db: Session,
+) -> None:
+    first = Project(name="滨江项目")
+    second = Project(name="城北项目")
+    db.add_all([first, second])
+    db.commit()
+
+    initial = list_weknora_project_bindings(db=db)["data"]
+    assert [item["project_id"] for item in initial] == [first.id, second.id]
+    assert all(item["weknora_agent_id"] is None for item in initial)
+
+    updated = update_weknora_project_binding(
+        first.id,
+        ProjectWeKnoraBindingInput(weknora_agent_id="  robot-project-001  "),
+        db=db,
+    )["data"]
+
+    assert updated["project_name"] == "滨江项目"
+    assert updated["weknora_agent_id"] == "robot-project-001"
+    assert db.get(ProjectSettings, first.id).weknora_agent_id == (
+        "robot-project-001"
+    )
+    listed = list_weknora_project_bindings(db=db)["data"]
+    assert listed[0]["weknora_agent_id"] == "robot-project-001"
+    assert listed[1]["weknora_agent_id"] is None
+
+    cleared = update_weknora_project_binding(
+        first.id,
+        ProjectWeKnoraBindingInput(weknora_agent_id=""),
+        db=db,
+    )["data"]
+    assert cleared["weknora_agent_id"] is None
 
 
 def test_legacy_code_bindings_are_converted_to_editable_table_interactions(

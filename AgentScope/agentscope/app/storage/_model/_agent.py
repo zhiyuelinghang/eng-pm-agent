@@ -324,7 +324,6 @@ class PlatformAgentConfig(BaseModel):
         title="Platform Knowledge Configuration",
     )
 
-
 class AgentData(BaseModel):
     """The agent data model."""
 

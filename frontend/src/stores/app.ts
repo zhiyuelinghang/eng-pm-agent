@@ -131,13 +131,81 @@ type ApiDaily = { id: number; project_id: number; file_name: string; report_date
 type ApiDraft = { id: number; project_id: number; risk_source_id: number; title: string; content: string; status: string; source_refs: string[]; missing_items: string[]; review_note?: string; created_at: string; updated_at: string }
 type ApiFill = { id: number; project_id: number; draft_id: number; platform_name: string; process_name: string; status: FillPackage['status']; fields: FillPackage['fields']; attachments: FillPackage['attachments']; created_at: string }
 type ApiLog = { id: number; created_at: string; action: string; detail: string; operator_id?: number }
-type ApiProjectSettings = { project_id: number; main_dir?: string; archive_dir?: string; temp_dir?: string; failed_dir?: string; backup_dir?: string; scan_interval?: number; enabled?: boolean; reminder_rules?: Array<{ id?: string; level: RemindRule['level']; days: number; enabled: boolean; frequency?: string }> }
+type ApiProjectSettings = { project_id: number; main_dir?: string; archive_dir?: string; temp_dir?: string; failed_dir?: string; backup_dir?: string; scan_interval?: number; enabled?: boolean; reminder_rules?: Array<{ id?: string; level: RemindRule['level']; days: number; enabled: boolean; frequency?: string }>; weknora_agent_id?: string | null }
+type ApiWeKnoraKnowledgeBase = { id: string; name: string; description?: string; created_at?: string | null; updated_at?: string | null }
+type ApiWeKnoraWorkspace = { project_id: number; project_name: string; weknora_configured: boolean; weknora_agent_id: string; knowledge_bases: ApiWeKnoraKnowledgeBase[]; total: number }
+type ApiWeKnoraFolder = { path: string; name: string; document_count?: number; total_count?: number; children?: ApiWeKnoraFolder[] }
+type ApiWeKnoraFolderTree = { root_document_count?: number; total_document_count?: number; folders?: ApiWeKnoraFolder[] }
+type ApiWeKnoraKnowledge = {
+  id: string
+  knowledge_base_id?: string | null
+  type?: string
+  title?: string
+  description?: string
+  file_name?: string
+  folder_path?: string
+  file_type?: string
+  file_size?: number | null
+  source?: string
+  channel?: string
+  parse_status?: string
+  enable_status?: string
+  created_at?: string | null
+  processed_at?: string | null
+}
+type ApiWeKnoraKnowledgePage = { knowledge: ApiWeKnoraKnowledge[]; total: number; page: number; page_size: number }
+type ApiWeKnoraSearchReference = {
+  knowledge_id: string
+  title?: string
+  filename?: string
+  folder_path?: string
+  content?: string
+  score?: number
+  file_type?: string
+  file_size?: number | null
+  source?: string
+  parse_status?: string
+}
+type ApiWeKnoraSearch = { query: string; total: number; references: ApiWeKnoraSearchReference[] }
+type ApiWeKnoraAnswer = { session_id: string; answer: string; references?: Array<Record<string, unknown>> }
+type ApiWeKnoraSession = { session_id: string }
+type ApiWeKnoraStop = { session_id: string; message_id?: string | null; stopped: boolean; message: string }
 type ProjectDashboard = { progress_rate: number; progress_status?: string; planned_delta?: string; risk_warnings: number; safety_issues: number; quality_issues: number; task_completion_rate: number; open_changes: number; unread_notifications: number; main_risk: string; main_safety?: string; main_quality: string; overall?: string }
 type ProjectChangeRecord = { id: number; category: string; title: string; content: string; status: string; source_refs: string[]; created_at: string }
 type ApiInformationRecord = { id: number; project_id: number; source_type: string; source_name: string; author?: string; recorded_at: string; status: string; confidence: string; content: string; source_refs: string[] }
 type NotificationRecord = { id: number; notification_type: string; title: string; content: string; priority: string; is_read: boolean; created_at: string }
-export type AttachmentRecord = { id: string; projectId: string; fileName: string; category: string; version: number; fileSize: number; contentType: string; createdAt: string; folderId?: string; snippet?: string }
-export type DocumentFolderRecord = { id: string; projectId: string; parentId?: string; name: string; createdAt: string }
+export type WeKnoraKnowledgeBaseRecord = { id: string; name: string; description: string; createdAt?: string; updatedAt?: string }
+export type AttachmentRecord = {
+  id: string
+  projectId: string
+  fileName: string
+  category: string
+  version: number
+  fileSize: number
+  contentType: string
+  createdAt: string
+  folderId?: string
+  snippet?: string
+  knowledgeBaseId?: string
+  folderPath?: string
+  parseStatus?: string
+  enableStatus?: string
+  source?: string
+  processedAt?: string
+  searchScore?: number
+}
+export type DocumentFolderRecord = {
+  id: string
+  projectId: string
+  parentId?: string
+  name: string
+  createdAt: string
+  knowledgeBaseId?: string
+  path?: string
+  isKnowledgeBase?: boolean
+  documentCount?: number
+  totalCount?: number
+}
 export type ProjectConfigScope = { members: Member[]; wbsItems: WbsItem[]; riskSources: RiskSource[]; qualityMetrics: QualityMetric[]; platformMappings: PlatformFieldMapping[]; dirConfig: DirConfig; remindRules: RemindRule[] }
 type WbsWriteInput = {
   code: string
@@ -203,6 +271,7 @@ const normalizeRiskLevel = (value: string | null | undefined): RiskSource['level
   return 'low'
 }
 const emptyDirConfig: DirConfig = { mainDir: '', archiveDir: '', tempDir: '', failedDir: '', backupDir: '', scanInterval: 0, enabled: false }
+const WEKNORA_DOCUMENT_PAGE_SIZE = 100
 
 export const useAppStore = defineStore('app', () => {
   const projects = ref<Project[]>([])
@@ -220,6 +289,10 @@ export const useAppStore = defineStore('app', () => {
   const allFillPackages = ref<FillPackage[]>([])
   const attachments = ref<AttachmentRecord[]>([])
   const documentFolders = ref<DocumentFolderRecord[]>([])
+  const weknoraKnowledgeBases = ref<WeKnoraKnowledgeBaseRecord[]>([])
+  const engineeringDocumentsLoading = ref(false)
+  const engineeringDocumentFolderLoading = ref(false)
+  const engineeringDocumentsError = ref('')
   const logs = ref<OperationLog[]>([])
   const projectSettings = ref<ApiProjectSettings | null>(null)
   const dashboard = ref<ProjectDashboard | null>(null)
@@ -231,6 +304,13 @@ export const useAppStore = defineStore('app', () => {
   const projectCatalogLoaded = ref(false)
   let projectCatalogToken = ''
   let projectCatalogPromise: Promise<void> | null = null
+  let engineeringDocumentsProjectId = ''
+  let engineeringDocumentsPromise: Promise<void> | null = null
+  let engineeringDocumentsGeneration = 0
+  let engineeringDocumentsLoadingCount = 0
+  let engineeringDocumentFolderLoadingCount = 0
+  const loadedEngineeringDocumentFolders = new Set<string>()
+  const engineeringDocumentFolderPromises = new Map<string, Promise<AttachmentRecord[]>>()
 
   const currentProject = computed(() => projects.value.find(p => p.id === currentProjectId.value))
   const members = computed(() => allMembers.value.filter(m => m.projectId === currentProjectId.value))
@@ -364,7 +444,269 @@ export const useAppStore = defineStore('app', () => {
   function mapLog(row: ApiLog): OperationLog { return { id: id(row.id), time: row.created_at, operator: row.operator_id ? getMemberName(id(row.operator_id)) : '系统', action: row.action, detail: row.detail, level: 'info' } }
   function mapAttachment(row: ApiAttachment): AttachmentRecord { return { id: id(row.id), projectId: id(row.project_id), fileName: row.file_name, category: row.category, version: row.version, fileSize: row.file_size, contentType: row.content_type || '', createdAt: row.created_at, folderId: id(row.folder_id) || undefined, snippet: row.snippet } }
   function mapDocumentFolder(row: ApiDocumentFolder): DocumentFolderRecord { return { id: id(row.id), projectId: id(row.project_id), parentId: id(row.parent_id) || undefined, name: row.name, createdAt: row.created_at } }
+  function normalizeWeKnoraFolderPath(value?: string | null) {
+    return (value || '').replace(/\\/g, '/').split('/').map(segment => segment.trim()).filter(Boolean).join('/')
+  }
+  function weknoraKnowledgeBaseFolderId(knowledgeBaseId: string) {
+    return `weknora-kb:${encodeURIComponent(knowledgeBaseId)}`
+  }
+  function weknoraFolderId(knowledgeBaseId: string, folderPath: string) {
+    const normalizedPath = normalizeWeKnoraFolderPath(folderPath)
+    return normalizedPath
+      ? `weknora-folder:${encodeURIComponent(knowledgeBaseId)}:${encodeURIComponent(normalizedPath)}`
+      : weknoraKnowledgeBaseFolderId(knowledgeBaseId)
+  }
+  function mapWeKnoraKnowledge(row: ApiWeKnoraKnowledge, projectId: string, fallbackKnowledgeBaseId: string): AttachmentRecord {
+    const knowledgeBaseId = row.knowledge_base_id || fallbackKnowledgeBaseId
+    const folderPath = normalizeWeKnoraFolderPath(row.folder_path)
+    return {
+      id: row.id,
+      projectId,
+      fileName: row.file_name || row.title || '未命名资料',
+      category: row.type === 'url' ? '网址资料' : '工程资料',
+      version: 1,
+      fileSize: row.file_size || 0,
+      contentType: row.file_type || '',
+      createdAt: row.created_at || '',
+      folderId: weknoraFolderId(knowledgeBaseId, folderPath),
+      snippet: row.description || '',
+      knowledgeBaseId,
+      folderPath,
+      parseStatus: row.parse_status || '',
+      enableStatus: row.enable_status || '',
+      source: row.source || row.channel || '',
+      processedAt: row.processed_at || undefined,
+    }
+  }
   function mapInformationRecord(row: ApiInformationRecord): ProjectInformationRecord { return { id: id(row.id), projectId: id(row.project_id), sourceType: row.source_type, sourceName: row.source_name, author: row.author || '', recordedAt: row.recorded_at, status: row.status, confidence: row.confidence, content: row.content, sourceRefs: row.source_refs || [] } }
+
+  function beginEngineeringDocumentsRequest() {
+    engineeringDocumentsLoadingCount += 1
+    engineeringDocumentsLoading.value = true
+  }
+
+  function endEngineeringDocumentsRequest() {
+    engineeringDocumentsLoadingCount = Math.max(0, engineeringDocumentsLoadingCount - 1)
+    engineeringDocumentsLoading.value = engineeringDocumentsLoadingCount > 0
+  }
+
+  function beginEngineeringDocumentFolderRequest() {
+    engineeringDocumentFolderLoadingCount += 1
+    engineeringDocumentFolderLoading.value = true
+  }
+
+  function endEngineeringDocumentFolderRequest() {
+    engineeringDocumentFolderLoadingCount = Math.max(0, engineeringDocumentFolderLoadingCount - 1)
+    engineeringDocumentFolderLoading.value = engineeringDocumentFolderLoadingCount > 0
+  }
+
+  function clearEngineeringDocumentFolderCache() {
+    engineeringDocumentsGeneration += 1
+    loadedEngineeringDocumentFolders.clear()
+    engineeringDocumentFolderPromises.clear()
+  }
+
+  async function loadEngineeringDocuments(projectId = currentProjectId.value, force = false) {
+    if (!projectId) {
+      attachments.value = []
+      documentFolders.value = []
+      weknoraKnowledgeBases.value = []
+      engineeringDocumentsProjectId = ''
+      clearEngineeringDocumentFolderCache()
+      return
+    }
+    if (!force && engineeringDocumentsProjectId === projectId) return
+    if (engineeringDocumentsPromise) {
+      await engineeringDocumentsPromise.catch(() => undefined)
+      if (!force && engineeringDocumentsProjectId === projectId) return
+    }
+
+    clearEngineeringDocumentFolderCache()
+    const generation = engineeringDocumentsGeneration
+    beginEngineeringDocumentsRequest()
+    engineeringDocumentsError.value = ''
+    engineeringDocumentsPromise = (async () => {
+      const workspaceResponse = await api.get<ApiEnvelope<ApiWeKnoraWorkspace>>(`/projects/${projectId}/engineering-documents/workspace`)
+      const workspace = workspaceResponse.data.data
+      const knowledgeBases: WeKnoraKnowledgeBaseRecord[] = (workspace.knowledge_bases || []).map(item => ({
+        id: item.id,
+        name: item.name,
+        description: item.description || '',
+        createdAt: item.created_at || undefined,
+        updatedAt: item.updated_at || undefined,
+      }))
+      const nextFolders: DocumentFolderRecord[] = []
+
+      await Promise.all(knowledgeBases.map(async knowledgeBase => {
+        const treeResponse = await api.get<ApiEnvelope<ApiWeKnoraFolderTree>>(`/projects/${projectId}/engineering-documents/knowledge-bases/${encodeURIComponent(knowledgeBase.id)}/folders`)
+        const tree = treeResponse.data.data
+
+        const folderMap = new Map<string, DocumentFolderRecord>()
+        const rootId = weknoraKnowledgeBaseFolderId(knowledgeBase.id)
+        const root: DocumentFolderRecord = {
+          id: rootId,
+          projectId,
+          name: knowledgeBase.name,
+          createdAt: knowledgeBase.createdAt || '',
+          knowledgeBaseId: knowledgeBase.id,
+          path: '',
+          isKnowledgeBase: true,
+          documentCount: tree.root_document_count || 0,
+          totalCount: tree.total_document_count || 0,
+        }
+        folderMap.set(root.id, root)
+
+        const ensureFolderPath = (folderPath: string) => {
+          const normalizedPath = normalizeWeKnoraFolderPath(folderPath)
+          if (!normalizedPath) return root
+          let parentId = rootId
+          let currentPath = ''
+          let current = root
+          for (const segment of normalizedPath.split('/')) {
+            currentPath = currentPath ? `${currentPath}/${segment}` : segment
+            const folderId = weknoraFolderId(knowledgeBase.id, currentPath)
+            const existing = folderMap.get(folderId)
+            if (existing) {
+              current = existing
+              parentId = existing.id
+              continue
+            }
+            current = {
+              id: folderId,
+              projectId,
+              parentId,
+              name: segment,
+              createdAt: '',
+              knowledgeBaseId: knowledgeBase.id,
+              path: currentPath,
+              documentCount: 0,
+              totalCount: 0,
+            }
+            folderMap.set(folderId, current)
+            parentId = folderId
+          }
+          return current
+        }
+
+        const appendTree = (nodes: ApiWeKnoraFolder[]) => {
+          for (const node of nodes) {
+            const folder = ensureFolderPath(node.path)
+            folder.name = node.name || folder.name
+            folder.documentCount = node.document_count || 0
+            folder.totalCount = node.total_count || 0
+            appendTree(node.children || [])
+          }
+        }
+        appendTree(tree.folders || [])
+        nextFolders.push(...folderMap.values())
+      }))
+
+      if (projectId !== currentProjectId.value || generation !== engineeringDocumentsGeneration) return
+      weknoraKnowledgeBases.value = knowledgeBases
+      documentFolders.value = nextFolders.sort((left, right) => {
+        if (left.isKnowledgeBase !== right.isKnowledgeBase) return left.isKnowledgeBase ? -1 : 1
+        return left.name.localeCompare(right.name, 'zh-CN', { numeric: true })
+      })
+      attachments.value = []
+      engineeringDocumentsProjectId = projectId
+    })()
+
+    try {
+      await engineeringDocumentsPromise
+    } catch (error: any) {
+      if (projectId === currentProjectId.value) {
+        attachments.value = []
+        documentFolders.value = []
+        weknoraKnowledgeBases.value = []
+        engineeringDocumentsProjectId = ''
+        clearEngineeringDocumentFolderCache()
+        engineeringDocumentsError.value = error.response?.data?.detail || error.message || 'WeKnora 工程资料加载失败。'
+      }
+      throw error
+    } finally {
+      engineeringDocumentsPromise = null
+      endEngineeringDocumentsRequest()
+    }
+  }
+
+  async function loadEngineeringDocumentFolder(folderId: string, force = false): Promise<AttachmentRecord[]> {
+    const projectId = currentProjectId.value
+    if (!projectId) return []
+    if (engineeringDocumentsProjectId !== projectId) await loadEngineeringDocuments(projectId)
+
+    const folder = documentFolders.value.find(item => item.id === folderId)
+    const knowledgeBaseId = folder?.knowledgeBaseId
+    if (!folder || !knowledgeBaseId) throw new Error('未找到对应的 WeKnora 资料目录。')
+
+    const folderPath = normalizeWeKnoraFolderPath(folder.path)
+    const cacheKey = `${projectId}:${folder.id}`
+    const cached = () => attachments.value.filter(item => (
+      item.knowledgeBaseId === knowledgeBaseId
+      && normalizeWeKnoraFolderPath(item.folderPath) === folderPath
+    ))
+    if (!force && loadedEngineeringDocumentFolders.has(cacheKey)) return cached()
+
+    const pending = engineeringDocumentFolderPromises.get(cacheKey)
+    if (pending) return pending
+
+    const generation = engineeringDocumentsGeneration
+    engineeringDocumentsError.value = ''
+    beginEngineeringDocumentFolderRequest()
+    const request = (async () => {
+      const knowledge: ApiWeKnoraKnowledge[] = []
+      let remoteTotal = 0
+      for (let page = 1; page <= 1000; page += 1) {
+        const response = await api.get<ApiEnvelope<ApiWeKnoraKnowledgePage>>(
+          `/projects/${projectId}/engineering-documents/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge`,
+          {
+            params: {
+              page,
+              page_size: WEKNORA_DOCUMENT_PAGE_SIZE,
+              folder_path: folderPath,
+              folder_recursive: false,
+            },
+          },
+        )
+        const pageData = response.data.data
+        const pageItems = pageData.knowledge || []
+        remoteTotal = Math.max(remoteTotal, Number(pageData.total) || 0)
+        knowledge.push(...pageItems)
+        if (
+          !pageItems.length
+          || (remoteTotal > 0 && knowledge.length >= remoteTotal)
+        ) break
+      }
+
+      if (projectId !== currentProjectId.value || generation !== engineeringDocumentsGeneration) return []
+      const mappedById = new Map<string, AttachmentRecord>()
+      for (const item of knowledge) {
+        const mapped = mapWeKnoraKnowledge(item, projectId, knowledgeBaseId)
+        mappedById.set(mapped.id, mapped)
+      }
+      const mapped = [...mappedById.values()]
+      const otherFolders = attachments.value.filter(item => !(
+        item.knowledgeBaseId === knowledgeBaseId
+        && normalizeWeKnoraFolderPath(item.folderPath) === folderPath
+      ))
+      attachments.value = [...otherFolders, ...mapped]
+        .sort((left, right) => (right.createdAt || '').localeCompare(left.createdAt || ''))
+      loadedEngineeringDocumentFolders.add(cacheKey)
+      return mapped
+    })()
+    engineeringDocumentFolderPromises.set(cacheKey, request)
+
+    try {
+      return await request
+    } catch (error: any) {
+      if (projectId === currentProjectId.value && generation === engineeringDocumentsGeneration) {
+        engineeringDocumentsError.value = error.response?.data?.detail || error.message || 'WeKnora 目录资料加载失败。'
+      }
+      throw error
+    } finally {
+      if (engineeringDocumentFolderPromises.get(cacheKey) === request) engineeringDocumentFolderPromises.delete(cacheKey)
+      endEngineeringDocumentFolderRequest()
+    }
+  }
 
   async function fetchProjectConfigScope(projectId: string): Promise<ProjectConfigScope> {
     const [memberResult, wbsResult, riskResult, qualityResult, mappingResult, settingsResult] = await Promise.all([
@@ -390,12 +732,33 @@ export const useAppStore = defineStore('app', () => {
 
   async function loadProjectData(projectId = currentProjectId.value) {
     if (!projectId) return
-    const [memberResult, wbsResult, riskResult, qualityResult, mappingResult, linkResult, taskResult, dailyResult, informationResult, draftResult, fillResult, attachmentResult, folderResult, logResult, settingsResult, dashboardResult, changesResult, notificationsResult] = await Promise.all([
-      api.get<ApiEnvelope<ApiMember[]>>(`/projects/${projectId}/members`), api.get<ApiEnvelope<ApiWbs[]>>(`/projects/${projectId}/wbs`), api.get<ApiEnvelope<ApiRisk[]>>(`/projects/${projectId}/risks`), api.get<ApiEnvelope<ApiQualityMetric[]>>(`/projects/${projectId}/quality-metrics`), api.get<ApiEnvelope<ApiPlatformMapping[]>>(`/projects/${projectId}/platform-field-mappings`), api.get<ApiEnvelope<ApiLink[]>>(`/projects/${projectId}/wbs-risk-links`), api.get<ApiEnvelope<ApiTask[]>>(`/projects/${projectId}/tasks`), api.get<ApiEnvelope<ApiDaily[]>>(`/projects/${projectId}/daily-reports`), api.get<ApiEnvelope<ApiInformationRecord[]>>(`/projects/${projectId}/information-records`), api.get<ApiEnvelope<ApiDraft[]>>(`/projects/${projectId}/risk-drafts`), api.get<ApiEnvelope<ApiFill[]>>(`/projects/${projectId}/fill-packages`), api.get<ApiEnvelope<ApiAttachment[]>>(`/projects/${projectId}/attachments`), api.get<ApiEnvelope<ApiDocumentFolder[]>>(`/projects/${projectId}/document-folders`), api.get<ApiEnvelope<ApiLog[]>>(`/projects/${projectId}/operation-logs`), api.get<ApiEnvelope<ApiProjectSettings>>(`/projects/${projectId}/settings`), api.get<ApiEnvelope<ProjectDashboard>>(`/projects/${projectId}/dashboard`), api.get<ApiEnvelope<ProjectChangeRecord[]>>(`/projects/${projectId}/changes`), api.get<ApiEnvelope<NotificationRecord[]>>(`/projects/${projectId}/notifications`),
+    const previousSettingsProjectId = id(projectSettings.value?.project_id)
+    const previousWeKnoraAgentId = projectSettings.value?.weknora_agent_id || ''
+    const [memberResult, wbsResult, riskResult, qualityResult, mappingResult, linkResult, taskResult, dailyResult, informationResult, draftResult, fillResult, logResult, settingsResult, dashboardResult, changesResult, notificationsResult] = await Promise.all([
+      api.get<ApiEnvelope<ApiMember[]>>(`/projects/${projectId}/members`), api.get<ApiEnvelope<ApiWbs[]>>(`/projects/${projectId}/wbs`), api.get<ApiEnvelope<ApiRisk[]>>(`/projects/${projectId}/risks`), api.get<ApiEnvelope<ApiQualityMetric[]>>(`/projects/${projectId}/quality-metrics`), api.get<ApiEnvelope<ApiPlatformMapping[]>>(`/projects/${projectId}/platform-field-mappings`), api.get<ApiEnvelope<ApiLink[]>>(`/projects/${projectId}/wbs-risk-links`), api.get<ApiEnvelope<ApiTask[]>>(`/projects/${projectId}/tasks`), api.get<ApiEnvelope<ApiDaily[]>>(`/projects/${projectId}/daily-reports`), api.get<ApiEnvelope<ApiInformationRecord[]>>(`/projects/${projectId}/information-records`), api.get<ApiEnvelope<ApiDraft[]>>(`/projects/${projectId}/risk-drafts`), api.get<ApiEnvelope<ApiFill[]>>(`/projects/${projectId}/fill-packages`), api.get<ApiEnvelope<ApiLog[]>>(`/projects/${projectId}/operation-logs`), api.get<ApiEnvelope<ApiProjectSettings>>(`/projects/${projectId}/settings`), api.get<ApiEnvelope<ProjectDashboard>>(`/projects/${projectId}/dashboard`), api.get<ApiEnvelope<ProjectChangeRecord[]>>(`/projects/${projectId}/changes`), api.get<ApiEnvelope<NotificationRecord[]>>(`/projects/${projectId}/notifications`),
     ])
     allMembers.value = memberResult.data.data.map(mapMember); allWbsItems.value = wbsResult.data.data.map(mapWbs); allRiskSources.value = riskResult.data.data.map(mapRisk); allQualityMetrics.value = qualityResult.data.data.map(row => mapQualityMetric(row, allWbsItems.value)); allPlatformMappings.value = mappingResult.data.data.map(mapPlatformMapping)
     allWbsRiskLinks.value = linkResult.data.data.map(link => ({ id: id(link.id), wbsId: id(link.wbs_item_id), riskId: id(link.risk_source_id), alertDays: link.alert_days, notifyMethods: link.notify_methods, basis: link.basis }))
-    allTasks.value = taskResult.data.data.map(mapTask); allDailyReports.value = dailyResult.data.data.map(mapDaily); informationRecords.value = informationResult.data.data.map(mapInformationRecord); allRiskDrafts.value = draftResult.data.data.map(mapDraft); allFillPackages.value = fillResult.data.data.map(mapFill); attachments.value = attachmentResult.data.data.map(mapAttachment); documentFolders.value = folderResult.data.data.map(mapDocumentFolder); logs.value = logResult.data.data.map(mapLog); projectSettings.value = settingsResult.data.data; dashboard.value = dashboardResult.data.data; projectChanges.value = changesResult.data.data; notifications.value = notificationsResult.data.data
+    allTasks.value = taskResult.data.data.map(mapTask); allDailyReports.value = dailyResult.data.data.map(mapDaily); informationRecords.value = informationResult.data.data.map(mapInformationRecord); allRiskDrafts.value = draftResult.data.data.map(mapDraft); allFillPackages.value = fillResult.data.data.map(mapFill); logs.value = logResult.data.data.map(mapLog); projectSettings.value = settingsResult.data.data; dashboard.value = dashboardResult.data.data; projectChanges.value = changesResult.data.data; notifications.value = notificationsResult.data.data
+    const nextWeKnoraAgentId = settingsResult.data.data.weknora_agent_id || ''
+    if (nextWeKnoraAgentId) {
+      try {
+        const bindingChanged = (
+          previousSettingsProjectId === projectId
+          && previousWeKnoraAgentId !== nextWeKnoraAgentId
+        )
+        await loadEngineeringDocuments(projectId, bindingChanged)
+      } catch {
+        // 工程资料服务不可用不应阻止项目其余模块加载；资料页会展示具体错误。
+      }
+    } else {
+      attachments.value = []
+      documentFolders.value = []
+      weknoraKnowledgeBases.value = []
+      engineeringDocumentsProjectId = ''
+      clearEngineeringDocumentFolderCache()
+      engineeringDocumentsError.value = '当前项目尚未绑定 WeKnora 机器人。'
+    }
   }
 
   async function loadProjectCatalog(force = false) {
@@ -456,13 +819,35 @@ export const useAppStore = defineStore('app', () => {
   function resetSession() {
     projects.value = []
     currentProjectId.value = ''
+    attachments.value = []
+    documentFolders.value = []
+    weknoraKnowledgeBases.value = []
+    engineeringDocumentsProjectId = ''
+    engineeringDocumentsError.value = ''
+    clearEngineeringDocumentFolderCache()
+    engineeringDocumentsLoadingCount = 0
+    engineeringDocumentsLoading.value = false
+    engineeringDocumentFolderLoadingCount = 0
+    engineeringDocumentFolderLoading.value = false
     projectCatalogLoaded.value = false
     projectCatalogToken = ''
     projectCatalogPromise = null
   }
   async function createProjectChange(payload: { category: string; title: string; content: string }) { await api.post(`/projects/${currentProjectId.value}/changes`, payload); await loadProjectData() }
   async function readNotification(notificationId: number) { await api.post(`/notifications/${notificationId}/read`); await loadProjectData() }
-  async function saveProjectSettings(payload: DirConfig & { reminderRules: RemindRule[] }, projectId = currentProjectId.value) { await api.put(`/projects/${projectId}/settings`, { main_dir: payload.mainDir, archive_dir: payload.archiveDir, temp_dir: payload.tempDir, failed_dir: payload.failedDir, backup_dir: payload.backupDir, scan_interval: payload.scanInterval, enabled: payload.enabled, reminder_rules: payload.reminderRules }); if (projectId === currentProjectId.value) await loadProjectData(projectId) }
+  async function saveProjectSettings(payload: DirConfig & { reminderRules: RemindRule[] }, projectId = currentProjectId.value) {
+    await api.put(`/projects/${projectId}/settings`, {
+      main_dir: payload.mainDir,
+      archive_dir: payload.archiveDir,
+      temp_dir: payload.tempDir,
+      failed_dir: payload.failedDir,
+      backup_dir: payload.backupDir,
+      scan_interval: payload.scanInterval,
+      enabled: payload.enabled,
+      reminder_rules: payload.reminderRules,
+    })
+    if (projectId === currentProjectId.value) await loadProjectData(projectId)
+  }
   function wbsWriteRequest(payload: WbsWriteInput) {
     const request: Record<string, unknown> = {
       ...payload,
@@ -487,10 +872,189 @@ export const useAppStore = defineStore('app', () => {
   async function updatePlatformMapping(mappingId: string, payload: Omit<PlatformFieldMapping, 'id' | 'projectId'>, projectId = currentProjectId.value) { await api.patch(`/platform-field-mappings/${mappingId}`, { platform_name: payload.platformName, source_field: payload.sourceField, target_field: payload.targetField, transform_rule: payload.transformRule, required: payload.required, enabled: payload.enabled }); if (projectId === currentProjectId.value) await loadProjectData(projectId) }
   async function removePlatformMapping(mappingId: string, projectId = currentProjectId.value) { await api.delete(`/platform-field-mappings/${mappingId}`); if (projectId === currentProjectId.value) await loadProjectData(projectId) }
   async function createTask(payload: { title: string; task_type: Task['type']; risk_level?: Task['riskLevel']; assignee_user_id?: string; confirmer_user_id?: string; due_at?: string; risk_source_id?: string; wbs_item_id?: string; trigger_reason?: string; required_materials?: string[]; workflow_steps?: Task['workflowSteps'] }) { await api.post(`/projects/${currentProjectId.value}/tasks`, { ...payload, assignee_user_id: payload.assignee_user_id ? Number(payload.assignee_user_id) : null, confirmer_user_id: payload.confirmer_user_id ? Number(payload.confirmer_user_id) : null, risk_source_id: payload.risk_source_id ? Number(payload.risk_source_id) : null, wbs_item_id: payload.wbs_item_id ? Number(payload.wbs_item_id) : null }); await loadProjectData() }
-  async function uploadAttachment(file: File, category = '自动归类', folderId?: string) { const body = new FormData(); body.append('file', file); body.append('category', category); if (folderId) body.append('folder_id', folderId); await api.post(`/projects/${currentProjectId.value}/attachments`, body); await loadProjectData() }
-  async function updateAttachmentCategory(attachmentId: string, category: string) { await api.patch(`/attachments/${attachmentId}`, { category }); await loadProjectData() }
-  async function createDocumentFolder(payload: { name: string; parentId?: string }) { await api.post(`/projects/${currentProjectId.value}/document-folders`, { name: payload.name, parent_id: payload.parentId ? Number(payload.parentId) : null }); await loadProjectData() }
-  async function searchDocuments(keyword: string) { if (!keyword.trim()) return [] as AttachmentRecord[]; const response = await api.get<ApiEnvelope<ApiAttachment[]>>(`/projects/${currentProjectId.value}/document-search`, { params: { keyword } }); return response.data.data.map(mapAttachment) }
+  async function uploadAttachment(file: File, _category = '自动归类', folderId?: string) {
+    if (!currentProjectId.value) throw new Error('请先选择项目。')
+    if (!weknoraKnowledgeBases.value.length) await loadEngineeringDocuments(currentProjectId.value, true)
+    const targetFolder = folderId ? documentFolders.value.find(folder => folder.id === folderId) : undefined
+    const knowledgeBaseId = targetFolder?.knowledgeBaseId || weknoraKnowledgeBases.value[0]?.id
+    if (!knowledgeBaseId) throw new Error('当前项目绑定的 WeKnora 机器人没有可用知识库。')
+    const body = new FormData()
+    body.append('file', file)
+    body.append('knowledge_base_id', knowledgeBaseId)
+    body.append('folder_path', targetFolder?.path || '')
+    body.append('enable_multimodel', 'true')
+    await api.post(`/projects/${currentProjectId.value}/engineering-documents/upload`, body)
+  }
+  async function updateAttachmentCategory(_attachmentId: string, _category: string) {
+    throw new Error('WeKnora 资料不使用平台本地分类字段。')
+  }
+  async function createDocumentFolder(payload: { name: string; parentId?: string }): Promise<DocumentFolderRecord> {
+    const projectId = currentProjectId.value
+    if (!projectId) throw new Error('请先选择项目。')
+    if (!weknoraKnowledgeBases.value.length) await loadEngineeringDocuments(projectId, true)
+    const name = payload.name.trim()
+    if (!name || name === '.' || name === '..' || /[\\/\0]/.test(name)) {
+      throw new Error('目录名称不能为空，且不能包含斜杠。')
+    }
+    if (name.length > 255) throw new Error('目录名称不能超过 255 个字符。')
+    const parent = payload.parentId
+      ? documentFolders.value.find(folder => folder.id === payload.parentId)
+      : documentFolders.value.find(folder => folder.isKnowledgeBase)
+    if (!parent?.knowledgeBaseId) throw new Error('请选择需要创建目录的知识库或上级目录。')
+    const parentPath = normalizeWeKnoraFolderPath(parent.path)
+    const folderPath = normalizeWeKnoraFolderPath(parentPath ? `${parentPath}/${name}` : name)
+    const duplicate = documentFolders.value.find(folder => (
+      folder.knowledgeBaseId === parent.knowledgeBaseId
+      && normalizeWeKnoraFolderPath(folder.path) === folderPath
+    ))
+    if (duplicate) throw new Error('同级目录中已存在同名文件夹。')
+    await api.post(`/projects/${projectId}/engineering-documents/folder`, {
+      knowledge_base_id: parent.knowledgeBaseId,
+      folder_path: folderPath,
+    })
+    let created: DocumentFolderRecord | undefined
+    for (const delay of [0, 250, 750]) {
+      if (delay) await new Promise(resolve => setTimeout(resolve, delay))
+      await loadEngineeringDocuments(projectId, true)
+      created = documentFolders.value.find(folder => (
+        folder.knowledgeBaseId === parent.knowledgeBaseId
+        && normalizeWeKnoraFolderPath(folder.path) === folderPath
+      ))
+      if (created) break
+    }
+    if (!created) throw new Error('目录已提交创建，但 WeKnora 尚未返回该目录，请稍后刷新。')
+    return created
+  }
+  async function deleteDocumentFolder(folderId: string) {
+    const projectId = currentProjectId.value
+    if (!projectId) throw new Error('请先选择项目。')
+    const folder = documentFolders.value.find(item => item.id === folderId)
+    if (!folder?.knowledgeBaseId || folder.isKnowledgeBase) {
+      throw new Error('知识库根节点不能删除。')
+    }
+    const folderPath = normalizeWeKnoraFolderPath(folder.path)
+    if (!folderPath) throw new Error('目录路径无效。')
+    await api.delete(`/projects/${projectId}/engineering-documents/folder`, {
+      params: {
+        knowledge_base_id: folder.knowledgeBaseId,
+        folder_path: folderPath,
+        recursive: true,
+      },
+      timeout: 0,
+    })
+    let stillExists = true
+    for (const delay of [0, 250, 750, 1500]) {
+      if (delay) await new Promise(resolve => setTimeout(resolve, delay))
+      await loadEngineeringDocuments(projectId, true)
+      stillExists = documentFolders.value.some(item => (
+        item.knowledgeBaseId === folder.knowledgeBaseId
+        && normalizeWeKnoraFolderPath(item.path) === folderPath
+      ))
+      if (!stillExists) break
+    }
+    if (stillExists) {
+      throw new Error('WeKnora 尚未移除该目录，请稍后刷新后重试。')
+    }
+    return { parentId: folder.parentId }
+  }
+  async function deleteEngineeringDocument(knowledgeId: string) {
+    const projectId = currentProjectId.value
+    if (!projectId) throw new Error('请先选择项目。')
+    const normalizedId = knowledgeId.trim()
+    if (!normalizedId) throw new Error('资料标识无效。')
+    const existing = attachments.value.find(item => item.id === normalizedId)
+    await api.delete(
+      `/projects/${projectId}/engineering-documents/knowledge/${encodeURIComponent(normalizedId)}`,
+      { timeout: 0 },
+    )
+    attachments.value = attachments.value.filter(item => item.id !== normalizedId)
+    if (existing?.folderId) {
+      loadedEngineeringDocumentFolders.delete(`${projectId}:${existing.folderId}`)
+    }
+    return existing
+  }
+  async function searchDocuments(keyword: string) {
+    const query = keyword.trim()
+    if (!query) return [] as AttachmentRecord[]
+    if (!weknoraKnowledgeBases.value.length) await loadEngineeringDocuments(currentProjectId.value, true)
+    const responses = await Promise.all(weknoraKnowledgeBases.value.map(async knowledgeBase => {
+      const response = await api.post<ApiEnvelope<ApiWeKnoraSearch>>(`/projects/${currentProjectId.value}/engineering-documents/search`, {
+        knowledge_base_id: knowledgeBase.id,
+        query,
+        top_k: 8,
+        vector_threshold: 0.5,
+        keyword_threshold: 0.3,
+      })
+      return { knowledgeBaseId: knowledgeBase.id, references: response.data.data.references || [] }
+    }))
+    const resultMap = new Map<string, AttachmentRecord>()
+    for (const response of responses) {
+      for (const reference of response.references) {
+        if (!reference.knowledge_id) continue
+        const existing = attachments.value.find(item => item.id === reference.knowledge_id)
+        const folderPath = normalizeWeKnoraFolderPath(reference.folder_path)
+        const mapped: AttachmentRecord = existing || {
+          id: reference.knowledge_id,
+          projectId: currentProjectId.value,
+          fileName: reference.filename || reference.title || '未命名资料',
+          category: '工程资料',
+          version: 1,
+          fileSize: reference.file_size || 0,
+          contentType: reference.file_type || '',
+          createdAt: '',
+          folderId: weknoraFolderId(response.knowledgeBaseId, folderPath),
+          knowledgeBaseId: response.knowledgeBaseId,
+          folderPath,
+          parseStatus: reference.parse_status || '',
+          source: reference.source || '',
+        }
+        const next = { ...mapped, snippet: reference.content || mapped.snippet, searchScore: reference.score || 0 }
+        const previous = resultMap.get(next.id)
+        if (!previous || (next.searchScore || 0) > (previous.searchScore || 0)) resultMap.set(next.id, next)
+      }
+    }
+    return [...resultMap.values()].sort((left, right) => (right.searchScore || 0) - (left.searchScore || 0))
+  }
+  async function createEngineeringDocumentSession() {
+    const response = await api.post<ApiEnvelope<ApiWeKnoraSession>>(
+      `/projects/${currentProjectId.value}/engineering-documents/sessions`,
+      undefined,
+      { timeout: 30_000 },
+    )
+    return response.data.data
+  }
+  async function stopEngineeringDocumentAnswer(sessionId: string) {
+    if (!sessionId) throw new Error('缺少需要终止的 WeKnora 会话。')
+    const response = await api.post<ApiEnvelope<ApiWeKnoraStop>>(
+      `/projects/${currentProjectId.value}/engineering-documents/sessions/${encodeURIComponent(sessionId)}/stop`,
+      undefined,
+      { timeout: 30_000 },
+    )
+    return response.data.data
+  }
+  async function askEngineeringDocuments(
+    query: string,
+    knowledgeIds: string[] = [],
+    knowledgeBaseIds: string[] = [],
+    sessionId = '',
+  ) {
+    const question = query.trim()
+    if (!question) throw new Error('请输入需要询问的问题。')
+    if (!weknoraKnowledgeBases.value.length) await loadEngineeringDocuments(currentProjectId.value, true)
+    const response = await api.post<ApiEnvelope<ApiWeKnoraAnswer>>(
+      `/projects/${currentProjectId.value}/engineering-documents/ask`,
+      {
+        query: question,
+        knowledge_base_ids: knowledgeBaseIds.length ? knowledgeBaseIds : weknoraKnowledgeBases.value.map(item => item.id),
+        knowledge_ids: knowledgeIds,
+        session_id: sessionId || undefined,
+      },
+      // WeKnora may legitimately spend a long time on multi-step reasoning.
+      // The user stops it explicitly through stopEngineeringDocumentAnswer.
+      { timeout: 0 },
+    )
+    return response.data.data
+  }
   async function parseDailyAttachment(attachmentId: string) { await api.post(`/attachments/${attachmentId}/parse-daily`); await loadProjectData() }
   async function createRiskDraft(payload: { risk_source_id: string; title: string; content: string; source_refs?: string[]; missing_items?: string[] }) { await api.post(`/projects/${currentProjectId.value}/risk-drafts`, { ...payload, risk_source_id: Number(payload.risk_source_id) }); await loadProjectData() }
   async function assistRiskDraft(riskId: string) { await api.post(`/projects/${currentProjectId.value}/risk-drafts/assist/${riskId}`); await loadProjectData() }
@@ -535,5 +1099,5 @@ export const useAppStore = defineStore('app', () => {
   async function removeWbsRiskLink(linkId: string) { await api.delete(`/wbs-risk-links/${linkId}`); await loadProjectData() }
   function addLog(log: OperationLog) { if (!currentProjectId.value) return; void api.post(`/projects/${currentProjectId.value}/operation-logs`, { action: log.action, detail: log.detail }).then(() => loadProjectData()) }
 
-  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, uploadAttachment, updateAttachmentCategory, createDocumentFolder, searchDocuments, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
+  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, weknoraKnowledgeBases, engineeringDocumentsLoading, engineeringDocumentFolderLoading, engineeringDocumentsError, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, uploadAttachment, updateAttachmentCategory, createDocumentFolder, deleteDocumentFolder, deleteEngineeringDocument, searchDocuments, createEngineeringDocumentSession, stopEngineeringDocumentAnswer, askEngineeringDocuments, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, loadEngineeringDocuments, loadEngineeringDocumentFolder, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
 })

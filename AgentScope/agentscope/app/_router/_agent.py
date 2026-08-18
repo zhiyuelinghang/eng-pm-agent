@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """Agent router — CRUD endpoints for agent configurations."""
+import asyncio
 from datetime import datetime
 import ipaddress
 import json
@@ -55,6 +56,11 @@ from ._schema import (
     WeKnoraConnectionResponse,
     WeKnoraKnowledgeBaseItem,
     WeKnoraKnowledgeItem,
+    WeKnoraFolderItem,
+    WeKnoraFolderTreeResponse,
+    CreateWeKnoraFolderRequest,
+    UpdateWeKnoraFolderRequest,
+    MoveWeKnoraKnowledgeRequest,
     SearchWeKnoraKnowledgeRequest,
     SearchWeKnoraKnowledgeResponse,
     WeKnoraSearchReference,
@@ -62,6 +68,13 @@ from ._schema import (
     WeKnoraKnowledgeMutationResponse,
     AskWeKnoraAgentRequest,
     AskWeKnoraAgentResponse,
+    CreateWeKnoraAgentSessionRequest,
+    WeKnoraAgentSessionResponse,
+    StopWeKnoraAgentSessionRequest,
+    StopWeKnoraAgentSessionResponse,
+    ListWeKnoraProjectBindingsResponse,
+    UpdateWeKnoraProjectBindingRequest,
+    WeKnoraProjectBindingItem,
     UpdatePlatformSettingsRequest,
     UpdateAgentRequest,
 )
@@ -93,6 +106,21 @@ from ...credential import CredentialFactory
 
 
 logger = logging.getLogger(__name__)
+
+# The stop endpoint can be served by a different worker, so this registry is
+# only a fast path.  The authoritative fallback always reads the active
+# assistant message from WeKnora itself.
+_active_weknora_message_ids: dict[str, str] = {}
+
+# WeKnora creates missing path segments from the upload's ``folder_path``.
+# This empty reserved marker keeps such a path alive without contributing
+# document content.  Every public adapter response removes it again.
+# WeKnora validates the extension before it persists a file.  Keep the
+# reserved marker name distinctive, but end it in a format accepted by the
+# current service.  The payload stays exactly zero bytes and multimodal
+# processing remains disabled.
+WEKNORA_FOLDER_PLACEHOLDER_FILENAME = "__dobby_folder__.md"
+WEKNORA_FOLDER_PLACEHOLDER_CONTENT_TYPE = "text/markdown"
 
 agent_router = APIRouter(
     prefix="/agent",
@@ -206,7 +234,6 @@ def _weknora_response(
         base_url=config.base_url,
         api_prefix=config.api_prefix,
         auth_header=config.auth_header,
-        agent_id=config.agent_id,
         api_key_configured=bool(config.api_key.get_secret_value()),
     )
 
@@ -241,7 +268,6 @@ def _build_weknora_config(
             base_url=base_url,
             api_prefix=body.api_prefix,
             auth_header=body.auth_header,
-            agent_id=body.agent_id,
             api_key=api_key,
         )
     except ValidationError as exc:
@@ -351,6 +377,88 @@ def _validate_weknora_response(response: httpx.Response) -> None:
         )
 
 
+def _dobby_internal_api_base_url() -> str:
+    """Return the trusted engineering-platform internal API root."""
+
+    explicit = os.getenv("DOBBY_INTERNAL_API_BASE_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    gateway = os.getenv(
+        "DOBBY_AGENT_TOOL_BASE_URL",
+        "http://127.0.0.1:38430/api/internal/agent-tools",
+    ).strip().rstrip("/")
+    return gateway.rsplit("/agent-tools", 1)[0]
+
+
+async def _request_dobby_project_bindings(
+    path: str = "",
+    *,
+    method: str = "GET",
+    json_body: dict | None = None,
+) -> object:
+    """Read or update project bindings through the trusted service API."""
+
+    token = (
+        os.getenv("DOBBY_AGENT_TOOL_TOKEN", "").strip()
+        or os.getenv("AGENTSCOPE_SERVICE_TOKEN", "").strip()
+    )
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="尚未配置工程平台内部服务令牌。",
+        )
+    url = (
+        f"{_dobby_internal_api_base_url()}"
+        f"/agent-tools/weknora-project-bindings{path}"
+    )
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=False,
+            timeout=httpx.Timeout(20.0),
+        ) as client:
+            response = await client.request(
+                method,
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                json=json_body,
+            )
+    except httpx.TimeoutException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="读取工程项目列表超时，请确认业务后端已启动。",
+        ) from exc
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="无法连接工程管理业务后端。",
+        ) from exc
+    if response.status_code in {401, 403}:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="工程平台内部服务令牌不一致。",
+        )
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail="工程项目不存在。")
+    if not 200 <= response.status_code < 300:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"工程管理业务后端返回 HTTP {response.status_code}。",
+        )
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="工程管理业务后端返回了无效响应。",
+        ) from exc
+    if not isinstance(payload, dict) or payload.get("success") is not True:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="工程管理业务后端返回了失败响应。",
+        )
+    return payload.get("data")
+
+
 async def _request_weknora_bytes(
     config: WeKnoraConnectionConfig,
     path: str,
@@ -400,15 +508,22 @@ async def _request_weknora_sse(
     config: WeKnoraConnectionConfig,
     path: str,
     body: dict,
+    *,
+    session_id: str = "",
 ) -> list[dict]:
-    """Read and parse the documented WeKnora SSE chat response."""
+    """Read WeKnora SSE without imposing a deadline on answer generation."""
 
     _validate_weknora_probe_target(config.base_url)
     url = f"{config.base_url}{config.api_prefix}{path}"
     events: list[dict] = []
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(300.0, connect=10.0),
+            timeout=httpx.Timeout(
+                connect=10.0,
+                read=None,
+                write=30.0,
+                pool=10.0,
+            ),
             follow_redirects=False,
         ) as client:
             async with client.stream(
@@ -431,20 +546,30 @@ async def _request_weknora_sse(
                         continue
                     if isinstance(event, dict):
                         events.append(event)
-                        if event.get("response_type") in {"complete", "error"}:
+                        message_id = _text(event.get("message_id"))
+                        if session_id and message_id:
+                            _active_weknora_message_ids[session_id] = message_id
+                        if event.get("response_type") in {
+                            "complete",
+                            "error",
+                            "stop",
+                        }:
                             break
     except HTTPException:
         raise
     except httpx.TimeoutException as exc:
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail="WeKnora 智能体响应超时。",
+            detail="连接 WeKnora 智能体超时。",
         ) from exc
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="无法连接 WeKnora 智能体。",
         ) from exc
+    finally:
+        if session_id:
+            _active_weknora_message_ids.pop(session_id, None)
     return events
 
 
@@ -452,7 +577,11 @@ def _weknora_list_payload(payload: dict) -> tuple[list[dict], dict]:
     """Extract either the documented array or paginated list shape."""
     data = payload.get("data", [])
     if isinstance(data, list):
-        return [item for item in data if isinstance(item, dict)], {}
+        # The deployed WeKnora API returns list items in ``data`` while
+        # pagination fields (total/page/page_size) live at the response root.
+        # Preserve the root metadata or callers will mistake the first page
+        # length for the complete result count.
+        return [item for item in data if isinstance(item, dict)], payload
     if isinstance(data, dict) and isinstance(data.get("list"), list):
         return (
             [item for item in data["list"] if isinstance(item, dict)],
@@ -466,6 +595,60 @@ def _weknora_list_payload(payload: dict) -> tuple[list[dict], dict]:
 
 def _text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def _normalise_weknora_folder_path(value: object) -> str:
+    """Normalise one WeKnora folder path without changing its segments."""
+
+    path = _text(value).replace("\\", "/").strip("/")
+    return "/".join(segment for segment in path.split("/") if segment)
+
+
+def _validate_weknora_folder_path(value: object) -> str:
+    """Validate a user-created path before using it in a marker upload."""
+
+    raw_path = _text(value).replace("\\", "/").strip("/")
+    segments = raw_path.split("/") if raw_path else []
+    if (
+        not segments
+        or any(
+            not segment.strip()
+            or segment.strip() in {".", ".."}
+            or "\x00" in segment
+            or segment.casefold()
+            == WEKNORA_FOLDER_PLACEHOLDER_FILENAME.casefold()
+            for segment in segments
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="文件夹路径无效。",
+        )
+    return "/".join(segment.strip() for segment in segments)
+
+
+def _is_weknora_folder_placeholder(
+    item: dict | WeKnoraKnowledgeItem,
+) -> bool:
+    """Whether a remote knowledge item is our private empty folder marker."""
+
+    if isinstance(item, dict):
+        values = (
+            item.get("file_name"),
+            item.get("filename"),
+            item.get("title"),
+            item.get("knowledge_filename"),
+            item.get("knowledge_title"),
+            item.get("source"),
+        )
+    else:
+        values = (item.file_name, item.title, item.source)
+    expected = WEKNORA_FOLDER_PLACEHOLDER_FILENAME.casefold()
+    for value in values:
+        leaf = _text(value).replace("\\", "/").rsplit("/", 1)[-1]
+        if leaf.casefold() == expected:
+            return True
+    return False
 
 
 def _integer(value: object, default: int = 0) -> int:
@@ -502,6 +685,7 @@ def _weknora_knowledge_item(
         title=_text(item.get("title")),
         description=_text(item.get("description")),
         file_name=_text(item.get("file_name")),
+        folder_path=_text(item.get("folder_path")),
         file_type=_text(item.get("file_type")),
         file_size=normalised_file_size,
         source=_text(item.get("source")),
@@ -513,14 +697,90 @@ def _weknora_knowledge_item(
     )
 
 
+def _weknora_folder_item(
+    item: dict,
+    placeholder_paths: list[str] | None = None,
+) -> WeKnoraFolderItem | None:
+    """Normalise one recursive node from the documented folder response."""
+
+    path = _normalise_weknora_folder_path(item.get("path"))
+    if not path:
+        return None
+    hidden_paths = placeholder_paths or []
+    direct_hidden = sum(hidden_path == path for hidden_path in hidden_paths)
+    nested_prefix = f"{path}/"
+    nested_hidden = sum(
+        hidden_path == path or hidden_path.startswith(nested_prefix)
+        for hidden_path in hidden_paths
+    )
+    raw_children = item.get("children", [])
+    children: list[WeKnoraFolderItem] = []
+    if isinstance(raw_children, list):
+        for raw_child in raw_children:
+            if not isinstance(raw_child, dict):
+                continue
+            child = _weknora_folder_item(raw_child, hidden_paths)
+            if child is not None:
+                children.append(child)
+    return WeKnoraFolderItem(
+        path=path,
+        name=_text(item.get("name")) or path.rsplit("/", 1)[-1],
+        document_count=max(
+            _integer(item.get("document_count")) - direct_hidden,
+            0,
+        ),
+        total_count=max(
+            _integer(item.get("total_count")) - nested_hidden,
+            0,
+        ),
+        children=children,
+    )
+
+
+async def _fetch_weknora_folder_placeholders(
+    config: WeKnoraConnectionConfig,
+    knowledge_base_id: str,
+) -> list[WeKnoraKnowledgeItem]:
+    """Load private folder markers so counts and lists can hide them."""
+
+    encoded_id = quote(knowledge_base_id, safe="")
+    page_size = 100
+    placeholders: list[WeKnoraKnowledgeItem] = []
+    seen_items = 0
+    for page in range(1, 10001):
+        payload = await _request_weknora_json(
+            config,
+            f"/knowledge-bases/{encoded_id}/knowledge",
+            params={
+                "page": page,
+                "page_size": page_size,
+                "keyword": WEKNORA_FOLDER_PLACEHOLDER_FILENAME,
+            },
+        )
+        raw_items, metadata = _weknora_list_payload(payload)
+        seen_items += len(raw_items)
+        for item in raw_items:
+            if _is_weknora_folder_placeholder(item):
+                placeholders.append(
+                    _weknora_knowledge_item(item, knowledge_base_id),
+                )
+        raw_total = _integer(metadata.get("total"), seen_items)
+        if (
+            not raw_items
+            or len(raw_items) < page_size
+            or seen_items >= raw_total
+        ):
+            break
+    return placeholders
+
+
 async def _fetch_weknora_agent(
     config: WeKnoraConnectionConfig,
-) -> tuple[str, str]:
-    """Validate the configured WeKnora agent and return its id and name."""
+    agent_id: str,
+) -> tuple[str, str, list[str]]:
+    """Load one WeKnora robot and its documented knowledge-base scope."""
 
-    if not config.agent_id:
-        return "", ""
-    encoded_id = quote(config.agent_id, safe="")
+    encoded_id = quote(agent_id, safe="")
     payload = await _request_weknora_json(config, f"/agents/{encoded_id}")
     data = payload.get("data")
     if not isinstance(data, dict):
@@ -529,12 +789,104 @@ async def _fetch_weknora_agent(
             detail="WeKnora 智能体详情响应结构无效。",
         )
     remote_id = _text(data.get("id"))
-    if remote_id and remote_id != config.agent_id:
+    if remote_id and remote_id != agent_id:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="WeKnora 返回的智能体 ID 与配置不一致。",
         )
-    return remote_id or config.agent_id, _text(data.get("name"))
+    raw_config = data.get("config")
+    if not isinstance(raw_config, dict):
+        raw_config = {}
+    selection_mode = _text(raw_config.get("kb_selection_mode")) or "all"
+    raw_ids = raw_config.get("knowledge_bases", [])
+    if not isinstance(raw_ids, list):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 智能体的知识库配置结构无效。",
+        )
+    selected_ids = list(
+        dict.fromkeys(_text(item) for item in raw_ids if _text(item)),
+    )
+    if selection_mode == "none":
+        selected_ids = []
+    elif selection_mode == "all":
+        selected_ids = [
+            item.id for item in await _fetch_weknora_knowledge_bases(config)
+        ]
+    return remote_id or agent_id, _text(data.get("name")), selected_ids
+
+
+async def _weknora_agent_knowledge_base_ids(
+    config: WeKnoraConnectionConfig,
+    agent_id: str | None,
+) -> list[str] | None:
+    """Return the robot-owned KB scope, or ``None`` for admin management."""
+
+    # FastAPI's ``Query`` default is only resolved during dependency injection;
+    # direct service-level calls (including unit tests) receive the descriptor.
+    # Treat every non-string value as the unrestricted administration scope.
+    if not isinstance(agent_id, str) or not agent_id.strip():
+        return None
+    agent_id = agent_id.strip()
+    _, _, knowledge_base_ids = await _fetch_weknora_agent(config, agent_id)
+    if not knowledge_base_ids:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="该 WeKnora 机器人没有配置可读取的知识库。",
+        )
+    return knowledge_base_ids
+
+
+def _require_weknora_knowledge_base_access(
+    knowledge_base_id: str,
+    allowed_ids: list[str] | None,
+) -> None:
+    if allowed_ids is not None and knowledge_base_id not in allowed_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="当前项目绑定的 WeKnora 机器人无权访问该知识库。",
+        )
+
+
+async def _fetch_weknora_knowledge_item_by_id(
+    config: WeKnoraConnectionConfig,
+    knowledge_id: str,
+) -> WeKnoraKnowledgeItem:
+    payload = await _request_weknora_json(
+        config,
+        f"/knowledge/{quote(knowledge_id, safe='')}",
+    )
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 资料详情响应结构无效。",
+        )
+    item = _weknora_knowledge_item(data)
+    if not item.id:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 资料详情缺少知识 ID。",
+        )
+    return item
+
+
+async def _require_weknora_knowledge_access(
+    config: WeKnoraConnectionConfig,
+    knowledge_id: str,
+    allowed_ids: list[str] | None,
+) -> WeKnoraKnowledgeItem:
+    item = await _fetch_weknora_knowledge_item_by_id(config, knowledge_id)
+    if not item.knowledge_base_id:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 资料详情缺少知识库 ID。",
+        )
+    _require_weknora_knowledge_base_access(
+        item.knowledge_base_id,
+        allowed_ids,
+    )
+    return item
 
 
 async def _fetch_weknora_knowledge_bases(
@@ -565,26 +917,120 @@ async def _fetch_weknora_knowledge(
     *,
     page: int,
     page_size: int,
+    folder_path: str | None = None,
+    folder_recursive: bool = True,
+    keyword: str = "",
 ) -> tuple[list[WeKnoraKnowledgeItem], int]:
     encoded_id = quote(knowledge_base_id, safe="")
+    params: dict[str, int | str] = {"page": page, "page_size": page_size}
+    if folder_path is not None:
+        params.update(
+            {
+                "folder_path": folder_path,
+                "folder_recursive": str(folder_recursive).lower(),
+            },
+        )
+    if keyword:
+        params["keyword"] = keyword
     payload = await _request_weknora_json(
         config,
         f"/knowledge-bases/{encoded_id}/knowledge",
-        params={"page": page, "page_size": page_size},
+        params=params,
     )
     raw_items, metadata = _weknora_list_payload(payload)
     result: list[WeKnoraKnowledgeItem] = []
     for item in raw_items:
         item_id = _text(item.get("id"))
-        if not item_id:
+        if not item_id or _is_weknora_folder_placeholder(item):
             continue
         result.append(_weknora_knowledge_item(item, knowledge_base_id))
+    placeholders = await _fetch_weknora_folder_placeholders(
+        config,
+        knowledge_base_id,
+    )
+    normalised_folder_path = (
+        _normalise_weknora_folder_path(folder_path)
+        if folder_path is not None
+        else None
+    )
+
+    def placeholder_is_in_scope(item: WeKnoraKnowledgeItem) -> bool:
+        if keyword and keyword.casefold() not in (
+            WEKNORA_FOLDER_PLACEHOLDER_FILENAME.casefold()
+        ):
+            return False
+        if normalised_folder_path is None:
+            return True
+        item_path = _normalise_weknora_folder_path(item.folder_path)
+        if folder_recursive:
+            return (
+                item_path == normalised_folder_path
+                or item_path.startswith(f"{normalised_folder_path}/")
+            )
+        return item_path == normalised_folder_path
+
+    hidden_total = sum(
+        placeholder_is_in_scope(item) for item in placeholders
+    )
     raw_total = metadata.get("total", len(result))
     try:
-        total = max(int(raw_total), len(result))
+        total = max(int(raw_total) - hidden_total, len(result))
     except (TypeError, ValueError):
         total = len(result)
     return result, total
+
+
+async def _fetch_weknora_folder_tree(
+    config: WeKnoraConnectionConfig,
+    knowledge_base_id: str,
+) -> WeKnoraFolderTreeResponse:
+    """Load WeKnora's complete folder hierarchy for one knowledge base."""
+
+    encoded_id = quote(knowledge_base_id, safe="")
+    payload = await _request_weknora_json(
+        config,
+        f"/knowledge-bases/{encoded_id}/knowledge/folders",
+    )
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 文件夹树响应结构无效。",
+        )
+    raw_folders = data.get("folders", [])
+    if not isinstance(raw_folders, list):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 文件夹树节点结构无效。",
+        )
+    placeholders = await _fetch_weknora_folder_placeholders(
+        config,
+        knowledge_base_id,
+    )
+    placeholder_paths = [
+        _normalise_weknora_folder_path(item.folder_path)
+        for item in placeholders
+    ]
+    folders: list[WeKnoraFolderItem] = []
+    for raw_folder in raw_folders:
+        if not isinstance(raw_folder, dict):
+            continue
+        folder = _weknora_folder_item(raw_folder, placeholder_paths)
+        if folder is not None:
+            folders.append(folder)
+    return WeKnoraFolderTreeResponse(
+        root_document_count=max(
+            _integer(data.get("root_document_count"))
+            - sum(not path for path in placeholder_paths),
+            0,
+        ),
+        total_document_count=max(
+            _integer(data.get("total_document_count"))
+            - len(placeholder_paths),
+            0,
+        ),
+        folders=folders,
+    )
 
 
 async def _fetch_weknora_knowledge_batch(
@@ -651,6 +1097,11 @@ async def _search_weknora_knowledge(
     for item in hits[: request.top_k]:
         knowledge_id = _text(item.get("knowledge_id"))
         details = file_info.get(knowledge_id)
+        if (
+            (details is not None and _is_weknora_folder_placeholder(details))
+            or _is_weknora_folder_placeholder(item)
+        ):
+            continue
         references.append(
             WeKnoraSearchReference(
                 knowledge_id=knowledge_id,
@@ -662,6 +1113,7 @@ async def _search_weknora_knowledge(
                     _text(item.get("knowledge_filename"))
                     or (details.file_name if details else "")
                 ),
+                folder_path=details.folder_path if details else "",
                 content=_text(item.get("content")),
                 score=_number(item.get("score")),
                 chunk_index=_integer(item.get("chunk_index")),
@@ -724,12 +1176,9 @@ def _weknora_mutation_result(
 
 async def _probe_weknora(
     config: WeKnoraConnectionConfig,
-) -> tuple[int, bool, str]:
+) -> int:
     knowledge_base_count = len(await _fetch_weknora_knowledge_bases(config))
-    if not config.agent_id:
-        return knowledge_base_count, False, ""
-    _, agent_name = await _fetch_weknora_agent(config)
-    return knowledge_base_count, True, agent_name
+    return knowledge_base_count
 
 
 def _is_initialization_validation_package(record: MCPPackageRecord) -> bool:
@@ -1531,24 +1980,77 @@ async def test_weknora_connection(
         body,
         current.data.weknora_connection,
     )
-    knowledge_base_count, agent_validated, agent_name = await _probe_weknora(
-        connection,
-    )
-    agent_message = (
-        f"，智能体“{agent_name or connection.agent_id}”验证通过"
-        if agent_validated
-        else ""
-    )
+    knowledge_base_count = await _probe_weknora(connection)
     return TestWeKnoraConnectionResponse(
         success=True,
         knowledge_base_count=knowledge_base_count,
-        agent_validated=agent_validated,
-        agent_name=agent_name,
         message=(
-            f"连接成功，读取到 {knowledge_base_count} 个知识库"
-            f"{agent_message}。"
+            f"连接成功，读取到 {knowledge_base_count} 个知识库。"
         ),
     )
+
+
+@agent_router.get(
+    "/platform/weknora/project-bindings",
+    response_model=ListWeKnoraProjectBindingsResponse,
+    summary="List engineering projects and their WeKnora robots",
+)
+async def list_weknora_project_bindings(
+    user_id: str = Depends(get_current_user_id),
+) -> ListWeKnoraProjectBindingsResponse:
+    del user_id
+    data = await _request_dobby_project_bindings()
+    if not isinstance(data, list):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="工程管理业务后端返回的项目列表结构无效。",
+        )
+    projects = [
+        WeKnoraProjectBindingItem.model_validate(item)
+        for item in data
+        if isinstance(item, dict)
+    ]
+    return ListWeKnoraProjectBindingsResponse(
+        projects=projects,
+        total=len(projects),
+    )
+
+
+@agent_router.put(
+    "/platform/weknora/project-bindings/{project_id}",
+    response_model=WeKnoraProjectBindingItem,
+    summary="Assign a WeKnora robot to one engineering project",
+)
+async def update_weknora_project_binding(
+    project_id: int,
+    body: UpdateWeKnoraProjectBindingRequest,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> WeKnoraProjectBindingItem:
+    agent_id = (body.weknora_agent_id or "").strip()
+    if agent_id:
+        settings = await _load_platform_settings(storage, user_id)
+        connection = _require_weknora_connection(settings)
+        _, _, knowledge_base_ids = await _fetch_weknora_agent(
+            connection,
+            agent_id,
+        )
+        if not knowledge_base_ids:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="该 WeKnora 机器人没有配置可读取的知识库。",
+            )
+    data = await _request_dobby_project_bindings(
+        f"/{project_id}",
+        method="PUT",
+        json_body={"weknora_agent_id": agent_id or None},
+    )
+    if not isinstance(data, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="工程管理业务后端返回的绑定结果结构无效。",
+        )
+    return WeKnoraProjectBindingItem.model_validate(data)
 
 
 @agent_router.get(
@@ -1557,16 +2059,340 @@ async def test_weknora_connection(
     summary="List knowledge bases from the configured WeKnora tenant",
 )
 async def list_weknora_knowledge_bases(
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
 ) -> ListWeKnoraKnowledgeBasesResponse:
     settings = await _load_platform_settings(storage, user_id)
-    knowledge_bases = await _fetch_weknora_knowledge_bases(
-        _require_weknora_connection(settings),
+    connection = _require_weknora_connection(settings)
+    allowed_ids = await _weknora_agent_knowledge_base_ids(
+        connection,
+        weknora_agent_id,
     )
+    knowledge_bases = await _fetch_weknora_knowledge_bases(connection)
+    if allowed_ids is not None:
+        by_id = {item.id: item for item in knowledge_bases}
+        knowledge_bases = [by_id[item_id] for item_id in allowed_ids if item_id in by_id]
     return ListWeKnoraKnowledgeBasesResponse(
         knowledge_bases=knowledge_bases,
         total=len(knowledge_bases),
+    )
+
+
+@agent_router.get(
+    "/platform/weknora/knowledge-bases/{knowledge_base_id}/knowledge/folders",
+    response_model=WeKnoraFolderTreeResponse,
+    summary="Load WeKnora's documented folder hierarchy",
+)
+async def get_weknora_folder_tree(
+    knowledge_base_id: str,
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> WeKnoraFolderTreeResponse:
+    settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    _require_weknora_knowledge_base_access(
+        knowledge_base_id,
+        await _weknora_agent_knowledge_base_ids(connection, weknora_agent_id),
+    )
+    return await _fetch_weknora_folder_tree(
+        connection,
+        knowledge_base_id,
+    )
+
+
+@agent_router.post(
+    "/platform/weknora/knowledge-bases/{knowledge_base_id}/knowledge/folders",
+    response_model=WeKnoraKnowledgeMutationResponse,
+    summary="Create a persistent WeKnora folder with an empty marker",
+)
+async def create_weknora_folder(
+    knowledge_base_id: str,
+    body: CreateWeKnoraFolderRequest,
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> WeKnoraKnowledgeMutationResponse:
+    settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    _require_weknora_knowledge_base_access(
+        knowledge_base_id,
+        await _weknora_agent_knowledge_base_ids(connection, weknora_agent_id),
+    )
+    folder_path = _validate_weknora_folder_path(body.folder_path)
+    tree = await _fetch_weknora_folder_tree(connection, knowledge_base_id)
+
+    def collect_paths(nodes: list[WeKnoraFolderItem]) -> set[str]:
+        paths: set[str] = set()
+        for node in nodes:
+            paths.add(_normalise_weknora_folder_path(node.path))
+            paths.update(collect_paths(node.children))
+        return paths
+
+    if folder_path in collect_paths(tree.folders):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="该文件夹已经存在。",
+        )
+    encoded_id = quote(knowledge_base_id, safe="")
+    payload = await _request_weknora_json(
+        connection,
+        f"/knowledge-bases/{encoded_id}/knowledge/file",
+        method="POST",
+        data={
+            "enable_multimodel": "false",
+            "channel": "api",
+            # The current WeKnora deployment exposes ``folder_path`` on
+            # reads but still derives a newly-created path from ``fileName``
+            # during uploads.  Send both representations: current releases
+            # consume ``folder_path`` while the deployed build consumes the
+            # path-qualified fileName.
+            "fileName": (
+                f"{folder_path}/{WEKNORA_FOLDER_PLACEHOLDER_FILENAME}"
+            ),
+            "folder_path": folder_path,
+        },
+        files={
+            "file": (
+                WEKNORA_FOLDER_PLACEHOLDER_FILENAME,
+                b"",
+                WEKNORA_FOLDER_PLACEHOLDER_CONTENT_TYPE,
+            ),
+        },
+        timeout_seconds=120.0,
+    )
+    return _weknora_mutation_result(
+        payload,
+        default_message="文件夹已创建。",
+    )
+
+
+@agent_router.delete(
+    "/platform/weknora/knowledge-bases/{knowledge_base_id}/knowledge/folders",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete one WeKnora folder and optionally all nested content",
+)
+async def delete_weknora_folder(
+    knowledge_base_id: str,
+    folder_path: str = Query(min_length=1, max_length=4096),
+    recursive: bool = False,
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> Response:
+    settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    _require_weknora_knowledge_base_access(
+        knowledge_base_id,
+        await _weknora_agent_knowledge_base_ids(connection, weknora_agent_id),
+    )
+    normalised_path = _validate_weknora_folder_path(folder_path)
+    tree = await _fetch_weknora_folder_tree(connection, knowledge_base_id)
+
+    def find_folder(
+        nodes: list[WeKnoraFolderItem],
+    ) -> WeKnoraFolderItem | None:
+        for node in nodes:
+            if _normalise_weknora_folder_path(node.path) == normalised_path:
+                return node
+            matched = find_folder(node.children)
+            if matched is not None:
+                return matched
+        return None
+
+    folder = find_folder(tree.folders)
+    if folder is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="文件夹不存在。",
+        )
+    if (
+        not recursive
+        and (
+            folder.document_count > 0
+            or folder.total_count > 0
+            or folder.children
+        )
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="只能删除空目录，请先移走其中的资料和子目录。",
+        )
+
+    placeholders = await _fetch_weknora_folder_placeholders(
+        connection,
+        knowledge_base_id,
+    )
+    nested_prefix = f"{normalised_path}/"
+    scoped_markers = [
+        item
+        for item in placeholders
+        if (
+            _normalise_weknora_folder_path(item.folder_path)
+            == normalised_path
+            or (
+                recursive
+                and _normalise_weknora_folder_path(item.folder_path).startswith(
+                    nested_prefix,
+                )
+            )
+        )
+    ]
+
+    if not recursive:
+        if not scoped_markers:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="该空目录不是由平台占位文件创建，当前无法安全删除。",
+            )
+        for marker in scoped_markers:
+            await _request_weknora_json(
+                connection,
+                f"/knowledge/{quote(marker.id, safe='')}",
+                method="DELETE",
+            )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    encoded_id = quote(knowledge_base_id, safe="")
+    page_size = 100
+    seen_remote_items = 0
+    knowledge_ids: list[str] = []
+    seen_knowledge_ids: set[str] = set()
+    for page in range(1, 10001):
+        payload = await _request_weknora_json(
+            connection,
+            f"/knowledge-bases/{encoded_id}/knowledge",
+            params={
+                "page": page,
+                "page_size": page_size,
+                "folder_path": normalised_path,
+                "folder_recursive": "true",
+            },
+        )
+        raw_items, metadata = _weknora_list_payload(payload)
+        seen_remote_items += len(raw_items)
+        for item in raw_items:
+            item_id = _text(item.get("id"))
+            item_path = _normalise_weknora_folder_path(item.get("folder_path"))
+            if (
+                not item_id
+                or item_id in seen_knowledge_ids
+                or _is_weknora_folder_placeholder(item)
+                or not (
+                    item_path == normalised_path
+                    or item_path.startswith(nested_prefix)
+                )
+            ):
+                continue
+            seen_knowledge_ids.add(item_id)
+            knowledge_ids.append(item_id)
+        raw_total = _integer(metadata.get("total"), seen_remote_items)
+        if (
+            not raw_items
+            or len(raw_items) < page_size
+            or seen_remote_items >= raw_total
+        ):
+            break
+
+    if not knowledge_ids and not scoped_markers:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="该目录没有可删除的资料或平台占位文件。",
+        )
+
+    for knowledge_id in knowledge_ids:
+        await _request_weknora_json(
+            connection,
+            f"/knowledge/{quote(knowledge_id, safe='')}",
+            method="DELETE",
+        )
+    for marker in sorted(
+        scoped_markers,
+        key=lambda item: _normalise_weknora_folder_path(
+            item.folder_path,
+        ).count("/"),
+        reverse=True,
+    ):
+        await _request_weknora_json(
+            connection,
+            f"/knowledge/{quote(marker.id, safe='')}",
+            method="DELETE",
+        )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@agent_router.put(
+    "/platform/weknora/knowledge-bases/{knowledge_base_id}/knowledge/folders",
+    summary="Rename or move a WeKnora folder",
+)
+async def update_weknora_folder(
+    knowledge_base_id: str,
+    body: UpdateWeKnoraFolderRequest,
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> dict:
+    settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    _require_weknora_knowledge_base_access(
+        knowledge_base_id,
+        await _weknora_agent_knowledge_base_ids(connection, weknora_agent_id),
+    )
+    source_path = body.source_path.strip().strip("/")
+    target_path = body.target_path.strip().strip("/")
+    if not source_path or not target_path or source_path == target_path:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="文件夹原路径和目标路径必须有效且不能相同。",
+        )
+    return await _request_weknora_json(
+        connection,
+        f"/knowledge-bases/{quote(knowledge_base_id, safe='')}/knowledge/folders",
+        method="PUT",
+        json_body={"from": source_path, "to": target_path},
+    )
+
+
+@agent_router.post(
+    "/platform/weknora/knowledge-bases/{knowledge_base_id}/knowledge/move",
+    summary="Move WeKnora knowledge items to a folder",
+)
+async def move_weknora_knowledge(
+    knowledge_base_id: str,
+    body: MoveWeKnoraKnowledgeRequest,
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> dict:
+    settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    allowed_ids = await _weknora_agent_knowledge_base_ids(
+        connection,
+        weknora_agent_id,
+    )
+    _require_weknora_knowledge_base_access(knowledge_base_id, allowed_ids)
+    knowledge_ids = list(dict.fromkeys(body.knowledge_ids))
+    for knowledge_id in knowledge_ids:
+        item = await _require_weknora_knowledge_access(
+            connection,
+            knowledge_id,
+            allowed_ids,
+        )
+        if item.knowledge_base_id != knowledge_base_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="待移动资料不属于目标知识库。",
+            )
+    return await _request_weknora_json(
+        connection,
+        "/knowledge/folder",
+        method="POST",
+        json_body={
+            "kb_id": knowledge_base_id,
+            "knowledge_ids": knowledge_ids,
+            "folder_path": body.folder_path.strip().strip("/"),
+        },
     )
 
 
@@ -1579,15 +2405,27 @@ async def list_weknora_knowledge(
     knowledge_base_id: str,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=100),
+    folder_path: str | None = Query(default=None, max_length=4096),
+    folder_recursive: bool = Query(default=True),
+    keyword: str = Query(default="", max_length=512),
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
 ) -> ListWeKnoraKnowledgeResponse:
     settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    _require_weknora_knowledge_base_access(
+        knowledge_base_id,
+        await _weknora_agent_knowledge_base_ids(connection, weknora_agent_id),
+    )
     knowledge, total = await _fetch_weknora_knowledge(
-        _require_weknora_connection(settings),
+        connection,
         knowledge_base_id,
         page=page,
         page_size=page_size,
+        folder_path=folder_path,
+        folder_recursive=folder_recursive,
+        keyword=keyword.strip(),
     )
     return ListWeKnoraKnowledgeResponse(
         knowledge=knowledge,
@@ -1605,12 +2443,18 @@ async def list_weknora_knowledge(
 async def search_weknora_knowledge(
     knowledge_base_id: str,
     body: SearchWeKnoraKnowledgeRequest,
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
 ) -> SearchWeKnoraKnowledgeResponse:
     settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    _require_weknora_knowledge_base_access(
+        knowledge_base_id,
+        await _weknora_agent_knowledge_base_ids(connection, weknora_agent_id),
+    )
     references = await _search_weknora_knowledge(
-        _require_weknora_connection(settings),
+        connection,
         knowledge_base_id,
         body,
     )
@@ -1630,6 +2474,8 @@ async def upload_weknora_knowledge(
     knowledge_base_id: str,
     file: UploadFile = File(...),
     enable_multimodel: bool = Form(default=True),
+    folder_path: str = Form(default="", max_length=4096),
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
 ) -> WeKnoraKnowledgeMutationResponse:
@@ -1637,6 +2483,19 @@ async def upload_weknora_knowledge(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="请选择需要上传的文件。",
+        )
+    document_filename = file.filename.replace("\\", "/").rsplit("/", 1)[-1]
+    if not document_filename:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="上传文件名无效。",
+        )
+    if document_filename.casefold() == (
+        WEKNORA_FOLDER_PLACEHOLDER_FILENAME.casefold()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="该文件名由系统保留用于维护资料目录。",
         )
     max_upload_bytes = 50 * 1024 * 1024
     content = await file.read(max_upload_bytes + 1)
@@ -1648,18 +2507,27 @@ async def upload_weknora_knowledge(
         )
     settings = await _load_platform_settings(storage, user_id)
     connection = _require_weknora_connection(settings)
+    _require_weknora_knowledge_base_access(
+        knowledge_base_id,
+        await _weknora_agent_knowledge_base_ids(connection, weknora_agent_id),
+    )
     encoded_id = quote(knowledge_base_id, safe="")
+    normalised_folder_path = folder_path.strip().strip("/")
+    upload_data = {
+        "enable_multimodel": str(enable_multimodel).lower(),
+        "channel": "api",
+        "fileName": document_filename,
+    }
+    if normalised_folder_path:
+        upload_data["folder_path"] = normalised_folder_path
     payload = await _request_weknora_json(
         connection,
         f"/knowledge-bases/{encoded_id}/knowledge/file",
         method="POST",
-        data={
-            "enable_multimodel": str(enable_multimodel).lower(),
-            "channel": "api",
-        },
+        data=upload_data,
         files={
             "file": (
-                file.filename,
+                document_filename,
                 content,
                 file.content_type or "application/octet-stream",
             ),
@@ -1680,6 +2548,7 @@ async def upload_weknora_knowledge(
 async def create_weknora_url_knowledge(
     knowledge_base_id: str,
     body: CreateWeKnoraUrlKnowledgeRequest,
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
 ) -> WeKnoraKnowledgeMutationResponse:
@@ -1691,6 +2560,10 @@ async def create_weknora_url_knowledge(
         )
     settings = await _load_platform_settings(storage, user_id)
     connection = _require_weknora_connection(settings)
+    _require_weknora_knowledge_base_access(
+        knowledge_base_id,
+        await _weknora_agent_knowledge_base_ids(connection, weknora_agent_id),
+    )
     encoded_id = quote(knowledge_base_id, safe="")
     request_body: dict[str, object] = {
         "url": body.url.strip(),
@@ -1720,13 +2593,20 @@ async def create_weknora_url_knowledge(
 )
 async def delete_weknora_knowledge(
     knowledge_id: str,
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
 ) -> Response:
     settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    await _require_weknora_knowledge_access(
+        connection,
+        knowledge_id,
+        await _weknora_agent_knowledge_base_ids(connection, weknora_agent_id),
+    )
     encoded_id = quote(knowledge_id, safe="")
     await _request_weknora_json(
-        _require_weknora_connection(settings),
+        connection,
         f"/knowledge/{encoded_id}",
         method="DELETE",
     )
@@ -1739,11 +2619,18 @@ async def _proxy_weknora_knowledge_content(
     *,
     user_id: str,
     storage: StorageBase,
+    weknora_agent_id: str | None = None,
 ) -> Response:
     settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    await _require_weknora_knowledge_access(
+        connection,
+        knowledge_id,
+        await _weknora_agent_knowledge_base_ids(connection, weknora_agent_id),
+    )
     encoded_id = quote(knowledge_id, safe="")
     content, content_type, content_disposition = await _request_weknora_bytes(
-        _require_weknora_connection(settings),
+        connection,
         f"/knowledge/{encoded_id}/{operation}",
     )
     headers = {
@@ -1761,6 +2648,7 @@ async def _proxy_weknora_knowledge_content(
 )
 async def download_weknora_knowledge(
     knowledge_id: str,
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
 ) -> Response:
@@ -1769,6 +2657,7 @@ async def download_weknora_knowledge(
         "download",
         user_id=user_id,
         storage=storage,
+        weknora_agent_id=weknora_agent_id,
     )
 
 
@@ -1778,6 +2667,7 @@ async def download_weknora_knowledge(
 )
 async def preview_weknora_knowledge(
     knowledge_id: str,
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
 ) -> Response:
@@ -1786,6 +2676,142 @@ async def preview_weknora_knowledge(
         "preview",
         user_id=user_id,
         storage=storage,
+        weknora_agent_id=weknora_agent_id,
+    )
+
+
+async def _create_weknora_agent_session(
+    connection: WeKnoraConnectionConfig,
+) -> WeKnoraAgentSessionResponse:
+    """Create the remote session used before a long-running query starts."""
+
+    session_payload = await _request_weknora_json(
+        connection,
+        "/sessions",
+        method="POST",
+        json_body={
+            "title": "AgentScope 工程知识问答",
+            "description": "工程管理平台的项目资料问答会话",
+        },
+    )
+    session_data = session_payload.get("data")
+    session_id = (
+        _text(session_data.get("id"))
+        if isinstance(session_data, dict)
+        else ""
+    )
+    if not session_id:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="WeKnora 创建会话后未返回 session_id。",
+        )
+    return WeKnoraAgentSessionResponse(session_id=session_id)
+
+
+@agent_router.post(
+    "/platform/weknora/sessions",
+    response_model=WeKnoraAgentSessionResponse,
+    summary="Create a WeKnora session for a project-bound robot",
+)
+async def create_weknora_agent_session(
+    body: CreateWeKnoraAgentSessionRequest,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> WeKnoraAgentSessionResponse:
+    settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    allowed_ids = await _weknora_agent_knowledge_base_ids(
+        connection,
+        body.weknora_agent_id,
+    )
+    assert allowed_ids is not None
+    return await _create_weknora_agent_session(connection)
+
+
+async def _active_weknora_assistant_message_id(
+    connection: WeKnoraConnectionConfig,
+    session_id: str,
+) -> str:
+    """Resolve the incomplete assistant message required by WeKnora stop."""
+
+    active_message_id = _active_weknora_message_ids.get(session_id, "")
+    if active_message_id:
+        return active_message_id
+
+    # A stop click can arrive just before WeKnora persists the assistant
+    # message. Retry briefly so the user does not have to click twice.
+    for attempt in range(8):
+        payload = await _request_weknora_json(
+            connection,
+            f"/messages/{quote(session_id, safe='')}/load",
+            params={"limit": 20},
+            timeout_seconds=5.0,
+        )
+        messages = payload.get("data")
+        if isinstance(messages, list):
+            for item in reversed(messages):
+                if not isinstance(item, dict):
+                    continue
+                if _text(item.get("role")).lower() != "assistant":
+                    continue
+                if (
+                    "is_completed" not in item
+                    or item.get("is_completed") is not False
+                ):
+                    continue
+                message_id = _text(item.get("id"))
+                if message_id:
+                    return message_id
+        if attempt < 7:
+            await asyncio.sleep(0.15)
+    return ""
+
+
+@agent_router.post(
+    "/platform/weknora/sessions/{session_id}/stop",
+    response_model=StopWeKnoraAgentSessionResponse,
+    summary="Stop an active WeKnora answer",
+)
+async def stop_weknora_agent_session(
+    session_id: str,
+    body: StopWeKnoraAgentSessionRequest,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> StopWeKnoraAgentSessionResponse:
+    settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    allowed_ids = await _weknora_agent_knowledge_base_ids(
+        connection,
+        body.weknora_agent_id,
+    )
+    assert allowed_ids is not None
+    message_id = await _active_weknora_assistant_message_id(
+        connection,
+        session_id,
+    )
+    if not message_id:
+        return StopWeKnoraAgentSessionResponse(
+            session_id=session_id,
+            stopped=False,
+            message="当前会话没有正在生成的回答。",
+        )
+    payload = await _request_weknora_json(
+        connection,
+        f"/sessions/{quote(session_id, safe='')}/stop",
+        method="POST",
+        json_body={"message_id": message_id},
+    )
+    remote_message = _text(payload.get("message"))
+    stopped = "already completed" not in remote_message.lower()
+    return StopWeKnoraAgentSessionResponse(
+        session_id=session_id,
+        message_id=message_id,
+        stopped=stopped,
+        message=(
+            "回答已终止。"
+            if stopped
+            else "该回答已经生成完成。"
+        ),
     )
 
 
@@ -1801,57 +2827,47 @@ async def ask_weknora_agent(
 ) -> AskWeKnoraAgentResponse:
     settings = await _load_platform_settings(storage, user_id)
     connection = _require_weknora_connection(settings)
-    if not connection.agent_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="请先配置 WeKnora 智能体 ID。",
-        )
+    allowed_ids = await _weknora_agent_knowledge_base_ids(
+        connection,
+        body.weknora_agent_id,
+    )
+    assert allowed_ids is not None
     knowledge_base_ids = list(dict.fromkeys(body.knowledge_base_ids))
     if not knowledge_base_ids:
-        knowledge_base_ids = [
-            item.id
-            for item in await _fetch_weknora_knowledge_bases(connection)
-        ]
+        knowledge_base_ids = allowed_ids
+    for knowledge_base_id in knowledge_base_ids:
+        _require_weknora_knowledge_base_access(
+            knowledge_base_id,
+            allowed_ids,
+        )
     if not knowledge_base_ids:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="WeKnora 中没有可用于对话的知识库。",
         )
+    knowledge_ids = list(dict.fromkeys(body.knowledge_ids))
+    for knowledge_id in knowledge_ids:
+        await _require_weknora_knowledge_access(
+            connection,
+            knowledge_id,
+            allowed_ids,
+        )
     session_id = body.session_id or ""
     if not session_id:
-        session_payload = await _request_weknora_json(
-            connection,
-            "/sessions",
-            method="POST",
-            json_body={
-                "knowledge_base_id": knowledge_base_ids[0],
-                "title": "AgentScope 工程知识问答",
-                "description": "AgentScope 管理平台代理会话",
-                "session_strategy": {
-                    "max_rounds": 10,
-                    "enable_rewrite": True,
-                    "fallback_strategy": "FIXED_RESPONSE",
-                    "fallback_response": "抱歉，我暂时无法回答这个问题。",
-                },
-            },
-        )
-        session_data = session_payload.get("data")
-        if isinstance(session_data, dict):
-            session_id = _text(session_data.get("id"))
-        if not session_id:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="WeKnora 创建会话后未返回 session_id。",
-            )
+        session = await _create_weknora_agent_session(connection)
+        session_id = session.session_id
     events = await _request_weknora_sse(
         connection,
         f"/agent-chat/{quote(session_id, safe='')}",
         {
             "query": body.query,
-            "agent_id": connection.agent_id,
+            "agent_enabled": True,
+            "agent_id": body.weknora_agent_id,
             "knowledge_base_ids": knowledge_base_ids,
+            "knowledge_ids": knowledge_ids,
             "channel": "api",
         },
+        session_id=session_id,
     )
     answer_parts: list[str] = []
     references: list[dict] = []

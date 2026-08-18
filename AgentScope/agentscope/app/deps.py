@@ -41,6 +41,32 @@ def _service_request_allowed(request: Request) -> bool:
         return True
     if (
         request.method == "POST"
+        and path == "/agent/platform/weknora/agent-query"
+    ):
+        # The endpoint body requires a non-empty ``weknora_agent_id`` and
+        # validates the robot's own knowledge-base scope before querying.
+        return True
+    if request.method == "POST" and (
+        path == "/agent/platform/weknora/sessions"
+        or (
+            path.startswith("/agent/platform/weknora/sessions/")
+            and path.endswith("/stop")
+        )
+    ):
+        # Session creation and cancellation carry the project robot ID in the
+        # validated request body and never expose the saved WeKnora API key.
+        return True
+    if (
+        path == "/agent/platform/weknora/knowledge-bases"
+        or path.startswith("/agent/platform/weknora/knowledge-bases/")
+        or path.startswith("/agent/platform/weknora/knowledge/")
+    ):
+        # Management calls may omit the robot scope. Platform-service calls
+        # must always carry it, so one project can never see another robot's
+        # knowledge bases through the shared service credential.
+        return bool(request.query_params.get("weknora_agent_id", "").strip())
+    if (
+        request.method == "POST"
         and path
         == "/mcp-registry/platform/project-initialization-validation"
     ):
