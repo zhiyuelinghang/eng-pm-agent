@@ -523,7 +523,7 @@ class EngineeringKnowledgeConversation(TimestampMixin, Base):
     __tablename__ = "engineering_knowledge_conversations"
     __table_args__ = (
         CheckConstraint(
-            "scope_type IN ('project', 'document')",
+            "scope_type IN ('project', 'knowledge_base', 'folder', 'document')",
             name="ck_engineering_knowledge_conversations_scope",
         ),
         Index(
@@ -558,6 +558,10 @@ class EngineeringKnowledgeConversation(TimestampMixin, Base):
     )
     knowledge_base_id: Mapped[str | None] = mapped_column(
         String(128),
+        nullable=True,
+    )
+    folder_path: Mapped[str | None] = mapped_column(
+        String(4096),
         nullable=True,
     )
     weknora_session_id: Mapped[str | None] = mapped_column(

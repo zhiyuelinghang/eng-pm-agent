@@ -170,3 +170,66 @@ def test_engineering_knowledge_conversation_rejects_empty_and_cross_user_access(
             other,
         )
     assert access_error.value.status_code == 404
+
+
+def test_engineering_knowledge_conversation_persists_folder_scope(
+    db: Session,
+) -> None:
+    user = _admin(db, "folder")
+    project = Project(name="知识库目录问答测试项目")
+    db.add(project)
+    db.commit()
+
+    created = create_engineering_knowledge_conversation(
+        project.id,
+        EngineeringKnowledgeConversationCreateInput(
+            title="安全方案目录问答",
+            scope_type="folder",
+            knowledge_name="安全生产保证计划",
+            knowledge_base_id="kb-001",
+            folder_path="01_合同图纸与方案/方案/安全生产保证计划",
+            first_message="该目录有哪些资料？",
+        ),
+        db,
+        user,
+    )["data"]["conversation"]
+
+    assert created["scope_type"] == "folder"
+    assert created["knowledge_id"] is None
+    assert created["knowledge_name"] == "安全生产保证计划"
+    assert created["knowledge_base_id"] == "kb-001"
+    assert created["folder_path"] == "01_合同图纸与方案/方案/安全生产保证计划"
+
+
+def test_engineering_knowledge_conversation_validates_scoped_targets(
+    db: Session,
+) -> None:
+    user = _admin(db, "scope-validation")
+    project = Project(name="知识库问答范围校验项目")
+    db.add(project)
+    db.commit()
+
+    with pytest.raises(HTTPException) as folder_error:
+        create_engineering_knowledge_conversation(
+            project.id,
+            EngineeringKnowledgeConversationCreateInput(
+                scope_type="folder",
+                knowledge_base_id="kb-001",
+                first_message="目录里有什么？",
+            ),
+            db,
+            user,
+        )
+    assert folder_error.value.status_code == 422
+
+    with pytest.raises(HTTPException) as knowledge_base_error:
+        create_engineering_knowledge_conversation(
+            project.id,
+            EngineeringKnowledgeConversationCreateInput(
+                scope_type="knowledge_base",
+                first_message="知识库里有什么？",
+            ),
+            db,
+            user,
+        )
+    assert knowledge_base_error.value.status_code == 422

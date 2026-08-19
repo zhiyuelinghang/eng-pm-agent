@@ -192,26 +192,6 @@
         </div>
       </section>
 
-      <section v-else-if="activeWorkspaceTab === 'connections'" class="project-connection-workspace">
-        <header class="project-connection-head"><div><span>连接配置</span><h2>项目协同工具</h2><p>维护当前项目使用的消息连接信息，用于后续通知和协同能力接入。</p></div><em>{{ configuredProjectConnectorCount }}/{{ projectConnectors.length }} 已配置</em></header>
-        <div class="project-connection-grid">
-          <nav class="project-connector-list" aria-label="项目连接类型">
-            <button v-for="item in projectConnectors" :key="item.key" type="button" :class="{ active: activeProjectConnectorKey === item.key }" @click="activeProjectConnectorKey = item.key">
-              <span class="project-connector-icon"><n-icon :size="18"><component :is="item.icon" /></n-icon></span>
-              <span><strong>{{ item.label }}</strong><small>{{ item.configured ? '连接信息已保存' : '尚未配置' }}</small></span>
-              <i :class="{ configured: item.configured }"></i>
-            </button>
-          </nav>
-          <form v-if="activeProjectConnector" class="project-connector-editor" @submit.prevent="saveProjectConnector">
-            <header><span class="project-connector-icon large"><n-icon :size="21"><component :is="activeProjectConnector.icon" /></n-icon></span><div><h3>{{ activeProjectConnector.label }}</h3><p>{{ activeProjectConnector.description }}</p></div></header>
-            <label>{{ activeProjectConnector.connectionLabel }}<input v-model.trim="activeProjectConnector.connectionId" maxlength="500" :placeholder="activeProjectConnector.connectionPlaceholder"></label>
-            <label>{{ activeProjectConnector.secretLabel }}<input v-model="activeProjectConnector.secret" type="password" autocomplete="new-password" placeholder="输入后仅用于本次配置，不在浏览器中保存"></label>
-            <div class="project-credential-note"><n-icon :size="17"><ShieldLock /></n-icon><p><strong>凭据保护</strong><span>当前仅保存连接标识和配置状态，密钥不会写入浏览器存储。</span></p></div>
-            <footer class="project-connector-actions"><span>{{ activeProjectConnector.updatedAt ? `更新于 ${activeProjectConnector.updatedAt}` : '尚未保存连接信息' }}</span><button type="submit" class="primary"><n-icon :size="17"><Link /></n-icon>保存连接信息</button></footer>
-          </form>
-        </div>
-      </section>
-
       <template v-else-if="false">
       <section class="setup-grid">
         <article class="panel">
@@ -326,15 +306,56 @@
 
       <template v-else>
         <section class="manual-config-workspace">
-          <aside class="manual-config-tree" aria-label="人工配置目录">
-            <div class="manual-config-tree-head"><span>配置目录</span><small>项目基础数据</small></div>
+          <aside class="manual-config-tree" aria-label="项目配置目录">
+            <div class="manual-config-tree-head"><span>项目配置</span><small>基础信息与业务规则</small></div>
             <button v-for="section in manualSections" :key="section.key" type="button" :class="{ active: manualSection === section.key }" @click="selectManualSection(section.key)"><n-icon :size="17"><component :is="section.icon" /></n-icon><strong>{{ section.label }}</strong><em>{{ section.count }}</em></button>
           </aside>
 
           <section class="manual-config-list">
-            <header class="manual-list-head"><div><span>人工配置</span><h2>{{ activeManualSection.label }}</h2><p>{{ activeManualSection.description }}</p></div><div class="manual-list-actions"><label class="manual-search"><n-icon :size="16"><Search /></n-icon><input v-model.trim="manualSearch" :placeholder="`搜索${activeManualSection.label}`"></label><button v-if="manualSection !== 'monitor'" type="button" class="primary" :disabled="submitting" @click="openManualEditor(manualSection)"><n-icon :size="16"><Plus /></n-icon>新建</button><button v-else type="button" class="primary" :disabled="submitting" @click="openManualEditor('monitor')"><n-icon :size="16"><Pencil /></n-icon>维护配置</button></div></header>
+            <header class="manual-list-head"><div><span>项目配置</span><h2>{{ activeManualSection.label }}</h2><p>{{ activeManualSection.description }}</p></div><div v-if="!['overview', 'wecom', 'feishu', 'dingtalk'].includes(manualSection)" class="manual-list-actions"><label class="manual-search"><n-icon :size="16"><Search /></n-icon><input v-model.trim="manualSearch" :placeholder="`搜索${activeManualSection.label}`"></label><button v-if="manualSection !== 'monitor'" type="button" class="primary" :disabled="submitting" @click="openManualEditor(manualSection)"><n-icon :size="16"><Plus /></n-icon>新建</button><button v-else type="button" class="primary" :disabled="submitting" @click="openManualEditor('monitor')"><n-icon :size="16"><Pencil /></n-icon>维护配置</button></div></header>
             <div class="manual-table-wrap">
               <div v-if="configScopeLoading" class="manual-data-loading" aria-label="正在加载正式项目数据"><i></i><span></span><span></span><span></span></div>
+
+              <section v-else-if="manualSection === 'overview'" class="project-base-info-panel">
+                <form class="project-base-info-form" @submit.prevent="saveProjectBaseInfo">
+                  <fieldset>
+                    <legend>项目概况</legend>
+                    <div class="project-base-info-grid">
+                      <label class="project-base-info-wide">项目名称<span>用于项目切换、任务归属和资料关联。</span><input v-model.trim="projectBaseInfoForm.name" required maxlength="200" placeholder="请输入项目名称"></label>
+                      <label class="project-base-info-wide">工程类型及概况<span>简要说明工程类别、范围和主要建设内容。</span><textarea v-model.trim="projectBaseInfoForm.engineeringTypeDescription" maxlength="5000" rows="4" placeholder="例如：社区卫生服务中心异地扩建，包含地下结构、主体结构及安装工程"></textarea></label>
+                    </div>
+                  </fieldset>
+                  <fieldset>
+                    <legend>合同信息</legend>
+                    <div class="project-base-info-grid contract">
+                      <label>合同开工日期<input v-model="projectBaseInfoForm.contractStartDate" type="date"></label>
+                      <label>合同结束日期<input v-model="projectBaseInfoForm.contractEndDate" type="date"></label>
+                      <label>合同工期（天）<input v-model.number="projectBaseInfoForm.contractDurationDays" type="number" min="1" step="1" placeholder="请输入天数"></label>
+                      <label>合同金额（万元）<input v-model.number="projectBaseInfoForm.contractAmountWanYuan" type="number" min="0" step="0.01" placeholder="请输入金额"></label>
+                    </div>
+                  </fieldset>
+                  <fieldset>
+                    <legend>参建单位</legend>
+                    <div class="project-base-info-grid units">
+                      <label>建设单位<input v-model.trim="projectBaseInfoForm.constructionUnitName" maxlength="300" placeholder="请输入建设单位名称"></label>
+                      <label>施工总承包单位<input v-model.trim="projectBaseInfoForm.generalContractorUnitName" maxlength="300" placeholder="请输入总承包单位名称"></label>
+                      <label>监理单位<input v-model.trim="projectBaseInfoForm.supervisionUnitName" maxlength="300" placeholder="请输入监理单位名称"></label>
+                      <label>设计单位<input v-model.trim="projectBaseInfoForm.designUnitName" maxlength="300" placeholder="请输入设计单位名称"></label>
+                      <label>勘察单位<input v-model.trim="projectBaseInfoForm.surveyUnitName" maxlength="300" placeholder="请输入勘察单位名称"></label>
+                    </div>
+                  </fieldset>
+                  <footer class="project-base-info-actions"><span>保存后立即更新当前项目，已有业务数据和知识库绑定不会改变。</span><button type="submit" class="primary" :disabled="submitting || !projectBaseInfoForm.name.trim()">{{ submitting ? '正在保存…' : '保存基础信息' }}</button></footer>
+                </form>
+              </section>
+
+              <section v-else-if="['wecom', 'feishu', 'dingtalk'].includes(manualSection)" class="project-connector-direct">
+                <form v-if="activeProjectConnector" class="project-connector-editor" @submit.prevent="saveProjectConnector">
+                  <label>{{ activeProjectConnector.connectionLabel }}<input v-model.trim="activeProjectConnector.connectionId" maxlength="500" :placeholder="activeProjectConnector.connectionPlaceholder"></label>
+                  <label>{{ activeProjectConnector.secretLabel }}<input v-model="activeProjectConnector.secret" type="password" autocomplete="new-password" placeholder="输入后仅用于本次配置，不在浏览器中保存"></label>
+                  <div class="project-credential-note"><n-icon :size="17"><ShieldLock /></n-icon><p><strong>凭据保护</strong><span>当前仅保存连接标识和配置状态，密钥不会写入浏览器存储。</span></p></div>
+                  <footer class="project-connector-actions"><span>{{ activeProjectConnector.updatedAt ? `更新于 ${activeProjectConnector.updatedAt}` : '尚未保存连接信息' }}</span><button type="submit" class="primary"><n-icon :size="17"><Link /></n-icon>保存{{ activeProjectConnector.label }}配置</button></footer>
+                </form>
+              </section>
 
               <section v-else-if="manualSection === 'members'" class="manual-data-panel personnel-browser">
                 <div v-if="filteredMembers.length" class="personnel-card-list">
@@ -401,9 +422,11 @@
                 <div v-else class="manual-empty"><n-icon :size="28"><Shield /></n-icon><strong>{{ manualSearch ? '没有匹配的风险源' : '还没有风险源' }}</strong><p>{{ manualSearch ? '可按风险部位、相关工序、等级或评价条件搜索。' : '点击右上角“新建”，补充项目风险清单。' }}</p></div>
               </section>
 
-              <table v-else-if="manualSection === 'mappings' && filteredMappings.length" class="manual-table"><thead><tr><th>平台</th><th>来源字段</th><th>目标字段</th><th>填报要求</th><th>操作</th></tr></thead><tbody><tr v-for="item in filteredMappings" :key="item.id"><td><strong>{{ item.platformName }}</strong></td><td>{{ sourceFieldLabel(item.sourceField) }}</td><td>{{ item.targetField }}</td><td>{{ item.required ? '必填' : '选填' }} · {{ item.enabled ? '已启用' : '已停用' }}</td><td><button type="button" class="row-action" @click="openManualEditor('mappings', item)">查看 / 修改</button></td></tr></tbody></table>
+              <section v-else-if="manualSection === 'mappings'" class="manual-data-panel mapping-browser">
+                <table v-if="filteredMappings.length" class="manual-table"><thead><tr><th>平台</th><th>来源字段</th><th>目标字段</th><th>填报要求</th><th>操作</th></tr></thead><tbody><tr v-for="item in filteredMappings" :key="item.id"><td><strong>{{ item.platformName }}</strong></td><td>{{ sourceFieldLabel(item.sourceField) }}</td><td>{{ item.targetField }}</td><td>{{ item.required ? '必填' : '选填' }} · {{ item.enabled ? '已启用' : '已停用' }}</td><td><button type="button" class="row-action" @click="openManualEditor('mappings', item)">查看 / 修改</button></td></tr></tbody></table>
+                <div v-else class="manual-empty"><n-icon :size="28"><ArrowsLeftRight /></n-icon><strong>{{ manualSearch ? '没有匹配的字段映射' : '还没有字段映射' }}</strong><p>{{ manualSearch ? '可按平台、来源字段或目标字段搜索。' : '点击右上角“新建”，补充外部平台字段映射规则。' }}</p></div>
+              </section>
               <table v-else-if="manualSection === 'monitor'" class="manual-table"><thead><tr><th>配置项</th><th>当前值</th><th>说明</th><th>操作</th></tr></thead><tbody><tr><td><strong>资料目录监控</strong></td><td>{{ monitorForm.enabled ? '已启用' : '未启用' }}</td><td>{{ monitorForm.mainDir || '尚未设置资料接收目录' }}</td><td><button type="button" class="row-action" @click="openManualEditor('monitor')">查看 / 修改</button></td></tr><tr v-for="rule in monitorRules" :key="rule.id"><td><strong>{{ riskLabel(rule.level) }}预警</strong></td><td>提前 {{ rule.days }} 天</td><td>{{ rule.enabled ? '已启用' : '已停用' }}</td><td><button type="button" class="row-action" @click="openManualEditor('monitor')">维护规则</button></td></tr></tbody></table>
-              <div v-else class="manual-empty"><n-icon :size="28"><ListDetails /></n-icon><strong>还没有{{ activeManualSection.label }}</strong><p>点击右上角“新建”，在弹窗中补充项目基础数据。</p></div>
             </div>
           </section>
         </section>
@@ -1003,7 +1026,7 @@ import {
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
 import AgentRuntimeDock from '@/components/agent/AgentRuntimeDock.vue'
 import InitializationIssueBadges from '@/components/initialization/InitializationIssueBadges.vue'
-import { useAppStore, type ProjectConfigScope } from '@/stores/app'
+import { useAppStore, type ProjectBaseInfoInput, type ProjectConfigScope } from '@/stores/app'
 import type { DirConfig, Member, MemberPosition, PlatformFieldMapping, QualityMetric, RemindRule, RiskLevel, RiskSource, WbsItem } from '@/types'
 import {
   applyAgentRuntimeEvents,
@@ -1014,8 +1037,21 @@ import {
   type ApiAgentMessage,
 } from '@/types/agentRuntime'
 
-type WorkspaceTab = 'agent' | 'manual' | 'connections'
-type ManualSection = 'members' | 'wbs' | 'quality' | 'risks' | 'mappings' | 'monitor'
+type WorkspaceTab = 'agent' | 'manual'
+type ManualSection = 'overview' | 'members' | 'wbs' | 'quality' | 'risks' | 'mappings' | 'monitor' | ProjectConnectorKey
+type ProjectBaseInfoForm = {
+  name: string
+  engineeringTypeDescription: string
+  contractStartDate: string
+  contractEndDate: string
+  contractDurationDays: number | ''
+  contractAmountWanYuan: number | ''
+  constructionUnitName: string
+  generalContractorUnitName: string
+  supervisionUnitName: string
+  designUnitName: string
+  surveyUnitName: string
+}
 type ManualWbsTreeRow = { item: WbsItem; depth: number; hasChildren: boolean }
 type InitializationAttachment = { id: string; name: string; size: number }
 type MaterialAgentMessage = {
@@ -1228,11 +1264,23 @@ const configScope = reactive<ProjectConfigScope>({ members: [], wbsItems: [], ri
 const activeWorkspaceTab = ref<WorkspaceTab>('agent')
 const workspaceTabs: Array<{ key: WorkspaceTab; label: string; hint: string }> = [
   { key: 'agent', label: 'Dobby 配置助手', hint: '初始化' },
-  { key: 'manual', label: '人工配置', hint: '手工维护' },
-  { key: 'connections', label: '连接配置', hint: '协同工具' },
+  { key: 'manual', label: '项目配置', hint: '基础信息与业务规则' },
 ]
 const projectCreateOpen = ref(false)
 const projectForm = reactive({ name: '' })
+const projectBaseInfoForm = reactive<ProjectBaseInfoForm>({
+  name: '',
+  engineeringTypeDescription: '',
+  contractStartDate: '',
+  contractEndDate: '',
+  contractDurationDays: '',
+  contractAmountWanYuan: '',
+  constructionUnitName: '',
+  generalContractorUnitName: '',
+  supervisionUnitName: '',
+  designUnitName: '',
+  surveyUnitName: '',
+})
 const memberForm = reactive({
   name: '',
   username: '',
@@ -1247,7 +1295,7 @@ const mappingForm = reactive({ platformName: '监管填报平台', sourceField: 
 const monitorForm = reactive<DirConfig>({ mainDir: '', archiveDir: '', tempDir: '', failedDir: '', backupDir: '', scanInterval: 30, enabled: false })
 const monitorRules = ref<RemindRule[]>([])
 const reminderForm = reactive<{ level: RiskLevel; days: number }>({ level: 'medium', days: 7 })
-const manualSection = ref<ManualSection>('members')
+const manualSection = ref<ManualSection>('overview')
 const manualSearch = ref('')
 const collapsedManualWbsIds = ref<Set<string>>(new Set())
 const personnelDetailMemberId = ref('')
@@ -1444,15 +1492,34 @@ const projectConnectors = reactive<ProjectConnectorConfig[]>([
   { key: 'dingtalk', label: '钉钉', description: '配置当前项目使用的钉钉应用或项目群机器人。', connectionLabel: '应用 Key / 机器人 Webhook', connectionPlaceholder: '输入应用 Key 或项目群机器人 Webhook', secretLabel: '应用 Secret / 加签密钥', connectionId: '', secret: '', configured: false, updatedAt: '', icon: MessageCircle },
 ])
 const activeProjectConnector = computed(() => projectConnectors.find(item => item.key === activeProjectConnectorKey.value))
-const configuredProjectConnectorCount = computed(() => projectConnectors.filter(item => item.configured).length)
 const projectConnectorStorageKey = computed(() => `dobby-project-connectors:${configProjectId.value || 'current'}`)
+const projectBaseInfoCompletedCount = computed(() => {
+  const values = [
+    projectBaseInfoForm.name,
+    projectBaseInfoForm.engineeringTypeDescription,
+    projectBaseInfoForm.contractStartDate,
+    projectBaseInfoForm.contractEndDate,
+    projectBaseInfoForm.contractDurationDays,
+    projectBaseInfoForm.contractAmountWanYuan === 0 ? '0' : projectBaseInfoForm.contractAmountWanYuan,
+    projectBaseInfoForm.constructionUnitName,
+    projectBaseInfoForm.generalContractorUnitName,
+    projectBaseInfoForm.supervisionUnitName,
+    projectBaseInfoForm.designUnitName,
+    projectBaseInfoForm.surveyUnitName,
+  ]
+  return values.filter(value => value !== '' && value !== null && value !== undefined).length
+})
 const manualSections = computed(() => [
+  { key: 'overview' as const, label: '基础信息', description: '修改项目名称、工程概况、合同信息与参建单位。', count: `${projectBaseInfoCompletedCount.value}/11`, icon: ListDetails },
   { key: 'members' as const, label: '项目成员', description: '维护成员账号、岗位与协作责任。', count: configScope.members.length, icon: Users },
   { key: 'wbs' as const, label: 'WBS进度管理', description: '维护工序基线，供进度、日报和预警匹配。', count: configScope.wbsItems.length, icon: ListDetails },
   { key: 'quality' as const, label: '质量指标', description: '维护验收要求、检查频次与关联工序。', count: configScope.qualityMetrics.length, icon: Shield },
   { key: 'risks' as const, label: '风险源', description: '维护风险等级、控制要求和资料要求。', count: configScope.riskSources.length, icon: Shield },
   { key: 'mappings' as const, label: '字段映射', description: '维护外部平台填报字段的映射规则。', count: configScope.platformMappings.length, icon: ArrowsLeftRight },
   { key: 'monitor' as const, label: '监控与预警', description: '维护资料目录监控与风险预警提前量。', count: monitorRules.value.length + 1, icon: ListDetails },
+  { key: 'wecom' as const, label: '企业微信配置', description: '维护当前项目使用的企业微信应用或项目群机器人。', count: projectConnectors[0].configured ? 1 : 0, icon: MessageCircle },
+  { key: 'feishu' as const, label: '飞书配置', description: '维护当前项目使用的飞书应用或项目群机器人。', count: projectConnectors[1].configured ? 1 : 0, icon: MessageCircle },
+  { key: 'dingtalk' as const, label: '钉钉配置', description: '维护当前项目使用的钉钉应用或项目群机器人。', count: projectConnectors[2].configured ? 1 : 0, icon: MessageCircle },
 ])
 const activeManualSection = computed(() => manualSections.value.find(item => item.key === manualSection.value) || manualSections.value[0])
 function matchesManualSearch(...values: Array<string | undefined>) { const keyword = manualSearch.value.trim().toLowerCase(); return !keyword || values.some(value => value?.toLowerCase().includes(keyword)) }
@@ -2010,6 +2077,55 @@ const canApplyInitializationDraft = computed(() => {
 function selectManualSection(section: ManualSection) {
   manualSection.value = section
   manualSearch.value = ''
+  if (section === 'wecom' || section === 'feishu' || section === 'dingtalk') {
+    activeProjectConnectorKey.value = section
+  }
+}
+
+function syncProjectBaseInfo(projectId = configProjectId.value) {
+  const project = store.projects.find(item => item.id === projectId)
+  Object.assign(projectBaseInfoForm, {
+    name: project?.name || '',
+    engineeringTypeDescription: project?.engineeringTypeDescription || '',
+    contractStartDate: project?.contractStartDate || '',
+    contractEndDate: project?.contractEndDate || '',
+    contractDurationDays: project?.contractDurationDays ?? '',
+    contractAmountWanYuan: project?.contractAmountWanYuan ?? '',
+    constructionUnitName: project?.constructionUnitName || '',
+    generalContractorUnitName: project?.generalContractorUnitName || '',
+    supervisionUnitName: project?.supervisionUnitName || '',
+    designUnitName: project?.designUnitName || '',
+    surveyUnitName: project?.surveyUnitName || '',
+  })
+}
+
+function saveProjectBaseInfo() {
+  if (!configProjectId.value || !projectBaseInfoForm.name.trim()) return
+  if (
+    projectBaseInfoForm.contractStartDate
+    && projectBaseInfoForm.contractEndDate
+    && projectBaseInfoForm.contractEndDate < projectBaseInfoForm.contractStartDate
+  ) {
+    message.warning('合同结束日期不能早于开始日期。')
+    return
+  }
+  const payload: ProjectBaseInfoInput = {
+    name: projectBaseInfoForm.name.trim(),
+    engineeringTypeDescription: projectBaseInfoForm.engineeringTypeDescription.trim() || undefined,
+    contractStartDate: projectBaseInfoForm.contractStartDate || undefined,
+    contractEndDate: projectBaseInfoForm.contractEndDate || undefined,
+    contractDurationDays: projectBaseInfoForm.contractDurationDays === '' ? undefined : projectBaseInfoForm.contractDurationDays,
+    contractAmountWanYuan: projectBaseInfoForm.contractAmountWanYuan === '' ? undefined : projectBaseInfoForm.contractAmountWanYuan,
+    constructionUnitName: projectBaseInfoForm.constructionUnitName.trim() || undefined,
+    generalContractorUnitName: projectBaseInfoForm.generalContractorUnitName.trim() || undefined,
+    supervisionUnitName: projectBaseInfoForm.supervisionUnitName.trim() || undefined,
+    designUnitName: projectBaseInfoForm.designUnitName.trim() || undefined,
+    surveyUnitName: projectBaseInfoForm.surveyUnitName.trim() || undefined,
+  }
+  void run(async () => {
+    await store.updateProject(configProjectId.value, payload)
+    syncProjectBaseInfo(configProjectId.value)
+  }, '项目基础信息已保存')
 }
 
 function maskedIdentityCard(value: string) {
@@ -2428,6 +2544,8 @@ watch(configProjectId, projectId => {
   materialAgentConfirming.value = false
   materialAgentStopping.value = false
   activeWorkspaceTab.value = 'agent'
+  manualSection.value = 'overview'
+  manualSearch.value = ''
   materialAgentMessages.value = []
   materialAgentError.value = ''
   materialAgentConversationId.value = null
@@ -2441,6 +2559,7 @@ watch(configProjectId, projectId => {
   initializationCredentialForms.value = []
   clearMaterialAgentFiles()
   activeProjectConnectorKey.value = 'wecom'
+  syncProjectBaseInfo(projectId)
   configScope.members = []
   configScope.wbsItems = []
   configScope.riskSources = []
@@ -3483,16 +3602,28 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .material-agent-preparation-progress i { display:block; height:100%; border-radius:inherit; background:#238b7b; transition:width .2s ease; }
 .project-config-scroll > .setup-grid { grid-template-columns:1fr; gap:14px; }.project-config-scroll > .setup-grid .panel { padding:20px 22px; }.project-config-scroll > .setup-grid .panel-head { margin-bottom:15px; }.project-config-scroll > .setup-grid .item-list { margin-top:15px; }
 .project-config-scroll { display:flex; flex-direction:column; }.project-workspace-tabs { flex:0 0 auto; }
-.project-config-scroll > .project-connection-workspace { flex:1 1 auto; min-height:0; }
-.project-connection-workspace { display:grid; min-height:0; grid-template-rows:auto minmax(0,1fr); gap:16px; padding:20px; border:1px solid var(--border-default); border-radius:10px; overflow:hidden; background:#fff; }
-.project-connection-head { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; padding-bottom:16px; border-bottom:1px solid var(--border-default); }
-.project-connection-head > div { min-width:0; }.project-connection-head span { display:block; margin-bottom:5px; color:#0f766e; font-size:12px; font-weight:850; letter-spacing:.05em; }.project-connection-head h2 { margin:0 0 6px; color:#1a3935; font-size:18px; line-height:1.35; }.project-connection-head p { margin:0; color:var(--text-muted); font-size:12px; line-height:1.65; }.project-connection-head em { flex:0 0 auto; border-radius:5px; padding:5px 8px; color:#53736d; background:#edf4f2; font-size:12px; font-style:normal; font-variant-numeric:tabular-nums; }
-.project-connection-grid { display:grid; min-height:0; grid-template-columns:240px minmax(0,1fr); overflow:hidden; border:1px solid var(--border-default); border-radius:9px; }
-.project-connector-list { display:grid; min-height:0; align-content:start; gap:4px; overflow-y:auto; padding:10px; border-right:1px solid var(--border-default); background:#f7faf8; }.project-connector-list button { display:grid; width:100%; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:9px; border:0; border-radius:7px; padding:10px; color:#55706b; background:transparent; font:inherit; text-align:left; cursor:pointer; transition:background .16s ease,color .16s ease; }.project-connector-list button:hover,.project-connector-list button.active { color:#204f49; background:#e7f1ee; }.project-connector-list button.active { box-shadow:inset 3px 0 #0f766e; }.project-connector-list button > span:nth-child(2) { display:grid; min-width:0; gap:2px; }.project-connector-list strong { overflow:hidden; color:#294d47; font-size:13px; text-overflow:ellipsis; white-space:nowrap; }.project-connector-list small { color:#82938f; font-size:12px; }.project-connector-list button > i { width:7px; height:7px; border-radius:50%; background:#b7c2bf; }.project-connector-list button > i.configured { background:#10a079; }
-.project-connector-icon { display:grid; width:32px; height:32px; place-items:center; border-radius:8px; color:#176b62; background:#dfeeea; }.project-connector-icon.large { width:40px; height:40px; }
-.project-connector-editor { display:grid; min-height:0; align-content:start; gap:16px; overflow-y:auto; padding:22px; }.project-connector-editor > header { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:11px; padding-bottom:15px; border-bottom:1px solid var(--border-default); }.project-connector-editor h3 { margin:0 0 4px; color:#193b37; font-size:17px; }.project-connector-editor header p { margin:0; color:#6d817c; font-size:12px; line-height:1.55; }.project-connector-editor label { display:grid; gap:7px; color:#49645f; font-size:13px; font-weight:700; }.project-connector-editor input { box-sizing:border-box; width:100%; min-width:0; min-height:42px; border:1px solid #cad9d5; border-radius:7px; padding:9px 11px; color:#193b37; background:#fff; font:inherit; font-size:13px; outline:0; }.project-connector-editor input:focus { border-color:#4e9187; box-shadow:0 0 0 3px rgba(15,118,110,.1); }
+.project-connector-editor { display:grid; min-height:0; align-content:start; gap:16px; overflow-y:auto; padding:22px; }.project-connector-editor label { display:grid; gap:6px; color:#4e6964; font-size:12px; font-weight:750; }.project-connector-editor input { box-sizing:border-box; width:100%; min-width:0; min-height:42px; border:1px solid #cad9d5; border-radius:7px; padding:9px 11px; color:#193b37; background:#fff; font:inherit; font-size:13px; outline:0; }.project-connector-editor input:focus { border-color:#4e9187; box-shadow:0 0 0 3px rgba(15,118,110,.1); }
 .project-credential-note { display:grid; grid-template-columns:auto minmax(0,1fr); gap:9px; padding:11px; border-radius:8px; color:#0f766e; background:#eef6f3; }.project-credential-note p { display:grid; gap:3px; margin:0; }.project-credential-note strong { color:#315a54; font-size:12px; }.project-credential-note span { color:#70837f; font-size:12px; line-height:1.5; }
 .project-connector-actions { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:4px; padding-top:18px; border-top:1px solid var(--border-default); }.project-connector-actions > span { color:#7a8d88; font-size:12px; }.project-connector-actions .primary { display:inline-flex; align-items:center; justify-content:center; gap:7px; white-space:nowrap; }
+.project-base-info-panel { min-height:100%; padding:16px 18px 22px; background:#f7faf9; }
+.project-base-info-form { display:grid; width:min(100%,1080px); gap:14px; margin:0 auto; }
+.project-base-info-form fieldset { min-width:0; margin:0; border:1px solid #dce7e4; border-radius:9px; padding:5px 16px 17px; background:#fff; }
+.project-base-info-form legend { padding:0 8px; color:#315c55; font-size:13px; font-weight:850; }
+.project-base-info-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:13px 16px; padding-top:8px; }
+.project-base-info-grid.contract { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.project-base-info-grid.units { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.project-base-info-grid label { display:grid; align-content:start; gap:6px; color:#49655f; font-size:12px; font-weight:750; }
+.project-base-info-grid label > span { color:#7a8d88; font-size:12px; font-weight:500; line-height:1.45; }
+.project-base-info-grid input,.project-base-info-grid textarea { box-sizing:border-box; width:100%; min-width:0; border:1px solid #cbdad6; border-radius:7px; padding:9px 10px; color:#193b37; background:#fff; font:inherit; font-size:13px; outline:0; transition:border-color .16s ease,box-shadow .16s ease; }
+.project-base-info-grid input { min-height:40px; }
+.project-base-info-grid textarea { resize:vertical; line-height:1.65; }
+.project-base-info-grid input:focus,.project-base-info-grid textarea:focus { border-color:#4e9187; box-shadow:0 0 0 3px rgba(15,118,110,.1); }
+.project-base-info-wide { grid-column:1 / -1; }
+.project-base-info-actions { position:sticky; bottom:-22px; display:flex; align-items:center; justify-content:space-between; gap:18px; border:1px solid #dce7e4; border-radius:9px; padding:12px 14px; background:rgba(255,255,255,.96); box-shadow:0 -5px 16px rgba(35,75,68,.05); backdrop-filter:blur(8px); }
+.project-base-info-actions span { color:#718681; font-size:12px; line-height:1.5; }
+.project-base-info-actions .primary { flex:0 0 auto; min-width:126px; }
+.project-connector-direct { min-height:100%; padding:16px 18px 22px; background:#f7faf9; }
+.project-connector-direct .project-connector-editor { box-sizing:border-box; width:min(100%,860px); min-height:360px; margin:0 auto; border:1px solid #dce7e4; border-radius:9px; background:#fff; }
 .setup-modal-backdrop { position:fixed; inset:0; z-index:30; display:grid; place-items:center; padding:24px; background:rgba(15,32,35,.42); backdrop-filter:blur(2px); }.setup-modal { width:min(100%,560px); max-height:calc(100dvh - 48px); overflow:auto; padding:20px; border:1px solid rgba(28,56,57,.18); border-radius:12px; background:#fff; box-shadow:0 22px 56px rgba(15,39,42,.26); }.setup-modal-head { display:flex; justify-content:space-between; align-items:center; gap:14px; min-width:0; margin-bottom:12px; }.setup-modal-head>div { display:flex; flex:1 1 auto; align-items:baseline; gap:10px; min-width:0; }.setup-modal-head span { flex:0 0 auto; color:var(--color-primary); font-size:12px; font-weight:800; letter-spacing:.04em; white-space:nowrap; }.setup-modal-head h2 { flex:0 1 auto; overflow:hidden; min-width:0; margin:0; color:#173235; font-size:17px; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }.setup-modal-head p { flex:1 1 14rem; overflow:hidden; min-width:5rem; max-width:none; margin:0; color:var(--text-muted); font-size:12px; line-height:1.4; text-overflow:ellipsis; white-space:nowrap; }.setup-modal-head .modal-close { flex:0 0 auto; }.modal-close,.modal-secondary { border:1px solid var(--border-emphasis); border-radius:6px; padding:8px 12px; color:var(--text-secondary); background:#fff; font:inherit; font-size:12px; font-weight:750; cursor:pointer; }.modal-close:disabled,.modal-secondary:disabled { opacity:.55; cursor:not-allowed; }.project-create-form { gap:14px; }.setup-modal-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; }.compact-form > * { min-width:0; }.compact-form input,.compact-form select { width:100%; min-width:0; }
 .project-config-scroll > .manual-config-workspace { flex:1 1 auto; min-height:0; }
 .project-config-scroll > .material-agent-workspace { display:grid; flex:1 1 auto; min-height:0; grid-template-rows:auto auto minmax(0,1fr); gap:10px; padding:14px 18px; }.material-agent-head { min-height:0; }.material-agent-head h2 { margin-bottom:3px; font-size:16px; }.material-agent-head p { max-width:none; font-size:12px; line-height:1.45; }.agent-context-summary { gap:0; overflow:hidden; border:1px solid #e0ebe8; border-radius:7px; background:#f8fbfa; }.agent-context-summary article { display:flex; align-items:baseline; gap:7px; min-width:0; padding:9px 13px; border:0; border-right:1px solid #e0ebe8; border-radius:0; background:transparent; }.agent-context-summary article:last-child { border-right:0; }.agent-context-summary span { flex:0 1 auto; overflow:hidden; color:#69847f; font-size: 12px; text-overflow:ellipsis; white-space:nowrap; }.agent-context-summary strong { flex:0 0 auto; margin:0; color:#1b4943; font-size:19px; font-variant-numeric:tabular-nums; }.agent-context-summary small { overflow:hidden; color:#7b918c; font-size: 12px; text-overflow:ellipsis; white-space:nowrap; }.material-agent-chat { min-height:0; height:100%; grid-template-rows:minmax(200px,1fr) auto auto; }.material-agent-chat.has-draft { grid-template-rows:minmax(200px,1fr) auto auto auto; }
@@ -3848,6 +3979,7 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .wbs-dependency-options strong { margin-right:8px; color:#256a5f; font-size:12px; font-variant-numeric:tabular-nums; }
 .manual-data-loading span:nth-child(4) { width:100px; }
 .manual-data-panel { display:grid; min-width:0; align-content:start; background:#f7faf9; }
+.mapping-browser .manual-table { background:#fff; }
 .personnel-card-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(380px,1fr)); grid-auto-rows:1fr; align-items:stretch; gap:14px; padding:14px; }
 .personnel-card { display:grid; height:100%; min-height:216px; grid-template-rows:auto minmax(0,1fr) auto; overflow:hidden; border:1px solid #d7e4e0; border-radius:10px; background:#fff; box-shadow:0 4px 14px rgba(40,80,72,.06); transition:border-color .18s ease,box-shadow .18s ease,transform .18s ease; }
 .personnel-card:hover { border-color:#b8d0ca; box-shadow:0 8px 22px rgba(40,80,72,.10); transform:translateY(-1px); }
@@ -3958,7 +4090,64 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
   .risk-record-card > header { grid-template-columns:auto minmax(0,1fr) auto; }.risk-record-card > header .row-action { grid-column:2; justify-self:start; }
 }
 @media (max-width:1380px) and (min-width:1001px) { .project-config-scroll > .setup-grid { grid-template-columns:1fr; } }
-@media (max-width:1000px) { .setup-page { display:block; height:auto; min-height:100%; overflow:visible; }.setup-workspace { display:block; min-height:0; }.project-navigator { min-height:0; margin-bottom:18px; }.project-config-panel { display:block; min-width:0; overflow:visible; }.project-config-scroll { overflow:visible; padding-right:0; }.project-workspace-tabs { position:static; overflow-x:auto; }.project-workspace-tabs button { flex:0 0 155px; }.project-config-scroll > .material-agent-workspace,.project-connection-workspace { min-height:520px; }.project-connection-grid { grid-template-columns:210px minmax(0,1fr); }.manual-config-workspace { min-height:520px; grid-template-columns:1fr; }.manual-config-tree { grid-template-columns:repeat(3,minmax(150px,1fr)); grid-auto-rows:min-content; border-right:0; border-bottom:1px solid var(--border-default); overflow:auto; }.manual-config-tree-head { grid-column:1 / -1; }.setup-grid { grid-template-columns:1fr; }.config-summary { grid-template-columns:repeat(2,1fr); }.compact-form,.wbs-form,.risk-form { grid-template-columns:1fr 1fr; }.compact-form button { grid-column:span 2; } } @media (max-width:600px) { .setup-page { padding:18px; }.project-context { padding:16px; }.project-context-title h1 { font-size:16px; }.project-context-meta { grid-template-columns:1fr; gap:9px; margin-top:15px; }.project-context-meta div { grid-template-columns:60px minmax(0,1fr); }.project-nav-item { padding:13px 14px; }.material-agent-workspace,.project-connection-workspace { min-height:0; padding:15px; }.material-workspace-head,.project-connection-head { display:grid; gap:12px; }.material-workspace-actions { justify-content:space-between; }.agent-context-summary { grid-template-columns:1fr; }.project-config-scroll > .material-agent-workspace { min-height:500px; padding:14px; }.agent-context-summary article { border-right:0; border-bottom:1px solid #e0ebe8; }.agent-context-summary article:last-child { border-bottom:0; }.material-agent-chat { min-height:340px; }.material-agent-composer { grid-template-columns:1fr; }.project-connection-grid { grid-template-columns:1fr; overflow:visible; }.project-connector-list { grid-template-columns:repeat(3,minmax(0,1fr)); overflow:visible; border-right:0; border-bottom:1px solid var(--border-default); }.project-connector-list button { grid-template-columns:auto minmax(0,1fr); }.project-connector-list button > i { display:none; }.project-connector-editor { overflow:visible; padding:16px; }.project-connector-actions { align-items:stretch; flex-direction:column; }.project-connector-actions .primary { width:100%; }.manual-config-workspace { min-height:500px; }.manual-config-tree { display:flex; gap:3px; padding:7px; overflow-x:auto; }.manual-config-tree-head { display:none; }.manual-config-tree button { flex:0 0 auto; grid-template-columns:auto minmax(0,1fr); width:auto; }.manual-config-tree button em { display:none; }.manual-list-head { display:grid; padding:15px; }.manual-list-actions { width:100%; }.manual-search { width:auto; flex:1 1 auto; }.manual-editor-form { grid-template-columns:1fr; }.manual-editor-form .full-span,.manual-editor-actions { grid-column:auto; }.manual-rule-editor>div { display:grid; }.manual-editor-actions { justify-content:stretch; }.manual-editor-actions button { flex:1 1 auto; }.config-summary { grid-template-columns:1fr 1fr; }.item-list>div { grid-template-columns:1fr; gap:3px; }.panel-head { gap:10px; }.setup-modal-backdrop { padding:12px; }.setup-modal { max-height:calc(100dvh - 24px); padding:16px; border-radius:10px; }.setup-modal-head { gap:12px; }.setup-modal-actions { justify-content:stretch; }.setup-modal-actions button { flex:1 1 auto; } }
+@media (max-width:1000px) {
+  .setup-page { display:block; height:auto; min-height:100%; overflow:visible; }
+  .setup-workspace { display:block; min-height:0; }
+  .project-navigator { min-height:0; margin-bottom:18px; }
+  .project-config-panel { display:block; min-width:0; overflow:visible; }
+  .project-config-scroll { overflow:visible; padding-right:0; }
+  .project-workspace-tabs { position:static; overflow-x:auto; }
+  .project-workspace-tabs button { flex:0 0 155px; }
+  .project-config-scroll > .material-agent-workspace { min-height:520px; }
+  .manual-config-workspace { min-height:520px; grid-template-columns:1fr; }
+  .manual-config-tree { grid-template-columns:repeat(3,minmax(150px,1fr)); grid-auto-rows:min-content; border-right:0; border-bottom:1px solid var(--border-default); overflow:auto; }
+  .manual-config-tree-head { grid-column:1 / -1; }
+  .setup-grid { grid-template-columns:1fr; }
+  .config-summary { grid-template-columns:repeat(2,1fr); }
+  .compact-form,.wbs-form,.risk-form { grid-template-columns:1fr 1fr; }
+  .compact-form button { grid-column:span 2; }
+}
+@media (max-width:600px) {
+  .setup-page { padding:18px; }
+  .project-context { padding:16px; }
+  .project-context-title h1 { font-size:16px; }
+  .project-context-meta { grid-template-columns:1fr; gap:9px; margin-top:15px; }
+  .project-context-meta div { grid-template-columns:60px minmax(0,1fr); }
+  .project-nav-item { padding:13px 14px; }
+  .material-agent-workspace { min-height:0; padding:15px; }
+  .material-workspace-head { display:grid; gap:12px; }
+  .material-workspace-actions { justify-content:space-between; }
+  .agent-context-summary { grid-template-columns:1fr; }
+  .project-config-scroll > .material-agent-workspace { min-height:500px; padding:14px; }
+  .agent-context-summary article { border-right:0; border-bottom:1px solid #e0ebe8; }
+  .agent-context-summary article:last-child { border-bottom:0; }
+  .material-agent-chat { min-height:340px; }
+  .material-agent-composer { grid-template-columns:1fr; }
+  .project-connector-editor { overflow:visible; padding:16px; }
+  .project-connector-actions { align-items:stretch; flex-direction:column; }
+  .project-connector-actions .primary { width:100%; }
+  .manual-config-workspace { min-height:500px; }
+  .manual-config-tree { display:flex; gap:3px; padding:7px; overflow-x:auto; }
+  .manual-config-tree-head { display:none; }
+  .manual-config-tree button { flex:0 0 auto; grid-template-columns:auto minmax(0,1fr); width:auto; }
+  .manual-config-tree button em { display:none; }
+  .manual-list-head { display:grid; padding:15px; }
+  .manual-list-actions { width:100%; }
+  .manual-search { width:auto; flex:1 1 auto; }
+  .manual-editor-form { grid-template-columns:1fr; }
+  .manual-editor-form .full-span,.manual-editor-actions { grid-column:auto; }
+  .manual-rule-editor>div { display:grid; }
+  .manual-editor-actions { justify-content:stretch; }
+  .manual-editor-actions button { flex:1 1 auto; }
+  .config-summary { grid-template-columns:1fr 1fr; }
+  .item-list>div { grid-template-columns:1fr; gap:3px; }
+  .panel-head { gap:10px; }
+  .setup-modal-backdrop { padding:12px; }
+  .setup-modal { max-height:calc(100dvh - 24px); padding:16px; border-radius:10px; }
+  .setup-modal-head { gap:12px; }
+  .setup-modal-actions { justify-content:stretch; }
+  .setup-modal-actions button { flex:1 1 auto; }
+}
 @media (max-width:600px) { .setup-modal-head span,.setup-modal-head p { display:none; } }
 @media (max-width:1000px) {
   .project-empty-stage,.project-empty-content { min-height:560px; }
@@ -3996,5 +4185,16 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
   .wbs-source-fieldset dl { grid-template-columns:1fr; }
   .wbs-source-fieldset .wbs-source-path { grid-column:auto; }
   .record-editor-form .manual-editor-actions { margin:0 -14px; padding:12px 14px 14px; }
+}
+@media (max-width:1000px) {
+  .project-base-info-grid.contract { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .project-connector-direct { min-height:520px; }
+}
+@media (max-width:600px) {
+  .project-base-info-panel { padding:12px; }
+  .project-base-info-grid,.project-base-info-grid.contract,.project-base-info-grid.units { grid-template-columns:1fr; }
+  .project-base-info-wide { grid-column:auto; }
+  .project-base-info-actions { position:static; align-items:stretch; flex-direction:column; }
+  .project-base-info-actions .primary { width:100%; }
 }
 </style>

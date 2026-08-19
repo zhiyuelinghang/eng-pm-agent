@@ -1,5 +1,6 @@
 """Regression tests for the engineering-platform integration contract."""
 
+import asyncio
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -535,6 +536,102 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
 
         self.assertTrue(payload["success"])
         client.request.assert_awaited_once()
+
+    async def test_weknora_invalid_json_records_raw_response_diagnostic(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_prefix="/api/v1",
+            auth_header="X-API-Key",
+            api_key="saved-secret",
+        )
+        response = httpx.Response(
+            200,
+            content=b"<html><body>upstream overloaded</body></html>",
+            headers={"content-type": "text/html", "x-request-id": "wk-7"},
+            request=httpx.Request(
+                "GET",
+                "https://weknora.example.com/api/v1/knowledge-bases",
+            ),
+        )
+        client = AsyncMock()
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = False
+        client.request.return_value = response
+
+        with (
+            patch(
+                "agentscope.app._router._agent.httpx.AsyncClient",
+                return_value=client,
+            ),
+            patch(
+                "agentscope.app._router._agent._record_weknora_invalid_json",
+            ) as record_diagnostic,
+        ):
+            with self.assertRaisesRegex(HTTPException, "诊断编号"):
+                await _request_weknora_json(connection, "/knowledge-bases")
+
+        record_diagnostic.assert_called_once()
+        self.assertEqual(
+            record_diagnostic.call_args.args[0].content,
+            response.content,
+        )
+        self.assertEqual(
+            record_diagnostic.call_args.kwargs["path"],
+            "/knowledge-bases",
+        )
+
+    async def test_weknora_json_requests_are_queued_instead_of_bursting(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_prefix="/api/v1",
+            auth_header="X-API-Key",
+            api_key="saved-secret",
+        )
+        active_requests = 0
+        max_active_requests = 0
+
+        class RecordingClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                del args
+                return False
+
+            async def request(self, method, url, **kwargs):
+                nonlocal active_requests, max_active_requests
+                del kwargs
+                active_requests += 1
+                max_active_requests = max(max_active_requests, active_requests)
+                await asyncio.sleep(0.01)
+                active_requests -= 1
+                return httpx.Response(
+                    200,
+                    json={"success": True, "data": {}},
+                    request=httpx.Request(method, url),
+                )
+
+        with (
+            patch(
+                "agentscope.app._router._agent.httpx.AsyncClient",
+                return_value=RecordingClient(),
+            ),
+            patch(
+                "agentscope.app._router._agent._weknora_json_request_gate",
+                new=asyncio.Semaphore(1),
+            ),
+        ):
+            await asyncio.gather(
+                _request_weknora_json(connection, "/knowledge-bases"),
+                _request_weknora_json(connection, "/agents/agent-1"),
+                _request_weknora_json(connection, "/sessions"),
+            )
+
+        self.assertEqual(max_active_requests, 1)
 
     async def test_project_robot_bindings_are_loaded_from_business_db(
         self,

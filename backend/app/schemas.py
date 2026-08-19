@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -24,6 +25,16 @@ class PasswordChangeInput(BaseModel):
 
 class ProjectInput(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    engineering_type_description: str | None = Field(default=None, max_length=5000)
+    contract_start_date: date | None = None
+    contract_end_date: date | None = None
+    contract_duration_days: int | None = Field(default=None, gt=0)
+    contract_amount_wan_yuan: Decimal | None = Field(default=None, ge=0)
+    construction_unit_name: str | None = Field(default=None, max_length=300)
+    general_contractor_unit_name: str | None = Field(default=None, max_length=300)
+    supervision_unit_name: str | None = Field(default=None, max_length=300)
+    design_unit_name: str | None = Field(default=None, max_length=300)
+    survey_unit_name: str | None = Field(default=None, max_length=300)
 
 
 class ProjectSettingsInput(BaseModel):
@@ -87,10 +98,11 @@ class EngineeringDocumentAskInput(BaseModel):
 
 class EngineeringKnowledgeConversationCreateInput(BaseModel):
     title: str | None = Field(default=None, max_length=300)
-    scope_type: Literal["project", "document"] = "project"
+    scope_type: Literal["project", "knowledge_base", "folder", "document"] = "project"
     knowledge_id: str | None = Field(default=None, max_length=128)
     knowledge_name: str | None = Field(default=None, max_length=500)
     knowledge_base_id: str | None = Field(default=None, max_length=128)
+    folder_path: str | None = Field(default=None, max_length=4096)
     first_message: str = Field(min_length=1, max_length=4000)
 
 

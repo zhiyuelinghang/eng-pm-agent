@@ -59,15 +59,62 @@
     <section class="knowledge-chat-pane">
       <header class="knowledge-chat-head">
         <strong>项目资料综合问答</strong>
-        <label class="knowledge-scope-select">
-          <i aria-hidden="true"></i>
-          <select :value="activeScopeValue" :disabled="disabled || loadingHistory || answering" aria-label="选择问答范围" @change="changeConversationScope">
-            <option value="project">全项目知识库</option>
-            <option v-if="activeDocumentScope" :value="`document:${activeDocumentScope.documentId}`">
-              当前文件：{{ activeDocumentScope.documentName }}
-            </option>
-          </select>
-        </label>
+        <div class="knowledge-scope-picker">
+          <button
+            type="button"
+            class="knowledge-scope-trigger"
+            :class="{ active: scopePickerOpen }"
+            :disabled="disabled || loadingHistory || answering"
+            aria-label="选择问答范围"
+            :aria-expanded="scopePickerOpen"
+            @click.stop="scopePickerOpen = !scopePickerOpen"
+          >
+            <i aria-hidden="true"></i>
+            <span :title="scopeTriggerLabel">{{ scopeTriggerLabel }}</span>
+            <n-icon :size="16"><ChevronDown /></n-icon>
+          </button>
+          <div v-if="scopePickerOpen" class="knowledge-scope-backdrop" aria-hidden="true" @click="scopePickerOpen = false"></div>
+          <section v-if="scopePickerOpen" class="knowledge-scope-menu" aria-label="知识库问答范围列表" @click.stop>
+            <button type="button" class="knowledge-scope-all" :class="{ selected: currentScope.type === 'project' }" @click="selectProjectScope">
+              <span class="knowledge-scope-node-icon"><n-icon :size="17"><Database /></n-icon></span>
+              <span><strong>全部</strong><small>当前项目绑定机器人可读取的全部知识库</small></span>
+            </button>
+            <div class="knowledge-scope-tree" role="tree">
+              <div
+                v-for="row in scopePickerRows"
+                :key="`${row.kind}:${row.id}`"
+                class="knowledge-scope-row"
+                :class="[{ selected: scopeRowSelected(row) }, `is-${row.kind}`]"
+                role="treeitem"
+                :aria-selected="scopeRowSelected(row)"
+              >
+                <span v-for="level in row.depth" :key="level" class="knowledge-scope-indent" aria-hidden="true"></span>
+                <button
+                  v-if="row.kind === 'folder'"
+                  type="button"
+                  class="knowledge-scope-expand"
+                  :class="{ hidden: !row.hasChildren }"
+                  :disabled="!row.hasChildren || scopeFolderLoadingIds.includes(row.id)"
+                  :aria-label="row.expanded ? `收起${row.folder.name}` : `展开${row.folder.name}`"
+                  @click="toggleScopeFolder(row.folder)"
+                >
+                  <n-icon v-if="scopeFolderLoadingIds.includes(row.id)" class="knowledge-scope-spinner" :size="15"><Refresh /></n-icon>
+                  <n-icon v-else :size="15"><component :is="row.expanded ? ChevronDown : ChevronRight" /></n-icon>
+                </button>
+                <span v-else class="knowledge-scope-expand hidden" aria-hidden="true"></span>
+                <button v-if="row.kind === 'folder'" type="button" class="knowledge-scope-choice" @click="selectFolderScope(row.folder)">
+                  <span class="knowledge-scope-node-icon"><n-icon :size="17"><component :is="row.folder.isKnowledgeBase ? Database : Folder" /></n-icon></span>
+                  <span><strong :title="row.folder.name">{{ row.folder.name }}</strong><small>{{ row.folder.isKnowledgeBase ? '知识库' : '目录' }} · {{ row.folder.totalCount ?? row.folder.documentCount ?? 0 }} 份资料</small></span>
+                </button>
+                <button v-else type="button" class="knowledge-scope-choice" @click="selectDocumentScope(row.file)">
+                  <span class="knowledge-scope-file-icon"><DocumentTypeIcon :kind="referenceIconKind(row.file.fileName)" /></span>
+                  <span><strong :title="row.file.fileName">{{ row.file.fileName }}</strong><small>文件 · {{ formatScopeFileSize(row.file.fileSize) }}</small></span>
+                </button>
+              </div>
+              <div v-if="!scopePickerRows.length" class="knowledge-scope-tree-empty">当前项目没有可选择的知识库目录。</div>
+            </div>
+          </section>
+        </div>
       </header>
 
       <div ref="chatScrollRef" class="knowledge-chat-scroll" :aria-busy="answering">
@@ -127,7 +174,7 @@
           <textarea
             v-model.trim="question"
             :disabled="disabled || loadingHistory || loadingMessages || !store.currentProjectId"
-            :placeholder="currentScope.type === 'document' ? '围绕当前文件继续提问…' : '向当前项目知识库提问…'"
+            :placeholder="scopeQuestionPlaceholder"
             @keydown.enter.exact.prevent="sendQuestion"
           ></textarea>
           <button v-if="answering" type="button" class="is-stop" :disabled="stopping" aria-label="终止回答" @click="stopAnswer">
@@ -145,19 +192,38 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
 import { NIcon, useDialog, useMessage } from 'naive-ui'
-import { MessageCircle, Messages, PlayerStop, Plus, Robot, Search, Send, Trash, User } from '@vicons/tabler'
+import { ChevronDown, ChevronRight, Database, Folder, MessageCircle, Messages, PlayerStop, Plus, Refresh, Robot, Search, Send, Trash, User } from '@vicons/tabler'
 import MarkdownIt from 'markdown-it'
 import DocumentTypeIcon from '@/components/business/DocumentTypeIcon.vue'
 import {
   useAppStore,
   type AttachmentRecord,
+  type DocumentFolderRecord,
   type EngineeringKnowledgeConversationRecord,
   type EngineeringKnowledgeMessageRecord,
 } from '@/stores/app'
 
 type KnowledgeScope =
   | { type: 'project' }
+  | { type: 'knowledge_base'; knowledgeBaseId: string; knowledgeBaseName: string }
+  | { type: 'folder'; folderPath: string; folderName: string; knowledgeBaseId: string }
   | { type: 'document'; documentId: string; documentName: string; knowledgeBaseId?: string }
+
+type ScopePickerRow =
+  | {
+      kind: 'folder'
+      id: string
+      depth: number
+      folder: DocumentFolderRecord
+      expanded: boolean
+      hasChildren: boolean
+    }
+  | {
+      kind: 'document'
+      id: string
+      depth: number
+      file: AttachmentRecord
+    }
 
 type KnowledgeReference = {
   id: string
@@ -208,6 +274,9 @@ const loadingHistory = ref(false)
 const loadingMessages = ref(false)
 const deletingConversationId = ref<number | null>(null)
 const chatScrollRef = ref<HTMLElement | null>(null)
+const scopePickerOpen = ref(false)
+const scopeExpandedFolderIds = ref<string[]>([])
+const scopeFolderLoadingIds = ref<string[]>([])
 let historyLoadVersion = 0
 let messageLoadVersion = 0
 
@@ -220,8 +289,58 @@ const filteredConversations = computed(() => {
     .filter(item => !keyword || item.title.toLocaleLowerCase('zh-CN').includes(keyword))
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 })
-const activeDocumentScope = computed(() => currentScope.value.type === 'document' ? currentScope.value : undefined)
-const activeScopeValue = computed(() => activeDocumentScope.value ? `document:${activeDocumentScope.value.documentId}` : 'project')
+const scopeTriggerLabel = computed(() => {
+  const scope = currentScope.value
+  if (scope.type === 'project') return '全部'
+  if (scope.type === 'knowledge_base') return `已选 ${scope.knowledgeBaseName} 知识库`
+  if (scope.type === 'folder') return `已选 ${scope.folderName} 目录`
+  return `已选 ${scope.documentName} 文件`
+})
+const scopeQuestionPlaceholder = computed(() => {
+  const scope = currentScope.value
+  if (scope.type === 'document') return '围绕当前文件继续提问…'
+  if (scope.type === 'folder') return '向当前目录中的资料提问…'
+  if (scope.type === 'knowledge_base') return '向当前知识库提问…'
+  return '向当前项目知识库提问…'
+})
+const scopePickerRows = computed<ScopePickerRow[]>(() => {
+  const rows: ScopePickerRow[] = []
+  const children = new Map<string | undefined, DocumentFolderRecord[]>()
+  for (const folder of store.documentFolders) {
+    const key = folder.isKnowledgeBase ? undefined : folder.parentId
+    children.set(key, [...(children.get(key) || []), folder])
+  }
+  for (const folders of children.values()) {
+    folders.sort((left, right) => left.name.localeCompare(right.name, 'zh-CN', { numeric: true }))
+  }
+  const filesByFolder = new Map<string, AttachmentRecord[]>()
+  for (const file of store.attachments) {
+    if (!file.folderId) continue
+    filesByFolder.set(file.folderId, [...(filesByFolder.get(file.folderId) || []), file])
+  }
+  for (const files of filesByFolder.values()) {
+    files.sort((left, right) => left.fileName.localeCompare(right.fileName, 'zh-CN', { numeric: true }))
+  }
+
+  const appendFolder = (folder: DocumentFolderRecord, depth: number) => {
+    const childFolders = children.get(folder.id) || []
+    const directFiles = filesByFolder.get(folder.id) || []
+    const expanded = scopeExpandedFolderIds.value.includes(folder.id)
+    rows.push({
+      kind: 'folder',
+      id: folder.id,
+      depth,
+      folder,
+      expanded,
+      hasChildren: childFolders.length > 0 || (folder.documentCount || 0) > 0 || directFiles.length > 0,
+    })
+    if (!expanded) return
+    for (const child of childFolders) appendFolder(child, depth + 1)
+    for (const file of directFiles) rows.push({ kind: 'document', id: file.id, depth: depth + 1, file })
+  }
+  for (const root of children.get(undefined) || []) appendFolder(root, 0)
+  return rows
+})
 
 watch(() => store.currentProjectId, projectId => {
   void loadConversationHistory(projectId)
@@ -237,6 +356,22 @@ watch(() => props.focusDocumentId, documentId => {
 watch(answering, value => emit('busy-change', value), { immediate: true })
 
 function conversationScope(record: EngineeringKnowledgeConversationRecord): KnowledgeScope {
+  if (record.scope_type === 'knowledge_base' && record.knowledge_base_id) {
+    return {
+      type: 'knowledge_base',
+      knowledgeBaseId: record.knowledge_base_id,
+      knowledgeBaseName: record.knowledge_name || '当前知识库',
+    }
+  }
+  if (record.scope_type === 'folder' && record.knowledge_base_id && record.folder_path) {
+    const folderSegments = record.folder_path.split('/').filter(Boolean)
+    return {
+      type: 'folder',
+      knowledgeBaseId: record.knowledge_base_id,
+      folderPath: record.folder_path,
+      folderName: record.knowledge_name || folderSegments[folderSegments.length - 1] || '当前目录',
+    }
+  }
   if (record.scope_type === 'document' && record.knowledge_id) {
     return {
       type: 'document',
@@ -278,6 +413,9 @@ async function loadConversationHistory(projectId: string) {
   conversations.value = []
   activeConversationId.value = null
   draftScope.value = { type: 'project' }
+  scopePickerOpen.value = false
+  scopeExpandedFolderIds.value = []
+  scopeFolderLoadingIds.value = []
   loadingMessages.value = false
   if (!projectId) {
     loadingHistory.value = false
@@ -333,6 +471,79 @@ function documentScope(file: AttachmentRecord): KnowledgeScope {
     documentName: file.fileName,
     knowledgeBaseId: file.knowledgeBaseId,
   }
+}
+
+function knowledgeBaseScope(folder: DocumentFolderRecord): KnowledgeScope {
+  return {
+    type: 'knowledge_base',
+    knowledgeBaseId: folder.knowledgeBaseId || '',
+    knowledgeBaseName: folder.name,
+  }
+}
+
+function folderScope(folder: DocumentFolderRecord): KnowledgeScope {
+  return {
+    type: 'folder',
+    knowledgeBaseId: folder.knowledgeBaseId || '',
+    folderPath: normalizeScopeFolderPath(folder.path),
+    folderName: folder.name,
+  }
+}
+
+function normalizeScopeFolderPath(value?: string) {
+  return (value || '').replace(/\\/g, '/').split('/').map(item => item.trim()).filter(Boolean).join('/')
+}
+
+async function toggleScopeFolder(folder: DocumentFolderRecord) {
+  const expanded = scopeExpandedFolderIds.value.includes(folder.id)
+  if (expanded) {
+    scopeExpandedFolderIds.value = scopeExpandedFolderIds.value.filter(item => item !== folder.id)
+    return
+  }
+  scopeExpandedFolderIds.value = [...scopeExpandedFolderIds.value, folder.id]
+  if (!(folder.documentCount || 0) || scopeFolderLoadingIds.value.includes(folder.id)) return
+  scopeFolderLoadingIds.value = [...scopeFolderLoadingIds.value, folder.id]
+  try {
+    await store.loadEngineeringDocumentFolder(folder.id)
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || error.message || '目录文件加载失败。')
+  } finally {
+    scopeFolderLoadingIds.value = scopeFolderLoadingIds.value.filter(item => item !== folder.id)
+  }
+}
+
+function selectProjectScope() {
+  startNewConversation({ type: 'project' })
+  scopePickerOpen.value = false
+}
+
+function selectFolderScope(folder: DocumentFolderRecord) {
+  if (!folder.knowledgeBaseId) return
+  startNewConversation(folder.isKnowledgeBase ? knowledgeBaseScope(folder) : folderScope(folder))
+  scopePickerOpen.value = false
+}
+
+function selectDocumentScope(file: AttachmentRecord) {
+  startNewConversation(documentScope(file))
+  scopePickerOpen.value = false
+}
+
+function scopeRowSelected(row: ScopePickerRow) {
+  const scope = currentScope.value
+  if (row.kind === 'document') return scope.type === 'document' && scope.documentId === row.file.id
+  if (row.folder.isKnowledgeBase) {
+    return scope.type === 'knowledge_base' && scope.knowledgeBaseId === row.folder.knowledgeBaseId
+  }
+  return scope.type === 'folder'
+    && scope.knowledgeBaseId === row.folder.knowledgeBaseId
+    && normalizeScopeFolderPath(scope.folderPath) === normalizeScopeFolderPath(row.folder.path)
+}
+
+function formatScopeFileSize(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '未知大小'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`
+  return `${(value / 1024 / 1024).toFixed(value >= 10 * 1024 * 1024 ? 0 : 1)} MB`
 }
 
 function startNewConversation(scope: KnowledgeScope = { type: 'project' }) {
@@ -395,20 +606,11 @@ async function deleteConversation(conversation: KnowledgeConversation) {
   }
 }
 
-function changeConversationScope(event: Event) {
-  const value = (event.target as HTMLSelectElement).value
-  if (value === activeScopeValue.value) return
-  if (value === 'project') {
-    startNewConversation({ type: 'project' })
-    return
-  }
-  const documentId = value.replace(/^document:/, '')
-  const file = store.attachments.find(item => item.id === documentId)
-  if (file) startNewConversation(documentScope(file))
-}
-
 function conversationScopeLabel(scope: KnowledgeScope) {
-  return scope.type === 'document' ? `单文件 · ${scope.documentName}` : '全项目知识库'
+  if (scope.type === 'project') return '全部'
+  if (scope.type === 'knowledge_base') return `知识库 · ${scope.knowledgeBaseName}`
+  if (scope.type === 'folder') return `目录 · ${scope.folderName}`
+  return `文件 · ${scope.documentName}`
 }
 
 function createId() {
@@ -461,6 +663,46 @@ function sessionRecoveryQuestion(messages: KnowledgeChatMessage[], currentQuesti
   return `请结合以下此前对话继续回答最后的问题。\n\n${context}\n\n用户当前问题：${currentQuestion}`
 }
 
+function scopeDisplayName(scope: KnowledgeScope) {
+  if (scope.type === 'knowledge_base') return scope.knowledgeBaseName
+  if (scope.type === 'folder') return scope.folderName
+  if (scope.type === 'document') return scope.documentName
+  return ''
+}
+
+async function resolveScopeAskFilters(scope: KnowledgeScope) {
+  if (scope.type === 'project') return { knowledgeIds: [] as string[], knowledgeBaseIds: [] as string[] }
+  if (scope.type === 'knowledge_base') {
+    return { knowledgeIds: [] as string[], knowledgeBaseIds: [scope.knowledgeBaseId] }
+  }
+  if (scope.type === 'document') {
+    return {
+      knowledgeIds: [scope.documentId],
+      knowledgeBaseIds: scope.knowledgeBaseId ? [scope.knowledgeBaseId] : [],
+    }
+  }
+
+  let folder = store.documentFolders.find(item => (
+    item.knowledgeBaseId === scope.knowledgeBaseId
+    && normalizeScopeFolderPath(item.path) === normalizeScopeFolderPath(scope.folderPath)
+  ))
+  if (!folder && store.currentProjectId) {
+    await store.loadEngineeringDocuments(store.currentProjectId, true)
+    folder = store.documentFolders.find(item => (
+      item.knowledgeBaseId === scope.knowledgeBaseId
+      && normalizeScopeFolderPath(item.path) === normalizeScopeFolderPath(scope.folderPath)
+    ))
+  }
+  if (!folder) throw new Error('所选目录已不存在，请重新选择问答范围。')
+  const files = await store.loadEngineeringDocumentFolder(folder.id, false, true)
+  const knowledgeIds = [...new Set(files.map(item => item.id).filter(Boolean))]
+  if (!knowledgeIds.length) throw new Error('所选目录中没有可用于问答的资料。')
+  if (knowledgeIds.length > 200) {
+    throw new Error(`所选目录包含 ${knowledgeIds.length} 份资料，当前单次问答最多限定 200 份，请选择更小的目录。`)
+  }
+  return { knowledgeIds, knowledgeBaseIds: [scope.knowledgeBaseId] }
+}
+
 async function sendQuestion() {
   const content = question.value.trim()
   if (props.disabled || loadingHistory.value || loadingMessages.value || !content || answering.value || !store.currentProjectId) return
@@ -472,16 +714,19 @@ async function sendQuestion() {
   stopRequested.value = false
   answerSessionId.value = conversation?.sessionId || ''
   try {
+    const requestedScope = conversation?.scope || draftScope.value
+    const scopeFilters = await resolveScopeAskFilters(requestedScope)
     if (!conversation) {
       const scope = draftScope.value
       const created = await store.createEngineeringKnowledgeConversation({
-        title: scope.type === 'document'
-          ? `${scope.documentName} · ${content.slice(0, 24)}`
-          : content.slice(0, 60),
+        title: scope.type === 'project'
+          ? content.slice(0, 60)
+          : `${scopeDisplayName(scope)} · ${content.slice(0, 24)}`,
         scopeType: scope.type,
         knowledgeId: scope.type === 'document' ? scope.documentId : undefined,
-        knowledgeName: scope.type === 'document' ? scope.documentName : undefined,
-        knowledgeBaseId: scope.type === 'document' ? scope.knowledgeBaseId : undefined,
+        knowledgeName: scope.type === 'project' ? undefined : scopeDisplayName(scope),
+        knowledgeBaseId: scope.type === 'project' ? undefined : scope.knowledgeBaseId,
+        folderPath: scope.type === 'folder' ? scope.folderPath : undefined,
         firstMessage: content,
       })
       conversation = mapConversation(created.conversation)
@@ -511,11 +756,10 @@ async function sendQuestion() {
       return
     }
     const scopedConversation = conversation
-    const scope = scopedConversation.scope
     const ask = (query: string) => store.askEngineeringDocuments(
       query,
-      scope.type === 'document' ? [scope.documentId] : [],
-      scope.type === 'document' && scope.knowledgeBaseId ? [scope.knowledgeBaseId] : [],
+      scopeFilters.knowledgeIds,
+      scopeFilters.knowledgeBaseIds,
       scopedConversation.sessionId,
     )
     let answer
@@ -781,9 +1025,32 @@ function referenceIconKind(fileName: string) {
 .knowledge-chat-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; background: #fff; }
 .knowledge-chat-head { display: flex; flex: 0 0 auto; align-items: center; gap: 24px; min-height: 62px; padding: 0 38px; border-bottom: 1px solid #edf1ef; }
 .knowledge-chat-head > strong { color: #1d3835; font-size: 16px; font-weight: 820; }
-.knowledge-scope-select { position: relative; display: inline-flex; min-width: 150px; align-items: center; }
-.knowledge-scope-select i { position: absolute; z-index: 1; left: 11px; width: 7px; height: 7px; border-radius: 50%; background: #0f9a79; pointer-events: none; }
-.knowledge-scope-select select { width: 100%; min-height: 36px; appearance: auto; border: 1px solid #d5e0dd; border-radius: 7px; padding: 0 27px 0 27px; color: #49645f; background: #f9fbfa; font: inherit; font-size: 12px; cursor: pointer; }
+.knowledge-scope-picker { position: relative; min-width: 188px; }
+.knowledge-scope-trigger { position: relative; z-index: 13; display: grid; width: min(360px, 32vw); min-width: 188px; min-height: 36px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; border: 1px solid #d5e0dd; border-radius: 7px; padding: 0 10px; color: #49645f; background: #f9fbfa; font: inherit; font-size: 12px; text-align: left; cursor: pointer; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
+.knowledge-scope-trigger:hover,.knowledge-scope-trigger.active { border-color: #8aafa7; background: #fff; }
+.knowledge-scope-trigger.active { box-shadow: 0 0 0 3px rgba(15, 118, 110, .09); }
+.knowledge-scope-trigger > i { width: 7px; height: 7px; border-radius: 50%; background: #0f9a79; }
+.knowledge-scope-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-scope-backdrop { position: fixed; z-index: 11; inset: 0; }
+.knowledge-scope-menu { position: absolute; z-index: 12; top: calc(100% + 7px); left: 0; display: grid; width: min(430px, calc(100vw - 32px)); max-height: min(520px, calc(100dvh - 170px)); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid #cbdad6; border-radius: 9px; background: #fff; box-shadow: 0 18px 42px rgba(25, 58, 52, .17); }
+.knowledge-scope-all { display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; border: 0; border-bottom: 1px solid #e3ebe9; padding: 12px 14px; color: #48645e; background: #f8fbfa; font: inherit; text-align: left; cursor: pointer; }
+.knowledge-scope-all:hover,.knowledge-scope-all.selected { color: #164f47; background: #eaf5f1; }
+.knowledge-scope-all > span:last-child,.knowledge-scope-choice > span:last-child { display: grid; min-width: 0; gap: 2px; }
+.knowledge-scope-all strong,.knowledge-scope-choice strong { overflow: hidden; color: #294b45; font-size: 12px; font-weight: 760; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-scope-all small,.knowledge-scope-choice small { overflow: hidden; color: #7a8c88; font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-scope-tree { min-height: 0; overflow: auto; padding: 7px; }
+.knowledge-scope-row { display: flex; min-width: 0; align-items: center; border-radius: 6px; color: #526c67; }
+.knowledge-scope-row:hover { background: #f1f7f5; }
+.knowledge-scope-row.selected { background: #e5f2ee; box-shadow: inset 3px 0 #168273; }
+.knowledge-scope-indent { flex: 0 0 15px; width: 15px; }
+.knowledge-scope-expand { display: grid; flex: 0 0 26px; width: 26px; height: 34px; place-items: center; border: 0; padding: 0; color: #6f8580; background: transparent; cursor: pointer; }
+.knowledge-scope-expand.hidden { visibility: hidden; cursor: default; }
+.knowledge-scope-choice { display: grid; flex: 1 1 auto; min-width: 0; min-height: 44px; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; border: 0; padding: 5px 9px 5px 2px; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.knowledge-scope-node-icon { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 7px; color: #176f64; background: #e4f1ed; }
+.knowledge-scope-file-icon { display: grid; width: 28px; height: 28px; place-items: center; }
+.knowledge-scope-file-icon :deep(img) { width: 24px; height: 24px; object-fit: contain; }
+.knowledge-scope-tree-empty { padding: 28px 16px; color: #7a8d88; font-size: 12px; text-align: center; }
+.knowledge-scope-spinner { animation: conversation-scope-spin .8s linear infinite; }
 .knowledge-chat-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 30px clamp(28px, 7vw, 108px); scrollbar-gutter: stable; scroll-behavior: smooth; }
 .knowledge-chat-empty { display: grid; min-height: 100%; place-content: center; justify-items: center; gap: 9px; color: #768b86; text-align: center; }
 .knowledge-chat-empty-icon { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 13px; color: #fff; background: #164a46; box-shadow: 0 10px 24px rgba(22, 74, 70, .16); }
@@ -842,9 +1109,13 @@ textarea:focus-visible { outline: 2px solid rgba(15, 118, 110, .48); outline-off
   38% { transform: translateY(-7px) scale(.96, 1.04); }
   62% { transform: translateY(1px) scale(1.05, .94); }
 }
+@keyframes conversation-scope-spin {
+  to { transform: rotate(360deg); }
+}
 @media (prefers-reduced-motion: reduce) {
   .knowledge-chat-message.is-pending .knowledge-message-card,
-  .conversation-loading-robot { animation: none; }
+  .conversation-loading-robot,
+  .knowledge-scope-spinner { animation: none; }
 }
 @media (max-width: 900px) {
   .project-knowledge-chat { grid-template-columns: 220px minmax(0, 1fr); }
@@ -856,5 +1127,6 @@ textarea:focus-visible { outline: 2px solid rgba(15, 118, 110, .48); outline-off
   .conversation-rail { min-height: 240px; border-right: 0; border-bottom: 1px solid #e1e8e6; }
   .knowledge-chat-pane { min-height: 620px; }
   .knowledge-chat-head { align-items: flex-start; flex-direction: column; gap: 8px; padding-top: 12px; padding-bottom: 12px; }
+  .knowledge-scope-picker,.knowledge-scope-trigger { width: 100%; }
 }
 </style>

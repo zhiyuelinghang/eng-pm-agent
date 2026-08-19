@@ -2367,7 +2367,11 @@ def create_project(payload: ProjectInput, db: Session = Depends(get_db), user: U
     project_name = payload.name.strip()
     if not project_name:
         raise HTTPException(status_code=422, detail="项目名称不能为空")
-    project = Project(name=project_name)
+    values = payload.model_dump()
+    values["name"] = project_name
+    if values.get("contract_start_date") and values.get("contract_end_date") and values["contract_end_date"] < values["contract_start_date"]:
+        raise HTTPException(status_code=422, detail="合同结束日期不能早于开始日期")
+    project = Project(**values)
     db.add(project); db.flush()
     audit(db, user, "创建项目", f"创建项目「{project.name}」", project.id, "project", project.id)
     db.commit(); db.refresh(project)
@@ -2380,7 +2384,14 @@ def update_project(project_id: int, payload: ProjectInput, db: Session = Depends
     project_name = payload.name.strip()
     if not project_name:
         raise HTTPException(status_code=422, detail="项目名称不能为空")
-    project.name = project_name
+    values = payload.model_dump(exclude_unset=True)
+    values["name"] = project_name
+    contract_start_date = values.get("contract_start_date", project.contract_start_date)
+    contract_end_date = values.get("contract_end_date", project.contract_end_date)
+    if contract_start_date and contract_end_date and contract_end_date < contract_start_date:
+        raise HTTPException(status_code=422, detail="合同结束日期不能早于开始日期")
+    for key, value in values.items():
+        setattr(project, key, value)
     audit(db, user, "更新项目", f"更新项目「{project.name}」", project.id, "project", project.id)
     db.commit(); db.refresh(project)
     return ok(serialize(project), "项目已更新")
@@ -4197,12 +4208,27 @@ def create_engineering_knowledge_conversation(
     knowledge_id = (payload.knowledge_id or "").strip() or None
     knowledge_name = (payload.knowledge_name or "").strip() or None
     knowledge_base_id = (payload.knowledge_base_id or "").strip() or None
+    folder_path = (payload.folder_path or "").strip().strip("/") or None
     if payload.scope_type == "document" and knowledge_id is None:
         raise HTTPException(status_code=422, detail="单文件问答必须指定资料")
+    if payload.scope_type == "knowledge_base" and knowledge_base_id is None:
+        raise HTTPException(status_code=422, detail="知识库问答必须指定知识库")
+    if payload.scope_type == "folder" and (
+        knowledge_base_id is None or folder_path is None
+    ):
+        raise HTTPException(status_code=422, detail="目录问答必须指定知识库和目录路径")
     if payload.scope_type == "project":
         knowledge_id = None
         knowledge_name = None
         knowledge_base_id = None
+        folder_path = None
+    elif payload.scope_type == "knowledge_base":
+        knowledge_id = None
+        folder_path = None
+    elif payload.scope_type == "folder":
+        knowledge_id = None
+    else:
+        folder_path = None
     title = (payload.title or first_message[:60]).strip()
     conversation = EngineeringKnowledgeConversation(
         project_id=project.id,
@@ -4212,6 +4238,7 @@ def create_engineering_knowledge_conversation(
         knowledge_id=knowledge_id,
         knowledge_name=knowledge_name,
         knowledge_base_id=knowledge_base_id,
+        folder_path=folder_path,
     )
     db.add(conversation)
     db.flush()

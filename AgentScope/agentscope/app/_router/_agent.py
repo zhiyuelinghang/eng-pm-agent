@@ -2,10 +2,15 @@
 """Agent router — CRUD endpoints for agent configurations."""
 import asyncio
 from datetime import datetime
+import hashlib
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import os
+from pathlib import Path
+import time
 from urllib.parse import quote, urlsplit
+from uuid import uuid4
 
 import httpx
 from fastapi import (
@@ -105,6 +110,24 @@ from ...credential import CredentialFactory
 
 logger = logging.getLogger(__name__)
 
+try:
+    _WEKNORA_JSON_MAX_CONCURRENCY = max(
+        1,
+        int(os.getenv("WEKNORA_JSON_MAX_CONCURRENCY", "1")),
+    )
+except ValueError:
+    _WEKNORA_JSON_MAX_CONCURRENCY = 1
+
+# The deployed WeKnora gateway becomes unstable when the engineering UI opens
+# several knowledge bases at once. Queue JSON calls in this process instead
+# of letting one page load create a burst of upstream requests. The limit is
+# configurable for deployments that have verified a higher safe capacity.
+_weknora_json_request_gate = asyncio.Semaphore(
+    _WEKNORA_JSON_MAX_CONCURRENCY,
+)
+_WEKNORA_DIAGNOSTIC_BODY_BYTES = 64 * 1024
+_weknora_diagnostic_logger: logging.Logger | None = None
+
 # The stop endpoint can be served by a different worker, so this registry is
 # only a fast path.  The authoritative fallback always reads the active
 # assistant message from WeKnora itself.
@@ -125,6 +148,93 @@ agent_router = APIRouter(
     tags=["agent"],
     responses={404: {"description": "Not found"}},
 )
+
+
+def _get_weknora_diagnostic_logger() -> logging.Logger:
+    """Return the private rotating log used for malformed upstream replies."""
+
+    global _weknora_diagnostic_logger
+    if _weknora_diagnostic_logger is not None:
+        return _weknora_diagnostic_logger
+
+    diagnostic_logger = logging.getLogger(
+        "agentscope.weknora.response_diagnostics",
+    )
+    diagnostic_logger.setLevel(logging.ERROR)
+    diagnostic_logger.propagate = False
+    if not diagnostic_logger.handlers:
+        runtime_home = Path(
+            os.getenv("AGENTSCOPE_RUNTIME_HOME", "data/agentscope"),
+        )
+        log_path = runtime_home / "logs" / "weknora_response_errors.log"
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            handler = RotatingFileHandler(
+                log_path,
+                maxBytes=5 * 1024 * 1024,
+                backupCount=5,
+                encoding="utf-8",
+            )
+            handler.setFormatter(
+                logging.Formatter(
+                    "%(asctime)s | %(levelname)s | %(message)s",
+                ),
+            )
+            diagnostic_logger.addHandler(handler)
+        except OSError:
+            # The ordinary application logger below still records the same
+            # diagnostic when a read-only deployment cannot create the file.
+            pass
+    _weknora_diagnostic_logger = diagnostic_logger
+    return diagnostic_logger
+
+
+def _record_weknora_invalid_json(
+    response: httpx.Response,
+    *,
+    request_id: str,
+    method: str,
+    path: str,
+    queue_wait_ms: int,
+) -> None:
+    """Persist enough raw upstream evidence to diagnose a malformed reply."""
+
+    body = response.content
+    body_sample = body[:_WEKNORA_DIAGNOSTIC_BODY_BYTES]
+    encoding = response.encoding or "utf-8"
+    try:
+        body_text = body_sample.decode(encoding, errors="replace")
+    except LookupError:
+        body_text = body_sample.decode("utf-8", errors="replace")
+    upstream_request_id = (
+        response.headers.get("x-request-id")
+        or response.headers.get("x-correlation-id")
+        or response.headers.get("cf-ray")
+        or ""
+    )
+    message = (
+        "WeKnora 非 JSON 响应 | diagnostic_id=%s | method=%s | path=%s "
+        "| status=%s | content_type=%r | content_length=%s | sha256=%s "
+        "| upstream_request_id=%r | queue_wait_ms=%s | body_truncated=%s "
+        "| body_repr=%r"
+    )
+    values = (
+        request_id,
+        method.upper(),
+        path,
+        response.status_code,
+        response.headers.get("content-type", ""),
+        len(body),
+        hashlib.sha256(body).hexdigest(),
+        upstream_request_id,
+        queue_wait_ms,
+        len(body) > len(body_sample),
+        body_text,
+    )
+    logger.error(message, *values)
+    diagnostic_logger = _get_weknora_diagnostic_logger()
+    if diagnostic_logger.handlers:
+        diagnostic_logger.error(message, *values)
 
 
 def _memory_infrastructure_response() -> MemoryInfrastructureResponse:
@@ -257,23 +367,30 @@ async def _request_weknora_json(
 ) -> dict:
     """Call one WeKnora JSON endpoint through the management backend."""
     url = f"{config.base_url}{config.api_prefix}{path}"
+    request_id = uuid4().hex[:12]
+    queued_at = time.perf_counter()
+    queue_wait_ms = 0
     try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(timeout_seconds, connect=10.0),
-            follow_redirects=False,
-        ) as client:
-            response = await client.request(
-                method.upper(),
-                url,
-                headers={
-                    config.auth_header: config.api_key.get_secret_value(),
-                    "Accept": "application/json",
-                },
-                params=params,
-                json=json_body,
-                data=data,
-                files=files,
+        async with _weknora_json_request_gate:
+            queue_wait_ms = round(
+                (time.perf_counter() - queued_at) * 1000,
             )
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout_seconds, connect=10.0),
+                follow_redirects=False,
+            ) as client:
+                response = await client.request(
+                    method.upper(),
+                    url,
+                    headers={
+                        config.auth_header: config.api_key.get_secret_value(),
+                        "Accept": "application/json",
+                    },
+                    params=params,
+                    json=json_body,
+                    data=data,
+                    files=files,
+                )
     except httpx.TimeoutException as exc:
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
@@ -295,9 +412,19 @@ async def _request_weknora_json(
     try:
         payload = json.loads(response.content)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        _record_weknora_invalid_json(
+            response,
+            request_id=request_id,
+            method=method,
+            path=path,
+            queue_wait_ms=queue_wait_ms,
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="WeKnora 返回的不是有效 JSON。",
+            detail=(
+                "WeKnora 返回的不是有效 JSON"
+                f"（诊断编号：{request_id}）。"
+            ),
         ) from exc
     if not isinstance(payload, dict):
         raise HTTPException(

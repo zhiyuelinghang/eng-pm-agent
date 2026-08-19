@@ -19,6 +19,19 @@ type ApiProject = {
   created_at: string
   updated_at?: string
 }
+export type ProjectBaseInfoInput = {
+  name: string
+  engineeringTypeDescription?: string
+  contractStartDate?: string
+  contractEndDate?: string
+  contractDurationDays?: number
+  contractAmountWanYuan?: number
+  constructionUnitName?: string
+  generalContractorUnitName?: string
+  supervisionUnitName?: string
+  designUnitName?: string
+  surveyUnitName?: string
+}
 type ApiMember = {
   id: number
   project_id: number
@@ -175,10 +188,11 @@ export type EngineeringKnowledgeConversationRecord = {
   project_id: number
   user_id: number
   title: string
-  scope_type: 'project' | 'document'
+  scope_type: 'project' | 'knowledge_base' | 'folder' | 'document'
   knowledge_id?: string | null
   knowledge_name?: string | null
   knowledge_base_id?: string | null
+  folder_path?: string | null
   weknora_session_id?: string | null
   created_at: string
   updated_at: string
@@ -559,7 +573,10 @@ export const useAppStore = defineStore('app', () => {
       }))
       const nextFolders: DocumentFolderRecord[] = []
 
-      await Promise.all(knowledgeBases.map(async knowledgeBase => {
+      // The current WeKnora deployment can return transient non-JSON gateway
+      // pages under burst traffic. Load each tree in order so opening one page
+      // does not fan out into several simultaneous upstream requests.
+      for (const knowledgeBase of knowledgeBases) {
         const treeResponse = await api.get<ApiEnvelope<ApiWeKnoraFolderTree>>(`/projects/${projectId}/engineering-documents/knowledge-bases/${encodeURIComponent(knowledgeBase.id)}/folders`)
         const tree = treeResponse.data.data
 
@@ -621,7 +638,7 @@ export const useAppStore = defineStore('app', () => {
         }
         appendTree(tree.folders || [])
         nextFolders.push(...folderMap.values())
-      }))
+      }
 
       if (projectId !== currentProjectId.value || generation !== engineeringDocumentsGeneration) return
       weknoraKnowledgeBases.value = knowledgeBases
@@ -651,7 +668,7 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  async function loadEngineeringDocumentFolder(folderId: string, force = false): Promise<AttachmentRecord[]> {
+  async function loadEngineeringDocumentFolder(folderId: string, force = false, recursive = false): Promise<AttachmentRecord[]> {
     const projectId = currentProjectId.value
     if (!projectId) return []
     if (engineeringDocumentsProjectId !== projectId) await loadEngineeringDocuments(projectId)
@@ -661,10 +678,15 @@ export const useAppStore = defineStore('app', () => {
     if (!folder || !knowledgeBaseId) throw new Error('未找到对应的 WeKnora 资料目录。')
 
     const folderPath = normalizeWeKnoraFolderPath(folder.path)
-    const cacheKey = `${projectId}:${folder.id}`
+    const cacheKey = `${projectId}:${folder.id}:${recursive ? 'recursive' : 'direct'}`
+    const matchesFolderScope = (item: AttachmentRecord) => {
+      if (item.knowledgeBaseId !== knowledgeBaseId) return false
+      const itemPath = normalizeWeKnoraFolderPath(item.folderPath)
+      if (!recursive) return itemPath === folderPath
+      return !folderPath || itemPath === folderPath || itemPath.startsWith(`${folderPath}/`)
+    }
     const cached = () => attachments.value.filter(item => (
-      item.knowledgeBaseId === knowledgeBaseId
-      && normalizeWeKnoraFolderPath(item.folderPath) === folderPath
+      matchesFolderScope(item)
     ))
     if (!force && loadedEngineeringDocumentFolders.has(cacheKey)) return cached()
 
@@ -685,7 +707,7 @@ export const useAppStore = defineStore('app', () => {
               page,
               page_size: WEKNORA_DOCUMENT_PAGE_SIZE,
               folder_path: folderPath,
-              folder_recursive: false,
+              folder_recursive: recursive,
             },
           },
         )
@@ -706,10 +728,7 @@ export const useAppStore = defineStore('app', () => {
         mappedById.set(mapped.id, mapped)
       }
       const mapped = [...mappedById.values()]
-      const otherFolders = attachments.value.filter(item => !(
-        item.knowledgeBaseId === knowledgeBaseId
-        && normalizeWeKnoraFolderPath(item.folderPath) === folderPath
-      ))
+      const otherFolders = attachments.value.filter(item => !matchesFolderScope(item))
       attachments.value = [...otherFolders, ...mapped]
         .sort((left, right) => (right.createdAt || '').localeCompare(left.createdAt || ''))
       loadedEngineeringDocumentFolders.add(cacheKey)
@@ -833,6 +852,26 @@ export const useAppStore = defineStore('app', () => {
     projects.value.unshift(project)
     currentProjectId.value = project.id
     projectCatalogLoaded.value = true
+    return project
+  }
+  async function updateProject(projectId: string, payload: ProjectBaseInfoInput) {
+    const response = await api.patch<ApiEnvelope<ApiProject>>(`/projects/${projectId}`, {
+      name: payload.name,
+      engineering_type_description: payload.engineeringTypeDescription || null,
+      contract_start_date: payload.contractStartDate || null,
+      contract_end_date: payload.contractEndDate || null,
+      contract_duration_days: payload.contractDurationDays || null,
+      contract_amount_wan_yuan: payload.contractAmountWanYuan ?? null,
+      construction_unit_name: payload.constructionUnitName || null,
+      general_contractor_unit_name: payload.generalContractorUnitName || null,
+      supervision_unit_name: payload.supervisionUnitName || null,
+      design_unit_name: payload.designUnitName || null,
+      survey_unit_name: payload.surveyUnitName || null,
+    })
+    const project = mapProject(response.data.data)
+    const index = projects.value.findIndex(item => item.id === projectId)
+    if (index >= 0) projects.value.splice(index, 1, project)
+    else projects.value.unshift(project)
     return project
   }
   function requestProjectSetupRefresh() {
@@ -1084,7 +1123,8 @@ export const useAppStore = defineStore('app', () => {
     const query = keyword.trim()
     if (!query) return [] as AttachmentRecord[]
     if (!weknoraKnowledgeBases.value.length) await loadEngineeringDocuments(currentProjectId.value, true)
-    const responses = await Promise.all(weknoraKnowledgeBases.value.map(async knowledgeBase => {
+    const responses: Array<{ knowledgeBaseId: string; references: ApiWeKnoraSearchReference[] }> = []
+    for (const knowledgeBase of weknoraKnowledgeBases.value) {
       const response = await api.post<ApiEnvelope<ApiWeKnoraSearch>>(`/projects/${currentProjectId.value}/engineering-documents/search`, {
         knowledge_base_id: knowledgeBase.id,
         query,
@@ -1092,8 +1132,8 @@ export const useAppStore = defineStore('app', () => {
         vector_threshold: 0.5,
         keyword_threshold: 0.3,
       })
-      return { knowledgeBaseId: knowledgeBase.id, references: response.data.data.references || [] }
-    }))
+      responses.push({ knowledgeBaseId: knowledgeBase.id, references: response.data.data.references || [] })
+    }
     const resultMap = new Map<string, AttachmentRecord>()
     for (const response of responses) {
       for (const reference of response.references) {
@@ -1171,10 +1211,11 @@ export const useAppStore = defineStore('app', () => {
   }
   async function createEngineeringKnowledgeConversation(payload: {
     title?: string
-    scopeType: 'project' | 'document'
+    scopeType: 'project' | 'knowledge_base' | 'folder' | 'document'
     knowledgeId?: string
     knowledgeName?: string
     knowledgeBaseId?: string
+    folderPath?: string
     firstMessage: string
   }) {
     if (!currentProjectId.value) throw new Error('请先选择项目。')
@@ -1189,6 +1230,7 @@ export const useAppStore = defineStore('app', () => {
         knowledge_id: payload.knowledgeId,
         knowledge_name: payload.knowledgeName,
         knowledge_base_id: payload.knowledgeBaseId,
+        folder_path: payload.folderPath,
         first_message: payload.firstMessage,
       },
     )
@@ -1281,5 +1323,5 @@ export const useAppStore = defineStore('app', () => {
   async function removeWbsRiskLink(linkId: string) { await api.delete(`/wbs-risk-links/${linkId}`); await loadProjectData() }
   function addLog(log: OperationLog) { if (!currentProjectId.value) return; void api.post(`/projects/${currentProjectId.value}/operation-logs`, { action: log.action, detail: log.detail }).then(() => loadProjectData()) }
 
-  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, weknoraKnowledgeBases, engineeringDocumentsLoading, engineeringDocumentFolderLoading, engineeringDocumentsError, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, uploadAttachment, updateAttachmentCategory, createDocumentFolder, updateDocumentFolder, deleteDocumentFolder, moveEngineeringDocuments, deleteEngineeringDocument, searchDocuments, createEngineeringDocumentSession, stopEngineeringDocumentAnswer, askEngineeringDocuments, loadEngineeringKnowledgeConversations, createEngineeringKnowledgeConversation, loadEngineeringKnowledgeMessages, updateEngineeringKnowledgeConversation, appendEngineeringKnowledgeMessage, deleteEngineeringKnowledgeConversation, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, loadEngineeringDocuments, loadEngineeringDocumentFolder, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
+  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, weknoraKnowledgeBases, engineeringDocumentsLoading, engineeringDocumentFolderLoading, engineeringDocumentsError, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, updateProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, uploadAttachment, updateAttachmentCategory, createDocumentFolder, updateDocumentFolder, deleteDocumentFolder, moveEngineeringDocuments, deleteEngineeringDocument, searchDocuments, createEngineeringDocumentSession, stopEngineeringDocumentAnswer, askEngineeringDocuments, loadEngineeringKnowledgeConversations, createEngineeringKnowledgeConversation, loadEngineeringKnowledgeMessages, updateEngineeringKnowledgeConversation, appendEngineeringKnowledgeMessage, deleteEngineeringKnowledgeConversation, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, loadEngineeringDocuments, loadEngineeringDocumentFolder, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
 })

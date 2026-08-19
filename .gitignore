@@ -10,6 +10,9 @@ data/
 /scratch/
 /更新文件/
 
+# 本地知识库问答验证资料及解析中间产物，不提交真实工程文档
+/docs/hybrid_auto/
+
 # Codex 项目级 MCP 配置包含本机数据库连接凭证，不提交到仓库
 /.codex/config.toml
 
