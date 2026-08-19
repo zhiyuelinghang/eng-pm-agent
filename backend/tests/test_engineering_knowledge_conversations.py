@@ -23,6 +23,7 @@ from backend.app.schemas import (
     EngineeringKnowledgeConversationCreateInput,
     EngineeringKnowledgeConversationUpdateInput,
     EngineeringKnowledgeMessageInput,
+    EngineeringKnowledgeScopeItemInput,
 )
 
 
@@ -201,6 +202,61 @@ def test_engineering_knowledge_conversation_persists_folder_scope(
     assert created["folder_path"] == "01_合同图纸与方案/方案/安全生产保证计划"
 
 
+def test_engineering_knowledge_conversation_persists_multi_selection(
+    db: Session,
+) -> None:
+    user = _admin(db, "multi-scope")
+    project = Project(name="知识库多选问答测试项目")
+    db.add(project)
+    db.commit()
+
+    created = create_engineering_knowledge_conversation(
+        project.id,
+        EngineeringKnowledgeConversationCreateInput(
+            title="安全资料联合问答",
+            scope_type="selection",
+            scope_items=[
+                EngineeringKnowledgeScopeItemInput(
+                    scope_type="folder",
+                    knowledge_name="安全生产保证计划",
+                    knowledge_base_id="kb-001",
+                    folder_path="01_合同图纸与方案/方案/安全生产保证计划",
+                ),
+                EngineeringKnowledgeScopeItemInput(
+                    scope_type="document",
+                    knowledge_id="knowledge-002",
+                    knowledge_name="安全网.pdf",
+                    knowledge_base_id="kb-002",
+                ),
+            ],
+            first_message="对比两个范围中的安全要求。",
+        ),
+        db,
+        user,
+    )["data"]["conversation"]
+
+    assert created["scope_type"] == "selection"
+    assert created["knowledge_id"] is None
+    assert created["knowledge_base_id"] is None
+    assert created["folder_path"] is None
+    assert created["scope_items"] == [
+        {
+            "scope_type": "folder",
+            "knowledge_id": None,
+            "knowledge_name": "安全生产保证计划",
+            "knowledge_base_id": "kb-001",
+            "folder_path": "01_合同图纸与方案/方案/安全生产保证计划",
+        },
+        {
+            "scope_type": "document",
+            "knowledge_id": "knowledge-002",
+            "knowledge_name": "安全网.pdf",
+            "knowledge_base_id": "kb-002",
+            "folder_path": None,
+        },
+    ]
+
+
 def test_engineering_knowledge_conversation_validates_scoped_targets(
     db: Session,
 ) -> None:
@@ -233,3 +289,15 @@ def test_engineering_knowledge_conversation_validates_scoped_targets(
             user,
         )
     assert knowledge_base_error.value.status_code == 422
+
+    with pytest.raises(HTTPException) as selection_error:
+        create_engineering_knowledge_conversation(
+            project.id,
+            EngineeringKnowledgeConversationCreateInput(
+                scope_type="selection",
+                first_message="多选范围里有什么？",
+            ),
+            db,
+            user,
+        )
+    assert selection_error.value.status_code == 422

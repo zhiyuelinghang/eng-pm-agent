@@ -92,10 +92,7 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
     async def _create_session(self, client: httpx.AsyncClient) -> str:
         response = await client.post(
             self._url("/sessions"),
-            json={
-                "title": "AgentScope 项目资料查询",
-                "description": "AgentScope 按需调用的单次项目知识查询",
-            },
+            json={"agent_id": self._robot_id},
         )
         response.raise_for_status()
         payload = response.json()
@@ -120,6 +117,7 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
         async with client.stream(
             "POST",
             self._url(f"/agent-chat/{quote(session_id, safe='')}"),
+            params={"resource_urls": "public"},
             json={
                 "query": query,
                 "agent_enabled": True,
@@ -176,7 +174,12 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
         try:
             async with httpx.AsyncClient(
                 headers=headers,
-                timeout=httpx.Timeout(180.0, connect=10.0),
+                timeout=httpx.Timeout(
+                    connect=10.0,
+                    read=None,
+                    write=30.0,
+                    pool=10.0,
+                ),
                 follow_redirects=True,
                 trust_env=False,
             ) as client:

@@ -74,3 +74,46 @@ async def test_project_knowledge_tool_rejects_empty_query() -> None:
 
     assert result.state == ToolResultState.ERROR
     assert "不能为空" in result.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_project_knowledge_tool_prefers_public_resource_urls() -> None:
+    tool = WeKnoraProjectKnowledgeTool(
+        connection=WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="secret",
+        ),
+        robot_id="project-robot",
+    )
+    request: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        async def aiter_lines(self):
+            yield 'data: {"response_type":"answer","content":"包含直链图片"}'
+            yield 'data: {"response_type":"complete"}'
+
+    class FakeStream:
+        async def __aenter__(self):
+            return FakeResponse()
+
+        async def __aexit__(self, *args):
+            del args
+            return False
+
+    class FakeClient:
+        def stream(self, method, url, **kwargs):
+            request.update({"method": method, "url": url, **kwargs})
+            return FakeStream()
+
+    answer, references = await tool._ask(
+        FakeClient(),
+        "session-1",
+        "问题",
+    )
+
+    assert answer == "包含直链图片"
+    assert references == []
+    assert request["params"] == {"resource_urls": "public"}

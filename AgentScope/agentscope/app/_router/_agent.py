@@ -1,13 +1,16 @@
 # -*- coding: utf-8 -*-
 """Agent router — CRUD endpoints for agent configurations."""
 import asyncio
+from collections.abc import AsyncIterator
 from datetime import datetime
 import hashlib
+from html import unescape
 import json
 import logging
 from logging.handlers import RotatingFileHandler
 import os
 from pathlib import Path
+import re
 import time
 from urllib.parse import quote, urlsplit
 from uuid import uuid4
@@ -25,6 +28,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from ...agent import ContextConfig, ReActConfig
@@ -126,6 +130,35 @@ _weknora_json_request_gate = asyncio.Semaphore(
     _WEKNORA_JSON_MAX_CONCURRENCY,
 )
 _WEKNORA_DIAGNOSTIC_BODY_BYTES = 64 * 1024
+# Some WeKnora versions send ``session_title`` before the answer, while the
+# integration document shows it after the final answer chunk.  Once the answer
+# is complete, keep the stream open briefly for optional trailing metadata, but
+# never impose a deadline while the answer itself is still being generated.
+_WEKNORA_POST_ANSWER_METADATA_GRACE_SECONDS = 3.0
+_WEKNORA_INLINE_CITATION_RE = re.compile(
+    r"<kb\b(?P<attributes>[^>]*)/?>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_WEKNORA_INLINE_CITATION_ATTRIBUTE_RE = re.compile(
+    r"\b(?P<name>doc|chunk_id|kb_id)\s*=\s*"
+    r"(?P<quote>[\"'])(?P<value>.*?)(?P=quote)",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_WEKNORA_WIKI_SUMMARY_REFERENCE_RE = re.compile(
+    r"\[\[summary/(?P<knowledge_id>[0-9a-f][0-9a-f-]{7,})\|"
+    r"(?P<title>[^\]\r\n]+)\]\]",
+    flags=re.IGNORECASE,
+)
+_WEKNORA_SOURCE_TOOL_NAMES = {
+    "browse_full_document",
+    "get_knowledge",
+    "get_knowledge_chunks",
+    "grep_chunks",
+    "list_knowledge_chunks",
+    "read_knowledge",
+    "wiki_read_page",
+    "wiki_search",
+}
 _weknora_diagnostic_logger: logging.Logger | None = None
 
 # The stop endpoint can be served by a different worker, so this registry is
@@ -230,6 +263,47 @@ def _record_weknora_invalid_json(
         queue_wait_ms,
         len(body) > len(body_sample),
         body_text,
+    )
+    logger.error(message, *values)
+    diagnostic_logger = _get_weknora_diagnostic_logger()
+    if diagnostic_logger.handlers:
+        diagnostic_logger.error(message, *values)
+
+
+def _record_weknora_invalid_sse(
+    raw_event: str,
+    response: httpx.Response,
+    *,
+    request_id: str,
+    path: str,
+) -> None:
+    """Persist a malformed WeKnora SSE frame without exposing credentials."""
+
+    raw_bytes = raw_event.encode("utf-8", errors="replace")
+    body_sample = raw_bytes[:_WEKNORA_DIAGNOSTIC_BODY_BYTES].decode(
+        "utf-8",
+        errors="replace",
+    )
+    upstream_request_id = (
+        response.headers.get("x-request-id")
+        or response.headers.get("x-correlation-id")
+        or response.headers.get("cf-ray")
+        or ""
+    )
+    message = (
+        "WeKnora 非法 SSE 事件 | diagnostic_id=%s | path=%s | status=%s "
+        "| content_type=%r | sha256=%s | upstream_request_id=%r "
+        "| body_truncated=%s | body_repr=%r"
+    )
+    values = (
+        request_id,
+        path,
+        response.status_code,
+        response.headers.get("content-type", ""),
+        hashlib.sha256(raw_bytes).hexdigest(),
+        upstream_request_id,
+        len(raw_bytes) > _WEKNORA_DIAGNOSTIC_BODY_BYTES,
+        body_sample,
     )
     logger.error(message, *values)
     diagnostic_logger = _get_weknora_diagnostic_logger()
@@ -555,10 +629,16 @@ async def _request_weknora_bytes(
     config: WeKnoraConnectionConfig,
     path: str,
     *,
+    params: dict[str, str] | None = None,
+    root_path: bool = False,
     max_response_bytes: int = 64 * 1024 * 1024,
 ) -> tuple[bytes, str, str]:
     """Download one authenticated WeKnora file or preview response."""
-    url = f"{config.base_url}{config.api_prefix}{path}"
+    url = (
+        f"{config.base_url}{path}"
+        if root_path
+        else f"{config.base_url}{config.api_prefix}{path}"
+    )
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(120.0, connect=10.0),
@@ -570,6 +650,7 @@ async def _request_weknora_bytes(
                     config.auth_header: config.api_key.get_secret_value(),
                     "Accept": "*/*",
                 },
+                params=params,
             )
     except httpx.TimeoutException as exc:
         raise HTTPException(
@@ -594,16 +675,18 @@ async def _request_weknora_bytes(
     )
 
 
-async def _request_weknora_sse(
+async def _stream_weknora_sse_events(
     config: WeKnoraConnectionConfig,
     path: str,
     body: dict,
     *,
+    params: dict[str, str] | None = None,
     session_id: str = "",
-) -> list[dict]:
-    """Read WeKnora SSE without imposing a deadline on answer generation."""
+) -> AsyncIterator[dict]:
+    """Yield complete WeKnora SSE events without an answer deadline."""
+
     url = f"{config.base_url}{config.api_prefix}{path}"
-    events: list[dict] = []
+    request_id = uuid4().hex[:12]
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(
@@ -621,28 +704,106 @@ async def _request_weknora_sse(
                     config.auth_header: config.api_key.get_secret_value(),
                     "Accept": "text/event-stream",
                 },
+                params=params,
                 json=body,
             ) as response:
                 _validate_weknora_response(response)
-                async for raw_line in response.aiter_lines():
-                    line = raw_line.strip()
-                    if not line or not line.startswith("data:"):
-                        continue
+                data_lines: list[str] = []
+
+                async def parse_event(raw_event: str) -> dict:
                     try:
-                        event = json.loads(line[5:].lstrip())
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(event, dict):
-                        events.append(event)
-                        message_id = _text(event.get("message_id"))
-                        if session_id and message_id:
+                        event = json.loads(raw_event)
+                    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                        _record_weknora_invalid_sse(
+                            raw_event,
+                            response,
+                            request_id=request_id,
+                            path=path,
+                        )
+                        raise HTTPException(
+                            status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail=(
+                                "WeKnora 返回了无法解析的流式事件"
+                                f"（诊断编号：{request_id}）。"
+                            ),
+                        ) from exc
+                    if not isinstance(event, dict):
+                        raise HTTPException(
+                            status_code=status.HTTP_502_BAD_GATEWAY,
+                            detail="WeKnora 返回了无效的流式事件结构。",
+                        )
+                    return event
+
+                answer_done_deadline: float | None = None
+                line_iterator = response.aiter_lines().__aiter__()
+                while True:
+                    try:
+                        if answer_done_deadline is None:
+                            raw_line = await anext(line_iterator)
+                        else:
+                            remaining = (
+                                answer_done_deadline
+                                - asyncio.get_running_loop().time()
+                            )
+                            if remaining <= 0:
+                                return
+                            raw_line = await asyncio.wait_for(
+                                anext(line_iterator),
+                                timeout=remaining,
+                            )
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.TimeoutError:
+                        # The answer is already complete.  This grace period is
+                        # only for an optional title or reference event and is
+                        # deliberately not an answer-generation timeout.
+                        return
+                    line = raw_line.rstrip("\r")
+                    if line == "":
+                        if not data_lines:
+                            continue
+                        event = await parse_event("\n".join(data_lines))
+                        data_lines.clear()
+                        response_type = _text(event.get("response_type"))
+                        message_id = _text(
+                            event.get("message_id") or event.get("id"),
+                        )
+                        if (
+                            session_id
+                            and message_id
+                            and response_type == "answer"
+                        ):
                             _active_weknora_message_ids[session_id] = message_id
-                        if event.get("response_type") in {
-                            "complete",
-                            "error",
-                            "stop",
-                        }:
-                            break
+                        yield event
+                        if response_type in {"complete", "error", "stop"}:
+                            return
+                        if (
+                            response_type == "answer"
+                            and event.get("done") is True
+                        ):
+                            answer_done_deadline = (
+                                asyncio.get_running_loop().time()
+                                + _WEKNORA_POST_ANSWER_METADATA_GRACE_SECONDS
+                            )
+                        continue
+                    if line.startswith(":"):
+                        continue
+                    if line.startswith("data:"):
+                        data_lines.append(line[5:].lstrip())
+
+                if data_lines:
+                    event = await parse_event("\n".join(data_lines))
+                    response_type = _text(event.get("response_type"))
+                    message_id = _text(
+                        event.get("message_id") or event.get("id"),
+                    )
+                    if (
+                        session_id
+                        and message_id
+                        and response_type == "answer"
+                    ):
+                        _active_weknora_message_ids[session_id] = message_id
+                    yield event
     except HTTPException:
         raise
     except httpx.TimeoutException as exc:
@@ -658,7 +819,28 @@ async def _request_weknora_sse(
     finally:
         if session_id:
             _active_weknora_message_ids.pop(session_id, None)
-    return events
+
+
+async def _request_weknora_sse(
+    config: WeKnoraConnectionConfig,
+    path: str,
+    body: dict,
+    *,
+    params: dict[str, str] | None = None,
+    session_id: str = "",
+) -> list[dict]:
+    """Aggregate WeKnora SSE for backward-compatible non-stream callers."""
+
+    return [
+        event
+        async for event in _stream_weknora_sse_events(
+            config,
+            path,
+            body,
+            params=params,
+            session_id=session_id,
+        )
+    ]
 
 
 def _weknora_list_payload(payload: dict) -> tuple[list[dict], dict]:
@@ -751,6 +933,417 @@ def _number(value: object, default: float = 0.0) -> float:
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return default
+
+
+def _extract_weknora_inline_citations(answer: str) -> list[dict[str, str]]:
+    """Extract the inline ``<kb .../>`` citations used by agent-chat.
+
+    Some deployed WeKnora versions do not emit a separate ``references`` SSE
+    event.  Instead, the answer contains one or more self-closing ``kb`` tags.
+    Keep this parser deliberately small and attribute-based so arbitrary answer
+    text is never interpreted as HTML.
+    """
+
+    citations: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for match in _WEKNORA_INLINE_CITATION_RE.finditer(answer):
+        attributes = {
+            attribute.group("name").lower(): unescape(
+                attribute.group("value"),
+            ).strip()
+            for attribute in _WEKNORA_INLINE_CITATION_ATTRIBUTE_RE.finditer(
+                match.group("attributes"),
+            )
+        }
+        document = attributes.get("doc", "").replace("\\", "/").strip()
+        filename = document.rsplit("/", 1)[-1].strip()
+        if not filename:
+            continue
+        citation = {
+            "filename": filename,
+            "chunk_id": attributes.get("chunk_id", ""),
+            "knowledge_base_id": attributes.get("kb_id", ""),
+        }
+        identity = (
+            citation["knowledge_base_id"],
+            citation["filename"].casefold(),
+            citation["chunk_id"],
+        )
+        if identity in seen:
+            continue
+        seen.add(identity)
+        citations.append(citation)
+    return citations
+
+
+def _weknora_reference_filename(item: dict) -> str:
+    nested_file = item.get("file_info")
+    file_item = nested_file if isinstance(nested_file, dict) else {}
+    return (
+        _text(item.get("knowledge_filename"))
+        or _text(item.get("filename"))
+        or _text(item.get("file_name"))
+        or _text(file_item.get("file_name"))
+        or _text(item.get("knowledge_title"))
+        or _text(item.get("title"))
+    )
+
+
+def _merge_weknora_reference_items(*groups: list[dict]) -> list[dict]:
+    """Merge chunk- and file-level citations without duplicate file cards."""
+
+    merged_items: list[dict] = []
+    for group in groups:
+        for raw_item in group:
+            if not isinstance(raw_item, dict):
+                continue
+            item = dict(raw_item)
+            item_chunk_id = _text(item.get("chunk_id") or item.get("id"))
+            item_knowledge_id = _text(item.get("knowledge_id"))
+            item_kb_id = _text(item.get("knowledge_base_id"))
+            item_filename = _weknora_reference_filename(item).casefold()
+            duplicate_index: int | None = None
+            for index, existing in enumerate(merged_items):
+                existing_chunk_id = _text(
+                    existing.get("chunk_id") or existing.get("id"),
+                )
+                existing_knowledge_id = _text(existing.get("knowledge_id"))
+                existing_kb_id = _text(existing.get("knowledge_base_id"))
+                existing_filename = _weknora_reference_filename(
+                    existing,
+                ).casefold()
+                same_chunk = bool(
+                    item_chunk_id
+                    and existing_chunk_id
+                    and item_chunk_id == existing_chunk_id
+                )
+                same_knowledge = bool(
+                    item_knowledge_id
+                    and existing_knowledge_id
+                    and item_knowledge_id == existing_knowledge_id
+                )
+                same_file = bool(
+                    item_filename
+                    and existing_filename
+                    and item_filename == existing_filename
+                    and (
+                        not item_kb_id
+                        or not existing_kb_id
+                        or item_kb_id == existing_kb_id
+                    )
+                )
+                if same_chunk or same_knowledge or same_file:
+                    duplicate_index = index
+                    break
+            if duplicate_index is None:
+                merged_items.append(item)
+                continue
+            existing = merged_items[duplicate_index]
+            for key, value in item.items():
+                if value not in (None, "", [], {}):
+                    existing[key] = value
+    return merged_items
+
+
+def _weknora_reference_from_record(record: dict) -> dict | None:
+    """Build one citation candidate from a WeKnora tool-data record."""
+
+    knowledge_id = _text(record.get("knowledge_id"))
+    if not knowledge_id:
+        return None
+    title = (
+        _text(record.get("knowledge_title"))
+        or _text(record.get("title"))
+        or _text(record.get("knowledge_filename"))
+        or _text(record.get("filename"))
+        or _text(record.get("file_name"))
+    )
+    filename = (
+        _text(record.get("knowledge_filename"))
+        or _text(record.get("filename"))
+        or _text(record.get("file_name"))
+        or title
+    )
+    return {
+        "knowledge_id": knowledge_id,
+        "knowledge_base_id": _text(record.get("knowledge_base_id")),
+        "chunk_id": _text(record.get("chunk_id") or record.get("id")),
+        "knowledge_title": title,
+        "knowledge_filename": filename,
+        "content": _text(
+            record.get("content") or record.get("content_snippet"),
+        )[:2000],
+    }
+
+
+def _weknora_nested_reference_records(value: object) -> list[dict]:
+    """Find documented ``knowledge_id`` records inside tool result data."""
+
+    references: list[dict] = []
+    if isinstance(value, dict):
+        candidate = _weknora_reference_from_record(value)
+        if candidate is not None:
+            references.append(candidate)
+        for nested in value.values():
+            references.extend(_weknora_nested_reference_records(nested))
+    elif isinstance(value, list):
+        for nested in value:
+            references.extend(_weknora_nested_reference_records(nested))
+    return references
+
+
+def _weknora_tool_reference_items(
+    event: dict,
+    tool_calls: dict[str, dict],
+) -> tuple[list[dict], list[dict[str, str]]]:
+    """Extract source documents exposed by WeKnora tool events.
+
+    Agent-chat does not consistently append inline ``<kb>`` tags or a final
+    ``references`` event.  Its documented tool events still identify the
+    source that was searched/read (for example ``list_knowledge_chunks``
+    returns ``knowledge_id`` and ``knowledge_title``).  Preserve that actual
+    upstream evidence instead of guessing a document from answer text.
+    """
+
+    response_type = _text(event.get("response_type"))
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return [], []
+    tool_call_id = _text(data.get("tool_call_id"))
+    tool_name = _text(data.get("tool_name"))
+    if response_type == "tool_call":
+        if not tool_call_id:
+            return [], []
+        current = tool_calls.setdefault(tool_call_id, {})
+        if tool_name:
+            current["tool_name"] = tool_name
+        arguments = data.get("arguments")
+        if isinstance(arguments, dict):
+            current["arguments"] = arguments
+        return [], []
+    if response_type != "tool_result" or data.get("success") is False:
+        return [], []
+
+    call = tool_calls.get(tool_call_id, {})
+    tool_name = tool_name or _text(call.get("tool_name"))
+    if tool_name not in _WEKNORA_SOURCE_TOOL_NAMES:
+        return [], []
+    arguments = call.get("arguments")
+    arguments = arguments if isinstance(arguments, dict) else {}
+
+    references = _weknora_nested_reference_records(data)
+    argument_kb_id = _text(arguments.get("knowledge_base_id"))
+    argument_ids: list[str] = []
+    argument_id = _text(arguments.get("knowledge_id"))
+    if argument_id:
+        argument_ids.append(argument_id)
+    raw_argument_ids = arguments.get("knowledge_ids")
+    if isinstance(raw_argument_ids, list):
+        argument_ids.extend(
+            _text(item) for item in raw_argument_ids if _text(item)
+        )
+    direct_title = (
+        _text(data.get("knowledge_title"))
+        or _text(data.get("knowledge_filename"))
+        or _text(data.get("filename"))
+        or _text(data.get("file_name"))
+    )
+    for knowledge_id in argument_ids:
+        references.append(
+            {
+                "knowledge_id": knowledge_id,
+                "knowledge_base_id": argument_kb_id,
+                "knowledge_title": direct_title,
+                "knowledge_filename": direct_title,
+            },
+        )
+
+    output = data.get("output")
+    inline_citations: list[dict[str, str]] = []
+    if isinstance(output, str):
+        inline_citations = _extract_weknora_inline_citations(output)
+        found_kbs = data.get("found_kbs")
+        found_kbs = found_kbs if isinstance(found_kbs, dict) else {}
+        for match in _WEKNORA_WIKI_SUMMARY_REFERENCE_RE.finditer(output):
+            knowledge_id = match.group("knowledge_id")
+            summary_slug = f"summary/{knowledge_id}"
+            raw_kb_ids = found_kbs.get(summary_slug)
+            kb_id = (
+                _text(raw_kb_ids[0])
+                if isinstance(raw_kb_ids, list) and raw_kb_ids
+                else ""
+            )
+            title = unescape(match.group("title")).strip()
+            title = re.sub(
+                r"\s*-\s*Summary\s*$",
+                "",
+                title,
+                flags=re.IGNORECASE,
+            ).strip()
+            references.append(
+                {
+                    "knowledge_id": knowledge_id,
+                    "knowledge_base_id": kb_id,
+                    "knowledge_title": title,
+                    "knowledge_filename": title,
+                },
+            )
+    return _merge_weknora_reference_items(references), inline_citations
+
+
+async def _find_weknora_citation_source(
+    config: WeKnoraConnectionConfig,
+    knowledge_base_ids: list[str],
+    filename: str,
+) -> WeKnoraKnowledgeItem | None:
+    """Resolve an inline citation to its file without concurrent API calls."""
+
+    target = filename.casefold()
+    for knowledge_base_id in knowledge_base_ids:
+        encoded_id = quote(knowledge_base_id, safe="")
+        try:
+            payload = await _request_weknora_json(
+                config,
+                f"/knowledge-bases/{encoded_id}/knowledge",
+                params={
+                    "page": 1,
+                    "page_size": 100,
+                    "keyword": filename[:512],
+                },
+            )
+            raw_items, _ = _weknora_list_payload(payload)
+        except (HTTPException, ValidationError, TypeError, ValueError) as exc:
+            logger.warning(
+                "WeKnora 内嵌引用资料查找失败：kb=%s file=%s "
+                "status=%s detail=%s",
+                knowledge_base_id,
+                filename,
+                getattr(exc, "status_code", "invalid-data"),
+                getattr(exc, "detail", str(exc)),
+            )
+            continue
+        for raw_item in raw_items:
+            if _is_weknora_folder_placeholder(raw_item):
+                continue
+            item = _weknora_knowledge_item(raw_item, knowledge_base_id)
+            candidates = {
+                item.file_name.casefold(),
+                item.title.casefold(),
+                item.source.replace("\\", "/").rsplit("/", 1)[-1].casefold(),
+            }
+            if target in candidates:
+                return item
+    return None
+
+
+async def _enrich_weknora_inline_citations(
+    config: WeKnoraConnectionConfig,
+    answer: str,
+    allowed_knowledge_base_ids: list[str],
+    known_references: list[dict] | None = None,
+) -> list[dict]:
+    """Turn agent-chat inline tags into the platform citation contract."""
+
+    return await _enrich_weknora_citation_items(
+        config,
+        _extract_weknora_inline_citations(answer),
+        allowed_knowledge_base_ids,
+        known_references,
+    )
+
+
+async def _enrich_weknora_citation_items(
+    config: WeKnoraConnectionConfig,
+    citations: list[dict[str, str]],
+    allowed_knowledge_base_ids: list[str],
+    known_references: list[dict] | None = None,
+) -> list[dict]:
+    """Resolve already parsed citation tags to source-file metadata."""
+
+    if not citations:
+        return []
+    known = known_references or []
+    resolved_cache: dict[tuple[str, str], WeKnoraKnowledgeItem | None] = {}
+    references: list[dict] = []
+    for citation in citations:
+        filename = citation["filename"]
+        chunk_id = citation["chunk_id"]
+        cited_kb_id = citation["knowledge_base_id"]
+        matching_known = next(
+            (
+                item
+                for item in known
+                if (
+                    chunk_id
+                    and chunk_id
+                    == _text(item.get("chunk_id") or item.get("id"))
+                )
+                or (
+                    filename.casefold()
+                    == _weknora_reference_filename(item).casefold()
+                )
+            ),
+            None,
+        )
+        if matching_known is not None:
+            references.append(
+                _merge_weknora_reference_items(
+                    [
+                        {
+                            "chunk_id": chunk_id,
+                            "knowledge_base_id": cited_kb_id,
+                            "filename": filename,
+                        },
+                    ],
+                    [matching_known],
+                )[0],
+            )
+            continue
+
+        candidate_kb_ids = list(allowed_knowledge_base_ids)
+        if cited_kb_id in candidate_kb_ids:
+            candidate_kb_ids.remove(cited_kb_id)
+            candidate_kb_ids.insert(0, cited_kb_id)
+        cache_key = ("\x1f".join(candidate_kb_ids), filename.casefold())
+        if cache_key not in resolved_cache:
+            resolved_cache[cache_key] = await _find_weknora_citation_source(
+                config,
+                candidate_kb_ids,
+                filename,
+            )
+        details = resolved_cache[cache_key]
+        reference = WeKnoraSearchReference(
+            chunk_id=chunk_id,
+            knowledge_id=details.id if details else "",
+            knowledge_base_id=(
+                details.knowledge_base_id
+                if details and details.knowledge_base_id
+                else cited_kb_id
+            ),
+            title=details.title if details else filename,
+            filename=details.file_name if details else filename,
+            folder_path=details.folder_path if details else "",
+            knowledge_channel=details.channel if details else "",
+            file_type=details.file_type if details else "",
+            file_size=details.file_size if details else None,
+            source=details.source if details else "",
+            knowledge_type=details.type if details else "",
+            parse_status=details.parse_status if details else "",
+            download_url=(
+                f"/agent/platform/weknora/knowledge/"
+                f"{quote(details.id, safe='')}/download"
+                if details
+                else ""
+            ),
+            preview_url=(
+                f"/agent/platform/weknora/knowledge/"
+                f"{quote(details.id, safe='')}/preview"
+                if details
+                else ""
+            ),
+        ).model_dump()
+        references.append(reference)
+    return _merge_weknora_reference_items(references)
 
 
 def _weknora_knowledge_item(
@@ -1192,6 +1785,7 @@ async def _search_weknora_knowledge(
             continue
         references.append(
             WeKnoraSearchReference(
+                chunk_id=_text(item.get("id")),
                 knowledge_id=knowledge_id,
                 title=(
                     _text(item.get("knowledge_title"))
@@ -1203,11 +1797,29 @@ async def _search_weknora_knowledge(
                 ),
                 folder_path=details.folder_path if details else "",
                 content=_text(item.get("content")),
-                score=_number(item.get("score")),
-                chunk_index=_integer(item.get("chunk_index")),
-                start_at=_integer(item.get("start_at")),
-                end_at=_integer(item.get("end_at")),
+                score=(
+                    _number(item.get("score"))
+                    if item.get("score") is not None
+                    else None
+                ),
+                chunk_index=(
+                    _integer(item.get("chunk_index"))
+                    if item.get("chunk_index") is not None
+                    else None
+                ),
+                start_at=(
+                    _integer(item.get("start_at"))
+                    if item.get("start_at") is not None
+                    else None
+                ),
+                end_at=(
+                    _integer(item.get("end_at"))
+                    if item.get("end_at") is not None
+                    else None
+                ),
                 match_type=_text(item.get("match_type")),
+                chunk_type=_text(item.get("chunk_type")),
+                knowledge_channel=_text(item.get("knowledge_channel")),
                 file_type=details.file_type if details else "",
                 file_size=details.file_size if details else None,
                 source=(
@@ -1231,6 +1843,150 @@ async def _search_weknora_knowledge(
                 ),
             ),
         )
+    return references
+
+
+async def _enrich_weknora_reference_items(
+    config: WeKnoraConnectionConfig,
+    raw_references: object,
+) -> list[dict]:
+    """Normalise actual WeKnora citations and add source-file metadata."""
+
+    if not isinstance(raw_references, list):
+        return []
+    raw_items = [item for item in raw_references if isinstance(item, dict)]
+    knowledge_ids = [
+        _text(item.get("knowledge_id"))
+        for item in raw_items
+        if _text(item.get("knowledge_id"))
+    ]
+    try:
+        file_info = await _fetch_weknora_knowledge_batch(
+            config,
+            knowledge_ids,
+        )
+    except (HTTPException, ValidationError, TypeError, ValueError) as exc:
+        # A metadata lookup must not turn an otherwise valid answer into a
+        # failed chat. The original citation remains authoritative and is
+        # still forwarded with every field WeKnora supplied.
+        logger.warning(
+            "WeKnora 引用元数据补全失败：status=%s detail=%s",
+            getattr(exc, "status_code", "invalid-data"),
+            getattr(exc, "detail", str(exc)),
+        )
+        file_info = {}
+
+    references: list[dict] = []
+    for item in raw_items:
+        knowledge_id = _text(item.get("knowledge_id"))
+        details = file_info.get(knowledge_id)
+        if (
+            (details is not None and _is_weknora_folder_placeholder(details))
+            or _is_weknora_folder_placeholder(item)
+        ):
+            continue
+        nested_file = item.get("file_info")
+        file_item = nested_file if isinstance(nested_file, dict) else {}
+        reference = WeKnoraSearchReference(
+            chunk_id=(
+                _text(item.get("id"))
+                or _text(item.get("chunk_id"))
+            ),
+            knowledge_id=knowledge_id,
+            knowledge_base_id=(
+                _text(item.get("knowledge_base_id"))
+                or (details.knowledge_base_id if details else "")
+                or ""
+            ),
+            title=(
+                _text(item.get("knowledge_title"))
+                or _text(item.get("title"))
+                or (details.title if details else "")
+            ),
+            filename=(
+                _text(item.get("knowledge_filename"))
+                or _text(item.get("file_name"))
+                or _text(item.get("filename"))
+                or _text(file_item.get("file_name"))
+                or (details.file_name if details else "")
+            ),
+            folder_path=(
+                _text(item.get("folder_path"))
+                or _text(file_item.get("folder_path"))
+                or (details.folder_path if details else "")
+            ),
+            content=(
+                _text(item.get("content"))
+                or _text(item.get("content_snippet"))
+            ),
+            score=(
+                _number(item.get("score"))
+                if item.get("score") is not None
+                else None
+            ),
+            chunk_index=(
+                _integer(item.get("chunk_index"))
+                if item.get("chunk_index") is not None
+                else None
+            ),
+            start_at=(
+                _integer(item.get("start_at"))
+                if item.get("start_at") is not None
+                else None
+            ),
+            end_at=(
+                _integer(item.get("end_at"))
+                if item.get("end_at") is not None
+                else None
+            ),
+            match_type=_text(item.get("match_type")),
+            chunk_type=_text(item.get("chunk_type")),
+            knowledge_channel=(
+                _text(item.get("knowledge_channel"))
+                or _text(item.get("channel"))
+                or (details.channel if details else "")
+            ),
+            file_type=(
+                _text(item.get("file_type"))
+                or _text(file_item.get("file_type"))
+                or (details.file_type if details else "")
+            ),
+            file_size=(
+                details.file_size
+                if details is not None
+                else (
+                    _integer(item.get("file_size"))
+                    if item.get("file_size") is not None
+                    else None
+                )
+            ),
+            source=(
+                _text(item.get("knowledge_source"))
+                or _text(item.get("source"))
+                or (details.source if details else "")
+            ),
+            knowledge_type=(
+                _text(item.get("knowledge_type"))
+                or (details.type if details else "")
+            ),
+            parse_status=(
+                _text(item.get("parse_status"))
+                or (details.parse_status if details else "")
+            ),
+            download_url=(
+                f"/agent/platform/weknora/knowledge/"
+                f"{quote(knowledge_id, safe='')}/download"
+                if knowledge_id
+                else ""
+            ),
+            preview_url=(
+                f"/agent/platform/weknora/knowledge/"
+                f"{quote(knowledge_id, safe='')}/preview"
+                if knowledge_id
+                else ""
+            ),
+        ).model_dump()
+        references.append(reference)
     return references
 
 
@@ -2674,6 +3430,28 @@ async def create_weknora_url_knowledge(
     )
 
 
+@agent_router.get(
+    "/platform/weknora/knowledge/{knowledge_id}",
+    response_model=WeKnoraKnowledgeItem,
+    summary="Get the current metadata for one WeKnora knowledge item",
+)
+async def get_weknora_knowledge(
+    knowledge_id: str,
+    weknora_agent_id: str | None = Query(default=None, max_length=128),
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> WeKnoraKnowledgeItem:
+    """Return live file metadata after enforcing the robot's KB scope."""
+
+    settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    return await _require_weknora_knowledge_access(
+        connection,
+        knowledge_id,
+        await _weknora_agent_knowledge_base_ids(connection, weknora_agent_id),
+    )
+
+
 @agent_router.delete(
     "/platform/weknora/knowledge/{knowledge_id}",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -2768,8 +3546,53 @@ async def preview_weknora_knowledge(
     )
 
 
+@agent_router.get(
+    "/platform/weknora/resources/{resource_id}",
+    summary="Proxy an authenticated WeKnora resource handle",
+)
+async def proxy_weknora_resource(
+    resource_id: str,
+    weknora_agent_id: str = Query(min_length=1, max_length=128),
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> Response:
+    """Resolve one documented ``resource://`` handle through `/files`."""
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", resource_id):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="WeKnora 资源句柄无效。",
+        )
+    settings = await _load_platform_settings(storage, user_id)
+    connection = _require_weknora_connection(settings)
+    allowed_ids = await _weknora_agent_knowledge_base_ids(
+        connection,
+        weknora_agent_id,
+    )
+    assert allowed_ids is not None
+    content, content_type, content_disposition = await _request_weknora_bytes(
+        connection,
+        "/files",
+        params={"file_path": f"resource://{resource_id}"},
+        root_path=True,
+        max_response_bytes=32 * 1024 * 1024,
+    )
+    headers = {
+        "Content-Type": content_type,
+        "Cache-Control": "private, no-store",
+    }
+    if (
+        content_disposition
+        and "\n" not in content_disposition
+        and "\r" not in content_disposition
+    ):
+        headers["Content-Disposition"] = content_disposition
+    return Response(content=content, headers=headers)
+
+
 async def _create_weknora_agent_session(
     connection: WeKnoraConnectionConfig,
+    weknora_agent_id: str,
 ) -> WeKnoraAgentSessionResponse:
     """Create the remote session used before a long-running query starts."""
 
@@ -2777,10 +3600,7 @@ async def _create_weknora_agent_session(
         connection,
         "/sessions",
         method="POST",
-        json_body={
-            "title": "AgentScope 工程知识问答",
-            "description": "工程管理平台的项目资料问答会话",
-        },
+        json_body={"agent_id": weknora_agent_id},
     )
     session_data = session_payload.get("data")
     session_id = (
@@ -2813,7 +3633,10 @@ async def create_weknora_agent_session(
         body.weknora_agent_id,
     )
     assert allowed_ids is not None
-    return await _create_weknora_agent_session(connection)
+    return await _create_weknora_agent_session(
+        connection,
+        body.weknora_agent_id,
+    )
 
 
 async def _active_weknora_assistant_message_id(
@@ -2913,6 +3736,89 @@ async def ask_weknora_agent(
     user_id: str = Depends(get_current_user_id),
     storage: StorageBase = Depends(get_storage),
 ) -> AskWeKnoraAgentResponse:
+    connection, session_id, request_body = await _prepare_weknora_agent_query(
+        body,
+        user_id=user_id,
+        storage=storage,
+    )
+    events = await _request_weknora_sse(
+        connection,
+        f"/agent-chat/{quote(session_id, safe='')}",
+        request_body,
+        params={"resource_urls": "public"},
+        session_id=session_id,
+    )
+    answer_parts: list[str] = []
+    references: list[dict] = []
+    tool_references: list[dict] = []
+    tool_inline_citations: list[dict[str, str]] = []
+    tool_calls: dict[str, dict] = {}
+    session_title = ""
+    for event in events:
+        response_type = _text(event.get("response_type"))
+        event_tool_references, event_tool_citations = (
+            _weknora_tool_reference_items(event, tool_calls)
+        )
+        tool_references.extend(event_tool_references)
+        tool_inline_citations.extend(event_tool_citations)
+        if response_type == "answer":
+            content = event.get("content")
+            if isinstance(content, str):
+                answer_parts.append(content)
+        elif response_type == "references":
+            raw_references = event.get("knowledge_references")
+            if isinstance(raw_references, list):
+                references.extend(
+                    item for item in raw_references if isinstance(item, dict)
+                )
+        elif response_type == "session_title":
+            session_title = _text(event.get("content"))
+        elif response_type == "error":
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    _text(event.get("content"))
+                    or "WeKnora 智能体返回错误。"
+                ),
+            )
+    answer = "".join(answer_parts)
+    references = await _enrich_weknora_reference_items(
+        connection,
+        _merge_weknora_reference_items(references, tool_references),
+    )
+    inline_references = await _enrich_weknora_inline_citations(
+        connection,
+        answer,
+        list(request_body.get("knowledge_base_ids", [])),
+        references,
+    )
+    tool_inline_references = await _enrich_weknora_citation_items(
+        connection,
+        tool_inline_citations,
+        list(request_body.get("knowledge_base_ids", [])),
+        references,
+    )
+    references = _merge_weknora_reference_items(
+        references,
+        inline_references,
+        tool_inline_references,
+    )
+    return AskWeKnoraAgentResponse(
+        session_id=session_id,
+        answer=answer,
+        references=references,
+        session_title=session_title,
+    )
+
+
+async def _prepare_weknora_agent_query(
+    body: AskWeKnoraAgentRequest,
+    *,
+    user_id: str,
+    storage: StorageBase,
+) -> tuple[WeKnoraConnectionConfig, str, dict]:
+    """Authorize one query and build the documented agent-chat payload."""
+
     settings = await _load_platform_settings(storage, user_id)
     connection = _require_weknora_connection(settings)
     allowed_ids = await _weknora_agent_knowledge_base_ids(
@@ -2942,11 +3848,14 @@ async def ask_weknora_agent(
         )
     session_id = body.session_id or ""
     if not session_id:
-        session = await _create_weknora_agent_session(connection)
+        session = await _create_weknora_agent_session(
+            connection,
+            body.weknora_agent_id,
+        )
         session_id = session.session_id
-    events = await _request_weknora_sse(
+    return (
         connection,
-        f"/agent-chat/{quote(session_id, safe='')}",
+        session_id,
         {
             "query": body.query,
             "agent_enabled": True,
@@ -2955,32 +3864,154 @@ async def ask_weknora_agent(
             "knowledge_ids": knowledge_ids,
             "channel": "api",
         },
-        session_id=session_id,
     )
-    answer_parts: list[str] = []
-    references: list[dict] = []
-    for event in events:
-        response_type = _text(event.get("response_type"))
-        if response_type == "answer":
-            answer_parts.append(_text(event.get("content")))
-        elif response_type == "references":
-            raw_references = event.get("knowledge_references")
-            if isinstance(raw_references, list):
-                references.extend(
-                    item for item in raw_references if isinstance(item, dict)
+
+
+def _weknora_sse_frame(payload: dict) -> str:
+    return (
+        "event: message\n"
+        f"data: {json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}\n\n"
+    )
+
+
+@agent_router.post(
+    "/platform/weknora/agent-query/stream",
+    summary="Stream the configured WeKnora agent-chat endpoint",
+)
+async def stream_weknora_agent(
+    body: AskWeKnoraAgentRequest,
+    user_id: str = Depends(get_current_user_id),
+    storage: StorageBase = Depends(get_storage),
+) -> StreamingResponse:
+    connection, session_id, request_body = await _prepare_weknora_agent_query(
+        body,
+        user_id=user_id,
+        storage=storage,
+    )
+
+    async def relay() -> AsyncIterator[str]:
+        pending_references: list[dict] = []
+        tool_references: list[dict] = []
+        tool_inline_citations: list[dict[str, str]] = []
+        tool_calls: dict[str, dict] = {}
+        answer_parts: list[str] = []
+        reference_event: dict | None = None
+        title_event: dict | None = None
+        terminal_event: dict | None = None
+        yield _weknora_sse_frame(
+            {
+                "response_type": "session",
+                "session_id": session_id,
+                "done": True,
+            },
+        )
+        try:
+            async for raw_event in _stream_weknora_sse_events(
+                connection,
+                f"/agent-chat/{quote(session_id, safe='')}",
+                request_body,
+                params={"resource_urls": "public"},
+                session_id=session_id,
+            ):
+                event = dict(raw_event)
+                event["session_id"] = session_id
+                response_type = _text(event.get("response_type"))
+                event_tool_references, event_tool_citations = (
+                    _weknora_tool_reference_items(event, tool_calls)
                 )
-        elif response_type == "error":
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=(
-                    _text(event.get("content"))
-                    or "WeKnora 智能体返回错误。"
-                ),
+                tool_references.extend(event_tool_references)
+                tool_inline_citations.extend(event_tool_citations)
+                if response_type == "references":
+                    raw_references = event.get("knowledge_references")
+                    if isinstance(raw_references, list):
+                        pending_references.extend(
+                            item
+                            for item in raw_references
+                            if isinstance(item, dict)
+                        )
+                    reference_event = event
+                    continue
+                if response_type == "answer":
+                    content = event.get("content")
+                    if isinstance(content, str):
+                        answer_parts.append(content)
+                if response_type == "session_title":
+                    title_event = event
+                    continue
+                if response_type in {"complete", "error", "stop"}:
+                    terminal_event = event
+                    continue
+                yield _weknora_sse_frame(event)
+        except HTTPException as exc:
+            terminal_event = {
+                "response_type": "error",
+                "session_id": session_id,
+                "content": str(exc.detail),
+                "status_code": exc.status_code,
+                "done": True,
+            }
+
+        # Metadata lookup is intentionally deferred until the upstream SSE
+        # connection has closed.  Some WeKnora deployments become unstable
+        # when a batch metadata request runs concurrently with agent-chat.
+        enriched: list[dict] = []
+        raw_references = _merge_weknora_reference_items(
+            pending_references,
+            tool_references,
+        )
+        if raw_references:
+            enriched = await _enrich_weknora_reference_items(
+                connection,
+                raw_references,
             )
-    return AskWeKnoraAgentResponse(
-        session_id=session_id,
-        answer="".join(answer_parts),
-        references=references,
+        inline_references = await _enrich_weknora_inline_citations(
+            connection,
+            "".join(answer_parts),
+            list(request_body.get("knowledge_base_ids", [])),
+            enriched,
+        )
+        tool_inline_references = await _enrich_weknora_citation_items(
+            connection,
+            tool_inline_citations,
+            list(request_body.get("knowledge_base_ids", [])),
+            enriched,
+        )
+        enriched = _merge_weknora_reference_items(
+            enriched,
+            inline_references,
+            tool_inline_references,
+        )
+        if enriched:
+            citation_event = dict(reference_event or {})
+            citation_event.update(
+                {
+                    "response_type": "references",
+                    "session_id": session_id,
+                    "knowledge_references": enriched,
+                },
+            )
+            yield _weknora_sse_frame(citation_event)
+        if title_event is not None:
+            yield _weknora_sse_frame(title_event)
+        if terminal_event is not None:
+            yield _weknora_sse_frame(terminal_event)
+        else:
+            yield _weknora_sse_frame(
+                {
+                    "response_type": "complete",
+                    "session_id": session_id,
+                    "done": True,
+                },
+            )
+
+    return StreamingResponse(
+        relay(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

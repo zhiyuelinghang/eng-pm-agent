@@ -3,10 +3,12 @@ import hashlib
 import json
 import re
 import shutil
+from collections.abc import AsyncIterator
 from contextlib import suppress
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, TypeVar
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -4074,6 +4076,28 @@ def move_engineering_documents(
     return ok(result, "资料已移动")
 
 
+@router.get(
+    "/projects/{project_id}/engineering-documents/knowledge/{knowledge_id}",
+)
+def get_engineering_document(
+    project_id: int,
+    knowledge_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Return the current WeKnora location for one project-authorized file."""
+
+    project_for_user_or_403(db, project_id, user)
+    try:
+        result = _agentscope_client().get_weknora_knowledge(
+            _project_weknora_agent_id(db, project_id),
+            knowledge_id,
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    return ok(result)
+
+
 @router.delete(
     "/projects/{project_id}/engineering-documents/knowledge/{knowledge_id}",
 )
@@ -4169,6 +4193,41 @@ def preview_engineering_document(
     )
 
 
+@router.get(
+    "/projects/{project_id}/engineering-documents/resources/{resource_id}",
+)
+def proxy_engineering_document_resource(
+    project_id: int,
+    resource_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    project_for_user_or_403(db, project_id, user)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", resource_id):
+        raise HTTPException(status_code=422, detail="WeKnora 资源句柄无效。")
+    try:
+        content, content_type, content_disposition = (
+            _agentscope_client().get_weknora_resource_content(
+                _project_weknora_agent_id(db, project_id),
+                resource_id,
+            )
+        )
+    except AgentScopeGatewayError as exc:
+        _raise_agentscope_http_error(exc)
+    headers = {"Cache-Control": "private, no-store"}
+    if (
+        content_disposition
+        and "\n" not in content_disposition
+        and "\r" not in content_disposition
+    ):
+        headers["Content-Disposition"] = content_disposition
+    return StreamingResponse(
+        iter([content]),
+        media_type=content_type,
+        headers=headers,
+    )
+
+
 @router.get("/projects/{project_id}/engineering-knowledge-conversations")
 def list_engineering_knowledge_conversations(
     project_id: int,
@@ -4209,6 +4268,43 @@ def create_engineering_knowledge_conversation(
     knowledge_name = (payload.knowledge_name or "").strip() or None
     knowledge_base_id = (payload.knowledge_base_id or "").strip() or None
     folder_path = (payload.folder_path or "").strip().strip("/") or None
+    scope_items: list[dict[str, str | None]] = []
+    scope_item_keys: set[tuple[str, str, str]] = set()
+    for raw_item in payload.scope_items:
+        item_type = raw_item.scope_type
+        item_knowledge_id = (raw_item.knowledge_id or "").strip() or None
+        item_name = (raw_item.knowledge_name or "").strip() or None
+        item_knowledge_base_id = (
+            (raw_item.knowledge_base_id or "").strip() or None
+        )
+        item_folder_path = (
+            (raw_item.folder_path or "").strip().strip("/") or None
+        )
+        if item_type == "document" and item_knowledge_id is None:
+            raise HTTPException(status_code=422, detail="多选范围中的文件缺少资料 ID")
+        if item_type == "knowledge_base" and item_knowledge_base_id is None:
+            raise HTTPException(status_code=422, detail="多选范围中的知识库缺少知识库 ID")
+        if item_type == "folder" and (
+            item_knowledge_base_id is None or item_folder_path is None
+        ):
+            raise HTTPException(status_code=422, detail="多选范围中的目录信息不完整")
+        item_key = (
+            item_type,
+            item_knowledge_id or item_knowledge_base_id or "",
+            item_folder_path or "",
+        )
+        if item_key in scope_item_keys:
+            continue
+        scope_item_keys.add(item_key)
+        scope_items.append(
+            {
+                "scope_type": item_type,
+                "knowledge_id": item_knowledge_id,
+                "knowledge_name": item_name,
+                "knowledge_base_id": item_knowledge_base_id,
+                "folder_path": item_folder_path,
+            },
+        )
     if payload.scope_type == "document" and knowledge_id is None:
         raise HTTPException(status_code=422, detail="单文件问答必须指定资料")
     if payload.scope_type == "knowledge_base" and knowledge_base_id is None:
@@ -4217,17 +4313,28 @@ def create_engineering_knowledge_conversation(
         knowledge_base_id is None or folder_path is None
     ):
         raise HTTPException(status_code=422, detail="目录问答必须指定知识库和目录路径")
+    if payload.scope_type == "selection" and not scope_items:
+        raise HTTPException(status_code=422, detail="多选问答范围不能为空")
     if payload.scope_type == "project":
         knowledge_id = None
         knowledge_name = None
         knowledge_base_id = None
         folder_path = None
+        scope_items = []
     elif payload.scope_type == "knowledge_base":
         knowledge_id = None
         folder_path = None
+        scope_items = []
     elif payload.scope_type == "folder":
         knowledge_id = None
+        scope_items = []
+    elif payload.scope_type == "document":
+        folder_path = None
+        scope_items = []
     else:
+        knowledge_id = None
+        knowledge_name = None
+        knowledge_base_id = None
         folder_path = None
     title = (payload.title or first_message[:60]).strip()
     conversation = EngineeringKnowledgeConversation(
@@ -4239,6 +4346,7 @@ def create_engineering_knowledge_conversation(
         knowledge_name=knowledge_name,
         knowledge_base_id=knowledge_base_id,
         folder_path=folder_path,
+        scope_items=scope_items or None,
     )
     db.add(conversation)
     db.flush()
@@ -4424,6 +4532,95 @@ def ask_engineering_documents(
     except AgentScopeGatewayError as exc:
         _raise_agentscope_http_error(exc)
     return ok(result)
+
+
+def _project_weknora_reference_urls(
+    project_id: int,
+    event: dict[str, Any],
+) -> dict[str, Any]:
+    """Replace internal AgentScope source URLs with project-authorized URLs."""
+
+    references = event.get("knowledge_references")
+    if not isinstance(references, list):
+        return event
+    rewritten: list[dict[str, Any]] = []
+    for raw in references:
+        if not isinstance(raw, dict):
+            continue
+        reference = dict(raw)
+        knowledge_id = str(reference.get("knowledge_id") or "").strip()
+        if knowledge_id:
+            encoded_id = quote(knowledge_id, safe="")
+            base = (
+                f"/api/projects/{project_id}/engineering-documents/"
+                f"knowledge/{encoded_id}"
+            )
+            reference["download_url"] = f"{base}/download"
+            reference["preview_url"] = f"{base}/preview"
+        rewritten.append(reference)
+    return {**event, "knowledge_references": rewritten}
+
+
+@router.post("/projects/{project_id}/engineering-documents/ask/stream")
+async def stream_engineering_document_answer(
+    project_id: int,
+    payload: EngineeringDocumentAskInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    project_for_user_or_403(db, project_id, user)
+    agent_id = _project_weknora_agent_id(db, project_id)
+    client = _agentscope_client()
+    request_body = payload.model_dump(exclude_none=True)
+
+    async def relay() -> AsyncIterator[str]:
+        session_id = payload.session_id or ""
+        try:
+            async with client.weknora_agent_stream(
+                agent_id,
+                request_body,
+            ) as events:
+                async for raw_event in events:
+                    event = _project_weknora_reference_urls(
+                        project_id,
+                        raw_event,
+                    )
+                    remote_session_id = str(
+                        event.get("session_id") or "",
+                    ).strip()
+                    if remote_session_id:
+                        session_id = remote_session_id
+                    yield _sse_frame("message", event)
+        except asyncio.CancelledError:
+            if session_id:
+                with suppress(Exception):
+                    await asyncio.to_thread(
+                        client.stop_weknora_agent_session,
+                        agent_id,
+                        session_id,
+                    )
+            raise
+        except AgentScopeGatewayError as exc:
+            yield _sse_frame(
+                "message",
+                {
+                    "response_type": "error",
+                    "session_id": session_id,
+                    "content": str(exc),
+                    "status_code": exc.status_code,
+                    "done": True,
+                },
+            )
+
+    return StreamingResponse(
+        relay(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/projects/{project_id}/engineering-documents/sessions")

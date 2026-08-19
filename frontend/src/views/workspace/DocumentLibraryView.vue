@@ -40,6 +40,7 @@
         @document-consumed="chatFocusDocumentId = ''"
         @busy-change="knowledgeChatBusy = $event"
         @ready-change="knowledgeChatReady = $event"
+        @locate-reference="locateReferenceDocument"
       />
 
       <section v-show="activeWorkspaceTab === 'files'" class="file-workspace" aria-label="工程资料文件管理">
@@ -171,6 +172,7 @@
                     role="option"
                     :aria-selected="activeDocument?.id === file.id"
                     :aria-busy="documentDeletingId === file.id"
+                    :data-document-id="file.id"
                     tabindex="0"
                     @click="selectDocument(file)"
                     @keydown.enter.prevent="selectDocument(file)"
@@ -440,7 +442,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, ref, watch } from 'vue'
+import { computed, h, nextTick, ref, watch } from 'vue'
 import { useDialog, useMessage, NIcon, NTreeSelect, type TreeSelectOption } from 'naive-ui'
 import {
   ArrowsLeftRight,
@@ -514,6 +516,7 @@ const documentSearchKeyword = ref('')
 const documentSearchResults = ref<AttachmentRecord[]>([])
 const isSearchActive = ref(false)
 const documentRefreshing = ref(false)
+const locatingReferenceId = ref('')
 
 const canManageDocuments = computed(() => Boolean(store.currentProjectId))
 const knowledgeWorkspaceBlocked = computed(() => Boolean(store.currentProjectId) && (
@@ -731,7 +734,7 @@ function folderOptionsForKnowledgeBase(knowledgeBaseId: string, excludedIds = ne
 function selectTreeNode(node: FolderTreeDisplayNode) {
   void selectFolder(node.folderId || node.id)
 }
-async function selectFolder(folderId: string) {
+async function selectFolder(folderId: string, force = false) {
   if (isSearchActive.value) clearSearch()
   activeFolderId.value = folderId
   selectedFileId.value = ''
@@ -743,7 +746,7 @@ async function selectFolder(folderId: string) {
   }
   if (ancestorIds.length) expandedFolderIds.value = [...new Set([...expandedFolderIds.value, ...ancestorIds])]
   try {
-    await store.loadEngineeringDocumentFolder(folderId)
+    await store.loadEngineeringDocumentFolder(folderId, force)
     fileWorkspaceInitialized.value = true
   } catch (error: any) {
     message.error(error.response?.data?.detail || error.message || 'WeKnora 目录资料加载失败。')
@@ -776,6 +779,68 @@ async function refreshDocumentLibrary() {
 }
 function selectDocument(file: AttachmentRecord) {
   selectedFileId.value = file.id
+}
+
+type KnowledgeReferenceLocation = {
+  knowledgeId: string
+  knowledgeBaseId?: string
+  fileName: string
+  folderPath?: string
+}
+
+function referenceFolder(knowledgeBaseId: string, folderPath?: string) {
+  const normalizedPath = normalizedFolderPath(folderPath)
+  return store.documentFolders.find(folder => (
+    folder.knowledgeBaseId === knowledgeBaseId
+    && normalizedFolderPath(folder.path) === normalizedPath
+  ))
+}
+
+async function locateReferenceDocument(reference: KnowledgeReferenceLocation) {
+  const projectId = store.currentProjectId
+  const knowledgeId = reference.knowledgeId?.trim()
+  if (!projectId || !knowledgeId || locatingReferenceId.value) return
+  locatingReferenceId.value = knowledgeId
+  try {
+    const currentFile = await store.getEngineeringDocument(knowledgeId)
+    if (projectId !== store.currentProjectId) return
+
+    let folder = referenceFolder(
+      currentFile.knowledgeBaseId || reference.knowledgeBaseId || '',
+      currentFile.folderPath,
+    )
+    if (!folder) {
+      await store.loadEngineeringDocuments(projectId, true)
+      folder = referenceFolder(
+        currentFile.knowledgeBaseId || reference.knowledgeBaseId || '',
+        currentFile.folderPath,
+      )
+    }
+    if (!folder) throw new Error('未找到引用文件当前所在的知识库目录。')
+
+    activeWorkspaceTab.value = 'files'
+    await selectFolder(folder.id, true)
+    if (projectId !== store.currentProjectId) return
+    const locatedFile = store.attachments.find(item => item.id === knowledgeId)
+    if (!locatedFile) throw new Error('引用文件已不在该目录中，请刷新知识库后重试。')
+
+    selectedFileId.value = knowledgeId
+    fileWorkspaceInitialized.value = true
+    await nextTick()
+    const row = [...document.querySelectorAll<HTMLElement>('[data-document-id]')]
+      .find(element => element.dataset.documentId === knowledgeId)
+    row?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    row?.focus({ preventScroll: true })
+  } catch (error: any) {
+    const status = Number(error.response?.status || 0)
+    message.error(
+      status === 404
+        ? `引用文件“${reference.fileName}”已被删除或不再可访问。`
+        : error.response?.data?.detail || error.message || '引用文件定位失败。',
+    )
+  } finally {
+    locatingReferenceId.value = ''
+  }
 }
 
 async function switchWorkspaceTab(tab: 'chat' | 'files') {

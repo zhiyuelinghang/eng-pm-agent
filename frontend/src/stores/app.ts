@@ -188,14 +188,22 @@ export type EngineeringKnowledgeConversationRecord = {
   project_id: number
   user_id: number
   title: string
-  scope_type: 'project' | 'knowledge_base' | 'folder' | 'document'
+  scope_type: 'project' | 'knowledge_base' | 'folder' | 'document' | 'selection'
   knowledge_id?: string | null
   knowledge_name?: string | null
   knowledge_base_id?: string | null
   folder_path?: string | null
+  scope_items?: EngineeringKnowledgeScopeItemRecord[] | null
   weknora_session_id?: string | null
   created_at: string
   updated_at: string
+}
+export type EngineeringKnowledgeScopeItemRecord = {
+  scope_type: 'knowledge_base' | 'folder' | 'document'
+  knowledge_id?: string | null
+  knowledge_name?: string | null
+  knowledge_base_id?: string | null
+  folder_path?: string | null
 }
 export type EngineeringKnowledgeMessageRecord = {
   id: number
@@ -1119,6 +1127,26 @@ export const useAppStore = defineStore('app', () => {
     }
     return existing
   }
+  async function getEngineeringDocument(knowledgeId: string) {
+    const projectId = currentProjectId.value
+    if (!projectId) throw new Error('请先选择项目。')
+    const normalizedId = knowledgeId.trim()
+    if (!normalizedId) throw new Error('资料标识无效。')
+    const response = await api.get<ApiEnvelope<ApiWeKnoraKnowledge>>(
+      `/projects/${projectId}/engineering-documents/knowledge/${encodeURIComponent(normalizedId)}`,
+    )
+    const row = response.data.data
+    const existing = attachments.value.find(item => item.id === normalizedId)
+    const knowledgeBaseId = row.knowledge_base_id || existing?.knowledgeBaseId || ''
+    if (!knowledgeBaseId) throw new Error('WeKnora 返回的资料缺少知识库信息。')
+    const mapped = mapWeKnoraKnowledge(row, projectId, knowledgeBaseId)
+    const current = attachments.value.find(item => item.id === mapped.id)
+    const merged = current
+      ? { ...current, ...mapped, snippet: mapped.snippet || current.snippet }
+      : mapped
+    attachments.value = [...attachments.value.filter(item => item.id !== merged.id), merged]
+    return merged
+  }
   async function searchDocuments(keyword: string) {
     const query = keyword.trim()
     if (!query) return [] as AttachmentRecord[]
@@ -1211,11 +1239,12 @@ export const useAppStore = defineStore('app', () => {
   }
   async function createEngineeringKnowledgeConversation(payload: {
     title?: string
-    scopeType: 'project' | 'knowledge_base' | 'folder' | 'document'
+    scopeType: 'project' | 'knowledge_base' | 'folder' | 'document' | 'selection'
     knowledgeId?: string
     knowledgeName?: string
     knowledgeBaseId?: string
     folderPath?: string
+    scopeItems?: EngineeringKnowledgeScopeItemRecord[]
     firstMessage: string
   }) {
     if (!currentProjectId.value) throw new Error('请先选择项目。')
@@ -1231,6 +1260,7 @@ export const useAppStore = defineStore('app', () => {
         knowledge_name: payload.knowledgeName,
         knowledge_base_id: payload.knowledgeBaseId,
         folder_path: payload.folderPath,
+        scope_items: payload.scopeItems,
         first_message: payload.firstMessage,
       },
     )
@@ -1323,5 +1353,5 @@ export const useAppStore = defineStore('app', () => {
   async function removeWbsRiskLink(linkId: string) { await api.delete(`/wbs-risk-links/${linkId}`); await loadProjectData() }
   function addLog(log: OperationLog) { if (!currentProjectId.value) return; void api.post(`/projects/${currentProjectId.value}/operation-logs`, { action: log.action, detail: log.detail }).then(() => loadProjectData()) }
 
-  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, weknoraKnowledgeBases, engineeringDocumentsLoading, engineeringDocumentFolderLoading, engineeringDocumentsError, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, updateProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, uploadAttachment, updateAttachmentCategory, createDocumentFolder, updateDocumentFolder, deleteDocumentFolder, moveEngineeringDocuments, deleteEngineeringDocument, searchDocuments, createEngineeringDocumentSession, stopEngineeringDocumentAnswer, askEngineeringDocuments, loadEngineeringKnowledgeConversations, createEngineeringKnowledgeConversation, loadEngineeringKnowledgeMessages, updateEngineeringKnowledgeConversation, appendEngineeringKnowledgeMessage, deleteEngineeringKnowledgeConversation, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, loadEngineeringDocuments, loadEngineeringDocumentFolder, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
+  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, weknoraKnowledgeBases, engineeringDocumentsLoading, engineeringDocumentFolderLoading, engineeringDocumentsError, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, updateProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, uploadAttachment, updateAttachmentCategory, createDocumentFolder, updateDocumentFolder, deleteDocumentFolder, moveEngineeringDocuments, getEngineeringDocument, deleteEngineeringDocument, searchDocuments, createEngineeringDocumentSession, stopEngineeringDocumentAnswer, askEngineeringDocuments, loadEngineeringKnowledgeConversations, createEngineeringKnowledgeConversation, loadEngineeringKnowledgeMessages, updateEngineeringKnowledgeConversation, appendEngineeringKnowledgeMessage, deleteEngineeringKnowledgeConversation, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, loadEngineeringDocuments, loadEngineeringDocumentFolder, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
 })

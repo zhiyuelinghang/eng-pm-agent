@@ -22,9 +22,11 @@ from backend.app.api import (
     _agentscope_reply_from_group,
     _catalog_agent_for_conversation,
     _platform_session_context,
+    _project_weknora_reference_urls,
     _project_agentscope_user_message,
     _sse_frame,
     create_agent_conversation,
+    get_engineering_document,
     list_agent_conversations,
     list_agent_conversation_messages,
     stream_agent_conversation_tool_confirmation,
@@ -110,6 +112,108 @@ class AgentScopeClientTest(TestCase):
                 "POST",
                 "/agent/platform/weknora/sessions/session%2F1/stop",
             ),
+        )
+
+    def test_weknora_resource_uses_robot_scope(self) -> None:
+        client = _client()
+        client._request_bytes = Mock(  # type: ignore[method-assign]
+            return_value=(b"image", "image/png", ""),
+        )
+
+        result = client.get_weknora_resource_content(
+            "robot-1",
+            "image_handle-1",
+        )
+
+        self.assertEqual(result[1], "image/png")
+        self.assertEqual(
+            client._request_bytes.call_args.args,
+            (
+                "/agent/platform/weknora/resources/image_handle-1",
+            ),
+        )
+        self.assertEqual(
+            client._request_bytes.call_args.kwargs,
+            {"params": {"weknora_agent_id": "robot-1"}},
+        )
+
+    def test_weknora_knowledge_detail_uses_robot_scope(self) -> None:
+        client = _client()
+        client._request = Mock(
+            return_value={
+                "id": "document/1",
+                "knowledge_base_id": "kb/1",
+                "folder_path": "方案/附件",
+            },
+        )
+
+        result = client.get_weknora_knowledge("robot-1", "document/1")
+
+        self.assertEqual(result["folder_path"], "方案/附件")
+        self.assertEqual(
+            client._request.call_args.args,
+            (
+                "GET",
+                "/agent/platform/weknora/knowledge/document%2F1",
+            ),
+        )
+        self.assertEqual(
+            client._request.call_args.kwargs,
+            {"params": {"weknora_agent_id": "robot-1"}},
+        )
+
+    def test_project_knowledge_detail_is_returned_without_mutation(self) -> None:
+        agentscope = Mock()
+        agentscope.get_weknora_knowledge.return_value = {
+            "id": "document-1",
+            "knowledge_base_id": "kb-1",
+            "folder_path": "方案/附件",
+        }
+        db = Mock()
+        user = Mock()
+
+        with (
+            patch("backend.app.api.project_for_user_or_403"),
+            patch(
+                "backend.app.api._project_weknora_agent_id",
+                return_value="robot-1",
+            ),
+            patch("backend.app.api._agentscope_client", return_value=agentscope),
+        ):
+            response = get_engineering_document(
+                project_id=17,
+                knowledge_id="document-1",
+                db=db,
+                user=user,
+            )
+
+        self.assertEqual(response["data"]["folder_path"], "方案/附件")
+        agentscope.get_weknora_knowledge.assert_called_once_with(
+            "robot-1",
+            "document-1",
+        )
+
+    def test_project_weknora_reference_urls_are_project_authorized(self) -> None:
+        event = _project_weknora_reference_urls(
+            17,
+            {
+                "response_type": "references",
+                "knowledge_references": [
+                    {
+                        "knowledge_id": "document/1",
+                        "filename": "方案.pdf",
+                        "score": 0.91,
+                    },
+                ],
+            },
+        )
+
+        reference = event["knowledge_references"][0]
+        self.assertEqual(reference["filename"], "方案.pdf")
+        self.assertEqual(
+            reference["preview_url"],
+            "/api/projects/17/engineering-documents/"
+            "knowledge/document%2F1/preview",
         )
 
     def test_weknora_folder_creation_uses_robot_scope(self) -> None:

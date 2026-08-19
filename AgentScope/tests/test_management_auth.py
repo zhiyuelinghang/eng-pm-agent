@@ -44,6 +44,19 @@ def _app() -> FastAPI:
     ) -> dict[str, str]:
         return {"config_id": config_id}
 
+    @app.post("/agent/platform/weknora/agent-query/stream")
+    async def weknora_agent_query_stream_probe(
+        config_id: str = Depends(get_current_user_id),
+    ) -> dict[str, str]:
+        return {"config_id": config_id}
+
+    @app.get("/agent/platform/weknora/resources/{resource_id}")
+    async def weknora_resource_probe(
+        resource_id: str,
+        config_id: str = Depends(get_current_user_id),
+    ) -> dict[str, str]:
+        return {"config_id": config_id, "resource_id": resource_id}
+
     @app.post("/agent/platform/weknora/sessions")
     async def weknora_session_probe(
         config_id: str = Depends(get_current_user_id),
@@ -128,6 +141,19 @@ def test_platform_service_can_only_use_robot_scoped_weknora_runtime() -> None:
         "/agent/platform/weknora/agent-query",
         headers=headers,
     )
+    agent_query_stream = client.post(
+        "/agent/platform/weknora/agent-query/stream",
+        headers=headers,
+    )
+    resource = client.get(
+        "/agent/platform/weknora/resources/image-1",
+        params={"weknora_agent_id": "project-robot"},
+        headers=headers,
+    )
+    unscoped_resource = client.get(
+        "/agent/platform/weknora/resources/image-1",
+        headers=headers,
+    )
     session = client.post(
         "/agent/platform/weknora/sessions",
         headers=headers,
@@ -144,9 +170,12 @@ def test_platform_service_can_only_use_robot_scoped_weknora_runtime() -> None:
     assert scoped.status_code == 200
     assert scoped.json() == {"config_id": "platform-global-config"}
     assert agent_query.status_code == 200
+    assert agent_query_stream.status_code == 200
+    assert resource.status_code == 200
     assert session.status_code == 200
     assert session_stop.status_code == 200
     assert unscoped.status_code == 403
+    assert unscoped_resource.status_code == 403
     assert project_bindings.status_code == 403
 
 

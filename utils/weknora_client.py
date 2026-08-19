@@ -306,9 +306,16 @@ class WeKnoraClient:
         data = payload.get("data", {})
         return str(data.get("id") or "") if isinstance(data, dict) else ""
 
-    def _chat_events(self, endpoint: str, body: dict[str, Any]) -> Iterator[dict]:
+    def _chat_events(
+        self,
+        endpoint: str,
+        body: dict[str, Any],
+        *,
+        params: dict[str, str] | None = None,
+    ) -> Iterator[dict]:
         response = self.session.post(
             f"{self.base_url}{endpoint}",
+            params=params,
             json=body,
             stream=True,
             timeout=(self.timeout[0], self.chat_timeout),
@@ -368,7 +375,11 @@ class WeKnoraClient:
         }
         if kb_ids:
             body["knowledge_base_ids"] = kb_ids
-        return self._chat_events(f"/agent-chat/{session_id}", body)
+        return self._chat_events(
+            f"/agent-chat/{session_id}",
+            body,
+            params={"resource_urls": "public"},
+        )
 
     # ── Search ★ Core ─────────────────────────────────────────────────
 

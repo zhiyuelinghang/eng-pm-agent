@@ -41,7 +41,10 @@ def _service_request_allowed(request: Request) -> bool:
         return True
     if (
         request.method == "POST"
-        and path == "/agent/platform/weknora/agent-query"
+        and path in {
+            "/agent/platform/weknora/agent-query",
+            "/agent/platform/weknora/agent-query/stream",
+        }
     ):
         # The endpoint body requires a non-empty ``weknora_agent_id`` and
         # validates the robot's own knowledge-base scope before querying.
@@ -60,6 +63,7 @@ def _service_request_allowed(request: Request) -> bool:
         path == "/agent/platform/weknora/knowledge-bases"
         or path.startswith("/agent/platform/weknora/knowledge-bases/")
         or path.startswith("/agent/platform/weknora/knowledge/")
+        or path.startswith("/agent/platform/weknora/resources/")
     ):
         # Management calls may omit the robot scope. Platform-service calls
         # must always carry it, so one project can never see another robot's

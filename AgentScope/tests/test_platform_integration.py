@@ -18,24 +18,30 @@ from agentscope.app._router._agent import (
     WEKNORA_FOLDER_PLACEHOLDER_CONTENT_TYPE,
     WEKNORA_FOLDER_PLACEHOLDER_FILENAME,
     _demote_other_global_main_agents,
+    _extract_weknora_inline_citations,
     _fetch_weknora_folder_tree,
     _fetch_weknora_knowledge,
     _fetch_weknora_knowledge_bases,
     _normalise_platform_agent_data,
     _request_weknora_json,
     _search_weknora_knowledge,
+    _stream_weknora_sse_events,
+    _weknora_tool_reference_items,
     ask_weknora_agent,
     create_weknora_folder,
     create_weknora_agent_session,
     delete_agent,
     delete_weknora_folder,
     get_platform_agent_catalog,
+    get_weknora_knowledge as _get_weknora_knowledge_endpoint,
     get_weknora_connection,
     list_weknora_project_bindings,
     list_weknora_knowledge as _list_weknora_knowledge_endpoint,
     list_weknora_knowledge_bases as _list_weknora_knowledge_bases_endpoint,
+    proxy_weknora_resource,
     reveal_weknora_api_key,
     stop_weknora_agent_session,
+    stream_weknora_agent,
     test_weknora_connection as _test_weknora_connection_endpoint,
     upload_weknora_knowledge as _upload_weknora_knowledge_endpoint,
     update_platform_settings,
@@ -860,6 +866,59 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_weknora_knowledge_detail_uses_robot_scope(self) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        expected = WeKnoraKnowledgeItem(
+            id="knowledge/1",
+            knowledge_base_id="kb/1",
+            file_name="施工组织设计.pdf",
+            folder_path="01_合同图纸与方案/图纸",
+        )
+        allowed_ids = AsyncMock(return_value=["kb/1"])
+        require_access = AsyncMock(return_value=expected)
+
+        with (
+            patch(
+                "agentscope.app._router._agent."
+                "_weknora_agent_knowledge_base_ids",
+                new=allowed_ids,
+            ),
+            patch(
+                "agentscope.app._router._agent."
+                "_require_weknora_knowledge_access",
+                new=require_access,
+            ),
+        ):
+            response = await _get_weknora_knowledge_endpoint(
+                knowledge_id="knowledge/1",
+                weknora_agent_id="robot-1",
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertEqual(response, expected)
+        allowed_ids.assert_awaited_once_with(connection, "robot-1")
+        require_access.assert_awaited_once_with(
+            connection,
+            "knowledge/1",
+            ["kb/1"],
+        )
+
     async def test_weknora_list_shapes_and_root_pagination_are_normalised(
         self,
     ) -> None:
@@ -1560,10 +1619,25 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             upsert_agent=AsyncMock(return_value="agent"),
         )
         request = AsyncMock(
-            return_value={
-                "success": True,
-                "data": {"id": "session-001"},
-            },
+            side_effect=[
+                {
+                    "success": True,
+                    "data": {"id": "session-001"},
+                },
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "id": "knowledge-1",
+                            "file_name": "方案.pdf",
+                            "folder_path": "方案",
+                            "file_type": "pdf",
+                            "file_size": 2048,
+                            "parse_status": "completed",
+                        },
+                    ],
+                },
+            ],
         )
         sse = AsyncMock(
             return_value=[
@@ -1572,8 +1646,22 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                 {
                     "response_type": "references",
                     "knowledge_references": [
-                        {"knowledge_id": "knowledge-1", "score": 0.9},
+                        {
+                            "id": "chunk-1",
+                            "knowledge_id": "knowledge-1",
+                            "content": "与问题匹配的方案片段",
+                            "score": 0.9,
+                            "chunk_index": 2,
+                            "match_type": "hybrid",
+                            "chunk_type": "text",
+                            "knowledge_channel": "web",
+                        },
                     ],
+                },
+                {
+                    "response_type": "session_title",
+                    "content": "方案对比",
+                    "done": True,
                 },
                 {"response_type": "complete"},
             ],
@@ -1606,7 +1694,21 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         self.assertEqual(response.session_id, "session-001")
         self.assertEqual(response.answer, "第一段第二段")
         self.assertEqual(response.references[0]["knowledge_id"], "knowledge-1")
-        self.assertEqual(request.await_args.args, (connection, "/sessions"))
+        self.assertEqual(response.references[0]["filename"], "方案.pdf")
+        self.assertEqual(response.references[0]["chunk_id"], "chunk-1")
+        self.assertEqual(response.references[0]["chunk_index"], 2)
+        self.assertEqual(response.references[0]["match_type"], "hybrid")
+        self.assertEqual(response.references[0]["chunk_type"], "text")
+        self.assertEqual(response.references[0]["knowledge_channel"], "web")
+        self.assertEqual(response.session_title, "方案对比")
+        self.assertEqual(
+            request.await_args_list[0].args,
+            (connection, "/sessions"),
+        )
+        self.assertEqual(
+            request.await_args_list[0].kwargs,
+            {"method": "POST", "json_body": {"agent_id": "project-robot-001"}},
+        )
         self.assertEqual(
             sse.await_args.args,
             (
@@ -1624,7 +1726,635 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             sse.await_args.kwargs,
-            {"session_id": "session-001"},
+            {
+                "params": {"resource_urls": "public"},
+                "session_id": "session-001",
+            },
+        )
+
+    async def test_weknora_agent_query_resolves_inline_kb_citations(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        request = AsyncMock(
+            side_effect=[
+                {"success": True, "data": {"id": "session-inline"}},
+                {
+                    "success": True,
+                    "data": [
+                        {
+                            "id": "knowledge-safety-helmet",
+                            "knowledge_base_id": "kb-001",
+                            "title": "安全帽zmd.pdf",
+                            "file_name": "安全帽zmd.pdf",
+                            "folder_path": "安全防护用品",
+                            "file_type": "pdf",
+                            "file_size": 8192,
+                            "channel": "web",
+                            "parse_status": "completed",
+                        },
+                    ],
+                    "total": 1,
+                },
+            ],
+        )
+        answer = (
+            "安全帽应满足冲击吸收要求。"
+            '<kb doc="安全帽zmd.pdf" chunk_id="chunk-inline-1" '
+            'kb_id="kb-001" />'
+        )
+        sse = AsyncMock(
+            return_value=[
+                {"response_type": "answer", "content": answer, "done": True},
+            ],
+        )
+
+        with (
+            patch(
+                "agentscope.app._router._agent._request_weknora_json",
+                new=request,
+            ),
+            patch(
+                "agentscope.app._router._agent._request_weknora_sse",
+                new=sse,
+            ),
+            patch(
+                "agentscope.app._router._agent._weknora_agent_knowledge_base_ids",
+                new=AsyncMock(return_value=["kb-001"]),
+            ),
+        ):
+            response = await ask_weknora_agent(
+                body=AskWeKnoraAgentRequest(
+                    query="安全帽有哪些关键要求？",
+                    weknora_agent_id="project-robot-001",
+                ),
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertEqual(response.answer, answer)
+        self.assertEqual(len(response.references), 1)
+        reference = response.references[0]
+        self.assertEqual(reference["chunk_id"], "chunk-inline-1")
+        self.assertEqual(reference["knowledge_id"], "knowledge-safety-helmet")
+        self.assertEqual(reference["knowledge_base_id"], "kb-001")
+        self.assertEqual(reference["filename"], "安全帽zmd.pdf")
+        self.assertEqual(reference["folder_path"], "安全防护用品")
+        self.assertEqual(reference["file_size"], 8192)
+        self.assertEqual(
+            request.await_args_list[1].args,
+            (connection, "/knowledge-bases/kb-001/knowledge"),
+        )
+        self.assertEqual(
+            request.await_args_list[1].kwargs,
+            {
+                "params": {
+                    "page": 1,
+                    "page_size": 100,
+                    "keyword": "安全帽zmd.pdf",
+                },
+            },
+        )
+
+    def test_weknora_inline_citation_parser_deduplicates_tags(self) -> None:
+        answer = (
+            "结论一"
+            "<kb kb_id='kb-1' chunk_id='chunk-1' doc='目录/安全网.pdf'/>"
+            "结论二"
+            "<kb doc='目录/安全网.pdf' chunk_id='chunk-1' kb_id='kb-1' />"
+        )
+        self.assertEqual(
+            _extract_weknora_inline_citations(answer),
+            [
+                {
+                    "filename": "安全网.pdf",
+                    "chunk_id": "chunk-1",
+                    "knowledge_base_id": "kb-1",
+                },
+            ],
+        )
+
+    def test_weknora_tool_result_exposes_read_document_reference(self) -> None:
+        tool_calls: dict[str, dict] = {}
+        _weknora_tool_reference_items(
+            {
+                "response_type": "tool_call",
+                "data": {
+                    "tool_call_id": "call-1",
+                    "tool_name": "list_knowledge_chunks",
+                    "arguments": {
+                        "knowledge_id": "knowledge-helmet",
+                        "limit": 50,
+                    },
+                },
+            },
+            tool_calls,
+        )
+
+        references, citations = _weknora_tool_reference_items(
+            {
+                "response_type": "tool_result",
+                "data": {
+                    "tool_call_id": "call-1",
+                    "tool_name": "list_knowledge_chunks",
+                    "success": True,
+                    "knowledge_id": "knowledge-helmet",
+                    "knowledge_title": "安全帽zmd.pdf",
+                    "fetched_chunks": 44,
+                    "total_chunks": 44,
+                },
+            },
+            tool_calls,
+        )
+
+        self.assertEqual(citations, [])
+        self.assertEqual(len(references), 1)
+        self.assertEqual(references[0]["knowledge_id"], "knowledge-helmet")
+        self.assertEqual(
+            references[0]["knowledge_filename"],
+            "安全帽zmd.pdf",
+        )
+
+    def test_weknora_wiki_summary_result_maps_to_source_document(self) -> None:
+        references, citations = _weknora_tool_reference_items(
+            {
+                "response_type": "tool_result",
+                "data": {
+                    "tool_call_id": "call-wiki",
+                    "tool_name": "wiki_search",
+                    "success": True,
+                    "found_kbs": {"summary/abc12345": ["kb-1"]},
+                    "output": (
+                        "<link>[[summary/abc12345|"
+                        "安全帽zmd.pdf - Summary]]</link>"
+                    ),
+                },
+            },
+            {},
+        )
+
+        self.assertEqual(citations, [])
+        self.assertEqual(
+            references,
+            [
+                {
+                    "knowledge_id": "abc12345",
+                    "knowledge_base_id": "kb-1",
+                    "knowledge_title": "安全帽zmd.pdf",
+                    "knowledge_filename": "安全帽zmd.pdf",
+                },
+            ],
+        )
+
+    async def test_weknora_sse_keeps_title_after_final_answer_chunk(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+
+        class FakeResponse:
+            status_code = 200
+            headers = {"content-type": "text/event-stream"}
+
+            async def aiter_lines(self):
+                for line in (
+                    'data: {"id":"message-1","response_type":"answer",',
+                    'data: "content":"完成","done":true}',
+                    "",
+                    'data: {"response_type":"session_title",'
+                    '"content":"自动标题","done":true}',
+                    "",
+                ):
+                    yield line
+
+        class FakeStream:
+            async def __aenter__(self):
+                return FakeResponse()
+
+            async def __aexit__(self, *args):
+                del args
+                return False
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                del args
+                return False
+
+            def stream(self, *args, **kwargs):
+                del args, kwargs
+                return FakeStream()
+
+        with patch(
+            "agentscope.app._router._agent.httpx.AsyncClient",
+            return_value=FakeClient(),
+        ):
+            events = [
+                event
+                async for event in _stream_weknora_sse_events(
+                    connection,
+                    "/agent-chat/session-1",
+                    {"query": "问题"},
+                    session_id="session-1",
+                )
+            ]
+
+        self.assertEqual(
+            [event["response_type"] for event in events],
+            ["answer", "session_title"],
+        )
+        self.assertEqual(events[1]["content"], "自动标题")
+
+    async def test_weknora_sse_does_not_treat_early_title_as_terminal(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+
+        class FakeResponse:
+            status_code = 200
+            headers = {"content-type": "text/event-stream"}
+
+            async def aiter_lines(self):
+                for line in (
+                    'data: {"response_type":"session_title",'
+                    '"content":"提前到达的标题","done":true}',
+                    "",
+                    'data: {"id":"message-1","response_type":"answer",'
+                    '"content":"真正答案","done":true}',
+                    "",
+                ):
+                    yield line
+
+        class FakeStream:
+            async def __aenter__(self):
+                return FakeResponse()
+
+            async def __aexit__(self, *args):
+                del args
+                return False
+
+        class FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                del args
+                return False
+
+            def stream(self, *args, **kwargs):
+                del args, kwargs
+                return FakeStream()
+
+        with patch(
+            "agentscope.app._router._agent.httpx.AsyncClient",
+            return_value=FakeClient(),
+        ):
+            events = [
+                event
+                async for event in _stream_weknora_sse_events(
+                    connection,
+                    "/agent-chat/session-1",
+                    {"query": "问题"},
+                    session_id="session-1",
+                )
+            ]
+
+        self.assertEqual(
+            [event["response_type"] for event in events],
+            ["session_title", "answer"],
+        )
+        self.assertEqual(events[1]["content"], "真正答案")
+
+    async def test_weknora_resource_proxy_uses_documented_root_route(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        download = AsyncMock(
+            return_value=(b"image", "image/png", "inline"),
+        )
+
+        with (
+            patch(
+                "agentscope.app._router._agent._weknora_agent_knowledge_base_ids",
+                new=AsyncMock(return_value=["kb-001"]),
+            ),
+            patch(
+                "agentscope.app._router._agent._request_weknora_bytes",
+                new=download,
+            ),
+        ):
+            response = await proxy_weknora_resource(
+                resource_id="image_handle-1",
+                weknora_agent_id="project-robot-001",
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertEqual(response.body, b"image")
+        self.assertEqual(response.headers["content-type"], "image/png")
+        self.assertEqual(
+            download.await_args.args,
+            (connection, "/files"),
+        )
+        self.assertEqual(
+            download.await_args.kwargs,
+            {
+                "params": {"file_path": "resource://image_handle-1"},
+                "root_path": True,
+                "max_response_bytes": 32 * 1024 * 1024,
+            },
+        )
+
+    async def test_weknora_stream_relays_incremental_events_and_complete(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+
+        upstream_calls: list[tuple[tuple, dict]] = []
+
+        async def upstream(*args, **kwargs):
+            upstream_calls.append((args, kwargs))
+            yield {
+                "response_type": "agent_query",
+                "content": "检索中",
+                "done": False,
+            }
+            yield {
+                "response_type": "answer",
+                "content": "答案",
+                "done": True,
+            }
+            yield {
+                "response_type": "references",
+                "knowledge_references": [
+                    {"knowledge_id": "knowledge-1", "score": 0.88},
+                ],
+            }
+            yield {
+                "response_type": "session_title",
+                "content": "回答标题",
+                "done": True,
+            }
+
+        with (
+            patch(
+                "agentscope.app._router._agent._prepare_weknora_agent_query",
+                new=AsyncMock(
+                    return_value=(connection, "session-1", {"query": "问题"}),
+                ),
+            ),
+            patch(
+                "agentscope.app._router._agent._stream_weknora_sse_events",
+                new=upstream,
+            ),
+            patch(
+                "agentscope.app._router._agent._enrich_weknora_reference_items",
+                new=AsyncMock(
+                    return_value=[
+                        {
+                            "knowledge_id": "knowledge-1",
+                            "filename": "方案.pdf",
+                            "score": 0.88,
+                        },
+                    ],
+                ),
+            ),
+        ):
+            response = await stream_weknora_agent(
+                body=AskWeKnoraAgentRequest(
+                    query="问题",
+                    weknora_agent_id="robot-1",
+                ),
+                user_id=USER_ID,
+                storage=SimpleNamespace(),
+            )
+            chunks = [chunk async for chunk in response.body_iterator]
+
+        body = "".join(
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            for chunk in chunks
+        )
+        self.assertIn('"response_type":"session"', body)
+        self.assertIn('"response_type":"agent_query"', body)
+        self.assertIn('"response_type":"references"', body)
+        self.assertIn('"response_type":"session_title"', body)
+        self.assertIn('"response_type":"complete"', body)
+        self.assertLess(
+            body.index('"response_type":"references"'),
+            body.index('"response_type":"session_title"'),
+        )
+        self.assertEqual(
+            upstream_calls[0][1]["params"],
+            {"resource_urls": "public"},
+        )
+
+    async def test_weknora_stream_emits_references_for_inline_kb_tags(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        answer = (
+            "安全网需满足耐冲击要求。"
+            '<kb doc="安全网.pdf" chunk_id="chunk-net" kb_id="kb-1" />'
+        )
+
+        async def upstream(*args, **kwargs):
+            del args, kwargs
+            yield {
+                "response_type": "answer",
+                "content": answer,
+                "done": True,
+            }
+
+        inline_enrichment = AsyncMock(
+            return_value=[
+                {
+                    "chunk_id": "chunk-net",
+                    "knowledge_id": "knowledge-net",
+                    "knowledge_base_id": "kb-1",
+                    "filename": "安全网.pdf",
+                },
+            ],
+        )
+        with (
+            patch(
+                "agentscope.app._router._agent._prepare_weknora_agent_query",
+                new=AsyncMock(
+                    return_value=(
+                        connection,
+                        "session-inline",
+                        {"query": "问题", "knowledge_base_ids": ["kb-1"]},
+                    ),
+                ),
+            ),
+            patch(
+                "agentscope.app._router._agent._stream_weknora_sse_events",
+                new=upstream,
+            ),
+            patch(
+                "agentscope.app._router._agent._enrich_weknora_inline_citations",
+                new=inline_enrichment,
+            ),
+        ):
+            response = await stream_weknora_agent(
+                body=AskWeKnoraAgentRequest(
+                    query="问题",
+                    weknora_agent_id="robot-1",
+                ),
+                user_id=USER_ID,
+                storage=SimpleNamespace(),
+            )
+            chunks = [chunk async for chunk in response.body_iterator]
+
+        body = "".join(
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            for chunk in chunks
+        )
+        self.assertIn('"response_type":"answer"', body)
+        self.assertIn('"response_type":"references"', body)
+        self.assertIn('"filename":"安全网.pdf"', body)
+        self.assertLess(
+            body.index('"response_type":"answer"'),
+            body.index('"response_type":"references"'),
+        )
+        inline_enrichment.assert_awaited_once_with(
+            connection,
+            answer,
+            ["kb-1"],
+            [],
+        )
+
+    async def test_weknora_stream_emits_references_from_tool_results(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+
+        async def upstream(*args, **kwargs):
+            del args, kwargs
+            yield {
+                "response_type": "tool_call",
+                "content": "Calling tool: list_knowledge_chunks",
+                "data": {
+                    "tool_call_id": "call-1",
+                    "tool_name": "list_knowledge_chunks",
+                    "arguments": {
+                        "knowledge_id": "knowledge-helmet",
+                    },
+                },
+            }
+            yield {
+                "response_type": "tool_result",
+                "data": {
+                    "tool_call_id": "call-1",
+                    "tool_name": "list_knowledge_chunks",
+                    "success": True,
+                    "knowledge_id": "knowledge-helmet",
+                    "knowledge_title": "安全帽zmd.pdf",
+                },
+            }
+            yield {
+                "response_type": "answer",
+                "content": "普通型不超过430g。",
+                "done": True,
+            }
+
+        enrichment = AsyncMock(
+            return_value=[
+                {
+                    "knowledge_id": "knowledge-helmet",
+                    "knowledge_base_id": "kb-1",
+                    "filename": "安全帽zmd.pdf",
+                    "preview_url": "/preview",
+                },
+            ],
+        )
+        with (
+            patch(
+                "agentscope.app._router._agent._prepare_weknora_agent_query",
+                new=AsyncMock(
+                    return_value=(
+                        connection,
+                        "session-tool-reference",
+                        {"query": "问题", "knowledge_base_ids": ["kb-1"]},
+                    ),
+                ),
+            ),
+            patch(
+                "agentscope.app._router._agent._stream_weknora_sse_events",
+                new=upstream,
+            ),
+            patch(
+                "agentscope.app._router._agent._enrich_weknora_reference_items",
+                new=enrichment,
+            ),
+        ):
+            response = await stream_weknora_agent(
+                body=AskWeKnoraAgentRequest(
+                    query="问题",
+                    weknora_agent_id="robot-1",
+                ),
+                user_id=USER_ID,
+                storage=SimpleNamespace(),
+            )
+            chunks = [chunk async for chunk in response.body_iterator]
+
+        body = "".join(
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            for chunk in chunks
+        )
+        self.assertIn('"response_type":"references"', body)
+        self.assertIn('"filename":"安全帽zmd.pdf"', body)
+        enrichment.assert_awaited_once()
+        raw_references = enrichment.await_args.args[1]
+        self.assertEqual(len(raw_references), 1)
+        self.assertEqual(
+            raw_references[0]["knowledge_id"],
+            "knowledge-helmet",
         )
 
     async def test_weknora_session_is_created_before_long_answer(self) -> None:
@@ -1668,6 +2398,10 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(response.session_id, "session-002")
         self.assertEqual(request.await_args.args, (connection, "/sessions"))
+        self.assertEqual(
+            request.await_args.kwargs,
+            {"method": "POST", "json_body": {"agent_id": "project-robot-001"}},
+        )
 
     async def test_weknora_stop_resolves_active_assistant_message(self) -> None:
         connection = WeKnoraConnectionConfig(

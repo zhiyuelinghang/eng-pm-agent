@@ -96,13 +96,31 @@ class EngineeringDocumentAskInput(BaseModel):
     session_id: str | None = Field(default=None, max_length=128)
 
 
-class EngineeringKnowledgeConversationCreateInput(BaseModel):
-    title: str | None = Field(default=None, max_length=300)
-    scope_type: Literal["project", "knowledge_base", "folder", "document"] = "project"
+class EngineeringKnowledgeScopeItemInput(BaseModel):
+    scope_type: Literal["knowledge_base", "folder", "document"]
     knowledge_id: str | None = Field(default=None, max_length=128)
     knowledge_name: str | None = Field(default=None, max_length=500)
     knowledge_base_id: str | None = Field(default=None, max_length=128)
     folder_path: str | None = Field(default=None, max_length=4096)
+
+
+class EngineeringKnowledgeConversationCreateInput(BaseModel):
+    title: str | None = Field(default=None, max_length=300)
+    scope_type: Literal[
+        "project",
+        "knowledge_base",
+        "folder",
+        "document",
+        "selection",
+    ] = "project"
+    knowledge_id: str | None = Field(default=None, max_length=128)
+    knowledge_name: str | None = Field(default=None, max_length=500)
+    knowledge_base_id: str | None = Field(default=None, max_length=128)
+    folder_path: str | None = Field(default=None, max_length=4096)
+    scope_items: list[EngineeringKnowledgeScopeItemInput] = Field(
+        default_factory=list,
+        max_length=200,
+    )
     first_message: str = Field(min_length=1, max_length=4000)
 
 

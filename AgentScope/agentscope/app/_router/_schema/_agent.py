@@ -360,16 +360,20 @@ class SearchWeKnoraKnowledgeRequest(BaseModel):
 class WeKnoraSearchReference(BaseModel):
     """One cited search result enriched with its source-file metadata."""
 
+    chunk_id: str = ""
     knowledge_id: str = ""
+    knowledge_base_id: str = ""
     title: str = ""
     filename: str = ""
     folder_path: str = ""
     content: str = ""
-    score: float = 0
-    chunk_index: int = 0
-    start_at: int = 0
-    end_at: int = 0
+    score: float | None = None
+    chunk_index: int | None = None
+    start_at: int | None = None
+    end_at: int | None = None
     match_type: str = ""
+    chunk_type: str = ""
+    knowledge_channel: str = ""
     file_type: str = ""
     file_size: int | None = None
     source: str = ""
@@ -421,6 +425,7 @@ class AskWeKnoraAgentResponse(BaseModel):
     session_id: str
     answer: str
     references: list[dict] = Field(default_factory=list)
+    session_title: str = ""
 
 
 class CreateWeKnoraAgentSessionRequest(BaseModel):

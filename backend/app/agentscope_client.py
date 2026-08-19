@@ -446,6 +446,58 @@ class AgentScopeClient:
             wait_for_response=True,
         )
 
+    @asynccontextmanager
+    async def weknora_agent_stream(
+        self,
+        agent_id: str,
+        payload: dict[str, Any],
+    ) -> AsyncIterator[AsyncIterator[dict[str, Any]]]:
+        """Open the authorized AgentScope-to-WeKnora answer stream."""
+
+        timeout = httpx.Timeout(
+            connect=min(self._request_timeout, 30.0),
+            read=None,
+            write=min(self._request_timeout, 30.0),
+            pool=min(self._request_timeout, 30.0),
+        )
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self._base_url}/agent/platform/weknora/"
+                    "agent-query/stream",
+                    headers={
+                        **self.headers,
+                        "Accept": "text/event-stream",
+                    },
+                    json={"weknora_agent_id": agent_id, **payload},
+                ) as response:
+                    if response.is_error:
+                        raw = (await response.aread()).decode(
+                            response.encoding or "utf-8",
+                            errors="replace",
+                        )
+                        try:
+                            parsed = json.loads(raw)
+                            detail = parsed.get("detail", parsed)
+                        except (ValueError, AttributeError):
+                            detail = raw or response.reason_phrase
+                        raise AgentScopeGatewayError(
+                            "AgentScope WeKnora 事件流请求失败"
+                            f"（{response.status_code}）：{detail}",
+                            status_code=(
+                                502 if response.status_code >= 500 else 409
+                            ),
+                        )
+                    yield self._iter_sse_events(response)
+        except AgentScopeGatewayError:
+            raise
+        except httpx.HTTPError as exc:
+            raise AgentScopeGatewayError(
+                f"无法连接 AgentScope WeKnora 事件流：{exc}",
+                status_code=503,
+            ) from exc
+
     def create_weknora_agent_session(
         self,
         agent_id: str,
@@ -501,6 +553,17 @@ class AgentScopeClient:
             params=self._weknora_scope_params(agent_id),
         )
 
+    def get_weknora_knowledge(
+        self,
+        agent_id: str,
+        knowledge_id: str,
+    ) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"/agent/platform/weknora/knowledge/{quote(knowledge_id, safe='')}",
+            params=self._weknora_scope_params(agent_id),
+        )
+
     def get_weknora_knowledge_content(
         self,
         agent_id: str,
@@ -512,6 +575,17 @@ class AgentScopeClient:
         return self._request_bytes(
             "/agent/platform/weknora/knowledge/"
             f"{quote(knowledge_id, safe='')}/{operation}",
+            params=self._weknora_scope_params(agent_id),
+        )
+
+    def get_weknora_resource_content(
+        self,
+        agent_id: str,
+        resource_id: str,
+    ) -> tuple[bytes, str, str]:
+        return self._request_bytes(
+            "/agent/platform/weknora/resources/"
+            f"{quote(resource_id, safe='')}",
             params=self._weknora_scope_params(agent_id),
         )
 

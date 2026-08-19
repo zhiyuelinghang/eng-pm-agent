@@ -67,26 +67,31 @@
             :disabled="disabled || loadingHistory || answering"
             aria-label="选择问答范围"
             :aria-expanded="scopePickerOpen"
-            @click.stop="scopePickerOpen = !scopePickerOpen"
+            @click.stop="toggleScopePicker"
           >
-            <i aria-hidden="true"></i>
+            <span class="knowledge-scope-trigger-icon" aria-hidden="true"><n-icon :size="16"><Database /></n-icon></span>
             <span :title="scopeTriggerLabel">{{ scopeTriggerLabel }}</span>
-            <n-icon :size="16"><ChevronDown /></n-icon>
+            <n-icon class="knowledge-scope-trigger-chevron" :class="{ open: scopePickerOpen }" :size="16"><ChevronDown /></n-icon>
           </button>
-          <div v-if="scopePickerOpen" class="knowledge-scope-backdrop" aria-hidden="true" @click="scopePickerOpen = false"></div>
+          <div v-if="scopePickerOpen" class="knowledge-scope-backdrop" aria-hidden="true" @click="closeScopePicker"></div>
           <section v-if="scopePickerOpen" class="knowledge-scope-menu" aria-label="知识库问答范围列表" @click.stop>
-            <button type="button" class="knowledge-scope-all" :class="{ selected: currentScope.type === 'project' }" @click="selectProjectScope">
+            <header class="knowledge-scope-menu-head">
+              <span><strong>选择问答范围</strong><small>可多选；勾选目录即包含其下全部资料</small></span>
+              <em>{{ pendingScopeItems.length ? `已选 ${pendingScopeItems.length} 项` : '全部资料' }}</em>
+            </header>
+            <button type="button" class="knowledge-scope-all" :class="{ selected: !pendingScopeItems.length }" @click="selectProjectScope">
+              <span class="knowledge-scope-checkbox" :class="{ checked: !pendingScopeItems.length }" role="checkbox" :aria-checked="!pendingScopeItems.length"></span>
               <span class="knowledge-scope-node-icon"><n-icon :size="17"><Database /></n-icon></span>
-              <span><strong>全部</strong><small>当前项目绑定机器人可读取的全部知识库</small></span>
+              <span><strong>全部项目资料</strong><small>当前项目绑定机器人可读取的全部知识库</small></span>
             </button>
             <div class="knowledge-scope-tree" role="tree">
               <div
                 v-for="row in scopePickerRows"
                 :key="`${row.kind}:${row.id}`"
                 class="knowledge-scope-row"
-                :class="[{ selected: scopeRowSelected(row) }, `is-${row.kind}`]"
+                :class="[{ selected: scopeRowCheckState(row) === 'checked' }, `is-${row.kind}`]"
                 role="treeitem"
-                :aria-selected="scopeRowSelected(row)"
+                :aria-selected="scopeRowCheckState(row) === 'checked'"
               >
                 <span v-for="level in row.depth" :key="level" class="knowledge-scope-indent" aria-hidden="true"></span>
                 <button
@@ -102,17 +107,36 @@
                   <n-icon v-else :size="15"><component :is="row.expanded ? ChevronDown : ChevronRight" /></n-icon>
                 </button>
                 <span v-else class="knowledge-scope-expand hidden" aria-hidden="true"></span>
-                <button v-if="row.kind === 'folder'" type="button" class="knowledge-scope-choice" @click="selectFolderScope(row.folder)">
+                <button v-if="row.kind === 'folder'" type="button" class="knowledge-scope-choice" @click="toggleScopeRow(row)">
+                  <span
+                    class="knowledge-scope-checkbox"
+                    :class="scopeRowCheckState(row)"
+                    role="checkbox"
+                    :aria-checked="scopeRowCheckState(row) === 'mixed' ? 'mixed' : scopeRowCheckState(row) === 'checked'"
+                  ></span>
                   <span class="knowledge-scope-node-icon"><n-icon :size="17"><component :is="row.folder.isKnowledgeBase ? Database : Folder" /></n-icon></span>
-                  <span><strong :title="row.folder.name">{{ row.folder.name }}</strong><small>{{ row.folder.isKnowledgeBase ? '知识库' : '目录' }} · {{ row.folder.totalCount ?? row.folder.documentCount ?? 0 }} 份资料</small></span>
+                  <span class="knowledge-scope-choice-copy"><strong :title="row.folder.name">{{ row.folder.name }}</strong><small>{{ row.folder.isKnowledgeBase ? '知识库' : '目录' }} · {{ row.folder.totalCount ?? row.folder.documentCount ?? 0 }} 份资料</small></span>
                 </button>
-                <button v-else type="button" class="knowledge-scope-choice" @click="selectDocumentScope(row.file)">
+                <button v-else type="button" class="knowledge-scope-choice" @click="toggleScopeRow(row)">
+                  <span
+                    class="knowledge-scope-checkbox"
+                    :class="scopeRowCheckState(row)"
+                    role="checkbox"
+                    :aria-checked="scopeRowCheckState(row) === 'checked'"
+                  ></span>
                   <span class="knowledge-scope-file-icon"><DocumentTypeIcon :kind="referenceIconKind(row.file.fileName)" /></span>
-                  <span><strong :title="row.file.fileName">{{ row.file.fileName }}</strong><small>文件 · {{ formatScopeFileSize(row.file.fileSize) }}</small></span>
+                  <span class="knowledge-scope-choice-copy"><strong :title="row.file.fileName">{{ row.file.fileName }}</strong><small>文件 · {{ formatScopeFileSize(row.file.fileSize) }}</small></span>
                 </button>
               </div>
               <div v-if="!scopePickerRows.length" class="knowledge-scope-tree-empty">当前项目没有可选择的知识库目录。</div>
             </div>
+            <footer class="knowledge-scope-menu-foot">
+              <span>{{ pendingScopeSummary }}</span>
+              <div>
+                <button type="button" @click="closeScopePicker">取消</button>
+                <button type="button" class="primary" @click="applyScopeSelection">应用范围</button>
+              </div>
+            </footer>
           </section>
         </div>
       </header>
@@ -126,11 +150,6 @@
           <span class="knowledge-chat-empty-icon"><n-icon :size="26"><Robot /></n-icon></span>
           <strong>从项目资料中查找答案</strong>
           <p>默认检索本项目绑定机器人可读取的全部 WeKnora 知识库，也可以从知识库管理进入单文件问答。</p>
-          <div class="knowledge-starter-list">
-            <button type="button" :disabled="disabled || loadingHistory" @click="askSuggestedQuestion('本项目有哪些深基坑监测要求？')">本项目有哪些深基坑监测要求？</button>
-            <button type="button" :disabled="disabled || loadingHistory" @click="askSuggestedQuestion('查找最新的安全例会纪要并概括主要结论')">查找最新的安全例会纪要</button>
-            <button type="button" :disabled="disabled || loadingHistory" @click="askSuggestedQuestion('汇总工程资料中的风险预警依据')">汇总风险预警依据</button>
-          </div>
         </section>
 
         <template v-else>
@@ -144,23 +163,30 @@
             <div class="knowledge-message-card">
               <div v-if="chatMessage.role === 'assistant'" class="knowledge-markdown" v-html="renderMarkdown(chatMessage.content)"></div>
               <p v-else>{{ chatMessage.content }}</p>
-              <div v-if="chatMessage.references?.length" class="knowledge-reference-list">
-                <span class="reference-label">来源参考</span>
-                <span v-for="reference in chatMessage.references" :key="reference.id + reference.fileName" class="knowledge-reference-chip" :title="reference.folderPath || reference.fileName">
-                  <DocumentTypeIcon :kind="referenceIconKind(reference.fileName)" />
-                  {{ reference.fileName }}
-                </span>
-              </div>
+              <KnowledgeReferenceList
+                v-if="chatMessage.references?.length && store.currentProjectId"
+                :project-id="store.currentProjectId"
+                :references="chatMessage.references"
+                @locate="emit('locate-reference', $event)"
+              />
               <time>{{ formatMessageTime(chatMessage.createdAt) }}</time>
             </div>
             <span v-if="chatMessage.role === 'user'" class="knowledge-user-avatar"><n-icon :size="18"><User /></n-icon></span>
           </article>
         </template>
 
-        <article v-if="answering" class="knowledge-chat-message is-assistant is-pending" role="status" aria-live="polite">
+        <article v-if="answering" class="knowledge-chat-message is-assistant is-pending" :class="{ 'has-content': streamingMessage?.content }" role="status" aria-live="polite">
           <span class="knowledge-message-avatar"><n-icon :size="17"><Robot /></n-icon></span>
           <div class="knowledge-message-card">
-            <p>{{ stopping ? '正在终止本次回答…' : '正在检索项目资料并组织回答…' }}</p>
+            <div v-if="streamingMessage?.content" class="knowledge-markdown" v-html="renderMarkdown(streamingMessage.content)"></div>
+            <p v-else>{{ stopping ? '正在终止本次回答…' : streamStatus }}</p>
+            <KnowledgeReferenceList
+              v-if="streamingMessage?.references?.length && store.currentProjectId"
+              :project-id="store.currentProjectId"
+              :references="streamingMessage.references"
+              @locate="emit('locate-reference', $event)"
+            />
+            <span class="streaming-cursor" aria-hidden="true"></span>
           </div>
         </article>
       </div>
@@ -190,21 +216,31 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { NIcon, useDialog, useMessage } from 'naive-ui'
 import { ChevronDown, ChevronRight, Database, Folder, MessageCircle, Messages, PlayerStop, Plus, Refresh, Robot, Search, Send, Trash, User } from '@vicons/tabler'
 import MarkdownIt from 'markdown-it'
 import DocumentTypeIcon from '@/components/business/DocumentTypeIcon.vue'
+import KnowledgeReferenceList from '@/components/business/KnowledgeReferenceList.vue'
+import { fetchWeKnoraResourceBlob } from '@/api/weknoraAssets'
+import { streamEngineeringKnowledgeAnswer } from '@/api/weknoraStream'
 import {
   useAppStore,
   type AttachmentRecord,
   type DocumentFolderRecord,
   type EngineeringKnowledgeConversationRecord,
   type EngineeringKnowledgeMessageRecord,
+  type EngineeringKnowledgeScopeItemRecord,
 } from '@/stores/app'
 
 type KnowledgeScope =
   | { type: 'project' }
+  | { type: 'knowledge_base'; knowledgeBaseId: string; knowledgeBaseName: string }
+  | { type: 'folder'; folderPath: string; folderName: string; knowledgeBaseId: string }
+  | { type: 'document'; documentId: string; documentName: string; knowledgeBaseId?: string }
+  | { type: 'selection'; items: KnowledgeScopeItem[] }
+
+type KnowledgeScopeItem =
   | { type: 'knowledge_base'; knowledgeBaseId: string; knowledgeBaseName: string }
   | { type: 'folder'; folderPath: string; folderName: string; knowledgeBaseId: string }
   | { type: 'document'; documentId: string; documentName: string; knowledgeBaseId?: string }
@@ -227,8 +263,24 @@ type ScopePickerRow =
 
 type KnowledgeReference = {
   id: string
+  knowledgeId: string
+  knowledgeBaseId?: string
   fileName: string
+  title?: string
   folderPath?: string
+  contentSnippet?: string
+  score?: number
+  chunkIndex?: number
+  startAt?: number
+  endAt?: number
+  matchType?: string
+  chunkType?: string
+  knowledgeChannel?: string
+  fileType?: string
+  fileSize?: number
+  source?: string
+  knowledgeType?: string
+  parseStatus?: string
 }
 
 type KnowledgeChatMessage = {
@@ -255,11 +307,16 @@ const emit = defineEmits<{
   'document-consumed': []
   'busy-change': [value: boolean]
   'ready-change': [value: boolean]
+  'locate-reference': [reference: KnowledgeReference]
 }>()
 const store = useAppStore()
 const message = useMessage()
 const dialog = useDialog()
 const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true })
+const validateMarkdownLink = markdown.validateLink.bind(markdown)
+markdown.validateLink = (url: string) => (
+  url.startsWith('blob:') || validateMarkdownLink(url)
+)
 
 const conversations = ref<KnowledgeConversation[]>([])
 const activeConversationId = ref<number | null>(null)
@@ -270,15 +327,24 @@ const answering = ref(false)
 const stopping = ref(false)
 const stopRequested = ref(false)
 const answerSessionId = ref('')
+const streamStatus = ref('正在连接 WeKnora…')
+const streamingMessage = ref<KnowledgeChatMessage | null>(null)
+const streamingRawReferences = ref<Array<Record<string, unknown>>>([])
 const loadingHistory = ref(false)
 const loadingMessages = ref(false)
 const deletingConversationId = ref<number | null>(null)
 const chatScrollRef = ref<HTMLElement | null>(null)
 const scopePickerOpen = ref(false)
+const pendingScopeItems = ref<KnowledgeScopeItem[]>([])
 const scopeExpandedFolderIds = ref<string[]>([])
 const scopeFolderLoadingIds = ref<string[]>([])
 let historyLoadVersion = 0
 let messageLoadVersion = 0
+let activeStreamController: AbortController | null = null
+const resourceObjectUrls = ref<Record<string, string>>({})
+const resourceRequests = new Map<string, Promise<void>>()
+const failedResourceHandles = new Set<string>()
+let resourceFetchQueue: Promise<void> = Promise.resolve()
 
 const activeConversation = computed(() => conversations.value.find(item => item.id === activeConversationId.value))
 const activeMessages = computed(() => activeConversation.value?.messages || [])
@@ -294,13 +360,20 @@ const scopeTriggerLabel = computed(() => {
   if (scope.type === 'project') return '全部'
   if (scope.type === 'knowledge_base') return `已选 ${scope.knowledgeBaseName} 知识库`
   if (scope.type === 'folder') return `已选 ${scope.folderName} 目录`
-  return `已选 ${scope.documentName} 文件`
+  if (scope.type === 'document') return `已选 ${scope.documentName} 文件`
+  return `已选 ${scope.items.length} 项范围`
+})
+const pendingScopeSummary = computed(() => {
+  if (!pendingScopeItems.value.length) return '将检索全部项目资料'
+  if (pendingScopeItems.value.length === 1) return `将检索：${scopeItemName(pendingScopeItems.value[0])}`
+  return `将同时检索 ${pendingScopeItems.value.length} 项范围`
 })
 const scopeQuestionPlaceholder = computed(() => {
   const scope = currentScope.value
   if (scope.type === 'document') return '围绕当前文件继续提问…'
   if (scope.type === 'folder') return '向当前目录中的资料提问…'
   if (scope.type === 'knowledge_base') return '向当前知识库提问…'
+  if (scope.type === 'selection') return `向已选择的 ${scope.items.length} 项资料范围提问…`
   return '向当前项目知识库提问…'
 })
 const scopePickerRows = computed<ScopePickerRow[]>(() => {
@@ -356,6 +429,12 @@ watch(() => props.focusDocumentId, documentId => {
 watch(answering, value => emit('busy-change', value), { immediate: true })
 
 function conversationScope(record: EngineeringKnowledgeConversationRecord): KnowledgeScope {
+  if (record.scope_type === 'selection') {
+    const items = (record.scope_items || [])
+      .map(scopeItemFromRecord)
+      .filter((item): item is KnowledgeScopeItem => Boolean(item))
+    if (items.length) return { type: 'selection', items }
+  }
   if (record.scope_type === 'knowledge_base' && record.knowledge_base_id) {
     return {
       type: 'knowledge_base',
@@ -396,12 +475,16 @@ function mapConversation(record: EngineeringKnowledgeConversationRecord): Knowle
 }
 
 function mapMessage(record: EngineeringKnowledgeMessageRecord): KnowledgeChatMessage {
+  const references = mergeRawReferences(
+    inlineCitationReferences(record.content),
+    record.references || [],
+  )
   return {
     id: String(record.id),
     role: record.role,
     content: record.content,
     createdAt: record.created_at,
-    references: normalizeReferences(record.references),
+    references: normalizeReferences(references),
     failed: Boolean(record.failed),
   }
 }
@@ -409,11 +492,13 @@ function mapMessage(record: EngineeringKnowledgeMessageRecord): KnowledgeChatMes
 async function loadConversationHistory(projectId: string) {
   const requestVersion = ++historyLoadVersion
   emit('ready-change', false)
+  releaseResourceUrls()
   messageLoadVersion += 1
   conversations.value = []
   activeConversationId.value = null
   draftScope.value = { type: 'project' }
   scopePickerOpen.value = false
+  pendingScopeItems.value = []
   scopeExpandedFolderIds.value = []
   scopeFolderLoadingIds.value = []
   loadingMessages.value = false
@@ -454,6 +539,7 @@ async function loadConversationMessages(conversation: KnowledgeConversation) {
     const target = conversations.value.find(item => item.id === conversation.id)
     if (!target) return
     target.messages = records.map(mapMessage)
+    for (const chatMessage of target.messages) void hydrateResourceHandles(chatMessage.content)
     target.loaded = true
     void scrollToBottom()
   } catch (error: any) {
@@ -464,7 +550,7 @@ async function loadConversationMessages(conversation: KnowledgeConversation) {
   }
 }
 
-function documentScope(file: AttachmentRecord): KnowledgeScope {
+function documentScope(file: AttachmentRecord): KnowledgeScopeItem {
   return {
     type: 'document',
     documentId: file.id,
@@ -473,7 +559,7 @@ function documentScope(file: AttachmentRecord): KnowledgeScope {
   }
 }
 
-function knowledgeBaseScope(folder: DocumentFolderRecord): KnowledgeScope {
+function knowledgeBaseScope(folder: DocumentFolderRecord): KnowledgeScopeItem {
   return {
     type: 'knowledge_base',
     knowledgeBaseId: folder.knowledgeBaseId || '',
@@ -481,7 +567,7 @@ function knowledgeBaseScope(folder: DocumentFolderRecord): KnowledgeScope {
   }
 }
 
-function folderScope(folder: DocumentFolderRecord): KnowledgeScope {
+function folderScope(folder: DocumentFolderRecord): KnowledgeScopeItem {
   return {
     type: 'folder',
     knowledgeBaseId: folder.knowledgeBaseId || '',
@@ -492,6 +578,118 @@ function folderScope(folder: DocumentFolderRecord): KnowledgeScope {
 
 function normalizeScopeFolderPath(value?: string) {
   return (value || '').replace(/\\/g, '/').split('/').map(item => item.trim()).filter(Boolean).join('/')
+}
+
+function scopeItemFromRecord(record: EngineeringKnowledgeScopeItemRecord): KnowledgeScopeItem | null {
+  if (record.scope_type === 'knowledge_base' && record.knowledge_base_id) {
+    return {
+      type: 'knowledge_base',
+      knowledgeBaseId: record.knowledge_base_id,
+      knowledgeBaseName: record.knowledge_name || '当前知识库',
+    }
+  }
+  if (record.scope_type === 'folder' && record.knowledge_base_id && record.folder_path) {
+    const folderPath = normalizeScopeFolderPath(record.folder_path)
+    const segments = folderPath.split('/').filter(Boolean)
+    return {
+      type: 'folder',
+      knowledgeBaseId: record.knowledge_base_id,
+      folderPath,
+      folderName: record.knowledge_name || segments[segments.length - 1] || '当前目录',
+    }
+  }
+  if (record.scope_type === 'document' && record.knowledge_id) {
+    return {
+      type: 'document',
+      documentId: record.knowledge_id,
+      documentName: record.knowledge_name || '当前文件',
+      knowledgeBaseId: record.knowledge_base_id || undefined,
+    }
+  }
+  return null
+}
+
+function scopeItemRecord(item: KnowledgeScopeItem): EngineeringKnowledgeScopeItemRecord {
+  return {
+    scope_type: item.type,
+    knowledge_id: item.type === 'document' ? item.documentId : undefined,
+    knowledge_name: scopeItemName(item),
+    knowledge_base_id: item.knowledgeBaseId,
+    folder_path: item.type === 'folder' ? item.folderPath : undefined,
+  }
+}
+
+function scopeItems(scope: KnowledgeScope): KnowledgeScopeItem[] {
+  if (scope.type === 'project') return []
+  if (scope.type === 'selection') return scope.items.map(item => ({ ...item }))
+  return [{ ...scope }]
+}
+
+function scopeItemName(item: KnowledgeScopeItem) {
+  if (item.type === 'knowledge_base') return item.knowledgeBaseName
+  if (item.type === 'folder') return item.folderName
+  return item.documentName
+}
+
+function scopeItemKey(item: KnowledgeScopeItem) {
+  if (item.type === 'knowledge_base') return `knowledge_base:${item.knowledgeBaseId}`
+  if (item.type === 'folder') return `folder:${item.knowledgeBaseId}:${normalizeScopeFolderPath(item.folderPath)}`
+  return `document:${item.documentId}`
+}
+
+function scopeItemForRow(row: ScopePickerRow): KnowledgeScopeItem {
+  if (row.kind === 'document') return documentScope(row.file)
+  return row.folder.isKnowledgeBase ? knowledgeBaseScope(row.folder) : folderScope(row.folder)
+}
+
+function scopeItemFolderPath(item: KnowledgeScopeItem) {
+  if (item.type === 'folder') return normalizeScopeFolderPath(item.folderPath)
+  if (item.type !== 'document') return ''
+  return normalizeScopeFolderPath(store.attachments.find(file => file.id === item.documentId)?.folderPath)
+}
+
+function scopeItemContains(parent: KnowledgeScopeItem, child: KnowledgeScopeItem) {
+  if (scopeItemKey(parent) === scopeItemKey(child)) return true
+  if (!parent.knowledgeBaseId || parent.knowledgeBaseId !== child.knowledgeBaseId) return false
+  if (parent.type === 'knowledge_base') return true
+  if (parent.type !== 'folder') return false
+  const parentPath = normalizeScopeFolderPath(parent.folderPath)
+  const childPath = scopeItemFolderPath(child)
+  return Boolean(childPath && (childPath === parentPath || childPath.startsWith(`${parentPath}/`)))
+}
+
+function scopeRowCheckState(row: ScopePickerRow): 'checked' | 'mixed' | 'unchecked' {
+  const item = scopeItemForRow(row)
+  if (pendingScopeItems.value.some(selected => scopeItemKey(selected) === scopeItemKey(item))) return 'checked'
+  if (row.kind === 'folder' && pendingScopeItems.value.some(selected => scopeItemContains(item, selected))) return 'mixed'
+  return 'unchecked'
+}
+
+function toggleScopeRow(row: ScopePickerRow) {
+  const item = scopeItemForRow(row)
+  const itemKey = scopeItemKey(item)
+  if (pendingScopeItems.value.some(selected => scopeItemKey(selected) === itemKey)) {
+    pendingScopeItems.value = pendingScopeItems.value.filter(selected => scopeItemKey(selected) !== itemKey)
+    return
+  }
+  pendingScopeItems.value = pendingScopeItems.value.filter(selected => (
+    !scopeItemContains(selected, item) && !scopeItemContains(item, selected)
+  ))
+  pendingScopeItems.value = [...pendingScopeItems.value, item]
+}
+
+function toggleScopePicker() {
+  if (scopePickerOpen.value) {
+    closeScopePicker()
+    return
+  }
+  pendingScopeItems.value = scopeItems(currentScope.value)
+  scopePickerOpen.value = true
+}
+
+function closeScopePicker() {
+  scopePickerOpen.value = false
+  pendingScopeItems.value = []
 }
 
 async function toggleScopeFolder(folder: DocumentFolderRecord) {
@@ -513,30 +711,18 @@ async function toggleScopeFolder(folder: DocumentFolderRecord) {
 }
 
 function selectProjectScope() {
-  startNewConversation({ type: 'project' })
-  scopePickerOpen.value = false
+  pendingScopeItems.value = []
 }
 
-function selectFolderScope(folder: DocumentFolderRecord) {
-  if (!folder.knowledgeBaseId) return
-  startNewConversation(folder.isKnowledgeBase ? knowledgeBaseScope(folder) : folderScope(folder))
-  scopePickerOpen.value = false
-}
-
-function selectDocumentScope(file: AttachmentRecord) {
-  startNewConversation(documentScope(file))
-  scopePickerOpen.value = false
-}
-
-function scopeRowSelected(row: ScopePickerRow) {
-  const scope = currentScope.value
-  if (row.kind === 'document') return scope.type === 'document' && scope.documentId === row.file.id
-  if (row.folder.isKnowledgeBase) {
-    return scope.type === 'knowledge_base' && scope.knowledgeBaseId === row.folder.knowledgeBaseId
-  }
-  return scope.type === 'folder'
-    && scope.knowledgeBaseId === row.folder.knowledgeBaseId
-    && normalizeScopeFolderPath(scope.folderPath) === normalizeScopeFolderPath(row.folder.path)
+function applyScopeSelection() {
+  const items = pendingScopeItems.value.map(item => ({ ...item }))
+  const scope: KnowledgeScope = !items.length
+    ? { type: 'project' }
+    : items.length === 1
+      ? items[0]
+      : { type: 'selection', items }
+  startNewConversation(scope)
+  closeScopePicker()
 }
 
 function formatScopeFileSize(value: number) {
@@ -610,7 +796,8 @@ function conversationScopeLabel(scope: KnowledgeScope) {
   if (scope.type === 'project') return '全部'
   if (scope.type === 'knowledge_base') return `知识库 · ${scope.knowledgeBaseName}`
   if (scope.type === 'folder') return `目录 · ${scope.folderName}`
-  return `文件 · ${scope.documentName}`
+  if (scope.type === 'document') return `文件 · ${scope.documentName}`
+  return `已选 ${scope.items.length} 项范围`
 }
 
 function createId() {
@@ -630,14 +817,131 @@ function createChatMessage(role: KnowledgeChatMessage['role'], content: string, 
 
 function normalizeReferences(items?: Array<Record<string, unknown>>): KnowledgeReference[] {
   const result = new Map<string, KnowledgeReference>()
-  for (const item of items || []) {
-    const id = textValue(item.knowledge_id, item.knowledgeId, item.id)
-    const fileName = textValue(item.knowledge_filename, item.file_name, item.filename, item.knowledge_title, item.title) || '来源资料'
-    const folderPath = textValue(item.folder_path, item.folderPath, item.path)
-    const key = id || `${fileName}:${folderPath}`
-    result.set(key, { id: id || key, fileName, folderPath: folderPath || undefined })
+  for (const item of mergeRawReferences(items || [])) {
+    const nestedFile = item.file_info && typeof item.file_info === 'object'
+      ? item.file_info as Record<string, unknown>
+      : {}
+    const knowledgeId = textValue(item.knowledge_id, item.knowledgeId)
+    const knowledgeBaseId = textValue(item.knowledge_base_id, item.knowledgeBaseId)
+    const chunkId = textValue(item.chunk_id, item.id)
+    const title = textValue(item.knowledge_title, item.title)
+    const fileName = textValue(
+      item.knowledge_filename,
+      item.file_name,
+      item.filename,
+      nestedFile.file_name,
+      title,
+    ) || '来源资料'
+    const folderPath = textValue(item.folder_path, item.folderPath, item.path, nestedFile.folder_path)
+    const contentSnippet = textValue(item.content, item.content_snippet, item.snippet)
+    const key = knowledgeId
+      ? `knowledge:${knowledgeId}`
+      : `file:${knowledgeBaseId}:${fileName.toLocaleLowerCase('zh-CN')}:${folderPath}`
+    result.set(key, {
+      id: key,
+      knowledgeId,
+      knowledgeBaseId: knowledgeBaseId || undefined,
+      fileName,
+      title: title || undefined,
+      folderPath: folderPath || undefined,
+      contentSnippet: contentSnippet || undefined,
+      score: numberValue(item.score),
+      chunkIndex: numberValue(item.chunk_index),
+      startAt: numberValue(item.start_at),
+      endAt: numberValue(item.end_at),
+      matchType: textValue(item.match_type) || undefined,
+      chunkType: textValue(item.chunk_type) || undefined,
+      knowledgeChannel: textValue(item.knowledge_channel, item.channel) || undefined,
+      fileType: textValue(item.file_type, nestedFile.file_type) || undefined,
+      fileSize: numberValue(item.file_size, nestedFile.file_size),
+      source: textValue(item.knowledge_source, item.source, nestedFile.source) || undefined,
+      knowledgeType: textValue(item.knowledge_type, item.type) || undefined,
+      parseStatus: textValue(item.parse_status, nestedFile.parse_status) || undefined,
+    })
   }
-  return [...result.values()].slice(0, 8)
+  return [...result.values()].sort((left, right) => (right.score || 0) - (left.score || 0))
+}
+
+function decodeCitationValue(value: string) {
+  return value
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&amp;/gi, '&')
+    .trim()
+}
+
+function citationAttribute(attributes: string, name: 'doc' | 'chunk_id' | 'kb_id') {
+  const match = attributes.match(new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i'))
+  return decodeCitationValue(match?.[1] || match?.[2] || '')
+}
+
+function inlineCitationReferences(content: string): Array<Record<string, unknown>> {
+  const references: Array<Record<string, unknown>> = []
+  const pattern = /<kb\b([^>]*)\/?>/gi
+  for (const match of content.matchAll(pattern)) {
+    const documentPath = citationAttribute(match[1] || '', 'doc').replace(/\\/g, '/')
+    const filename = documentPath.split('/').filter(Boolean).pop() || ''
+    if (!filename) continue
+    references.push({
+      chunk_id: citationAttribute(match[1] || '', 'chunk_id'),
+      knowledge_base_id: citationAttribute(match[1] || '', 'kb_id'),
+      knowledge_filename: filename,
+      filename,
+      title: filename,
+    })
+  }
+  return mergeRawReferences(references)
+}
+
+function rawReferenceFilename(item: Record<string, unknown>) {
+  const nestedFile = item.file_info && typeof item.file_info === 'object'
+    ? item.file_info as Record<string, unknown>
+    : {}
+  return textValue(
+    item.knowledge_filename,
+    item.filename,
+    item.file_name,
+    nestedFile.file_name,
+    item.knowledge_title,
+    item.title,
+  )
+}
+
+function mergeRawReferences(...groups: Array<Array<Record<string, unknown>>>): Array<Record<string, unknown>> {
+  const merged: Array<Record<string, unknown>> = []
+  for (const group of groups) {
+    for (const rawItem of group) {
+      const item = { ...rawItem }
+      const chunkId = textValue(item.chunk_id, item.id)
+      const knowledgeId = textValue(item.knowledge_id, item.knowledgeId)
+      const knowledgeBaseId = textValue(item.knowledge_base_id, item.knowledgeBaseId)
+      const filename = rawReferenceFilename(item).toLocaleLowerCase('zh-CN')
+      const duplicate = merged.find(existing => {
+        const existingChunkId = textValue(existing.chunk_id, existing.id)
+        const existingKnowledgeId = textValue(existing.knowledge_id, existing.knowledgeId)
+        const existingKnowledgeBaseId = textValue(existing.knowledge_base_id, existing.knowledgeBaseId)
+        const existingFilename = rawReferenceFilename(existing).toLocaleLowerCase('zh-CN')
+        return Boolean(chunkId && existingChunkId && chunkId === existingChunkId)
+          || Boolean(knowledgeId && existingKnowledgeId && knowledgeId === existingKnowledgeId)
+          || Boolean(
+            filename
+            && existingFilename
+            && filename === existingFilename
+            && (!knowledgeBaseId || !existingKnowledgeBaseId || knowledgeBaseId === existingKnowledgeBaseId),
+          )
+      })
+      if (!duplicate) {
+        merged.push(item)
+        continue
+      }
+      for (const [key, value] of Object.entries(item)) {
+        if (value !== null && value !== undefined && value !== '') duplicate[key] = value
+      }
+    }
+  }
+  return merged
 }
 
 function textValue(...values: unknown[]) {
@@ -645,8 +949,17 @@ function textValue(...values: unknown[]) {
   return ''
 }
 
+function numberValue(...values: unknown[]) {
+  for (const value of values) {
+    if (value === null || value === undefined || value === '') continue
+    const parsed = typeof value === 'number' ? value : Number(value)
+    if (Number.isFinite(parsed) && parsed >= 0) return parsed
+  }
+  return undefined
+}
+
 function isMissingSessionError(error: any) {
-  const status = Number(error?.response?.status || 0)
+  const status = Number(error?.statusCode || error?.response?.status || 0)
   const detail = String(error?.response?.data?.detail || error?.message || '')
   return status === 404 && /(session|会话).*(not found|不存在|失效)/i.test(detail)
 }
@@ -667,13 +980,13 @@ function scopeDisplayName(scope: KnowledgeScope) {
   if (scope.type === 'knowledge_base') return scope.knowledgeBaseName
   if (scope.type === 'folder') return scope.folderName
   if (scope.type === 'document') return scope.documentName
+  if (scope.type === 'selection') return `${scope.items.length} 项范围`
   return ''
 }
 
-async function resolveScopeAskFilters(scope: KnowledgeScope) {
-  if (scope.type === 'project') return { knowledgeIds: [] as string[], knowledgeBaseIds: [] as string[] }
+async function resolveScopeItemFilters(scope: KnowledgeScopeItem) {
   if (scope.type === 'knowledge_base') {
-    return { knowledgeIds: [] as string[], knowledgeBaseIds: [scope.knowledgeBaseId] }
+    return { knowledgeIds: [] as string[], knowledgeBaseIds: [scope.knowledgeBaseId] as string[] }
   }
   if (scope.type === 'document') {
     return {
@@ -703,6 +1016,25 @@ async function resolveScopeAskFilters(scope: KnowledgeScope) {
   return { knowledgeIds, knowledgeBaseIds: [scope.knowledgeBaseId] }
 }
 
+async function resolveScopeAskFilters(scope: KnowledgeScope) {
+  if (scope.type === 'project') return { knowledgeIds: [] as string[], knowledgeBaseIds: [] as string[] }
+  const items = scope.type === 'selection' ? scope.items : [scope]
+  const knowledgeIds = new Set<string>()
+  const knowledgeBaseIds = new Set<string>()
+  for (const item of items) {
+    const filters = await resolveScopeItemFilters(item)
+    filters.knowledgeIds.forEach(id => knowledgeIds.add(id))
+    filters.knowledgeBaseIds.forEach(id => knowledgeBaseIds.add(id))
+  }
+  if (knowledgeIds.size > 200) {
+    throw new Error(`所选范围共包含 ${knowledgeIds.size} 份指定资料，当前单次问答最多限定 200 份，请缩小范围。`)
+  }
+  if (knowledgeBaseIds.size > 50) {
+    throw new Error('所选知识库超过 50 个，请缩小问答范围。')
+  }
+  return { knowledgeIds: [...knowledgeIds], knowledgeBaseIds: [...knowledgeBaseIds] }
+}
+
 async function sendQuestion() {
   const content = question.value.trim()
   if (props.disabled || loadingHistory.value || loadingMessages.value || !content || answering.value || !store.currentProjectId) return
@@ -713,6 +1045,9 @@ async function sendQuestion() {
   stopping.value = false
   stopRequested.value = false
   answerSessionId.value = conversation?.sessionId || ''
+  streamStatus.value = '正在连接 WeKnora…'
+  streamingRawReferences.value = []
+  streamingMessage.value = createChatMessage('assistant', '', [])
   try {
     const requestedScope = conversation?.scope || draftScope.value
     const scopeFilters = await resolveScopeAskFilters(requestedScope)
@@ -724,9 +1059,12 @@ async function sendQuestion() {
           : `${scopeDisplayName(scope)} · ${content.slice(0, 24)}`,
         scopeType: scope.type,
         knowledgeId: scope.type === 'document' ? scope.documentId : undefined,
-        knowledgeName: scope.type === 'project' ? undefined : scopeDisplayName(scope),
-        knowledgeBaseId: scope.type === 'project' ? undefined : scope.knowledgeBaseId,
+        knowledgeName: ['knowledge_base', 'folder', 'document'].includes(scope.type) ? scopeDisplayName(scope) : undefined,
+        knowledgeBaseId: scope.type === 'knowledge_base' || scope.type === 'folder' || scope.type === 'document'
+          ? scope.knowledgeBaseId
+          : undefined,
         folderPath: scope.type === 'folder' ? scope.folderPath : undefined,
+        scopeItems: scope.type === 'selection' ? scope.items.map(scopeItemRecord) : undefined,
         firstMessage: content,
       })
       conversation = mapConversation(created.conversation)
@@ -756,12 +1094,53 @@ async function sendQuestion() {
       return
     }
     const scopedConversation = conversation
-    const ask = (query: string) => store.askEngineeringDocuments(
-      query,
-      scopeFilters.knowledgeIds,
-      scopeFilters.knowledgeBaseIds,
-      scopedConversation.sessionId,
-    )
+    const ask = (query: string) => {
+      activeStreamController = new AbortController()
+      return streamEngineeringKnowledgeAnswer(
+        store.currentProjectId,
+        {
+          query,
+          knowledge_base_ids: scopeFilters.knowledgeBaseIds.length
+            ? scopeFilters.knowledgeBaseIds
+            : store.weknoraKnowledgeBases.map(item => item.id),
+          knowledge_ids: scopeFilters.knowledgeIds,
+          session_id: scopedConversation.sessionId || undefined,
+        },
+        {
+          onSession: async sessionId => {
+            if (sessionId !== scopedConversation.sessionId) {
+              await updateConversationSession(scopedConversation, sessionId)
+            }
+          },
+          onStatus: status => {
+            streamStatus.value = status
+          },
+          onAnswer: progress => {
+            if (!streamingMessage.value) return
+            streamingMessage.value.content = progress.answer
+            streamingRawReferences.value = mergeRawReferences(
+              inlineCitationReferences(progress.answer),
+              streamingRawReferences.value,
+            )
+            streamingMessage.value.references = normalizeReferences(streamingRawReferences.value)
+            streamStatus.value = progress.done ? '回答已生成，正在整理引用…' : '正在生成回答…'
+            void hydrateResourceHandles(progress.answer)
+            void scrollToBottom()
+          },
+          onReferences: references => {
+            streamingRawReferences.value = mergeRawReferences(
+              inlineCitationReferences(streamingMessage.value?.content || ''),
+              streamingRawReferences.value,
+              references,
+            )
+            if (streamingMessage.value) streamingMessage.value.references = normalizeReferences(streamingRawReferences.value)
+            void scrollToBottom()
+          },
+          onTitle: title => updateConversationTitle(scopedConversation, title),
+        },
+        activeStreamController.signal,
+      )
+    }
     let answer
     try {
       answer = await ask(content)
@@ -770,12 +1149,23 @@ async function sendQuestion() {
       const session = await store.createEngineeringDocumentSession()
       await updateConversationSession(conversation, session.session_id)
       answerSessionId.value = conversation.sessionId
+      streamingRawReferences.value = []
+      if (streamingMessage.value) {
+        streamingMessage.value.content = ''
+        streamingMessage.value.references = []
+      }
+      streamStatus.value = '原会话已失效，正在恢复上下文…'
       answer = await ask(sessionRecoveryQuestion(conversation.messages, content))
     }
-    if (answer.session_id && answer.session_id !== conversation.sessionId) {
-      await updateConversationSession(conversation, answer.session_id)
+    if (answer.sessionId && answer.sessionId !== conversation.sessionId) {
+      await updateConversationSession(conversation, answer.sessionId)
     }
-    const answerContent = answer.answer?.trim()
+    streamingRawReferences.value = mergeRawReferences(
+      inlineCitationReferences(answer.answer),
+      answer.references,
+    )
+    if (streamingMessage.value) streamingMessage.value.references = normalizeReferences(streamingRawReferences.value)
+    const answerContent = answer.answer.trim()
     await saveAssistantMessage(
       conversation,
       answerContent
@@ -783,7 +1173,7 @@ async function sendQuestion() {
         : stopRequested.value
           ? '回答已终止。'
           : 'WeKnora 未返回可展示的回答。',
-      answer.references,
+      streamingRawReferences.value,
     )
   } catch (error: any) {
     const detail = error.response?.data?.detail || error.message || '知识库问答失败，请稍后重试。'
@@ -791,9 +1181,20 @@ async function sendQuestion() {
       question.value = content
       message.error(detail)
     } else if (stopRequested.value) {
-      await saveAssistantMessage(conversation, '回答已终止。')
+      const partial = streamingMessage.value?.content.trim() || ''
+      await saveAssistantMessage(
+        conversation,
+        partial ? `${partial}\n\n（回答已终止）` : '回答已终止。',
+        streamingRawReferences.value,
+      )
     } else {
-      await saveAssistantMessage(conversation, detail, undefined, true)
+      const partial = streamingMessage.value?.content.trim() || ''
+      await saveAssistantMessage(
+        conversation,
+        partial ? `${partial}\n\n（回答中断：${detail}）` : detail,
+        streamingRawReferences.value,
+        true,
+      )
       message.error(detail)
     }
   } finally {
@@ -802,6 +1203,10 @@ async function sendQuestion() {
     stopping.value = false
     stopRequested.value = false
     answerSessionId.value = ''
+    activeStreamController = null
+    streamingMessage.value = null
+    streamingRawReferences.value = []
+    streamStatus.value = '正在连接 WeKnora…'
     void scrollToBottom()
   }
 }
@@ -817,6 +1222,21 @@ async function updateConversationSession(conversation: KnowledgeConversation, se
     conversation.updatedAt = updated.updated_at
   } catch (error: any) {
     message.warning(error.response?.data?.detail || '会话已建立，但会话标识暂未写入数据库。')
+  }
+}
+
+async function updateConversationTitle(conversation: KnowledgeConversation, title: string) {
+  const normalized = title.trim().slice(0, 300)
+  if (!normalized || normalized === conversation.title) return
+  conversation.title = normalized
+  try {
+    const updated = await store.updateEngineeringKnowledgeConversation(
+      conversation.id,
+      { title: normalized },
+    )
+    conversation.updatedAt = updated.updated_at
+  } catch (error: any) {
+    message.warning(error.response?.data?.detail || '会话标题已生成，但暂未写入数据库。')
   }
 }
 
@@ -845,12 +1265,6 @@ async function saveAssistantMessage(
   void scrollToBottom()
 }
 
-function askSuggestedQuestion(value: string) {
-  if (props.disabled || loadingHistory.value || loadingMessages.value) return
-  question.value = value
-  void sendQuestion()
-}
-
 async function stopAnswer() {
   if (!answering.value || stopping.value) return
   stopRequested.value = true
@@ -865,6 +1279,7 @@ async function stopAnswer() {
       return
     }
     message.info('已发送终止请求，正在保留已经生成的内容。')
+    activeStreamController?.abort()
   } catch (error: any) {
     stopRequested.value = false
     stopping.value = false
@@ -890,8 +1305,86 @@ function formatMessageTime(value: string) {
   return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
 }
 
+function normalizeMarkdownImageAlt(value: string) {
+  return value
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/[*_`~#[\]<>]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 120) || '知识库原图'
+}
+
 function renderMarkdown(content: string) {
-  return markdown.render(content)
+  const projectId = store.currentProjectId
+  const inlineCitations: string[] = []
+  let resolved = content
+    .replace(/<kb\b[^>]*$/i, '')
+    .replace(/<kb\b([^>]*)\/?>/gi, (_original, attributes: string) => {
+      const documentPath = citationAttribute(attributes, 'doc').replace(/\\/g, '/')
+      const filename = documentPath.split('/').filter(Boolean).pop() || ''
+      if (!filename) return ''
+      const token = `DOBBYKBREFERENCE${inlineCitations.length}TOKEN`
+      inlineCitations.push(filename)
+      return token
+    })
+  resolved = resolved.replace(
+    /!\[([^\]]*)\]\(resource:\/\/([A-Za-z0-9_-]+)\)/g,
+    (_original, alt: string, handle: string) => {
+      const url = resourceObjectUrls.value[handle]
+      if (url) return `![${normalizeMarkdownImageAlt(alt)}](${url})`
+      const failed = projectId && failedResourceHandles.has(`${projectId}:${handle}`)
+      return `*${normalizeMarkdownImageAlt(alt)}${failed ? '暂时无法加载' : '正在加载…'}*`
+    },
+  )
+  resolved = resolved.replace(
+    /(\]\()resource:\/\/([A-Za-z0-9_-]+)(\))/g,
+    (original, prefix: string, handle: string, suffix: string) => {
+      const url = resourceObjectUrls.value[handle]
+      return url ? `${prefix}${url}${suffix}` : original
+    },
+  )
+  let rendered = markdown.render(resolved)
+  inlineCitations.forEach((filename, index) => {
+    const escapedFilename = markdown.utils.escapeHtml(filename)
+    rendered = rendered
+      .split(`DOBBYKBREFERENCE${index}TOKEN`)
+      .join(`<span class="knowledge-inline-citation" title="引用资料：${escapedFilename}">${escapedFilename}</span>`)
+  })
+  return rendered
+}
+
+async function hydrateResourceHandles(content: string) {
+  const projectId = store.currentProjectId
+  if (!projectId) return
+  const handles = [...content.matchAll(/\]\(resource:\/\/([A-Za-z0-9_-]+)\)/g)].map(match => match[1])
+  for (const handle of new Set(handles)) {
+    const requestKey = `${projectId}:${handle}`
+    if (!handle || resourceObjectUrls.value[handle] || failedResourceHandles.has(requestKey)) continue
+    const pending = resourceRequests.get(requestKey)
+    if (pending) continue
+    const request = resourceFetchQueue.then(async () => {
+      try {
+        if (projectId !== store.currentProjectId) return
+        const blob = await fetchWeKnoraResourceBlob(projectId, handle)
+        if (projectId !== store.currentProjectId) return
+        const url = URL.createObjectURL(blob)
+        resourceObjectUrls.value = { ...resourceObjectUrls.value, [handle]: url }
+      } catch {
+        failedResourceHandles.add(requestKey)
+        resourceObjectUrls.value = { ...resourceObjectUrls.value }
+      } finally {
+        resourceRequests.delete(requestKey)
+      }
+    })
+    resourceFetchQueue = request
+    resourceRequests.set(requestKey, request)
+  }
+}
+
+function releaseResourceUrls() {
+  for (const url of Object.values(resourceObjectUrls.value)) URL.revokeObjectURL(url)
+  resourceObjectUrls.value = {}
+  failedResourceHandles.clear()
 }
 
 function referenceIconKind(fileName: string) {
@@ -907,6 +1400,16 @@ function referenceIconKind(fileName: string) {
   if (['html', 'css', 'js', 'ts', 'tsx', 'jsx', 'json', 'xml', 'yaml', 'yml'].includes(extension)) return 'code'
   return 'generic'
 }
+
+onBeforeUnmount(() => {
+  const sessionId = answerSessionId.value
+  if (answering.value) stopRequested.value = true
+  if (answering.value && sessionId) {
+    void store.stopEngineeringDocumentAnswer(sessionId).catch(() => undefined)
+  }
+  activeStreamController?.abort()
+  releaseResourceUrls()
+})
 </script>
 
 <style scoped>
@@ -1025,40 +1528,58 @@ function referenceIconKind(fileName: string) {
 .knowledge-chat-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; background: #fff; }
 .knowledge-chat-head { display: flex; flex: 0 0 auto; align-items: center; gap: 24px; min-height: 62px; padding: 0 38px; border-bottom: 1px solid #edf1ef; }
 .knowledge-chat-head > strong { color: #1d3835; font-size: 16px; font-weight: 820; }
-.knowledge-scope-picker { position: relative; min-width: 188px; }
-.knowledge-scope-trigger { position: relative; z-index: 13; display: grid; width: min(360px, 32vw); min-width: 188px; min-height: 36px; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; border: 1px solid #d5e0dd; border-radius: 7px; padding: 0 10px; color: #49645f; background: #f9fbfa; font: inherit; font-size: 12px; text-align: left; cursor: pointer; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
-.knowledge-scope-trigger:hover,.knowledge-scope-trigger.active { border-color: #8aafa7; background: #fff; }
+.knowledge-scope-picker { position: relative; min-width: 220px; }
+.knowledge-scope-trigger { position: relative; z-index: 13; display: grid; width: min(340px, 32vw); min-width: 220px; min-height: 38px; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 8px; border: 1px solid #cedbd8; border-radius: 8px; padding: 4px 9px 4px 5px; color: #355650; background: #fff; font: inherit; font-size: 13px; font-weight: 650; text-align: left; cursor: pointer; box-shadow: 0 1px 2px rgba(28, 67, 61, .04); transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
+.knowledge-scope-trigger:hover,.knowledge-scope-trigger.active { border-color: #70a49b; background: #fbfdfc; }
 .knowledge-scope-trigger.active { box-shadow: 0 0 0 3px rgba(15, 118, 110, .09); }
-.knowledge-scope-trigger > i { width: 7px; height: 7px; border-radius: 50%; background: #0f9a79; }
-.knowledge-scope-trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-scope-trigger:focus-visible,.knowledge-scope-all:focus-visible,.knowledge-scope-expand:focus-visible,.knowledge-scope-choice:focus-visible,.knowledge-scope-menu-foot button:focus-visible { outline: 2px solid #2d8d82; outline-offset: 2px; }
+.knowledge-scope-trigger:disabled { cursor: not-allowed; opacity: .6; }
+.knowledge-scope-trigger-icon { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 6px; color: #0f7166; background: #e8f3f0; }
+.knowledge-scope-trigger > span:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-scope-trigger-chevron { color: #708681; transition: transform .16s ease; }
+.knowledge-scope-trigger-chevron.open { transform: rotate(180deg); }
 .knowledge-scope-backdrop { position: fixed; z-index: 11; inset: 0; }
-.knowledge-scope-menu { position: absolute; z-index: 12; top: calc(100% + 7px); left: 0; display: grid; width: min(430px, calc(100vw - 32px)); max-height: min(520px, calc(100dvh - 170px)); grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid #cbdad6; border-radius: 9px; background: #fff; box-shadow: 0 18px 42px rgba(25, 58, 52, .17); }
-.knowledge-scope-all { display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; border: 0; border-bottom: 1px solid #e3ebe9; padding: 12px 14px; color: #48645e; background: #f8fbfa; font: inherit; text-align: left; cursor: pointer; }
-.knowledge-scope-all:hover,.knowledge-scope-all.selected { color: #164f47; background: #eaf5f1; }
-.knowledge-scope-all > span:last-child,.knowledge-scope-choice > span:last-child { display: grid; min-width: 0; gap: 2px; }
-.knowledge-scope-all strong,.knowledge-scope-choice strong { overflow: hidden; color: #294b45; font-size: 12px; font-weight: 760; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-scope-menu { position: absolute; z-index: 12; top: calc(100% + 8px); left: 0; display: grid; width: min(470px, calc(100vw - 32px)); max-height: min(560px, calc(100dvh - 170px)); grid-template-rows: auto auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid #c7d6d2; border-radius: 10px; background: #fff; box-shadow: 0 20px 48px rgba(25, 58, 52, .18); }
+.knowledge-scope-menu-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 15px 12px; border-bottom: 1px solid #e5ecea; }
+.knowledge-scope-menu-head > span { display: grid; min-width: 0; gap: 3px; }
+.knowledge-scope-menu-head strong { color: #244640; font-size: 14px; font-weight: 800; }
+.knowledge-scope-menu-head small { color: #798b87; font-size: 12px; }
+.knowledge-scope-menu-head em { flex: 0 0 auto; border-radius: 12px; padding: 4px 8px; color: #0d6f64; background: #e9f4f0; font-size: 12px; font-style: normal; font-weight: 700; }
+.knowledge-scope-all { display: grid; min-width: 0; grid-template-columns: 18px 30px minmax(0, 1fr); align-items: center; gap: 9px; border: 0; border-bottom: 1px solid #e3ebe9; padding: 10px 14px; color: #48645e; background: #f8fbfa; font: inherit; text-align: left; cursor: pointer; }
+.knowledge-scope-all:hover,.knowledge-scope-all.selected { color: #164f47; background: #edf6f3; }
+.knowledge-scope-all:active,.knowledge-scope-choice:active,.knowledge-scope-menu-foot button:active { transform: translateY(1px); }
+.knowledge-scope-all > span:last-child,.knowledge-scope-choice-copy { display: grid; min-width: 0; gap: 2px; }
+.knowledge-scope-all strong,.knowledge-scope-choice strong { overflow: hidden; color: #294b45; font-size: 13px; font-weight: 760; text-overflow: ellipsis; white-space: nowrap; }
 .knowledge-scope-all small,.knowledge-scope-choice small { overflow: hidden; color: #7a8c88; font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.knowledge-scope-tree { min-height: 0; overflow: auto; padding: 7px; }
-.knowledge-scope-row { display: flex; min-width: 0; align-items: center; border-radius: 6px; color: #526c67; }
-.knowledge-scope-row:hover { background: #f1f7f5; }
-.knowledge-scope-row.selected { background: #e5f2ee; box-shadow: inset 3px 0 #168273; }
+.knowledge-scope-checkbox { position: relative; display: grid; width: 18px; height: 18px; place-items: center; border: 1px solid #aebfbb; border-radius: 4px; color: #fff; background: #fff; transition: border-color .14s ease, background .14s ease; }
+.knowledge-scope-checkbox.checked,.knowledge-scope-checkbox.mixed { border-color: #14776c; background: #14776c; }
+.knowledge-scope-checkbox.checked::after { content: '✓'; font-size: 12px; font-weight: 900; line-height: 1; }
+.knowledge-scope-checkbox.mixed::after { content: '—'; font-size: 12px; font-weight: 900; line-height: 1; }
+.knowledge-scope-tree { min-height: 0; overflow: auto; padding: 7px 8px; scrollbar-gutter: stable; }
+.knowledge-scope-row { display: flex; min-width: 0; align-items: center; border-radius: 7px; color: #526c67; }
+.knowledge-scope-row:hover { background: #f3f8f6; }
+.knowledge-scope-row.selected { background: #edf6f3; }
 .knowledge-scope-indent { flex: 0 0 15px; width: 15px; }
 .knowledge-scope-expand { display: grid; flex: 0 0 26px; width: 26px; height: 34px; place-items: center; border: 0; padding: 0; color: #6f8580; background: transparent; cursor: pointer; }
 .knowledge-scope-expand.hidden { visibility: hidden; cursor: default; }
-.knowledge-scope-choice { display: grid; flex: 1 1 auto; min-width: 0; min-height: 44px; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; border: 0; padding: 5px 9px 5px 2px; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.knowledge-scope-choice { display: grid; flex: 1 1 auto; min-width: 0; min-height: 46px; grid-template-columns: 18px 30px minmax(0, 1fr); align-items: center; gap: 9px; border: 0; padding: 5px 9px 5px 2px; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
 .knowledge-scope-node-icon { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 7px; color: #176f64; background: #e4f1ed; }
 .knowledge-scope-file-icon { display: grid; width: 28px; height: 28px; place-items: center; }
 .knowledge-scope-file-icon :deep(img) { width: 24px; height: 24px; object-fit: contain; }
 .knowledge-scope-tree-empty { padding: 28px 16px; color: #7a8d88; font-size: 12px; text-align: center; }
+.knowledge-scope-menu-foot { display: flex; min-height: 58px; align-items: center; justify-content: space-between; gap: 14px; border-top: 1px solid #e3ebe9; padding: 10px 12px 10px 15px; background: #fbfcfc; }
+.knowledge-scope-menu-foot > span { min-width: 0; overflow: hidden; color: #6f827d; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-scope-menu-foot > div { display: flex; flex: 0 0 auto; gap: 7px; }
+.knowledge-scope-menu-foot button { min-height: 34px; border: 1px solid #cad9d5; border-radius: 7px; padding: 0 13px; color: #48625d; background: #fff; font: inherit; font-size: 12px; cursor: pointer; }
+.knowledge-scope-menu-foot button:hover { border-color: #80a69e; background: #f4f8f7; }
+.knowledge-scope-menu-foot button.primary { border-color: #135f57; color: #fff; background: #135f57; }
+.knowledge-scope-menu-foot button.primary:hover { border-color: #0e514a; background: #0e514a; }
 .knowledge-scope-spinner { animation: conversation-scope-spin .8s linear infinite; }
 .knowledge-chat-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 30px clamp(28px, 7vw, 108px); scrollbar-gutter: stable; scroll-behavior: smooth; }
 .knowledge-chat-empty { display: grid; min-height: 100%; place-content: center; justify-items: center; gap: 9px; color: #768b86; text-align: center; }
 .knowledge-chat-empty-icon { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 13px; color: #fff; background: #164a46; box-shadow: 0 10px 24px rgba(22, 74, 70, .16); }
 .knowledge-chat-empty strong { color: #274844; font-size: 17px; }
 .knowledge-chat-empty p { max-width: 56ch; margin: 0; font-size: 13px; line-height: 1.65; }
-.knowledge-starter-list { display: flex; flex-wrap: wrap; justify-content: center; gap: 7px; margin-top: 7px; }
-.knowledge-starter-list button { border: 1px solid #d2dfdb; border-radius: 6px; padding: 8px 10px; color: #42615b; background: #fff; font: inherit; font-size: 12px; cursor: pointer; transition: border-color .16s ease, background .16s ease, transform .16s ease; }
-.knowledge-starter-list button:hover { transform: translateY(-1px); border-color: #86aaa2; background: #f4f8f7; }
 .knowledge-chat-message { display: flex; align-items: flex-start; gap: 12px; margin: 0 auto 18px; }
 .knowledge-chat-message.is-user { justify-content: flex-end; }
 .knowledge-message-avatar,
@@ -1069,7 +1590,8 @@ function referenceIconKind(fileName: string) {
 .knowledge-chat-message.is-user .knowledge-message-card { max-width: min(620px, 72%); border-color: #c8ddd7; background: #edf6f3; }
 .knowledge-chat-message.is-failed .knowledge-message-card { border-color: #e5c5bf; background: #fff7f5; }
 .knowledge-chat-message.is-failed p { color: #a04b3f; }
-.knowledge-chat-message.is-pending .knowledge-message-card { color: #71847f; animation: knowledge-answer-pulse 1.3s ease-in-out infinite; }
+.knowledge-chat-message.is-pending .knowledge-message-card { color: #71847f; }
+.knowledge-chat-message.is-pending:not(.has-content) .knowledge-message-card { animation: knowledge-answer-pulse 1.3s ease-in-out infinite; }
 .knowledge-message-card > p { margin: 0; font-size: 13px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
 .knowledge-message-card > time { display: block; margin-top: 10px; color: #84938f; font-size: 12px; font-variant-numeric: tabular-nums; text-align: right; }
 .knowledge-markdown { font-size: 13px; line-height: 1.72; overflow-wrap: anywhere; }
@@ -1079,10 +1601,9 @@ function referenceIconKind(fileName: string) {
 .knowledge-markdown :deep(ul) { margin: 8px 0; padding-left: 24px; }
 .knowledge-markdown :deep(li) { margin: 5px 0; }
 .knowledge-markdown :deep(code) { border-radius: 4px; padding: 2px 5px; color: #315b55; background: #eef4f2; font-size: 12px; }
-.knowledge-reference-list { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 14px; }
-.reference-label { flex: 0 0 100%; color: #71847f; font-size: 12px; }
-.knowledge-reference-chip { display: inline-flex; max-width: 280px; align-items: center; gap: 7px; border: 1px solid #d8e2df; border-radius: 6px; padding: 6px 9px; overflow: hidden; color: #42605b; background: #fbfcfc; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.knowledge-reference-chip :deep(img) { width: 18px; height: 18px; }
+.knowledge-markdown :deep(img) { display: block; max-width: 100%; height: auto; margin: 12px 0; border: 1px solid #dbe5e2; border-radius: 8px; background: #f7faf9; }
+.knowledge-markdown :deep(.knowledge-inline-citation) { display: inline-flex; max-width: min(100%, 340px); align-items: center; margin: 0 3px; border: 1px solid #c9ddd7; border-radius: 10px; padding: 1px 7px; overflow: hidden; color: #0f6f65; background: #eef7f4; font-size: 12px; font-weight: 700; line-height: 1.45; text-overflow: ellipsis; vertical-align: baseline; white-space: nowrap; }
+.streaming-cursor { display: inline-block; width: 7px; height: 15px; margin: 4px 0 -2px 3px; border-radius: 2px; background: #168273; animation: knowledge-cursor-blink .9s steps(1) infinite; }
 
 .knowledge-chat-footer { flex: 0 0 auto; border-top: 1px solid #e3eae8; background: #fff; }
 .knowledge-scope-summary { display: flex; align-items: center; gap: 6px; min-height: 42px; padding: 0 24px; color: #71847f; background: #f3f8f6; font-size: 12px; }
@@ -1104,6 +1625,10 @@ textarea:focus-visible { outline: 2px solid rgba(15, 118, 110, .48); outline-off
   0%, 100% { opacity: .62; }
   50% { opacity: 1; }
 }
+@keyframes knowledge-cursor-blink {
+  0%, 52% { opacity: 1; }
+  53%, 100% { opacity: .12; }
+}
 @keyframes conversation-robot-duang {
   0%, 100% { transform: translateY(0) scale(1); }
   38% { transform: translateY(-7px) scale(.96, 1.04); }
@@ -1114,6 +1639,7 @@ textarea:focus-visible { outline: 2px solid rgba(15, 118, 110, .48); outline-off
 }
 @media (prefers-reduced-motion: reduce) {
   .knowledge-chat-message.is-pending .knowledge-message-card,
+  .streaming-cursor,
   .conversation-loading-robot,
   .knowledge-scope-spinner { animation: none; }
 }
