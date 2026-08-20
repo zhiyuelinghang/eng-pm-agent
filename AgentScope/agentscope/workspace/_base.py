@@ -37,7 +37,7 @@ the workspace's :class:`BackendBase` plus a fixed layout derived from
     {workdir}/
     ├── .mcp          # persisted MCP client configs (JSON array)
     ├── data/         # offloaded multimodal payloads
-    ├── skills/       # skill subdirectories
+    ├── skills/       # .seed template plus one partition per agent
     └── sessions/     # per-session context and tool-result files
 
 Subclasses only set ``self.workdir`` (the agent-visible root); all
@@ -99,6 +99,42 @@ _EXTRACT_TAR_SHIM = (
     "os.unlink(src)\n"
 )
 
+DEFAULT_SKILL_PARTITION = "default"
+SKILL_SEED_DIR = ".seed"
+
+_MIGRATE_SKILLS_SHIM = (
+    "import os, shutil, sys\n"
+    "skills, seed = sys.argv[1], sys.argv[2]\n"
+    "if not os.path.isdir(skills): sys.exit(0)\n"
+    "stale = []\n"
+    "for entry in os.listdir(skills):\n"
+    "    if entry == seed: continue\n"
+    "    path = os.path.join(skills, entry)\n"
+    "    if entry == '.skills' and os.path.isfile(path):\n"
+    "        stale.append((entry, '.index'))\n"
+    "    elif os.path.isfile(os.path.join(path, 'SKILL.md')):\n"
+    "        stale.append((entry, entry))\n"
+    "if not stale: sys.exit(0)\n"
+    "dst = os.path.join(skills, seed)\n"
+    "os.makedirs(dst, exist_ok=True)\n"
+    "for entry, name in stale:\n"
+    "    shutil.move(os.path.join(skills, entry), os.path.join(dst, name))\n"
+    "print(len(stale))\n"
+)
+
+_EQUIP_PARTITION_SHIM = (
+    "import os, shutil, sys\n"
+    "seed, partition = sys.argv[1], sys.argv[2]\n"
+    "if os.path.isdir(partition): sys.exit(0)\n"
+    "os.makedirs(os.path.dirname(partition), exist_ok=True)\n"
+    "staging = partition + '.equipping-' + str(os.getpid())\n"
+    "if os.path.isdir(seed): shutil.copytree(seed, staging)\n"
+    "else: os.makedirs(staging)\n"
+    "try: os.rename(staging, partition)\n"
+    "except OSError: shutil.rmtree(staging, ignore_errors=True)\n"
+    "print('equipped')\n"
+)
+
 
 class WorkspaceBase:
     """Abstract base class for all workspace implementations.
@@ -149,6 +185,9 @@ class WorkspaceBase:
     _skill_lock: asyncio.Lock
     """Guards mutation of the ``skills/`` directory."""
 
+    _equipped_partitions: set[str]
+    """Skill partitions already initialized from the seed template."""
+
     @property
     def _glob_helper_path(self) -> str | None:
         """Optional path (backend-side) to the ``Glob`` helper script.
@@ -198,6 +237,7 @@ class WorkspaceBase:
         self._mcps = []
         self._mcp_lock = asyncio.Lock()
         self._skill_lock = asyncio.Lock()
+        self._equipped_partitions = set()
 
     # ── derived paths ──────────────────────────────────────────────
 
@@ -208,11 +248,72 @@ class WorkspaceBase:
 
     @property
     def _skills_dir(self) -> str:
-        """``${workdir}/skills`` — skill subdirectories."""
+        """``${workdir}/skills`` — seed and per-agent partitions."""
         return self.get_backend().join_path(
             self.workdir,
             DEFAULT_SKILLS_DIR,
         )
+
+    @property
+    def _python_command(self) -> str:
+        """Interpreter used by portable workspace maintenance shims."""
+        return "python3"
+
+    @property
+    def _skill_seed_dir(self) -> str:
+        """Template copied into each agent's partition on first use."""
+        return self.get_backend().join_path(self._skills_dir, SKILL_SEED_DIR)
+
+    def _skill_partition(self, agent_id: str | None) -> str:
+        """Resolve and validate one agent's isolated skill directory."""
+        if agent_id and (
+            agent_id.startswith(".") or "/" in agent_id or "\\" in agent_id
+        ):
+            raise ValueError(
+                f"Agent id {agent_id!r} is not usable as a skill partition "
+                "name.",
+            )
+        return self.get_backend().join_path(
+            self._skills_dir,
+            agent_id or DEFAULT_SKILL_PARTITION,
+        )
+
+    async def _equip_partition(self, agent_id: str | None) -> str:
+        """Create an agent partition from the immutable seed, once."""
+        partition = self._skill_partition(agent_id)
+        if partition in self._equipped_partitions:
+            return partition
+        result = await self.get_backend().exec_shell(
+            [
+                self._python_command,
+                "-c",
+                _EQUIP_PARTITION_SHIM,
+                self._skill_seed_dir,
+                partition,
+            ],
+        )
+        if not result.ok():
+            raise RuntimeError(
+                f"Failed to equip skill partition {partition!r}: "
+                f"{result.stderr.decode('utf-8', 'replace')}",
+            )
+        self._equipped_partitions.add(partition)
+        return partition
+
+    async def purge_agent(self, *, agent_id: str) -> None:
+        """Best-effort removal of one agent's isolated skill partition."""
+        if self._backend is None or not agent_id:
+            return
+        try:
+            partition = self._skill_partition(agent_id)
+            self._equipped_partitions.discard(partition)
+            await self._backend.delete_path(partition)
+        except Exception as error:
+            logger.warning(
+                "Failed to delete the skill partition of agent %r: %s",
+                agent_id,
+                error,
+            )
 
     @property
     def _sessions_dir(self) -> str:
@@ -570,15 +671,19 @@ class WorkspaceBase:
 
     # ── skill management (shared, simple) ──────────────────────────
 
-    async def list_skills(self) -> list[Skill]:
-        """Enumerate skills under ``${workdir}/skills``.
+    async def list_skills(
+        self,
+        *,
+        agent_id: str | None = None,
+    ) -> list[Skill]:
+        """Enumerate skills in one agent's isolated partition.
 
         Walks ``skills/`` recursively, parses every ``SKILL.md``'s
         YAML front matter, and yields one :class:`Skill` per file
         that has both ``name`` and ``description``.
 
         Subclasses with richer indexing (e.g.
-        :class:`LocalWorkspace` with its ``.skills`` hash index)
+        :class:`LocalWorkspace` with its ``.index`` hash index)
         override this method.
 
         Returns:
@@ -589,14 +694,16 @@ class WorkspaceBase:
         import frontmatter as fm
 
         backend = self.get_backend()
-        if not await backend.is_dir(self._skills_dir):
-            return []
-
-        entries = await backend.list_dir(self._skills_dir, recursive=True)
+        partition = await self._equip_partition(agent_id)
+        entries = await backend.list_dir(partition, recursive=True)
 
         skills: list[Skill] = []
         for md_path in entries:
-            if backend.basename(md_path) != "SKILL.md":
+            skill_dir = backend.dirname(md_path)
+            if (
+                backend.basename(md_path) != "SKILL.md"
+                or backend.dirname(skill_dir) != partition
+            ):
                 continue
             try:
                 raw = await backend.read_file(md_path)
@@ -609,7 +716,7 @@ class WorkspaceBase:
                     Skill(
                         name=str(name),
                         description=str(desc),
-                        dir=backend.dirname(md_path),
+                        dir=skill_dir,
                         markdown=doc.content or "",
                         updated_at=0.0,
                     ),
@@ -618,8 +725,13 @@ class WorkspaceBase:
                 logger.warning("Failed to load skill %s: %s", md_path, e)
         return skills
 
-    async def add_skill(self, skill_path: str) -> None:
-        """Copy a local skill directory into ``${workdir}/skills``.
+    async def add_skill(
+        self,
+        skill_path: str,
+        *,
+        agent_id: str | None = None,
+    ) -> None:
+        """Copy a local skill directory into one agent's partition.
 
         Tars the directory on the host, writes the archive to the
         backend's tmp area, and extracts it via ``python3 -c`` inside
@@ -648,15 +760,16 @@ class WorkspaceBase:
             )
 
         backend = self.get_backend()
+        partition = await self._equip_partition(agent_id)
 
         async with self._skill_lock:
             dir_name = os.path.basename(os.path.abspath(skill_path))
-            remote_dir = backend.join_path(self._skills_dir, dir_name)
+            remote_dir = backend.join_path(partition, dir_name)
 
             if await backend.file_exists(remote_dir):
                 raise ValueError(
                     f"Skill directory {dir_name!r} already exists in "
-                    f"{self._skills_dir}",
+                    f"{partition}",
                 )
 
             buf = io.BytesIO()
@@ -668,15 +781,15 @@ class WorkspaceBase:
             await backend.write_file(tmp_path, tar_bytes)
 
             await backend.exec_shell(
-                ["mkdir", "-p", self._skills_dir],
+                ["mkdir", "-p", partition],
             )
             result = await backend.exec_shell(
                 [
-                    "python3",
+                    self._python_command,
                     "-c",
                     _EXTRACT_TAR_SHIM,
                     tmp_path,
-                    self._skills_dir,
+                    partition,
                 ],
             )
             if not result.ok():
@@ -687,7 +800,12 @@ class WorkspaceBase:
 
             logger.info("Added skill %r at %s", dir_name, remote_dir)
 
-    async def remove_skill(self, name: str) -> None:
+    async def remove_skill(
+        self,
+        name: str,
+        *,
+        agent_id: str | None = None,
+    ) -> None:
         """Remove a skill by its agent-facing ``name`` (front matter).
 
         Looks up the skill via :meth:`list_skills` and ``rm -rf``-style
@@ -702,7 +820,7 @@ class WorkspaceBase:
                 If the skill is not found in the workspace.
         """
         backend = self.get_backend()
-        skills = await self.list_skills()
+        skills = await self.list_skills(agent_id=agent_id)
         target_dir: str | None = None
         for s in skills:
             if s.name == name:
@@ -723,11 +841,12 @@ class WorkspaceBase:
         new_name: str,
         description: str,
         markdown: str,
+        agent_id: str | None = None,
     ) -> None:
         """Update a skill's front matter and Markdown instructions.
 
         The shared implementation works for backend-driven workspaces. Local
-        workspaces override it so their ``.skills`` hash/name index stays in
+        workspaces override it so their ``.index`` hash/name index stays in
         sync with the edited file.
 
         Args:
@@ -758,7 +877,7 @@ class WorkspaceBase:
 
         backend = self.get_backend()
         async with self._skill_lock:
-            skills = await self.list_skills()
+            skills = await self.list_skills(agent_id=agent_id)
             target = next((skill for skill in skills if skill.name == name), None)
             if target is None:
                 raise KeyError(f"Skill {name!r} not found.")
@@ -777,33 +896,67 @@ class WorkspaceBase:
             )
             logger.info("Updated skill %r as %r at %s", name, new_name, target.dir)
 
+    async def _migrate_skill_layout(self) -> None:
+        """Move legacy shared skills into the per-agent seed template."""
+        backend = self._backend
+        if backend is None:
+            return
+        try:
+            result = await backend.exec_shell(
+                [
+                    self._python_command,
+                    "-c",
+                    _MIGRATE_SKILLS_SHIM,
+                    self._skills_dir,
+                    SKILL_SEED_DIR,
+                ],
+            )
+            moved = result.stdout.decode("utf-8", "replace").strip()
+            if result.ok() and moved:
+                logger.info(
+                    "Moved %s legacy skill entries into %s/.",
+                    moved,
+                    SKILL_SEED_DIR,
+                )
+            elif not result.ok():
+                logger.warning(
+                    "Failed to migrate %s: %s",
+                    self._skills_dir,
+                    result.stderr.decode("utf-8", "replace"),
+                )
+        except Exception as error:
+            logger.warning("Failed to migrate %s: %s", self._skills_dir, error)
+
     async def _setup_skills(self) -> None:
-        """Copy :attr:`skill_paths` into ``${workdir}/skills`` once.
-
-        Skips seeding when:
-
-        - :attr:`skill_paths` is empty;
-        - the backend is not bound; or
-        - ``skills/`` already contains entries (assume the prior
-          run, or the user, is the source of truth).
-
-        Individual failures are logged and skipped — a single bad
-        skill cannot block startup.
-        """
+        """Populate the seed copied into every new agent partition."""
         if not self.skill_paths:
             return
         backend = self._backend
         if backend is None:
             return
-        entries = await backend.list_dir(self._skills_dir)
-        if entries:
+        seed = self._skill_seed_dir
+        if await backend.is_dir(seed) and await backend.list_dir(seed):
             return
-        for path in self.skill_paths:
-            try:
-                await self.add_skill(path)
-            except Exception as e:
-                logger.warning(
-                    "Skip skill %r: %s",
+
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as archive:
+            for path in self.skill_paths:
+                if not os.path.isfile(os.path.join(path, "SKILL.md")):
+                    logger.warning("Skip skill %r: SKILL.md not found", path)
+                    continue
+                archive.add(
                     path,
-                    e,
+                    arcname=os.path.basename(os.path.abspath(path)),
                 )
+
+        tmp_path = f"/tmp/skill-seed-{_generate_id()}.tar"
+        await backend.write_file(tmp_path, buf.getvalue())
+        result = await backend.exec_shell(
+            [self._python_command, "-c", _EXTRACT_TAR_SHIM, tmp_path, seed],
+        )
+        if not result.ok():
+            logger.warning(
+                "Failed to seed %s: %s",
+                seed,
+                result.stderr.decode("utf-8", "replace"),
+            )

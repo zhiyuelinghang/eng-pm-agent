@@ -195,6 +195,7 @@ class SandboxedWorkspaceBase(WorkspaceBase):
         await self._setup_mcp_gateway()
 
         # Set up the skills if not exists
+        await self._migrate_skill_layout()
         await self._setup_skills()
 
         self.is_alive = True
@@ -233,6 +234,7 @@ class SandboxedWorkspaceBase(WorkspaceBase):
         """
         backend = self.get_backend()
         async with self._mcp_lock, self._skill_lock:
+            self._equipped_partitions.clear()
             for mcp in list(self._mcps):
                 try:
                     await mcp.close()

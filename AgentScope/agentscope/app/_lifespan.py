@@ -123,6 +123,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.session_service = SessionService(
             storage=storage,
             message_bus=message_bus,
+            workspace_manager=workspace_manager,
             mcp_registry_manager=mcp_registry_manager,
             session_end_handler=app.state.session_end_handler,
         )

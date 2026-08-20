@@ -26,7 +26,9 @@ from agentscope.model import (
     ChatResponse,
     ChatUsage,
     FinishedReason,
+    StructuredResponse,
 )
+from agentscope.exception import StructuredOutputError
 from agentscope.model._utils import _StreamAccumulator
 from agentscope.permission import (
     PermissionBehavior,
@@ -246,6 +248,100 @@ class StreamingModelWrapperTest(IsolatedAsyncioTestCase):
         self.assertEqual(chunks[1].content[0].text, "完成")
         self.assertEqual(chunks[1].usage.input_tokens, 3)
         self.assertEqual(chunks[1].usage.output_tokens, 2)
+
+
+class _StructuredFallbackError(Exception):
+    """Provider request-shape error that permits strategy fallback."""
+
+
+class _StructuredFallbackModel(ChatModelBase):
+    """Deterministic model that records structured-output strategies."""
+
+    def __init__(self, responses: list[StructuredResponse | Exception]) -> None:
+        super().__init__(
+            credential=CredentialBase(),
+            model="test",
+            parameters=self.Parameters(),
+            stream=False,
+            max_retries=0,
+        )
+        self.responses = list(responses)
+        self.calls: list[tuple[str | None, dict[str, Any]]] = []
+
+    async def _call_api(
+        self,
+        model_name: str,
+        messages: list,
+        tools: list[dict] | None = None,
+        tool_choice: ToolChoice | None = None,
+        **kwargs: Any,
+    ) -> ChatResponse:
+        raise AssertionError("The strategy test bypasses the raw API call.")
+
+    async def _call_api_with_structured_output(
+        self,
+        model_name: str,
+        messages: list,
+        structured_model: Any,
+        tool_choice: ToolChoice | None = None,
+        **kwargs: Any,
+    ) -> StructuredResponse:
+        del model_name, messages, structured_model
+        self.calls.append(
+            (tool_choice.mode if tool_choice is not None else None, kwargs),
+        )
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def _get_disable_thinking_kwargs(self) -> dict:
+        return {"extra_body": {"enable_thinking": False}}
+
+    @classmethod
+    def _get_structured_output_fallback_exceptions(
+        cls,
+    ) -> tuple[type[Exception], ...]:
+        return (_StructuredFallbackError,)
+
+
+class StructuredOutputFallbackBackportTest(IsolatedAsyncioTestCase):
+    """Structured output keeps strong strategies before disabling thought."""
+
+    async def test_strategy_order_and_nested_parameter_merge(self) -> None:
+        model = _StructuredFallbackModel(
+            [
+                _StructuredFallbackError("forced tool choice rejected"),
+                StructuredOutputError("auto did not call the tool"),
+                StructuredResponse(content={}),
+            ],
+        )
+
+        await model.generate_structured_output(
+            [UserMsg(name="user", content="test")],
+            {"type": "object"},
+            extra_body={"custom": True},
+        )
+
+        self.assertEqual(
+            model.calls,
+            [
+                (
+                    "generate_structured_output",
+                    {"extra_body": {"custom": True}},
+                ),
+                ("auto", {"extra_body": {"custom": True}}),
+                (
+                    "generate_structured_output",
+                    {
+                        "extra_body": {
+                            "custom": True,
+                            "enable_thinking": False,
+                        },
+                    },
+                ),
+            ],
+        )
 
 
 class _MutationProbeTool(ToolBase):

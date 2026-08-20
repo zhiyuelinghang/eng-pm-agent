@@ -100,7 +100,7 @@ class BackgroundToolContinuationTest(IsolatedAsyncioTestCase):
         )
         registry.spawn.assert_not_called()
 
-    async def test_generic_wakeup_may_still_be_consumed_by_live_run(
+    async def test_generic_wakeup_is_retried_until_live_run_finishes(
         self,
     ) -> None:
         bus = SimpleNamespace(is_locked=AsyncMock(return_value=True))
@@ -121,5 +121,10 @@ class BackgroundToolContinuationTest(IsolatedAsyncioTestCase):
             raw_input=None,
         )
 
-        dispatcher._schedule_idle_wake_retry.assert_not_called()
+        dispatcher._schedule_idle_wake_retry.assert_called_once_with(
+            "user",
+            "session",
+            "agent",
+            MessageBusKeys.WAKEUP_KIND_WAKE,
+        )
         registry.spawn.assert_not_called()

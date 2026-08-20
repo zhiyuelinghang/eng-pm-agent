@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import sys
 from typing import TypedDict
 
 import frontmatter
@@ -22,7 +23,7 @@ from ._base import WorkspaceBase
 
 
 class _SkillEntry(TypedDict):
-    """A single entry in the .skills index file."""
+    """A single entry in the .index skill index file."""
 
     hash: str
     """SHA-256 hash of the skill's SKILL.md content."""
@@ -31,7 +32,7 @@ class _SkillEntry(TypedDict):
 
 
 class _SkillsFile(TypedDict):
-    """Schema of the .skills index file stored inside skills_dir."""
+    """Schema of the .index skill index file stored inside skills_dir."""
 
     skills_dir_mtime: float
     """mtime of skills_dir at the time the index was last written."""
@@ -65,7 +66,7 @@ class LocalWorkspace(WorkspaceBase):
         {workdir}/
         ├── .mcp          # persisted MCP client configs (JSON array)
         ├── data/         # offloaded multimodal files
-        ├── skills/       # skill subdirectories
+        ├── skills/       # .seed template plus one partition per agent
         └── sessions/     # per-session context and tool-result files
     """
 
@@ -121,6 +122,11 @@ class LocalWorkspace(WorkspaceBase):
 
         self._skill_lock = asyncio.Lock()
         self._mcp_lock = asyncio.Lock()
+
+    @property
+    def _python_command(self) -> str:
+        """Use the current interpreter for host-side maintenance shims."""
+        return sys.executable or "python3"
 
     async def list_tools(self) -> list[ToolBase]:
         """Return the enabled local-workspace builtin tools.
@@ -196,8 +202,10 @@ class LocalWorkspace(WorkspaceBase):
         for mcp in failed:
             self._mcps.remove(mcp)
 
-        # Seed skills
-        skills_dir = os.path.join(self.workdir, "skills")
+        # Migrate legacy shared skills, then maintain the common seed template.
+        os.makedirs(self._skills_dir, exist_ok=True)
+        await self._migrate_skill_layout()
+        skills_dir = self._skill_seed_dir
         os.makedirs(skills_dir, exist_ok=True)
 
         skills_file = await self._load_skills_file(skills_dir)
@@ -300,7 +308,7 @@ class LocalWorkspace(WorkspaceBase):
         return self.instructions
 
     async def _load_skills_file(self, skills_dir: str) -> _SkillsFile:
-        """Load the .skills index file, returning an empty structure if absent.
+        """Load the partition index, returning an empty structure if absent.
 
         Args:
             skills_dir (`str`): The skills directory path.
@@ -308,7 +316,7 @@ class LocalWorkspace(WorkspaceBase):
         Returns:
             `_SkillsFile`: The parsed index, or a fresh empty structure.
         """
-        path = os.path.join(skills_dir, ".skills")
+        path = os.path.join(skills_dir, ".index")
         if not await self._backend.file_exists(path):
             return {"skills_dir_mtime": 0.0, "skills": {}}
 
@@ -320,7 +328,7 @@ class LocalWorkspace(WorkspaceBase):
                 skills=data.get("skills", {}),
             )
         except Exception as e:
-            logger.warning("Failed to load .skills from %s: %s", path, str(e))
+            logger.warning("Failed to load skill index from %s: %s", path, str(e))
             return {"skills_dir_mtime": 0.0, "skills": {}}
 
     async def _save_skills_file(
@@ -328,20 +336,20 @@ class LocalWorkspace(WorkspaceBase):
         skills_dir: str,
         data: _SkillsFile,
     ) -> None:
-        """Persist the .skills index file.
+        """Persist a partition's skill index.
 
         Args:
             skills_dir (`str`): The skills directory path.
             data (`_SkillsFile`): The index to write.
         """
-        path = os.path.join(skills_dir, ".skills")
+        path = os.path.join(skills_dir, ".index")
         try:
             await self._backend.write_file(
                 path,
                 json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8"),
             )
         except Exception as e:
-            logger.warning("Failed to save .skills to %s: %s", path, str(e))
+            logger.warning("Failed to save skill index to %s: %s", path, str(e))
 
     async def _validate_skill(
         self,
@@ -473,6 +481,7 @@ class LocalWorkspace(WorkspaceBase):
             await self._backend.delete_path(mcp_file)
 
         async with self._skill_lock:
+            self._equipped_partitions.clear()
             skills_path = os.path.join(self.workdir, "skills")
             await self._backend.delete_path(skills_path)
 
@@ -480,10 +489,14 @@ class LocalWorkspace(WorkspaceBase):
             path = os.path.join(self.workdir, sub)
             await self._backend.delete_path(path)
 
-    async def list_skills(self) -> list[Skill]:
-        """List all skills available in the workspace.
+    async def list_skills(
+        self,
+        *,
+        agent_id: str | None = None,
+    ) -> list[Skill]:
+        """List skills available to one agent.
 
-        The method uses the .skills index for agent-facing names, compares the
+        The method uses the .index file for agent-facing names, compares the
         skills directory mtime to detect manual additions/removals since the
         last write, and reconciles the index when a change is found.
 
@@ -491,7 +504,7 @@ class LocalWorkspace(WorkspaceBase):
             `list[Skill]`:
                 A list of Skill objects found in the workspace.
         """
-        skills_dir = os.path.join(self.workdir, "skills")
+        skills_dir = await self._equip_partition(agent_id)
         async with self._skill_lock:
             if not await self._backend.is_dir(skills_dir):
                 return []
@@ -538,7 +551,7 @@ class LocalWorkspace(WorkspaceBase):
         skills_file: _SkillsFile,
         current_mtime: float,
     ) -> _SkillsFile:
-        """Reconcile the .skills index after the skills directory has changed.
+        """Reconcile the .index file after the skills directory has changed.
 
         Handles:
         - Manually deleted subdirectories: removed from the index.
@@ -640,7 +653,7 @@ class LocalWorkspace(WorkspaceBase):
             skill_dir (`str`):
                 The skill directory path containing SKILL.md.
             skill_name (`str`):
-                The agent-facing name stored in the .skills index.
+                The agent-facing name stored in the .index file.
 
         Returns:
             `Skill | None`:
@@ -714,8 +727,13 @@ class LocalWorkspace(WorkspaceBase):
                     return
         logger.warning("MCP client %r not found in workspace", name)
 
-    async def add_skill(self, skill_path: str) -> None:
-        """Add a skill to the workspace by copying from the given path.
+    async def add_skill(
+        self,
+        skill_path: str,
+        *,
+        agent_id: str | None = None,
+    ) -> None:
+        """Add a skill to one agent's partition from the given path.
 
         The skill directory must contain a valid ``SKILL.md`` file with
         ``name`` and ``description`` frontmatter fields.  Duplicate skills
@@ -732,7 +750,7 @@ class LocalWorkspace(WorkspaceBase):
                 malformed ``SKILL.md``).
         """
         skill_path = _normalize_local_path(skill_path)
-        skills_dir = os.path.join(self.workdir, "skills")
+        skills_dir = await self._equip_partition(agent_id)
         async with self._skill_lock:
             os.makedirs(skills_dir, exist_ok=True)
 
@@ -809,20 +827,25 @@ class LocalWorkspace(WorkspaceBase):
             )
             await self._save_skills_file(skills_dir, skills_file)
 
-    async def remove_skill(self, name: str) -> None:
-        """Remove a skill from the workspace by its agent-facing name.
+    async def remove_skill(
+        self,
+        name: str,
+        *,
+        agent_id: str | None = None,
+    ) -> None:
+        """Remove a skill from one agent's partition by name.
 
-        The skill directory is deleted from disk and the ``.skills`` index is
+        The skill directory is deleted from disk and the ``.index`` file is
         updated.  If no skill with the given name is found, a warning is
         logged and the method returns without error.
 
         Args:
             name (`str`):
                 The agent-facing name of the skill to remove (as stored in the
-                ``.skills`` index, i.e. the ``name`` field from ``SKILL.md``
+                ``.index`` file, i.e. the ``name`` field from ``SKILL.md``
                 possibly with a numeric suffix for de-duplication).
         """
-        skills_dir = os.path.join(self.workdir, "skills")
+        skills_dir = await self._equip_partition(agent_id)
         async with self._skill_lock:
             if not await self._backend.is_dir(skills_dir):
                 logger.warning(
@@ -876,8 +899,9 @@ class LocalWorkspace(WorkspaceBase):
         new_name: str,
         description: str,
         markdown: str,
+        agent_id: str | None = None,
     ) -> None:
-        """Update a local skill and keep the ``.skills`` index consistent.
+        """Update a local skill and keep the ``.index`` file consistent.
 
         Args:
             name (`str`):
@@ -902,7 +926,7 @@ class LocalWorkspace(WorkspaceBase):
         if not description:
             raise ValueError("Skill description cannot be empty.")
 
-        skills_dir = os.path.join(self.workdir, "skills")
+        skills_dir = await self._equip_partition(agent_id)
         async with self._skill_lock:
             skills_file = await self._load_skills_file(skills_dir)
             existing: dict[str, _SkillEntry] = skills_file["skills"]

@@ -60,3 +60,61 @@ class LocalWorkspaceSkillUpdateTest(IsolatedAsyncioTestCase):
                     description="Updated description",
                     markdown="Body",
                 )
+
+    async def test_agent_skill_partitions_are_isolated(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            source_dir = Path(temp_dir) / "private-skill"
+            source_dir.mkdir()
+            (source_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: private\n"
+                "description: Agent-private skill\n"
+                "---\n\n"
+                "Private instructions.\n",
+                encoding="utf-8",
+            )
+            workspace = LocalWorkspace(workdir=str(Path(temp_dir) / "workspace"))
+
+            await workspace.add_skill(str(source_dir), agent_id="agent-a")
+
+            self.assertEqual(
+                [skill.name for skill in await workspace.list_skills(
+                    agent_id="agent-a",
+                )],
+                ["private"],
+            )
+            self.assertEqual(
+                await workspace.list_skills(agent_id="agent-b"),
+                [],
+            )
+
+    async def test_seeded_skill_is_copied_per_agent(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            source_dir = Path(temp_dir) / "seed-skill"
+            source_dir.mkdir()
+            (source_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: seeded\n"
+                "description: Seeded skill\n"
+                "---\n\n"
+                "Seed instructions.\n",
+                encoding="utf-8",
+            )
+            workspace = LocalWorkspace(
+                workdir=str(Path(temp_dir) / "workspace"),
+                skill_paths=[str(source_dir)],
+            )
+            await workspace.initialize()
+
+            await workspace.remove_skill("seeded", agent_id="agent-a")
+
+            self.assertEqual(
+                await workspace.list_skills(agent_id="agent-a"),
+                [],
+            )
+            self.assertEqual(
+                [skill.name for skill in await workspace.list_skills(
+                    agent_id="agent-b",
+                )],
+                ["seeded"],
+            )

@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Shared delivery primitive for messages between team sessions."""
 
-from ._bus_ops import enqueue_run_trigger
-from .message_bus import MessageBus, MessageBusKeys
+from ._bus_ops import deliver_to_inbox
+from .message_bus import MessageBus
 from ..message import HintBlock
 
 
@@ -29,14 +29,10 @@ async def deliver_team_message(
         ),
         source=sender_name,
     )
-    await message_bus.queue_push(
-        MessageBusKeys.inbox(recipient_session_id),
-        hint.model_dump(mode="json"),
-    )
-    await enqueue_run_trigger(
+    await deliver_to_inbox(
         message_bus,
         user_id=user_id,
         session_id=recipient_session_id,
         agent_id=recipient_agent_id,
-        kind=MessageBusKeys.WAKEUP_KIND_TEAM,
+        payload=hint.model_dump(mode="json"),
     )

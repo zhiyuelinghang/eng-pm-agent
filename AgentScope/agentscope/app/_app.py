@@ -12,6 +12,7 @@ from ._router import (
     auth_router,
     chat_router,
     credential_router,
+    health_router,
     database_interaction_router,
     knowledge_base_router,
     model_router,
@@ -297,6 +298,7 @@ def create_app(
     # Built-in routers
     for router in (
         auth_router,
+        health_router,
         agent_router,
         chat_router,
         credential_router,

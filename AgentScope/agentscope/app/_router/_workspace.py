@@ -351,7 +351,7 @@ async def list_skills(
         workspace_manager,
         principal,
     )
-    return await workspace.list_skills()
+    return await workspace.list_skills(agent_id=agent_id)
 
 
 @workspace_router.post("/skill", status_code=status.HTTP_201_CREATED)
@@ -373,7 +373,7 @@ async def add_skill(
         workspace_manager,
         principal,
     )
-    await workspace.add_skill(body.skill_path)
+    await workspace.add_skill(body.skill_path, agent_id=agent_id)
 
 
 @workspace_router.put("/skill/{skill_name}")
@@ -402,6 +402,7 @@ async def update_skill(
             new_name=body.name,
             description=body.description,
             markdown=body.markdown,
+            agent_id=agent_id,
         )
     except KeyError as error:
         raise HTTPException(
@@ -437,4 +438,4 @@ async def remove_skill(
         workspace_manager,
         principal,
     )
-    await workspace.remove_skill(skill_name)
+    await workspace.remove_skill(skill_name, agent_id=agent_id)

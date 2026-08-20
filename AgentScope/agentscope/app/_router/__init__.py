@@ -4,6 +4,7 @@ from ._agent import agent_router
 from ._auth import auth_router
 from ._chat import chat_router
 from ._credential import credential_router
+from ._health import health_router
 from ._database_interaction import database_interaction_router
 from ._knowledge_base import knowledge_base_router
 from ._schedule import schedule_router
@@ -25,6 +26,7 @@ __all__ = [
     "tts_model_router",
     "chat_router",
     "credential_router",
+    "health_router",
     "database_interaction_router",
     "knowledge_base_router",
     "schedule_router",

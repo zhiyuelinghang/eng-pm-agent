@@ -237,9 +237,6 @@ class WakeupDispatcher:
         """
         is_resume = kind == MessageBusKeys.WAKEUP_KIND_RESUME
         is_team_wake = kind == MessageBusKeys.WAKEUP_KIND_TEAM
-        is_background_wake = (
-            kind == MessageBusKeys.WAKEUP_KIND_BACKGROUND
-        )
 
         # Parse the resume input early so every downstream path
         # (lock-retry, spawn-retry) receives a typed event object
@@ -278,17 +275,13 @@ class WakeupDispatcher:
                     agent_id,
                     input_msg,
                 )
-            elif is_team_wake or is_background_wake:
+            else:
                 self._schedule_idle_wake_retry(
                     user_id,
                     session_id,
                     agent_id,
                     kind,
                 )
-            # Generic ``wake`` triggers are safe to drop while running — the
-            # live run drains the inbox itself. Background completions are
-            # different: they can arrive after the last reasoning step, so
-            # their continuation must survive until the lock is released.
             return
 
         # Orphan guard: the queue is unaware of session lifecycle. A
@@ -349,18 +342,12 @@ class WakeupDispatcher:
                     agent_id,
                     input_msg,
                 )
-            elif is_team_wake or is_background_wake:
+            else:
                 self._schedule_idle_wake_retry(
                     user_id,
                     session_id,
                     agent_id,
                     kind,
-                )
-            else:
-                logger.debug(
-                    "WakeupDispatcher: skipping wake trigger for session "
-                    "%s; a local run is already registered.",
-                    session_id,
                 )
 
     def _schedule_resume_retry(

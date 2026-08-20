@@ -54,6 +54,7 @@ from ..message_bus import MessageBus, MessageBusKeys
 from ..mcp_registry import MCPRegistryManager
 from ..storage import StorageBase
 from ..storage._utils import _ensure_team_members
+from ..workspace_manager import WorkspaceManagerBase
 from ._session_projection import SessionProjection
 from ._projectors import CollaborationProgressProjector, SubagentHitlProjector
 from ..._logging import logger
@@ -124,6 +125,7 @@ class SessionService:
         self,
         storage: StorageBase,
         message_bus: MessageBus,
+        workspace_manager: WorkspaceManagerBase | None = None,
         mcp_registry_manager: MCPRegistryManager | None = None,
         session_end_handler: Callable[[str, str, Any], Awaitable[None]] | None = None,
     ) -> None:
@@ -135,6 +137,7 @@ class SessionService:
         """
         self._storage = storage
         self._bus = message_bus
+        self._workspace_manager = workspace_manager
         self._mcp_registry_manager = mcp_registry_manager
         self._session_end_handler = session_end_handler
         self._projection = SessionProjection(message_bus)
@@ -511,7 +514,13 @@ class SessionService:
             `bool`:
                 ``True`` if the agent record existed and was deleted.
         """
-        for session in await self._storage.list_sessions(user_id, agent_id):
+        sessions = await self._storage.list_sessions(user_id, agent_id)
+        workspaces = {
+            session.config.workspace_id: session.id
+            for session in sessions
+            if session.config.workspace_id
+        }
+        for session in sessions:
             if session.team_id is not None:
                 team = await self._storage.get_team(
                     user_id,
@@ -542,6 +551,28 @@ class SessionService:
         for schedule in await self._storage.list_schedules(user_id):
             if schedule.agent_id == agent_id:
                 await self.delete_schedule(user_id, schedule.id)
+
+        # Skill partitions are agent-scoped and may live in more than one
+        # persistent workspace. Purging them is best-effort so a backend
+        # outage cannot undo an otherwise completed agent deletion.
+        for workspace_id, session_id in workspaces.items():
+            if self._workspace_manager is None:
+                break
+            try:
+                workspace = await self._workspace_manager.get_workspace(
+                    user_id,
+                    agent_id,
+                    session_id,
+                    workspace_id,
+                )
+                await workspace.purge_agent(agent_id=agent_id)
+            except Exception as error:
+                logger.warning(
+                    "Failed to purge workspace %r for agent %r: %s",
+                    workspace_id,
+                    agent_id,
+                    error,
+                )
 
         # storage.delete_agent re-iterates sessions and schedules —
         # those re-runs are idempotent no-ops because the records were

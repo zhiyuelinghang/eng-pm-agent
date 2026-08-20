@@ -12,8 +12,7 @@ from ._team_tool_base import _TeamToolBase
 from .._platform_permissions import apply_platform_tool_allow_rules
 from .._types import SubAgentTemplate
 from .._team_lifecycle import add_and_assign_team_member
-from ..message_bus import MessageBusKeys
-from .._bus_ops import enqueue_run_trigger
+from .._bus_ops import deliver_to_inbox
 from ..storage import AgentData, AgentRecord, SessionConfig, TeamMember
 from ..storage._utils import _ensure_team_members
 from ...message import HintBlock, TextBlock, ToolResultState
@@ -562,15 +561,12 @@ optional):
                     ensure_ascii=False,
                 ),
             )
-            await self._message_bus.queue_push(
-                MessageBusKeys.inbox(worker_session.id),
-                hint.model_dump(mode="json"),
-            )
-            await enqueue_run_trigger(
+            await deliver_to_inbox(
                 self._message_bus,
                 user_id=self._user_id,
                 session_id=worker_session.id,
                 agent_id=worker_agent.id,
+                payload=hint.model_dump(mode="json"),
             )
 
             return ToolChunk(

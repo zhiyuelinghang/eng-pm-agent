@@ -137,6 +137,95 @@ async def enqueue_run_trigger(
     await bus.publish(MessageBusKeys.wakeup_signal(), {})
 
 
+async def deliver_to_inbox(
+    bus: "MessageBus",
+    *,
+    user_id: str,
+    session_id: str,
+    agent_id: str,
+    payload: dict,
+) -> None:
+    """Push one payload and wake only when no run owns the final drain."""
+    async with bus.acquire_lock(
+        MessageBusKeys.inbox_lock(session_id),
+        ttl_secs=MessageBusKeys.INBOX_LOCK_TTL_SECS,
+    ):
+        await bus.queue_push(MessageBusKeys.inbox(session_id), payload)
+        consumer_registered = await bus.registry_exists(
+            MessageBusKeys.inbox_consumer(session_id),
+            MessageBusKeys.INBOX_CONSUMER_FIELD,
+        )
+
+    if not consumer_registered:
+        await enqueue_run_trigger(
+            bus,
+            user_id=user_id,
+            session_id=session_id,
+            agent_id=agent_id,
+        )
+
+
+async def register_inbox_consumer(bus: "MessageBus", session_id: str) -> None:
+    """Register this run as the inbox consumer for its lock lifetime."""
+    await bus.registry_set(
+        MessageBusKeys.inbox_consumer(session_id),
+        MessageBusKeys.INBOX_CONSUMER_FIELD,
+        "1",
+        ttl_secs=MessageBusKeys.SESSION_RUN_TTL_SECS,
+    )
+
+
+async def has_pending_inbox_or_release(
+    bus: "MessageBus",
+    session_id: str,
+) -> bool:
+    """Atomically check pending payloads or release the consumer lease."""
+    inbox = MessageBusKeys.inbox(session_id)
+    async with bus.acquire_lock(
+        MessageBusKeys.inbox_lock(session_id),
+        ttl_secs=MessageBusKeys.INBOX_LOCK_TTL_SECS,
+    ):
+        payloads: list[dict] = []
+        while True:
+            batch = await bus.queue_drain(inbox, max_count=100)
+            if not batch:
+                break
+            payloads.extend(payload for _entry_id, payload in batch)
+
+        if not payloads:
+            await bus.registry_del(
+                MessageBusKeys.inbox_consumer(session_id),
+                MessageBusKeys.INBOX_CONSUMER_FIELD,
+            )
+            return False
+
+        for payload in payloads:
+            await bus.queue_push(inbox, payload)
+        return True
+
+
+async def abandon_inbox_consumer(
+    bus: "MessageBus",
+    *,
+    user_id: str,
+    session_id: str,
+    agent_id: str,
+) -> None:
+    """Release an abnormal run's lease and wake queued work if needed."""
+    if not await has_pending_inbox_or_release(bus, session_id):
+        return
+    await bus.registry_del(
+        MessageBusKeys.inbox_consumer(session_id),
+        MessageBusKeys.INBOX_CONSUMER_FIELD,
+    )
+    await enqueue_run_trigger(
+        bus,
+        user_id=user_id,
+        session_id=session_id,
+        agent_id=agent_id,
+    )
+
+
 # ── enqueue_index_task ─────────────────────────────────────────────────
 
 

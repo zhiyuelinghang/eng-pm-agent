@@ -160,11 +160,29 @@ class MessageBusKeys:
     # ------------------------------------------------------------------
 
     _INBOX = "agentscope:inbox:{sid}"
+    _INBOX_LOCK = "agentscope:inbox:lock:{sid}"
+    _INBOX_CONSUMER = "agentscope:inbox:consumer:{sid}"
+
+    INBOX_LOCK_TTL_SECS = 30
+    """Lease for the short producer/consumer hand-off lock."""
+
+    INBOX_CONSUMER_FIELD = "running"
+    """Field marking the run currently responsible for an inbox."""
 
     @classmethod
     def inbox(cls, session_id: str) -> str:
         """Per-session inbox drain-queue key."""
         return cls._INBOX.format(sid=session_id)
+
+    @classmethod
+    def inbox_lock(cls, session_id: str) -> str:
+        """Lock serialising the final drain against a producer push."""
+        return cls._INBOX_LOCK.format(sid=session_id)
+
+    @classmethod
+    def inbox_consumer(cls, session_id: str) -> str:
+        """Registry namespace for the active inbox consumer lease."""
+        return cls._INBOX_CONSUMER.format(sid=session_id)
 
     # ------------------------------------------------------------------
     # Run trigger queue (wakeup / resume)

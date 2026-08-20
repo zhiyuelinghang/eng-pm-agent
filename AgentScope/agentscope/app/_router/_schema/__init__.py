@@ -2,6 +2,7 @@
 """Schema models for the agent service."""
 
 from ._chat import ChatRequest, ChatTriggerResponse
+from ._health import ComponentStatus, HealthResponse
 from ._model import ListModelsResponse, ListModelsRequest
 from ._tts_model import ListTTSModelsResponse, ListTTSModelsRequest
 from ._schedule import (
@@ -148,6 +149,9 @@ __all__ = [
     # Chat
     "ChatRequest",
     "ChatTriggerResponse",
+    # Health
+    "ComponentStatus",
+    "HealthResponse",
     # Credential
     "CreateCredentialRequest",
     "CreateCredentialResponse",

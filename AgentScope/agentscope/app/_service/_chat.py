@@ -13,10 +13,16 @@ that wants them subscribes through the
 """
 import asyncio
 import json
+from contextlib import nullcontext
 
 from fastapi import HTTPException
 
-from .._bus_ops import enqueue_run_trigger, publish_session_event
+from .._bus_ops import (
+    abandon_inbox_consumer,
+    enqueue_run_trigger,
+    publish_session_event,
+    register_inbox_consumer,
+)
 from .._team_lifecycle import (
     mark_team_leader_completed,
     mark_team_leader_running,
@@ -338,9 +344,31 @@ class ChatService:
         | UserInterruptEvent
         | None,
     ) -> None:
-        """The actual chat-run body; wrapped by :meth:`run` for error
-        swallowing. Separated so the try/except doesn't bury the
-        per-step logic at one extra indentation level."""
+        """Serialize the complete session-state load, run and persist cycle."""
+        async with self._message_bus.acquire_lock(
+            MessageBusKeys.session_lock(session_id),
+            ttl_secs=MessageBusKeys.SESSION_RUN_TTL_SECS,
+        ):
+            await self._run_impl_locked(
+                user_id,
+                session_id,
+                agent_id,
+                input_msg,
+            )
+
+    async def _run_impl_locked(
+        self,
+        user_id: str,
+        session_id: str,
+        agent_id: str,
+        input_msg: Msg
+        | list[Msg]
+        | UserConfirmResultEvent
+        | ExternalExecutionResultEvent
+        | UserInterruptEvent
+        | None,
+    ) -> None:
+        """Run one session while :meth:`_run_impl` holds its lock."""
 
         # ----------------------------------------------------------------
         # 1. Load records + resolve workspace ONCE here, reused below.
@@ -605,14 +633,12 @@ class ChatService:
                     return
 
         # ----------------------------------------------------------------
-        # 7. Run the agent inside the distributed session lock
+        # 7. Run the agent while the distributed session lock remains held
         # ----------------------------------------------------------------
-        lock_key = MessageBusKeys.session_lock(session_id)
         events_key = MessageBusKeys.session_events(session_id)
-        async with self._message_bus.acquire_lock(
-            lock_key,
-            ttl_secs=MessageBusKeys.SESSION_RUN_TTL_SECS,
-        ):
+        # Keep the block shape local customisations rely on while the real
+        # lock now wraps state loading, assembly and persistence above.
+        async with nullcontext():
             reply_msg: Msg | None = None
             member_work_revision: int | None = None
             leader_settlement_revision: int | None = None
@@ -631,6 +657,7 @@ class ChatService:
                     team_id=session_record.team_id,
                     leader_session_id=session_id,
                 )
+            await register_inbox_consumer(self._message_bus, session_id)
             try:
                 if input_msg is None or isinstance(input_msg, (Msg, list)):
                     # Case A: new reply (user message(s), or retrigger with
@@ -769,6 +796,17 @@ class ChatService:
                 # acquire the lock and load a stale state from storage
                 # before this write lands.
                 async def _persist() -> None:
+                    # A producer suppresses a redundant wake while this run
+                    # owns the final inbox drain. Hand that ownership back
+                    # atomically and retrigger when something arrived after
+                    # the agent's last drain.
+                    await abandon_inbox_consumer(
+                        self._message_bus,
+                        user_id=user_id,
+                        session_id=session_id,
+                        agent_id=agent_id,
+                    )
+
                     # TeamDelete can intentionally remove a worker session
                     # while its cancelled model/tool coroutine is still
                     # unwinding. In that case there is no state left to
