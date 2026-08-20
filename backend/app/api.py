@@ -24,9 +24,10 @@ from .agentscope_client import (
     AgentScopeReply,
 )
 from .config import get_settings
+from .connector_secrets import encrypt_connector_secret
 from .db import SessionLocal, get_db
-from .models import (AgentConversation, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, EngineeringKnowledgeConversation, EngineeringKnowledgeMessage, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectInformationRecord, ProjectInitializationDraft, ProjectInitializationFile, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectSettings, ProjectStatusSnapshot,
-                      QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, WbsItem, WbsPredecessor, WbsRiskLink)
+from .models import (AgentConversation, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, EngineeringKnowledgeConversation, EngineeringKnowledgeMessage, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectConnectorConfig, ProjectInformationRecord, ProjectInitializationDraft, ProjectInitializationFile, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectSettings, ProjectStatusSnapshot,
+                      QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, UserConnectorConfig, WbsItem, WbsPredecessor, WbsRiskLink)
 from .initialization_validation import (
     InitializationValidationError,
     latest_initialization_validation_run,
@@ -55,7 +56,7 @@ from .project_initialization import (
     suggest_unique_username,
 )
 from .schemas import (AttachmentUpdate, DailyReportInput, DailyReportUpdate, DraftInput, DraftReviewInput, FillPackageInput,
-                      LoginRequest, MemberInput, PasswordChangeInput, ProfileUpdate, ProjectInput, RiskInput, TaskFlowGenerateInput, TaskInput, TaskTransitionInput,
+                      LoginRequest, MemberInput, PasswordChangeInput, ProfileUpdate, ProjectConnectorConfigInput, ProjectConnectorType, ProjectInput, RiskInput, TaskFlowGenerateInput, TaskInput, TaskTransitionInput, UserConnectorConfigInput, UserConnectorType,
                       WbsInput, WbsRiskLinkInput, OperationLogInput, PlatformFieldMappingInput, ProjectSettingsInput,
                        AgentConversationConfirmInput, AgentConversationInput, AgentConversationMessageInput, CollaborationMessageInput, CollaborationSessionInput, DocumentFolderInput, ProjectChangeInput, ProjectInformationDispositionInput, QualityMetricInput, TaskNoteInput, TaskReassignInput, TaskStepUpdate,
                        EngineeringDocumentAskInput, EngineeringDocumentFolderCreateInput, EngineeringDocumentFolderUpdateInput, EngineeringDocumentMoveInput, EngineeringDocumentSearchInput, EngineeringDocumentUrlInput, EngineeringKnowledgeConversationCreateInput, EngineeringKnowledgeConversationUpdateInput, EngineeringKnowledgeMessageInput)
@@ -279,6 +280,34 @@ def normalize_task_flow(data: dict[str, Any], fallback: dict[str, Any], members:
 
 def audit(db: Session, user: User, action: str, detail: str, project_id: int | None = None, target_type: str | None = None, target_id: int | None = None) -> None:
     db.add(OperationLog(project_id=project_id, operator_id=user.id, action=action, detail=detail, target_type=target_type, target_id=target_id))
+
+
+def user_connector_view(row: UserConnectorConfig) -> dict[str, Any]:
+    """Expose connector metadata without ever returning its credential."""
+
+    return {
+        "id": row.id,
+        "connector_type": row.connector_type,
+        "account_identifier": row.account_identifier,
+        "platform_type": row.platform_type,
+        "configured": row.configured,
+        "has_secret": bool(row.secret_encrypted),
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def project_connector_view(row: ProjectConnectorConfig) -> dict[str, Any]:
+    """Expose project connector metadata without returning its credential."""
+
+    return {
+        "id": row.id,
+        "project_id": row.project_id,
+        "connector_type": row.connector_type,
+        "connection_id": row.connection_id,
+        "configured": row.configured,
+        "has_secret": bool(row.secret_encrypted),
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
 
 
 def _agentscope_client() -> AgentScopeClient:
@@ -1135,6 +1164,7 @@ def update_me(payload: ProfileUpdate, db: Session = Depends(get_db), user: User 
     user.email = payload.email.strip() if payload.email and payload.email.strip() else None
     user.title = payload.title.strip() if payload.title and payload.title.strip() else None
     user.org_name = payload.org_name.strip() if payload.org_name and payload.org_name.strip() else None
+    audit(db, user, "更新个人资料", "更新姓名、岗位或联系方式", target_type="user", target_id=user.id)
     db.commit()
     db.refresh(user)
     return ok(serialize(user), "个人资料已保存")
@@ -1147,8 +1177,93 @@ def change_my_password(payload: PasswordChangeInput, db: Session = Depends(get_d
     if verify_password(payload.new_password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与当前密码相同")
     user.password_hash = hash_password(payload.new_password)
+    audit(db, user, "修改登录密码", "当前用户修改登录密码", target_type="user", target_id=user.id)
     db.commit()
     return ok(None, "登录密码已更新")
+
+
+@router.get("/me/connectors")
+def list_my_connectors(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    rows = db.scalars(
+        select(UserConnectorConfig)
+        .where(UserConnectorConfig.user_id == user.id)
+        .order_by(UserConnectorConfig.id),
+    ).all()
+    return ok([user_connector_view(row) for row in rows])
+
+
+@router.put("/me/connectors/{connector_type}")
+def save_my_connector(
+    connector_type: UserConnectorType,
+    payload: UserConnectorConfigInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    row = db.scalar(
+        select(UserConnectorConfig).where(
+            UserConnectorConfig.user_id == user.id,
+            UserConnectorConfig.connector_type == connector_type,
+        ),
+    )
+    if row is None:
+        row = UserConnectorConfig(
+            user_id=user.id,
+            connector_type=connector_type,
+            account_identifier=payload.account_identifier.strip(),
+        )
+        db.add(row)
+    row.account_identifier = payload.account_identifier.strip()
+    row.platform_type = (
+        payload.platform_type.strip()
+        if payload.platform_type and payload.platform_type.strip()
+        else None
+    )
+    if payload.secret and payload.secret.strip():
+        row.secret_encrypted = encrypt_connector_secret(payload.secret)
+    row.configured = True
+    db.flush()
+    audit(
+        db,
+        user,
+        "保存个人连接配置",
+        f"保存个人{connector_type}连接配置",
+        target_type="user_connector_config",
+        target_id=row.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return ok(user_connector_view(row), "个人连接配置已保存")
+
+
+@router.delete("/me/connectors/{connector_type}")
+def delete_my_connector(
+    connector_type: UserConnectorType,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    row = db.scalar(
+        select(UserConnectorConfig).where(
+            UserConnectorConfig.user_id == user.id,
+            UserConnectorConfig.connector_type == connector_type,
+        ),
+    )
+    if row is None:
+        return ok(None, "个人连接配置已清除")
+    row_id = row.id
+    db.delete(row)
+    audit(
+        db,
+        user,
+        "清除个人连接配置",
+        f"清除个人{connector_type}连接配置",
+        target_type="user_connector_config",
+        target_id=row_id,
+    )
+    db.commit()
+    return ok(None, "个人连接配置已清除")
 
 
 @router.get("/agents/catalog")
@@ -2648,6 +2763,93 @@ def save_project_settings(project_id: int, payload: ProjectSettingsInput, db: Se
     return ok(serialize(row), "项目资料配置已保存")
 
 
+@router.get("/projects/{project_id}/connectors")
+def list_project_connectors(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    rows = db.scalars(
+        select(ProjectConnectorConfig)
+        .where(ProjectConnectorConfig.project_id == project_id)
+        .order_by(ProjectConnectorConfig.id),
+    ).all()
+    return ok([project_connector_view(row) for row in rows])
+
+
+@router.put("/projects/{project_id}/connectors/{connector_type}")
+def save_project_connector(
+    project_id: int,
+    connector_type: ProjectConnectorType,
+    payload: ProjectConnectorConfigInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    row = db.scalar(
+        select(ProjectConnectorConfig).where(
+            ProjectConnectorConfig.project_id == project_id,
+            ProjectConnectorConfig.connector_type == connector_type,
+        ),
+    )
+    if row is None:
+        row = ProjectConnectorConfig(
+            project_id=project_id,
+            connector_type=connector_type,
+            connection_id=payload.connection_id.strip(),
+        )
+        db.add(row)
+    row.connection_id = payload.connection_id.strip()
+    if payload.secret and payload.secret.strip():
+        row.secret_encrypted = encrypt_connector_secret(payload.secret)
+    row.configured = True
+    db.flush()
+    audit(
+        db,
+        user,
+        "保存项目连接配置",
+        f"保存项目{connector_type}连接配置",
+        project_id,
+        "project_connector_config",
+        row.id,
+    )
+    db.commit()
+    db.refresh(row)
+    return ok(project_connector_view(row), "项目连接配置已保存")
+
+
+@router.delete("/projects/{project_id}/connectors/{connector_type}")
+def delete_project_connector(
+    project_id: int,
+    connector_type: ProjectConnectorType,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user)
+    row = db.scalar(
+        select(ProjectConnectorConfig).where(
+            ProjectConnectorConfig.project_id == project_id,
+            ProjectConnectorConfig.connector_type == connector_type,
+        ),
+    )
+    if row is None:
+        return ok(None, "项目连接配置已清除")
+    row_id = row.id
+    db.delete(row)
+    audit(
+        db,
+        user,
+        "清除项目连接配置",
+        f"清除项目{connector_type}连接配置",
+        project_id,
+        "project_connector_config",
+        row_id,
+    )
+    db.commit()
+    return ok(None, "项目连接配置已清除")
+
+
 def refresh_project_notifications(project_id: int, db: Session) -> None:
     overdue = db.scalars(select(Task).where(Task.project_id == project_id, Task.status == "overdue")).all()
     waiting_dailies = db.scalars(select(DailyReport).where(DailyReport.project_id == project_id, DailyReport.status == "pending_confirm")).all()
@@ -2661,8 +2863,8 @@ def refresh_project_notifications(project_id: int, db: Session) -> None:
 
 
 @router.get("/projects/{project_id}/dashboard")
-def project_dashboard(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    project_or_404(db, project_id); refresh_project_notifications(project_id, db)
+def project_dashboard(project_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
+    project_for_user_or_403(db, project_id, user); refresh_project_notifications(project_id, db)
     wbs = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id)).all()
     tasks = db.scalars(select(Task).where(Task.project_id == project_id)).all()
     risks = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id)).all()
@@ -2676,7 +2878,66 @@ def project_dashboard(project_id: int, db: Session = Depends(get_db), _: User = 
                    "task_completion_rate": snapshot.task_completion_rate, "open_changes": len(changes), "unread_notifications": len(notifications),
                    "main_risk": snapshot.main_risk, "main_safety": snapshot.main_safety, "main_quality": snapshot.main_quality, "overall": snapshot.overall})
     done = sum(1 for task in tasks if task.status == "completed")
-    return ok({"progress_rate": round(sum(item.progress for item in wbs) / len(wbs)) if wbs else 0, "progress_status": "正常", "planned_delta": "基本一致", "risk_warnings": sum(1 for risk in risks if risk.level in {"critical", "high"}), "safety_issues": sum(1 for risk in risks if "安全" in risk.risk_type), "quality_issues": sum(1 for metric in metrics if metric.status != "passed"), "task_completion_rate": round(done * 100 / len(tasks)) if tasks else 0, "open_changes": len(changes), "unread_notifications": len(notifications), "main_risk": next((risk.name for risk in risks if risk.level in {"critical", "high"}), "暂无重大风险"), "main_safety": "暂无新增安全隐患", "main_quality": next((metric.name for metric in metrics if metric.status != "passed"), "暂无待核查质量项"), "overall": "项目整体状态待核对"})
+    parent_ids = {item.parent_id for item in wbs if item.parent_id is not None}
+    progress_items = [item for item in wbs if item.id not in parent_ids] or wbs
+    progress_rate = (
+        round(
+            sum(float(item.progress_percent or 0) for item in progress_items)
+            / len(progress_items),
+        )
+        if progress_items
+        else 0
+    )
+    high_levels = {
+        "critical",
+        "high",
+        "重大",
+        "重大风险",
+        "较大",
+        "较大风险",
+        "一级",
+        "二级",
+    }
+
+    def is_high_risk(risk: RiskSource) -> bool:
+        return risk.risk_level.strip().lower() in high_levels
+
+    def is_safety_risk(risk: RiskSource) -> bool:
+        content = " ".join(
+            filter(
+                None,
+                (
+                    risk.related_process_name,
+                    risk.risk_part,
+                    risk.summary,
+                    risk.evaluation_condition,
+                ),
+            ),
+        )
+        return "安全" in content or "隐患" in content
+
+    high_risks = [risk for risk in risks if is_high_risk(risk)]
+    safety_risks = [risk for risk in risks if is_safety_risk(risk)]
+    pending_quality = [
+        metric
+        for metric in metrics
+        if metric.status not in {"passed", "completed", "合格", "已完成"}
+    ]
+    return ok({
+        "progress_rate": progress_rate,
+        "progress_status": "正常",
+        "planned_delta": "基本一致",
+        "risk_warnings": len(high_risks),
+        "safety_issues": len(safety_risks),
+        "quality_issues": len(pending_quality),
+        "task_completion_rate": round(done * 100 / len(tasks)) if tasks else 0,
+        "open_changes": len(changes),
+        "unread_notifications": len(notifications),
+        "main_risk": high_risks[0].risk_part if high_risks else "暂无重大风险",
+        "main_safety": safety_risks[0].risk_part if safety_risks else "暂无新增安全隐患",
+        "main_quality": pending_quality[0].quality_acceptance_item if pending_quality else "暂无待核查质量项",
+        "overall": "项目整体状态待核对",
+    })
 
 
 @router.get("/projects/{project_id}/information-records")
@@ -2954,8 +3215,8 @@ def serialize_project_wbs(db: Session, project_id: int) -> list[dict[str, Any]]:
             "planned_finish": row.planned_finish_at.isoformat() if row.planned_finish_at else None,
             "progress": float(row.progress_percent or 0),
             "status": row.status_text,
-            "responsible_user_id": None,
-            "raw_data": {},
+            "responsible_user_id": row.responsible_user_id,
+            "raw_data": row.raw_data or {},
             "predecessor_ids": predecessors,
             "predecessor_codes": [row_by_id[item_id].wbs_code for item_id in predecessors],
         })
@@ -2978,11 +3239,11 @@ def serialize_project_risks(db: Session, project_id: int) -> list[dict[str, Any]
             "risk_type": row.related_process_name,
             "planned_start": row.risk_window_start_date.isoformat() if row.risk_window_start_date else None,
             "planned_finish": row.risk_window_end_date.isoformat() if row.risk_window_end_date else None,
-            "responsible_user_id": None,
-            "confirmer_user_id": None,
-            "material_requirements": [],
+            "responsible_user_id": row.responsible_user_id,
+            "confirmer_user_id": row.confirmer_user_id,
+            "material_requirements": row.material_requirements or [],
             "control_requirements": row.evaluation_condition,
-            "status": "active",
+            "status": row.status,
         })
     return result
 
@@ -3012,9 +3273,9 @@ def serialize_project_quality_metrics(db: Session, project_id: int) -> list[dict
             "wbs_name": wbs.name,
             "name": row.quality_acceptance_item,
             "requirement": row.control_indicator,
-            "required_materials": [],
-            "owner_user_id": None,
-            "status": "pending",
+            "required_materials": row.required_materials or [],
+            "owner_user_id": row.owner_user_id,
+            "status": row.status,
         })
     return result
 
@@ -3169,6 +3430,7 @@ def create_wbs(project_id: int, payload: WbsInput, db: Session = Depends(get_db)
         wbs_code=payload.code,
         name=payload.name,
         assigned_to_text=responsible.real_name if responsible else payload.assigned_to_text or None,
+        responsible_user_id=payload.responsible_user_id,
         planned_start_at=planned_start,
         planned_finish_at=planned_finish,
         deadline_at=parse_optional_datetime(payload.deadline, "截止时间"),
@@ -3182,6 +3444,7 @@ def create_wbs(project_id: int, payload: WbsInput, db: Session = Depends(get_db)
         budget=payload.budget,
         actual_cost=payload.actual_cost,
         item_type=payload.item_type or "任务",
+        raw_data=payload.raw_data,
         level=payload.level,
     )
     db.add(item); db.flush()
@@ -3221,6 +3484,8 @@ def update_wbs(item_id: int, payload: WbsInput, db: Session = Depends(get_db), u
     if "responsible_user_id" in fields:
         responsible = db.get(User, payload.responsible_user_id) if payload.responsible_user_id else None
         item.assigned_to_text = responsible.real_name if responsible else None
+        item.responsible_user_id = payload.responsible_user_id
+    if "raw_data" in fields: item.raw_data = payload.raw_data
     if "predecessor_ids" in fields:
         replace_wbs_predecessors(db, item, payload.predecessor_ids or [])
     audit(db, user, "更新WBS工序", f"更新工序「{item.name}」", item.project_id, "wbs", item.id); db.commit(); db.refresh(item)
@@ -3257,6 +3522,10 @@ def create_risk(project_id: int, payload: RiskInput, db: Session = Depends(get_d
         risk_window_start_date=risk_start,
         risk_window_end_date=risk_finish,
         summary=payload.summary if payload.summary is not None else "、".join(payload.material_requirements) or None,
+        responsible_user_id=payload.responsible_user_id,
+        confirmer_user_id=payload.confirmer_user_id,
+        material_requirements=payload.material_requirements,
+        status=payload.status,
     )
     db.add(item); db.flush()
     audit(db, user, "新增风险源", f"新增风险源「{item.risk_part}」", project_id, "risk", item.id); db.commit(); db.refresh(item)
@@ -3287,7 +3556,13 @@ def update_risk(risk_id: int, payload: RiskInput, db: Session = Depends(get_db),
     validate_risk_window(item.risk_window_start_date, item.risk_window_end_date)
     if "control_requirements" in fields: item.evaluation_condition = payload.control_requirements or ""
     if "summary" in fields: item.summary = payload.summary or None
-    elif "material_requirements" in fields: item.summary = "、".join(payload.material_requirements) or None
+    if "material_requirements" in fields:
+        item.material_requirements = payload.material_requirements
+        if "summary" not in fields:
+            item.summary = "、".join(payload.material_requirements) or None
+    if "responsible_user_id" in fields: item.responsible_user_id = payload.responsible_user_id
+    if "confirmer_user_id" in fields: item.confirmer_user_id = payload.confirmer_user_id
+    if "status" in fields: item.status = payload.status
     audit(db, user, "更新风险源", f"更新风险源「{item.risk_part}」", item.project_id, "risk", item.id); db.commit(); db.refresh(item)
     row = next(row for row in serialize_project_risks(db, item.project_id) if row["id"] == item.id)
     return ok(row, "风险源已更新")
@@ -3318,6 +3593,9 @@ def create_quality_metric(project_id: int, payload: QualityMetricInput, db: Sess
         control_indicator=payload.requirement,
         inspection_frequency=payload.inspection_frequency or "",
         related_documents=payload.related_documents if payload.related_documents is not None else "、".join(payload.required_materials),
+        required_materials=payload.required_materials,
+        owner_user_id=payload.owner_user_id,
+        status=payload.status,
     )
     db.add(item); db.flush()
     audit(db, user, "新增质量指标", f"新增质量指标「{item.quality_acceptance_item}」", project_id, "quality_metric", item.id); db.commit(); db.refresh(item)
@@ -3345,7 +3623,12 @@ def update_quality_metric(metric_id: int, payload: QualityMetricInput, db: Sessi
     if "requirement" in fields: item.control_indicator = payload.requirement
     if "inspection_frequency" in fields: item.inspection_frequency = payload.inspection_frequency or ""
     if "related_documents" in fields: item.related_documents = payload.related_documents or ""
-    elif "required_materials" in fields: item.related_documents = "、".join(payload.required_materials)
+    if "required_materials" in fields:
+        item.required_materials = payload.required_materials
+        if "related_documents" not in fields:
+            item.related_documents = "、".join(payload.required_materials)
+    if "owner_user_id" in fields: item.owner_user_id = payload.owner_user_id
+    if "status" in fields: item.status = payload.status
     audit(db, user, "更新质量指标", f"更新质量指标「{item.quality_acceptance_item}」", item.project_id, "quality_metric", item.id); db.commit(); db.refresh(item)
     row = next(row for row in serialize_project_quality_metrics(db, item.project_id) if row["id"] == item.id)
     return ok(row, "质量指标已更新")
@@ -3436,10 +3719,10 @@ def generate_task_flow(project_id: int, payload: TaskFlowGenerateInput, db: Sess
 
     if settings.ai_api_key:
         context = {
-            "project": {"id": project.id, "name": project.project_name, "description": project.description},
+            "project": {"id": project.id, "name": project.name, "description": project.engineering_type_description},
             "members": members,
-            "wbs_items": [{"id": item.id, "code": item.code, "name": item.name, "progress": item.progress, "status": item.status} for item in wbs_items],
-            "risk_sources": [{"id": risk.id, "name": risk.name, "level": risk.level, "type": risk.risk_type} for risk in risks],
+            "wbs_items": [{"id": item.id, "code": item.wbs_code, "name": item.name, "progress": float(item.progress_percent or 0), "status": item.status_text} for item in wbs_items],
+            "risk_sources": [{"id": risk.id, "name": risk.risk_part, "level": risk.risk_level, "type": risk.related_process_name} for risk in risks],
         }
         prompt = f"""你是 Dobby 工程项目任务流设计助手。根据用户需求和项目上下文，生成一个可执行、可追溯的任务流。
 用户需求：{payload.requirement}
@@ -3591,17 +3874,17 @@ def assist_risk_draft(project_id: int, risk_id: int, db: Session = Depends(get_d
     project_or_404(db, project_id); risk = entity_or_404(db, RiskSource, risk_id, "风险源不存在")
     attachments = db.scalars(select(Attachment).where(Attachment.project_id == project_id)).all()
     names = [attachment.file_name for attachment in attachments]
-    missing = [material for material in risk.material_requirements if not any(material.lower() in name.lower() or name.lower() in material.lower() for name in names)]
+    missing = [material for material in (risk.material_requirements or []) if not any(material.lower() in name.lower() or name.lower() in material.lower() for name in names)]
     source_refs = names[-8:]
-    content = f"风险源：{risk.name}\n风险等级：{risk.level}\n控制要求：{risk.control_requirements or '待补充'}\n已关联资料：{'、'.join(source_refs) or '暂无'}\n缺项资料：{'、'.join(missing) or '无'}\n建议：请核对风险现场状态和资料完整性后提交审核。"
-    draft = RiskDraft(project_id=project_id, risk_source_id=risk.id, title=f"{risk.name}风险上报草稿", content=content, source_refs=source_refs, missing_items=missing)
+    content = f"风险源：{risk.risk_part}\n风险等级：{risk.risk_level}\n控制要求：{risk.evaluation_condition or '待补充'}\n已关联资料：{'、'.join(source_refs) or '暂无'}\n缺项资料：{'、'.join(missing) or '无'}\n建议：请核对风险现场状态和资料完整性后提交审核。"
+    draft = RiskDraft(project_id=project_id, risk_source_id=risk.id, title=f"{risk.risk_part}风险上报草稿", content=content, source_refs=source_refs, missing_items=missing)
     db.add(draft); db.flush()
     task_id = None
     if missing:
-        task = Task(project_id=project_id, title=f"补齐风险资料 — {risk.name}", task_type="material_missing", risk_level=risk.level, assignee_user_id=risk.responsible_user_id, confirmer_user_id=risk.confirmer_user_id, risk_source_id=risk.id, trigger_reason="智能草稿生成时发现风险资料缺项", required_materials=missing)
+        task = Task(project_id=project_id, title=f"补齐风险资料 — {risk.risk_part}", task_type="material_missing", risk_level=risk.risk_level, assignee_user_id=risk.responsible_user_id, confirmer_user_id=risk.confirmer_user_id, risk_source_id=risk.id, trigger_reason="智能草稿生成时发现风险资料缺项", required_materials=missing)
         db.add(task); db.flush(); task_id = task.id
         db.add(TaskStatusHistory(task_id=task.id, to_status="pending", changed_by=user.id, note="智能资料缺项校验自动创建"))
-    audit(db, user, "智能生成风险草稿", f"为风险源「{risk.name}」生成草稿" + ("并创建缺项任务" if task_id else ""), project_id, "risk_draft", draft.id)
+    audit(db, user, "智能生成风险草稿", f"为风险源「{risk.risk_part}」生成草稿" + ("并创建缺项任务" if task_id else ""), project_id, "risk_draft", draft.id)
     db.commit(); db.refresh(draft)
     return ok({"draft": serialize(draft), "task_id": task_id}, "风险草稿与缺项校验已完成")
 
@@ -3657,7 +3940,7 @@ def transition_fill_package(package_id: int, payload: TaskTransitionInput, db: S
 def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str, list[int]]:
     project = project_or_404(db, project_id)
     tasks = db.scalars(select(Task).where(Task.project_id == project_id, Task.status.in_(["overdue", "pending", "processing", "need_more_info", "pending_confirm"])).order_by(Task.updated_at.desc())).all()
-    wbs_items = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id).order_by(WbsItem.code).limit(30)).all()
+    wbs_items = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id).order_by(WbsItem.wbs_code).limit(30)).all()
     risk_sources = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id).order_by(RiskSource.updated_at.desc()).limit(30)).all()
     quality_metrics = db.scalars(select(QualityMetric).where(QualityMetric.project_id == project_id).order_by(QualityMetric.updated_at.desc()).limit(30)).all()
     daily_reports = db.scalars(select(DailyReport).where(DailyReport.project_id == project_id).order_by(DailyReport.updated_at.desc()).limit(20)).all()
@@ -3689,10 +3972,10 @@ def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str
         for file_name, category, content, parse_status, parse_error in materials
     ) or "暂无已入库资料"
     project_context = (
-        f"项目：{project.project_name}；所属单位：{project.owner_unit or '未填写'}；说明：{(project.description or '未填写')[:360]}\n"
-        + "WBS：" + ("；".join(f"{item.code} {item.name}（{item.progress}%/{item.status}）" for item in wbs_items) or "暂无") + "\n"
-        + "风险源：" + ("；".join(f"{item.name}（{item.level}/{item.status}）" for item in risk_sources) or "暂无") + "\n"
-        + "质量指标：" + ("；".join(f"{item.name}（{item.status}）" for item in quality_metrics) or "暂无") + "\n"
+        f"项目：{project.name}；建设单位：{project.construction_unit_name or '未填写'}；说明：{(project.engineering_type_description or '未填写')[:360]}\n"
+        + "WBS：" + ("；".join(f"{item.wbs_code} {item.name}（{float(item.progress_percent or 0)}%/{item.status_text or '未设置'}）" for item in wbs_items) or "暂无") + "\n"
+        + "风险源：" + ("；".join(f"{item.risk_part}（{item.risk_level}/{item.status}）" for item in risk_sources) or "暂无") + "\n"
+        + "质量指标：" + ("；".join(f"{item.quality_acceptance_item}（{item.inspection_frequency or '未设置频次'}）" for item in quality_metrics) or "暂无") + "\n"
         + "日报：" + ("；".join(f"{item.file_name}（{item.report_date or '日期待确认'}/{item.status}）" for item in daily_reports) or "暂无") + "\n"
         + "字段映射：" + ("；".join(f"{item.platform_name}:{item.source_field}→{item.target_field}" for item in field_mappings) or "暂无")
     )

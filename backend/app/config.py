@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     database_url: str
     database_schema: str = "platform"
     jwt_secret: str = "change-this-in-production"
+    connector_secret_key: str = ""
     jwt_expire_minutes: int = 480
     cors_origins: str = "http://localhost:38429,http://127.0.0.1:38429"
     upload_dir: Path = Path("data/uploads")

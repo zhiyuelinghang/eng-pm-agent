@@ -447,6 +447,98 @@ def _ensure_project_settings_weknora_agent_field(engine: Engine) -> None:
             )
 
 
+def _ensure_user_profile_fields(engine: Engine) -> None:
+    """Add editable personal-profile columns to supported embedded installs."""
+
+    table_name = "users"
+    inspector = inspect(engine)
+    if table_name not in inspector.get_table_names():
+        return
+    columns = {
+        str(column["name"])
+        for column in inspector.get_columns(table_name)
+    }
+    definitions = {
+        "phone": "VARCHAR(50)",
+        "email": "VARCHAR(200)",
+        "title": "VARCHAR(100)",
+        "org_name": "VARCHAR(200)",
+    }
+    statements = [
+        f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}"
+        for name, definition in definitions.items()
+        if name not in columns
+    ]
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+
+def _ensure_risk_operational_fields(engine: Engine) -> None:
+    """Preserve platform workflow fields added around canonical risk data."""
+
+    table_name = "project_risks"
+    inspector = inspect(engine)
+    if table_name not in inspector.get_table_names():
+        return
+    columns = {
+        str(column["name"])
+        for column in inspector.get_columns(table_name)
+    }
+    json_default = "'[]'"
+    definitions = {
+        "responsible_user_id": "INTEGER",
+        "confirmer_user_id": "INTEGER",
+        "material_requirements": f"JSON NOT NULL DEFAULT {json_default}",
+        "status": "VARCHAR(32) NOT NULL DEFAULT 'active'",
+    }
+    statements = [
+        f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}"
+        for name, definition in definitions.items()
+        if name not in columns
+    ]
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+
+def _ensure_wbs_quality_operational_fields(engine: Engine) -> None:
+    """Retain page-editable workflow fields around imported WBS data."""
+
+    table_definitions = {
+        "project_wbs_items": {
+            "responsible_user_id": "INTEGER",
+            "raw_data": "JSON NOT NULL DEFAULT '{}'",
+        },
+        "project_wbs_quality_requirements": {
+            "required_materials": "JSON NOT NULL DEFAULT '[]'",
+            "owner_user_id": "INTEGER",
+            "status": "VARCHAR(32) NOT NULL DEFAULT 'pending'",
+        },
+    }
+    inspector = inspect(engine)
+    table_names = set(inspector.get_table_names())
+    statements: list[str] = []
+    for table_name, definitions in table_definitions.items():
+        if table_name not in table_names:
+            continue
+        columns = {
+            str(column["name"])
+            for column in inspector.get_columns(table_name)
+        }
+        statements.extend(
+            f"ALTER TABLE {table_name} ADD COLUMN {name} {definition}"
+            for name, definition in definitions.items()
+            if name not in columns
+        )
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+
 def _ensure_initialization_draft_record_version_fields(engine: Engine) -> None:
     """Keep addressable draft-row history compatible with older installs."""
     table_name = "project_initialization_draft_records"
@@ -600,6 +692,9 @@ def upgrade_database_schema(
         _ensure_database_interaction_runtime_rules(engine)
         _ensure_attachment_text_pipeline_fields(engine)
         _ensure_project_settings_weknora_agent_field(engine)
+        _ensure_user_profile_fields(engine)
+        _ensure_risk_operational_fields(engine)
+        _ensure_wbs_quality_operational_fields(engine)
         _ensure_initialization_draft_record_version_fields(engine)
         return
 
@@ -609,6 +704,9 @@ def upgrade_database_schema(
     _ensure_database_interaction_runtime_rules(engine)
     _ensure_attachment_text_pipeline_fields(engine)
     _ensure_project_settings_weknora_agent_field(engine)
+    _ensure_user_profile_fields(engine)
+    _ensure_risk_operational_fields(engine)
+    _ensure_wbs_quality_operational_fields(engine)
     _ensure_initialization_draft_record_version_fields(engine)
     _backfill_initialization_draft_records(engine)
     if legacy_layout:

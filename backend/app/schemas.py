@@ -23,6 +23,27 @@ class PasswordChangeInput(BaseModel):
     new_password: str = Field(min_length=8, max_length=200)
 
 
+UserConnectorType = Literal[
+    "platform",
+    "mail",
+    "wecom",
+    "feishu",
+    "dingtalk",
+]
+ProjectConnectorType = Literal["wecom", "feishu", "dingtalk"]
+
+
+class UserConnectorConfigInput(BaseModel):
+    account_identifier: str = Field(min_length=1, max_length=500)
+    platform_type: str | None = Field(default=None, max_length=100)
+    secret: str | None = Field(default=None, max_length=4000)
+
+
+class ProjectConnectorConfigInput(BaseModel):
+    connection_id: str = Field(min_length=1, max_length=1000)
+    secret: str | None = Field(default=None, max_length=4000)
+
+
 class ProjectInput(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     engineering_type_description: str | None = Field(default=None, max_length=5000)

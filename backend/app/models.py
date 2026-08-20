@@ -56,9 +56,45 @@ class User(TimestampMixin, Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(20), default="user", server_default="user")
     real_name: Mapped[str] = mapped_column(String(100))
+    phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    org_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     identity_card_no: Mapped[str] = mapped_column(
         String(30),
         unique=True,
+    )
+
+
+class UserConnectorConfig(TimestampMixin, Base):
+    """个人外部账号连接；敏感凭据只保存服务端密文。"""
+
+    __tablename__ = "user_connector_configs"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "connector_type",
+            name="uq_user_connector_type",
+        ),
+        CheckConstraint(
+            "connector_type IN ('platform', 'mail', 'wecom', 'feishu', 'dingtalk')",
+            name="ck_user_connector_type",
+        ),
+        Index("ix_user_connector_configs_user", "user_id"),
+        Index("ix_user_connector_configs_type", "connector_type"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+    )
+    connector_type: Mapped[str] = mapped_column(String(32))
+    account_identifier: Mapped[str] = mapped_column(String(500))
+    platform_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    configured: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
     )
 
 
@@ -94,6 +130,38 @@ class Project(TimestampMixin, Base):
     supervision_unit_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
     design_unit_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
     survey_unit_name: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
+
+class ProjectConnectorConfig(TimestampMixin, Base):
+    """项目级协同工具连接；每个项目、每类工具最多一条。"""
+
+    __tablename__ = "project_connector_configs"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "connector_type",
+            name="uq_project_connector_type",
+        ),
+        CheckConstraint(
+            "connector_type IN ('wecom', 'feishu', 'dingtalk')",
+            name="ck_project_connector_type",
+        ),
+        Index("ix_project_connector_configs_project", "project_id"),
+        Index("ix_project_connector_configs_type", "connector_type"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+    )
+    connector_type: Mapped[str] = mapped_column(String(32))
+    connection_id: Mapped[str] = mapped_column(String(1000))
+    secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    configured: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+    )
+
 
 class ProjectStatusSnapshot(TimestampMixin, Base):
     """项目状态页的管理口径快照；实际业务数据仍保存在工序、风险、任务等表中。"""
@@ -283,6 +351,10 @@ class WbsItem(TimestampMixin, Base):
     wbs_code: Mapped[str] = mapped_column(String(128))
     name: Mapped[str] = mapped_column(String(300))
     assigned_to_text: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    responsible_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     planned_start_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     planned_finish_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     deadline_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -308,6 +380,11 @@ class WbsItem(TimestampMixin, Base):
     source_creator: Mapped[str | None] = mapped_column(String(200), nullable=True)
     item_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source_project_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_data: Mapped[dict[str, Any]] = mapped_column(
+        JSON,
+        default=dict,
+        server_default=text("'{}'"),
+    )
     level: Mapped[int] = mapped_column(SmallInteger, default=1)
 
 
@@ -364,6 +441,24 @@ class RiskSource(TimestampMixin, Base):
     risk_window_start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     risk_window_end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    responsible_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    confirmer_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    material_requirements: Mapped[list[str]] = mapped_column(
+        JSON,
+        default=list,
+        server_default=text("'[]'"),
+    )
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default="active",
+        server_default="active",
+    )
 
 
 
@@ -389,6 +484,20 @@ class QualityMetric(TimestampMixin, Base):
     control_indicator: Mapped[str] = mapped_column(Text)
     inspection_frequency: Mapped[str] = mapped_column(Text)
     related_documents: Mapped[str] = mapped_column(Text)
+    required_materials: Mapped[list[str]] = mapped_column(
+        JSON,
+        default=list,
+        server_default=text("'[]'"),
+    )
+    owner_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default="pending",
+        server_default="pending",
+    )
 
 
 class PlatformFieldMapping(TimestampMixin, Base):

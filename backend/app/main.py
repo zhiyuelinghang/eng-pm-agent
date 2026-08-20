@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,6 +84,7 @@ def ensure_prototype_status_data(db, project: Project) -> None:
             account = User(
                 username=username,
                 real_name=real_name,
+                title=title,
                 identity_card_no=f"PROTOTYPE_{username}",
                 password_hash=hash_password("ChangeMe123!"),
                 role="user",
@@ -114,7 +115,20 @@ def ensure_prototype_status_data(db, project: Project) -> None:
     for spec in supervision_specs:
         item = db.scalar(select(WbsItem).where(WbsItem.project_id == project.id, WbsItem.name == spec["name"]))
         if not item:
-            item = WbsItem(project_id=project.id, code=spec["code"], name=spec["name"], level=2, planned_start="2026-07-01", planned_finish="2026-07-31", progress=spec["progress"], status=spec["status"], responsible_user_id=users[spec["owner"]].id, raw_data={"supervision": {key: spec[key] for key in ("yesterday", "today", "quality", "risk", "focus", "key")}})
+            item = WbsItem(
+                project_id=project.id,
+                sort_order=len(wbs) + 1,
+                wbs_code=spec["code"],
+                name=spec["name"],
+                level=2,
+                planned_start_at=datetime(2026, 7, 1),
+                planned_finish_at=datetime(2026, 7, 31),
+                progress_percent=spec["progress"],
+                status_text=spec["status"],
+                assigned_to_text=spec["owner"],
+                responsible_user_id=users[spec["owner"]].id,
+                raw_data={"supervision": {key: spec[key] for key in ("yesterday", "today", "quality", "risk", "focus", "key")}},
+            )
             db.add(item)
             db.flush()
         wbs[spec["name"]] = item
@@ -125,10 +139,23 @@ def ensure_prototype_status_data(db, project: Project) -> None:
         ("临边防护缺失", "medium", "安全隐患", "赵安全", "补齐双道栏杆和警示标识，复核照片作为闭环依据。"),
     ]
     risks: dict[str, RiskSource] = {}
-    for name, level, risk_type, owner, control in risk_specs:
-        item = db.scalar(select(RiskSource).where(RiskSource.project_id == project.id, RiskSource.name == name))
+    for serial_no, (name, level, risk_type, owner, control) in enumerate(risk_specs, start=1):
+        item = db.scalar(select(RiskSource).where(RiskSource.project_id == project.id, RiskSource.risk_part == name))
         if not item:
-            item = RiskSource(project_id=project.id, name=name, level=level, risk_type=risk_type, planned_start="2026-07-01", planned_finish="2026-07-31", responsible_user_id=users[owner].id, confirmer_user_id=users["赵安全"].id, material_requirements=["监测日报", "复核意见"], control_requirements=control)
+            item = RiskSource(
+                project_id=project.id,
+                serial_no=serial_no,
+                risk_part=name,
+                risk_level=level,
+                related_process_name=risk_type,
+                risk_window_start_date=date(2026, 7, 1),
+                risk_window_end_date=date(2026, 7, 31),
+                responsible_user_id=users[owner].id,
+                confirmer_user_id=users["赵安全"].id,
+                material_requirements=["监测日报", "复核意见"],
+                evaluation_condition=control,
+                status="active",
+            )
             db.add(item)
             db.flush()
         risks[name] = item
@@ -146,8 +173,18 @@ def ensure_prototype_status_data(db, project: Project) -> None:
         ("降水记录连续性", "降水运行", "降水井运行记录需补齐并保持连续", "processing"),
     ]
     for name, wbs_name, requirement, status in quality_specs:
-        if not db.scalar(select(QualityMetric).where(QualityMetric.project_id == project.id, QualityMetric.name == name)):
-            db.add(QualityMetric(project_id=project.id, wbs_item_id=wbs[wbs_name].id, name=name, requirement=requirement, inspection_frequency="每日核查", required_materials=["施工日报", "验收记录"], owner_user_id=users["赵安全"].id, status=status))
+        if not db.scalar(select(QualityMetric).where(QualityMetric.project_id == project.id, QualityMetric.quality_acceptance_item == name)):
+            db.add(QualityMetric(
+                project_id=project.id,
+                wbs_code=wbs[wbs_name].wbs_code,
+                quality_acceptance_item=name,
+                control_indicator=requirement,
+                inspection_frequency="每日核查",
+                related_documents="施工日报、验收记录",
+                required_materials=["施工日报", "验收记录"],
+                owner_user_id=users["赵安全"].id,
+                status=status,
+            ))
 
     def workflow(phase: str, closure: str, rows: list[tuple[str, str, str, str]]) -> list[dict[str, str]]:
         return [{"name": name, "owner": owner, "status": status, "note": material, "material": material, "phase": phase, "closure": closure} for name, owner, status, material in rows]
@@ -217,22 +254,22 @@ def ensure_prototype_status_data(db, project: Project) -> None:
 
 def seed_prototype_project() -> None:
     with SessionLocal() as db:
-        for project in db.scalars(select(Project).where(Project.project_name.in_(MISSEEDED_DEMO_PROJECTS))).all():
-            if project.description and project.description.startswith("原型项目："):
+        for project in db.scalars(select(Project).where(Project.name.in_(MISSEEDED_DEMO_PROJECTS))).all():
+            if project.engineering_type_description and project.engineering_type_description.startswith("原型项目："):
                 db.query(DocumentFolder).filter(DocumentFolder.project_id == project.id).delete()
                 db.delete(project)
-        project = db.scalar(select(Project).where(Project.project_name == PROTOTYPE_PROJECT["project_name"]))
+        project = db.scalar(select(Project).where(Project.name == PROTOTYPE_PROJECT["project_name"]))
         if not project:
             project = Project(
-                project_name=PROTOTYPE_PROJECT["project_name"],
-                owner_unit=PROTOTYPE_PROJECT["owner_unit"],
-                description=PROTOTYPE_PROJECT["description"],
+                name=PROTOTYPE_PROJECT["project_name"],
+                construction_unit_name=PROTOTYPE_PROJECT["owner_unit"],
+                engineering_type_description=PROTOTYPE_PROJECT["description"],
             )
             db.add(project)
             db.flush()
         else:
-            project.owner_unit = PROTOTYPE_PROJECT["owner_unit"]
-            project.description = PROTOTYPE_PROJECT["description"]
+            project.construction_unit_name = PROTOTYPE_PROJECT["owner_unit"]
+            project.engineering_type_description = PROTOTYPE_PROJECT["description"]
         stale_folders = db.scalars(select(DocumentFolder).where(
             DocumentFolder.project_id == project.id,
             DocumentFolder.parent_id.is_(None),

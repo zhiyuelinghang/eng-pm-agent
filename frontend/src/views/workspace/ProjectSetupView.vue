@@ -351,9 +351,9 @@
               <section v-else-if="['wecom', 'feishu', 'dingtalk'].includes(manualSection)" class="project-connector-direct">
                 <form v-if="activeProjectConnector" class="project-connector-editor" @submit.prevent="saveProjectConnector">
                   <label>{{ activeProjectConnector.connectionLabel }}<input v-model.trim="activeProjectConnector.connectionId" maxlength="500" :placeholder="activeProjectConnector.connectionPlaceholder"></label>
-                  <label>{{ activeProjectConnector.secretLabel }}<input v-model="activeProjectConnector.secret" type="password" autocomplete="new-password" placeholder="输入后仅用于本次配置，不在浏览器中保存"></label>
-                  <div class="project-credential-note"><n-icon :size="17"><ShieldLock /></n-icon><p><strong>凭据保护</strong><span>当前仅保存连接标识和配置状态，密钥不会写入浏览器存储。</span></p></div>
-                  <footer class="project-connector-actions"><span>{{ activeProjectConnector.updatedAt ? `更新于 ${activeProjectConnector.updatedAt}` : '尚未保存连接信息' }}</span><button type="submit" class="primary"><n-icon :size="17"><Link /></n-icon>保存{{ activeProjectConnector.label }}配置</button></footer>
+                  <label>{{ activeProjectConnector.secretLabel }}<input v-model="activeProjectConnector.secret" type="password" autocomplete="new-password" :placeholder="activeProjectConnector.hasSecret ? '留空则继续使用已保存的密钥' : '输入应用密钥或签名密钥'"></label>
+                  <div class="project-credential-note"><n-icon :size="17"><ShieldLock /></n-icon><p><strong>凭据保护</strong><span>连接标识保存在项目配置表，密钥仅以服务端密文保存，页面不会回显。</span></p></div>
+                  <footer class="project-connector-actions"><span>{{ activeProjectConnector.updatedAt ? `更新于 ${activeProjectConnector.updatedAt}` : '尚未保存连接信息' }}</span><div><button v-if="activeProjectConnector.configured" type="button" class="secondary danger" :disabled="projectConnectorSaving" @click="clearProjectConnector">清除配置</button><button type="submit" class="primary" :disabled="projectConnectorSaving || projectConnectorLoading"><n-icon :size="17"><Link /></n-icon>{{ projectConnectorSaving ? '正在保存…' : `保存${activeProjectConnector.label}配置` }}</button></div></footer>
                 </form>
               </section>
 
@@ -1247,6 +1247,7 @@ type ProjectConnectorConfig = {
   connectionId: string
   secret: string
   configured: boolean
+  hasSecret: boolean
   updatedAt: string
   icon: any
 }
@@ -1485,14 +1486,22 @@ const initializationDraftApplying = ref(false)
 const initializationDraftValidating = ref(false)
 const initializationDraftAllowPartial = ref(false)
 const initializationCredentialForms = ref<InitializationCredentialForm[]>([])
+const projectConnectorLoading = ref(false)
+const projectConnectorSaving = ref(false)
 const activeProjectConnectorKey = ref<ProjectConnectorKey>('wecom')
 const projectConnectors = reactive<ProjectConnectorConfig[]>([
-  { key: 'wecom', label: '企业微信', description: '配置当前项目使用的企业微信应用或项目群机器人。', connectionLabel: '企业 ID / 机器人 Webhook', connectionPlaceholder: '输入企业 ID 或项目群机器人 Webhook', secretLabel: '应用 Secret / 签名密钥', connectionId: '', secret: '', configured: false, updatedAt: '', icon: MessageCircle },
-  { key: 'feishu', label: '飞书', description: '配置当前项目使用的飞书应用或项目群机器人。', connectionLabel: '应用 ID / 机器人 Webhook', connectionPlaceholder: '输入应用 ID 或项目群机器人 Webhook', secretLabel: '应用 Secret / 签名密钥', connectionId: '', secret: '', configured: false, updatedAt: '', icon: MessageCircle },
-  { key: 'dingtalk', label: '钉钉', description: '配置当前项目使用的钉钉应用或项目群机器人。', connectionLabel: '应用 Key / 机器人 Webhook', connectionPlaceholder: '输入应用 Key 或项目群机器人 Webhook', secretLabel: '应用 Secret / 加签密钥', connectionId: '', secret: '', configured: false, updatedAt: '', icon: MessageCircle },
+  { key: 'wecom', label: '企业微信', description: '配置当前项目使用的企业微信应用或项目群机器人。', connectionLabel: '企业 ID / 机器人 Webhook', connectionPlaceholder: '输入企业 ID 或项目群机器人 Webhook', secretLabel: '应用 Secret / 签名密钥', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
+  { key: 'feishu', label: '飞书', description: '配置当前项目使用的飞书应用或项目群机器人。', connectionLabel: '应用 ID / 机器人 Webhook', connectionPlaceholder: '输入应用 ID 或项目群机器人 Webhook', secretLabel: '应用 Secret / 签名密钥', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
+  { key: 'dingtalk', label: '钉钉', description: '配置当前项目使用的钉钉应用或项目群机器人。', connectionLabel: '应用 Key / 机器人 Webhook', connectionPlaceholder: '输入应用 Key 或项目群机器人 Webhook', secretLabel: '应用 Secret / 加签密钥', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
 ])
 const activeProjectConnector = computed(() => projectConnectors.find(item => item.key === activeProjectConnectorKey.value))
-const projectConnectorStorageKey = computed(() => `dobby-project-connectors:${configProjectId.value || 'current'}`)
+type ApiProjectConnectorConfig = {
+  connector_type: ProjectConnectorKey
+  connection_id: string
+  configured: boolean
+  has_secret: boolean
+  updated_at: string | null
+}
 const projectBaseInfoCompletedCount = computed(() => {
   const values = [
     projectBaseInfoForm.name,
@@ -2569,7 +2578,7 @@ watch(configProjectId, projectId => {
   closePersonnelDetail()
   Object.assign(monitorForm, { mainDir: '', archiveDir: '', tempDir: '', failedDir: '', backupDir: '', scanInterval: 30, enabled: false })
   monitorRules.value = []
-  loadProjectConnectorSettings()
+  void loadProjectConnectorSettings()
   void loadConfigProjectScope(projectId)
   void loadMaterialAgentConversation(projectId)
   void loadInitializationDraft(projectId)
@@ -2582,44 +2591,78 @@ watch(() => store.projectSetupRefreshVersion, () => {
   void loadInitializationDraft(configProjectId.value)
 })
 
-function loadProjectConnectorSettings() {
+async function loadProjectConnectorSettings() {
+  projectConnectorLoading.value = true
   for (const connector of projectConnectors) {
     connector.connectionId = ''
     connector.secret = ''
     connector.configured = false
+    connector.hasSecret = false
     connector.updatedAt = ''
   }
   try {
-    const saved = JSON.parse(localStorage.getItem(projectConnectorStorageKey.value) || '{}') as Record<string, Partial<ProjectConnectorConfig>>
-    for (const connector of projectConnectors) {
-      const value = saved[connector.key]
-      if (!value) continue
-      connector.connectionId = value.connectionId || ''
+    if (!configProjectId.value) return
+    const response = await api.get<ApiEnvelope<ApiProjectConnectorConfig[]>>(`/projects/${configProjectId.value}/connectors`)
+    for (const value of response.data.data) {
+      const connector = projectConnectors.find(item => item.key === value.connector_type)
+      if (!connector) continue
+      connector.connectionId = value.connection_id || ''
       connector.configured = Boolean(value.configured)
-      connector.updatedAt = value.updatedAt || ''
+      connector.hasSecret = Boolean(value.has_secret)
+      connector.updatedAt = value.updated_at ? new Date(value.updated_at).toLocaleString('zh-CN', { hour12: false }) : ''
     }
-  } catch {
-    localStorage.removeItem(projectConnectorStorageKey.value)
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '项目连接配置加载失败。')
+  } finally {
+    projectConnectorLoading.value = false
   }
 }
 
-function saveProjectConnector() {
+async function saveProjectConnector() {
   const connector = activeProjectConnector.value
   if (!connector) return
   if (!connector.connectionId.trim()) {
     message.warning(`请填写${connector.connectionLabel}。`)
     return
   }
-  connector.configured = true
-  connector.updatedAt = new Date().toLocaleString('zh-CN', { hour12: false })
-  const saved = Object.fromEntries(projectConnectors.map(item => [item.key, {
-    connectionId: item.connectionId,
-    configured: item.configured,
-    updatedAt: item.updatedAt,
-  }]))
-  localStorage.setItem(projectConnectorStorageKey.value, JSON.stringify(saved))
-  connector.secret = ''
-  message.success(`${connector.label}连接信息已保存；敏感凭据未写入浏览器。`)
+  if (!configProjectId.value) return
+  projectConnectorSaving.value = true
+  try {
+    const response = await api.put<ApiEnvelope<ApiProjectConnectorConfig>>(`/projects/${configProjectId.value}/connectors/${connector.key}`, {
+      connection_id: connector.connectionId,
+      secret: connector.secret || null,
+    })
+    const saved = response.data.data
+    connector.connectionId = saved.connection_id
+    connector.configured = saved.configured
+    connector.hasSecret = saved.has_secret
+    connector.updatedAt = saved.updated_at ? new Date(saved.updated_at).toLocaleString('zh-CN', { hour12: false }) : ''
+    connector.secret = ''
+    message.success(`${connector.label}连接信息已保存到项目。`)
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '项目连接配置保存失败。')
+  } finally {
+    projectConnectorSaving.value = false
+  }
+}
+
+async function clearProjectConnector() {
+  const connector = activeProjectConnector.value
+  if (!connector || !connector.configured || !configProjectId.value) return
+  projectConnectorSaving.value = true
+  try {
+    await api.delete(`/projects/${configProjectId.value}/connectors/${connector.key}`)
+    connector.connectionId = ''
+    connector.secret = ''
+    connector.configured = false
+    connector.hasSecret = false
+    connector.updatedAt = ''
+    message.success(`${connector.label}连接配置已清除。`)
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '项目连接配置清除失败。')
+  } finally {
+    projectConnectorSaving.value = false
+  }
 }
 
 function attachmentsFromMessage(item: ApiAgentMessage): InitializationAttachment[] {
@@ -3604,7 +3647,7 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .project-config-scroll { display:flex; flex-direction:column; }.project-workspace-tabs { flex:0 0 auto; }
 .project-connector-editor { display:grid; min-height:0; align-content:start; gap:16px; overflow-y:auto; padding:22px; }.project-connector-editor label { display:grid; gap:6px; color:#4e6964; font-size:12px; font-weight:750; }.project-connector-editor input { box-sizing:border-box; width:100%; min-width:0; min-height:42px; border:1px solid #cad9d5; border-radius:7px; padding:9px 11px; color:#193b37; background:#fff; font:inherit; font-size:13px; outline:0; }.project-connector-editor input:focus { border-color:#4e9187; box-shadow:0 0 0 3px rgba(15,118,110,.1); }
 .project-credential-note { display:grid; grid-template-columns:auto minmax(0,1fr); gap:9px; padding:11px; border-radius:8px; color:#0f766e; background:#eef6f3; }.project-credential-note p { display:grid; gap:3px; margin:0; }.project-credential-note strong { color:#315a54; font-size:12px; }.project-credential-note span { color:#70837f; font-size:12px; line-height:1.5; }
-.project-connector-actions { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:4px; padding-top:18px; border-top:1px solid var(--border-default); }.project-connector-actions > span { color:#7a8d88; font-size:12px; }.project-connector-actions .primary { display:inline-flex; align-items:center; justify-content:center; gap:7px; white-space:nowrap; }
+.project-connector-actions { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:4px; padding-top:18px; border-top:1px solid var(--border-default); }.project-connector-actions > span { color:#7a8d88; font-size:12px; }.project-connector-actions > div { display:flex; align-items:center; gap:8px; }.project-connector-actions .primary,.project-connector-actions .secondary { display:inline-flex; min-height:38px; align-items:center; justify-content:center; gap:7px; white-space:nowrap; }.project-connector-actions .secondary { border:1px solid #cad9d5; border-radius:7px; padding:8px 12px; color:#4c6762; background:#fff; font:inherit; font-size:12px; font-weight:750; cursor:pointer; }.project-connector-actions .secondary.danger { color:#b54832; border-color:#e6c7c0; }.project-connector-actions button:disabled { opacity:.55; cursor:not-allowed; }
 .project-base-info-panel { min-height:100%; padding:16px 18px 22px; background:#f7faf9; }
 .project-base-info-form { display:grid; width:min(100%,1080px); gap:14px; margin:0 auto; }
 .project-base-info-form fieldset { min-width:0; margin:0; border:1px solid #dce7e4; border-radius:9px; padding:5px 16px 17px; background:#fff; }
