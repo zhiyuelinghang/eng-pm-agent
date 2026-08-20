@@ -114,7 +114,7 @@ const passwordForm = reactive({ current_password: '', new_password: '', confirm_
 const connectors = reactive<ConnectorConfig[]>([
   { key: 'platform', label: '工程平台账号', description: '选择工程中已配置的平台，维护本人用于登录和自动填报的账号标识。', accountLabel: '平台用户名', accountPlaceholder: '例如：safety_user', account: '', secret: '', platformType: '监测平台', configured: false, hasSecret: false, updatedAt: '', icon: Building },
   { key: 'mail', label: '邮件配置', description: '用于接收过程邮件、会议通知和外发报告草稿。', accountLabel: '项目邮箱', accountPlaceholder: 'name@example.com', account: '', secret: '', platformType: '', configured: false, hasSecret: false, updatedAt: '', icon: Mail },
-  { key: 'wecom', label: '企业微信配置', description: '用于接入项目群消息、任务提醒和转发同事处理。', accountLabel: '企业微信账号', accountPlaceholder: '手机号或企业微信账号', account: '', secret: '', platformType: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
+  { key: 'wecom', label: '企业微信配置', description: '用于在项目群任务通知中准确 @ 到本人。', accountLabel: '手机号或企业微信 UserID', accountPlaceholder: '例如：13800138000 或 wangfang', account: '', secret: '', platformType: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
   { key: 'feishu', label: '飞书配置', description: '用于后续连接飞书群、飞书文档和审批消息。', accountLabel: '飞书账号', accountPlaceholder: '请输入飞书账号', account: '', secret: '', platformType: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
   { key: 'dingtalk', label: '钉钉配置', description: '用于后续连接钉钉群、待办和组织通讯录。', accountLabel: '钉钉账号', accountPlaceholder: '请输入钉钉账号', account: '', secret: '', platformType: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
 ])

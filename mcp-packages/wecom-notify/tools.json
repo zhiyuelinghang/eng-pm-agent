@@ -1,0 +1,80 @@
+[
+  {
+    "name": "wecom_send_text",
+    "title": "发送企业微信文本",
+    "description": "向已配置的企业微信群机器人发送文本，可按 UserID 或手机号提醒成员。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "session_id": {"type": "string"},
+        "content": {"type": "string", "maxLength": 2048},
+        "mentioned_list": {"type": "array", "items": {"type": "string"}},
+        "mentioned_mobile_list": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["content"]
+    }
+  },
+  {
+    "name": "wecom_send_markdown",
+    "title": "发送企业微信 Markdown",
+    "description": "向已配置的企业微信群机器人发送 Markdown 通知。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "session_id": {"type": "string"},
+        "content": {"type": "string", "maxLength": 4096}
+      },
+      "required": ["content"]
+    }
+  },
+  {
+    "name": "wecom_send_image",
+    "title": "发送企业微信图片",
+    "description": "发送不超过 2MB 的本地图片或 data URI。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "session_id": {"type": "string"},
+        "image_source": {"type": "string"}
+      },
+      "required": ["image_source"]
+    }
+  },
+  {
+    "name": "wecom_send_news",
+    "title": "发送企业微信图文",
+    "description": "发送 1 至 8 条带链接的企业微信图文消息。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "session_id": {"type": "string"},
+        "articles": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": {"type": "string"},
+              "description": {"type": "string"},
+              "url": {"type": "string"},
+              "picurl": {"type": "string"}
+            },
+            "required": ["title", "url"]
+          }
+        }
+      },
+      "required": ["articles"]
+    }
+  },
+  {
+    "name": "wecom_get_status",
+    "title": "查询企业微信通知状态",
+    "description": "读取当前 MCP 进程内的发送次数和最近错误。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {"session_id": {"type": "string"}}
+    }
+  }
+]
+

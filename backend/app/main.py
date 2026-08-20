@@ -19,10 +19,37 @@ from .models import (Attachment, DailyReport, DocumentFolder, DocumentFolderItem
 from .security import hash_password
 from .schema_migrations import upgrade_database_schema
 from .task_engine_gateway import get_engine
+from .wecom_notification_gateway import (
+    deliver_due_notifications,
+    enqueue_task_notification,
+)
 
 
 logger = logging.getLogger(__name__)
 TICK_INTERVAL_SECONDS = 300
+NOTIFICATION_INTERVAL_SECONDS = 5
+
+
+def _record_tick_notifications(report, task_engine) -> None:
+    """把任务引擎 tick 结果转换为宿主通知事件。"""
+
+    with SessionLocal() as db:
+        for outcome in report.fired:
+            if not outcome.ok or not outcome.task_id:
+                continue
+            task = task_engine.get_task(outcome.task_id)
+            if task is not None:
+                enqueue_task_notification(
+                    db,
+                    task,
+                    "schedule_fired",
+                    dedupe_suffix=f"{outcome.schedule_id}:{outcome.fired_at.isoformat()}",
+                )
+        for task_id in report.overdue_task_ids:
+            task = task_engine.get_task(task_id)
+            if task is not None:
+                enqueue_task_notification(db, task, "task_overdue")
+        db.commit()
 
 
 async def _tick_loop() -> None:
@@ -31,6 +58,12 @@ async def _tick_loop() -> None:
     while True:
         try:
             report = await asyncio.to_thread(task_engine.tick)
+            if report.created_count or report.overdue_task_ids:
+                await asyncio.to_thread(
+                    _record_tick_notifications,
+                    report,
+                    task_engine,
+                )
             if report.created_count or report.overdue_task_ids:
                 logger.info("任务引擎：%s", report.describe())
             for failure in (item for item in report.fired if not item.ok):
@@ -42,6 +75,19 @@ async def _tick_loop() -> None:
         except Exception:
             logger.exception("任务引擎 tick 失败")
         await asyncio.sleep(TICK_INTERVAL_SECONDS)
+
+
+async def _notification_loop() -> None:
+    """持续投递 PostgreSQL outbox，失败按退避策略重试。"""
+
+    while True:
+        try:
+            report = await asyncio.to_thread(deliver_due_notifications)
+            if report.claimed:
+                logger.info("企业微信通知：%s", report.describe())
+        except Exception:
+            logger.exception("企业微信通知投递循环失败")
+        await asyncio.sleep(NOTIFICATION_INTERVAL_SECONDS)
 
 
 def seed_admin() -> None:
@@ -356,10 +402,14 @@ async def lifespan(_: FastAPI):
         bootstrap_declarative_catalog(db)
     seed_admin()
     tick_task = asyncio.create_task(_tick_loop())
+    notification_task = asyncio.create_task(_notification_loop())
     yield
     tick_task.cancel()
+    notification_task.cancel()
     with suppress(asyncio.CancelledError):
         await tick_task
+    with suppress(asyncio.CancelledError):
+        await notification_task
 
 
 settings = get_settings()

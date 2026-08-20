@@ -319,11 +319,16 @@ def dispatch_platform_task(
             "risk_source_id": risk_source_id,
         },
     )
-    return get_engine().dispatch(
+    task = get_engine().dispatch(
         flow,
         actor=str(actor),
         trigger_note=trigger_reason,
     )
+    # 宿主侧通知是引擎结果的消费者，不改变任务引擎领域模型与流转规则。
+    from .wecom_notification_gateway import enqueue_task_notification
+
+    enqueue_task_notification(db, task, "task_created")
+    return task
 
 
 def build_steps(

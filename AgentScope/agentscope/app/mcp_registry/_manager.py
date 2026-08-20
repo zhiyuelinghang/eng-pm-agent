@@ -26,6 +26,7 @@ from ._models import (
     MCPPackageView,
     PROJECT_INITIALIZATION_VALIDATION_CAPABILITY,
     TASK_ENGINE_STORE_CAPABILITY,
+    WECOM_NOTIFICATION_CAPABILITY,
     utc_now,
 )
 
@@ -371,6 +372,7 @@ class MCPRegistryManager:
         *,
         allow_system_tool_package: bool = False,
         allow_task_engine_store_capability: bool = False,
+        allow_wecom_notification_capability: bool = False,
     ) -> MCPPackageRecord:
         """Validate, probe and publish one dependency-complete ZIP package.
 
@@ -405,6 +407,14 @@ class MCPRegistryManager:
                 ):
                     raise MCPPackageError(
                         "任务引擎存储能力只能由平台维护脚本安装或更新。",
+                    )
+                if (
+                    WECOM_NOTIFICATION_CAPABILITY
+                    in manifest.platform_capabilities
+                    and not allow_wecom_notification_capability
+                ):
+                    raise MCPPackageError(
+                        "企业微信通知能力只能由平台维护脚本安装或更新。",
                     )
                 existing = await self.get_record(manifest.name)
                 if (
@@ -610,9 +620,11 @@ class MCPRegistryManager:
         env.pop("DOBBY_DATABASE_PATH", None)
         # 任务引擎只能使用宿主注入的连接信息，上传包中的值不能覆盖。
         env.pop("TASK_ENGINE_DATABASE_URL", None)
+        capabilities = set(manifest.platform_capabilities)
         if {
             "dobby_database_interactions",
-        } & set(manifest.platform_capabilities):
+            WECOM_NOTIFICATION_CAPABILITY,
+        } & capabilities:
             gateway_url = os.getenv(
                 "DOBBY_AGENT_TOOL_BASE_URL",
                 "http://127.0.0.1:38430/api/internal/agent-tools",
@@ -627,20 +639,21 @@ class MCPRegistryManager:
                 # Give the package only the dedicated gateway credential name;
                 # never expose the broader AgentScope service-token variable.
                 env["DOBBY_AGENT_TOOL_TOKEN"] = gateway_token
-            database_api_url = os.getenv(
-                "DOBBY_INTERNAL_API_BASE_URL",
-                "",
-            ).strip().rstrip("/")
-            if not database_api_url and gateway_url.rstrip("/").endswith(
-                "/agent-tools",
-            ):
-                database_api_url = (
-                    gateway_url.rstrip("/").removesuffix("/agent-tools")
-                )
-            if database_api_url:
-                env["DOBBY_DATABASE_INTERACTION_BASE_URL"] = (
-                    database_api_url + "/database-interactions"
-                )
+            if "dobby_database_interactions" in capabilities:
+                database_api_url = os.getenv(
+                    "DOBBY_INTERNAL_API_BASE_URL",
+                    "",
+                ).strip().rstrip("/")
+                if not database_api_url and gateway_url.rstrip("/").endswith(
+                    "/agent-tools",
+                ):
+                    database_api_url = (
+                        gateway_url.rstrip("/").removesuffix("/agent-tools")
+                    )
+                if database_api_url:
+                    env["DOBBY_DATABASE_INTERACTION_BASE_URL"] = (
+                        database_api_url + "/database-interactions"
+                    )
         if TASK_ENGINE_STORE_CAPABILITY in manifest.platform_capabilities:
             database_url = (
                 os.getenv("TASK_ENGINE_DATABASE_URL", "").strip()

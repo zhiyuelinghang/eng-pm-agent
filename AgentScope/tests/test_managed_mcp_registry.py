@@ -408,6 +408,45 @@ def test_task_engine_store_package_requires_trusted_install(
     asyncio.run(scenario())
 
 
+def test_wecom_notification_capability_is_reserved_for_platform_package() -> None:
+    with pytest.raises(ValueError, match="仅允许 wecom-notify"):
+        MCPPackageManifest(
+            name="lookalike-wecom",
+            display_name="伪企业微信通知",
+            version="1.0.0",
+            command="server.exe",
+            platform_capabilities=["dobby_wecom_notifications"],
+        )
+
+
+def test_wecom_notification_package_requires_trusted_install(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        manager = MCPRegistryManager(tmp_path)
+        async with manager:
+            monkeypatch.setattr(manager, "_probe_package", AsyncMock(return_value=[]))
+            package = _archive(
+                name="wecom-notify",
+                platform_capabilities=["dobby_wecom_notifications"],
+            )
+            with pytest.raises(MCPPackageError, match="平台维护脚本"):
+                await manager.install_archive(package)
+
+            trusted_package = _archive(
+                name="wecom-notify",
+                platform_capabilities=["dobby_wecom_notifications"],
+            )
+            record = await manager.install_archive(
+                trusted_package,
+                allow_wecom_notification_capability=True,
+            )
+            assert record.id == "wecom-notify"
+
+    asyncio.run(scenario())
+
+
 def test_command_must_resolve_inside_uploaded_package(tmp_path) -> None:
     package_dir = tmp_path / "package"
     runtime_dir = package_dir / "runtime"
@@ -554,6 +593,27 @@ def test_platform_gateway_context_is_injected_only_when_requested(
     assert gateway_env["DOBBY_AGENT_TOOL_TOKEN"] == "host-gateway-token"
     assert "MINERU_FILE_PARSE_URL" not in gateway_env
     assert "MINERU_BACKEND" not in gateway_env
+
+    wecom_env = manager._runtime_environment(
+        MCPPackageManifest(
+            name="wecom-notify",
+            display_name="企业微信通知",
+            version="1.0.0",
+            command="server.exe",
+            platform_capabilities=["dobby_wecom_notifications"],
+        ),
+        user_id="user",
+        agent_id="agent",
+        session_id="session",
+        platform_session_id="platform-session",
+    )
+    assert wecom_env["DOBBY_AGENT_TOOL_BASE_URL"] == (
+        "http://gateway.test/api/internal/agent-tools"
+    )
+    assert wecom_env["DOBBY_AGENT_TOOL_TOKEN"] == "host-gateway-token"
+    assert wecom_env["DOBBY_PLATFORM_SESSION_ID"] == "platform-session"
+    assert "DOBBY_DATABASE_INTERACTION_BASE_URL" not in wecom_env
+    assert "TASK_ENGINE_DATABASE_URL" not in wecom_env
 
     task_engine_env = manager._runtime_environment(
         MCPPackageManifest(

@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     connector_secret_key: str = ""
     jwt_expire_minutes: int = 480
     cors_origins: str = "http://localhost:38429,http://127.0.0.1:38429"
+    frontend_public_url: str = "http://127.0.0.1:38429"
     upload_dir: Path = Path("data/uploads")
     ai_api_key: str = ""
     ai_base_url: str = "https://api.openai.com/v1"

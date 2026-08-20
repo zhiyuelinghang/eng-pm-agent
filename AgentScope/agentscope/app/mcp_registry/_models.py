@@ -12,6 +12,7 @@ PROJECT_INITIALIZATION_VALIDATION_CAPABILITY = (
     "project_initialization_validation"
 )
 TASK_ENGINE_STORE_CAPABILITY = "dobby_task_engine_store"
+WECOM_NOTIFICATION_CAPABILITY = "dobby_wecom_notifications"
 
 
 def utc_now() -> datetime:
@@ -57,6 +58,7 @@ class MCPPackageManifest(BaseModel):
         Literal[
             "dobby_database_interactions",
             "dobby_task_engine_store",
+            "dobby_wecom_notifications",
             "project_initialization_validation",
         ]
     ] = Field(
@@ -102,6 +104,7 @@ class MCPPackageManifest(BaseModel):
             Literal[
                 "dobby_database_interactions",
                 "dobby_task_engine_store",
+                "dobby_wecom_notifications",
                 "project_initialization_validation",
             ]
         ],
@@ -109,6 +112,7 @@ class MCPPackageManifest(BaseModel):
         Literal[
             "dobby_database_interactions",
             "dobby_task_engine_store",
+            "dobby_wecom_notifications",
             "project_initialization_validation",
         ]
     ]:
@@ -122,6 +126,13 @@ class MCPPackageManifest(BaseModel):
         ):
             raise ValueError(
                 "dobby_task_engine_store 仅允许 task-engine 包申请",
+            )
+        if (
+            WECOM_NOTIFICATION_CAPABILITY in self.platform_capabilities
+            and self.name != "wecom-notify"
+        ):
+            raise ValueError(
+                "dobby_wecom_notifications 仅允许 wecom-notify 包申请",
             )
         return self
 

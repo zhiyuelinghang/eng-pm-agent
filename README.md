@@ -198,6 +198,29 @@ AGENTSCOPE_REQUEST_TIMEOUT_SECONDS=150
 AGENTSCOPE_POLL_INTERVAL_SECONDS=0.35
 ```
 
+## 任务引擎与企业微信通知
+
+任务流、计划、节点、活动与触发日志由任务引擎保存在 PostgreSQL 的 `task_engine`
+schema；工程平台只通过宿主适配器提供项目、工点、责任人和确认人。企业微信通知不改
+任务引擎核心：任务事件先写入平台 schema 的 `outbound_notifications`，后端投递循环
+再向项目群机器人发送，失败按退避策略重试，通知失败不会回滚已经下发的任务。
+
+管理员在“工程配置 → 企业微信配置”填写项目群名称和群机器人 Webhook。Webhook 只
+以服务端密文保存；保存后可主动“测试发送”。成员在“个人设置 → 企业微信配置”填写
+手机号或企业微信 UserID，任务通知优先按手机号在项目群中 @ 当前责任人。未配置项目
+群机器人时，任务仍正常下发，只是不创建外部通知。
+
+分支保留的文本、Markdown、图片、图文和状态查询 5 个 MCP 工具位于
+`mcp-packages/wecom-notify`。平台运行时，MCP 通过会话绑定的内部网关发送，不会获得
+项目 Webhook。修改包后依次构建、无外发探测、安装并分配给 Dobby 全局总控：
+
+```powershell
+.\python-3.13.14\python.exe .\scripts\build_wecom_notify_mcp_package.py
+.\python-3.13.14\python.exe .\scripts\smoke_test_wecom_notify_mcp_package.py
+.\python-3.13.14\python.exe .\scripts\install_wecom_notify_mcp.py
+.\python-3.13.14\python.exe .\scripts\assign_wecom_notify_to_global_main.py
+```
+
 AgentScope 管理端的“数据库交互”不是任意 SQL 编辑器。工程平台数据库内维护三类
 权威记录：数据表白名单、可分配交互定义、智能体分配关系。管理员先在“数据表”
 中选择真实业务表，配置当前项目/当前用户/仅管理员的行级范围，以及可读、可写、
@@ -217,9 +240,8 @@ AgentScope 管理端的“数据库交互”不是任意 SQL 编辑器。工程�
 XLSX 优先调用 MinerU；接口不可用或解析失败时使用包内本地解析器，CSV、TXT、
 Markdown 和旧版 XLS 直接本地解析。
 
-平台 SQLite 只保存平台账号、项目、附件关联、操作审计，以及“平台账号/项目
-可以访问哪个 AgentScope 会话”的授权映射；不再复制保存聊天消息正文或运行时
-消息。聊天正文、思考、工具调用和协同过程均以 AgentScope 存储为唯一数据源，
+工程平台业务数据统一保存在 PostgreSQL 的 `platform` schema；聊天正文、思考、
+工具调用和协同过程均以 PostgreSQL 的 AgentScope 存储为唯一数据源，
 一条消息只写入一次。平台读取历史时先校验账号与项目权限，再根据授权映射由
 后端读取对应 AgentScope 会话并投影为业务端展示格式；AgentScope 暂时不可用时
 明确返回服务错误，不使用另一份可能过期的平台消息副本兜底。

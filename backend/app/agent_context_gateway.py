@@ -12,6 +12,7 @@ import hmac
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+import httpx
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -20,10 +21,16 @@ from .config import get_settings
 from .db import get_db
 from .models import (
     AgentConversation,
+    OperationLog,
     Project,
     ProjectMember,
     ProjectSettings,
     User,
+)
+from .wecom_notification_gateway import (
+    WeComDeliveryError,
+    safe_wecom_error,
+    send_project_wecom_payload,
 )
 
 
@@ -59,6 +66,12 @@ class ProjectWeKnoraBindingInput(BaseModel):
     """Trusted management request for one project's WeKnora robot."""
 
     weknora_agent_id: str | None = Field(default=None, max_length=128)
+
+
+class WeComRelayInput(BaseModel):
+    """A message body whose destination is resolved from the bound session."""
+
+    payload: dict[str, Any]
 
 
 def ok(data: Any, message: str = "ok") -> dict[str, Any]:
@@ -141,6 +154,50 @@ def get_agent_tool_context(
             },
         },
     )
+
+
+@router.post(
+    "/wecom/messages",
+    dependencies=[Depends(require_service_token)],
+)
+def relay_wecom_message(
+    payload: WeComRelayInput,
+    agentscope_session_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Relay an MCP message through the current session's project Webhook."""
+
+    context = resolve_tool_context(db, agentscope_session_id)
+    if not context.can_write:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="当前会话只能读取项目资料，不能发送企业微信消息",
+        )
+    try:
+        result = send_project_wecom_payload(
+            db,
+            context.project.id,
+            payload.payload,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (httpx.HTTPError, WeComDeliveryError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"企业微信消息发送失败：{safe_wecom_error(exc)}",
+        ) from exc
+
+    db.add(
+        OperationLog(
+            project_id=context.project.id,
+            operator_id=context.user.id,
+            action="Dobby发送企业微信消息",
+            detail=f"发送 {result['message_type']} 类型项目群消息",
+            target_type="project_connector_config",
+        ),
+    )
+    db.commit()
+    return ok(result, "企业微信消息已发送")
 
 
 @router.get(

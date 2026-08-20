@@ -80,6 +80,15 @@ from .task_engine_gateway import (
     to_api_history,
     to_api_task,
 )
+from .wecom_notification_gateway import (
+    WeComDeliveryError,
+    enqueue_task_notification,
+    is_wecom_webhook_url,
+    project_wecom_configured,
+    safe_wecom_error,
+    send_project_wecom_test,
+    validate_wecom_webhook_url,
+)
 
 
 router = APIRouter(prefix="/api")
@@ -314,13 +323,23 @@ def user_connector_view(row: UserConnectorConfig) -> dict[str, Any]:
 def project_connector_view(row: ProjectConnectorConfig) -> dict[str, Any]:
     """Expose project connector metadata without returning its credential."""
 
+    legacy_wecom_webhook = (
+        row.connector_type == "wecom"
+        and is_wecom_webhook_url(row.connection_id)
+    )
     return {
         "id": row.id,
         "project_id": row.project_id,
         "connector_type": row.connector_type,
-        "connection_id": row.connection_id,
-        "configured": row.configured,
-        "has_secret": bool(row.secret_encrypted),
+        "connection_id": (
+            "项目群机器人" if legacy_wecom_webhook else row.connection_id
+        ),
+        "configured": (
+            project_wecom_configured(row)
+            if row.connector_type == "wecom"
+            else row.configured
+        ),
+        "has_secret": bool(row.secret_encrypted or legacy_wecom_webhook),
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 
@@ -2807,17 +2826,43 @@ def save_project_connector(
             ProjectConnectorConfig.connector_type == connector_type,
         ),
     )
-    if row is None:
+    is_new = row is None
+    if is_new:
         row = ProjectConnectorConfig(
             project_id=project_id,
             connector_type=connector_type,
             connection_id=payload.connection_id.strip(),
         )
         db.add(row)
-    row.connection_id = payload.connection_id.strip()
-    if payload.secret and payload.secret.strip():
-        row.secret_encrypted = encrypt_connector_secret(payload.secret)
-    row.configured = True
+    assert row is not None
+
+    connection_id = payload.connection_id.strip()
+    provided_secret = (payload.secret or "").strip()
+    if connector_type == "wecom":
+        legacy_webhook = connection_id if is_wecom_webhook_url(connection_id) else ""
+        if legacy_webhook:
+            connection_id = "项目群机器人"
+        secret = provided_secret or legacy_webhook
+        if not secret and not row.secret_encrypted and is_wecom_webhook_url(row.connection_id):
+            secret = row.connection_id
+        if secret:
+            try:
+                secret = validate_wecom_webhook_url(secret)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            row.secret_encrypted = encrypt_connector_secret(secret)
+        if not row.secret_encrypted:
+            raise HTTPException(
+                status_code=422,
+                detail="请填写企业微信群机器人 Webhook",
+            )
+        row.connection_id = connection_id or "项目群机器人"
+        row.configured = True
+    else:
+        row.connection_id = connection_id
+        if provided_secret:
+            row.secret_encrypted = encrypt_connector_secret(provided_secret)
+        row.configured = True
     db.flush()
     audit(
         db,
@@ -2831,6 +2876,37 @@ def save_project_connector(
     db.commit()
     db.refresh(row)
     return ok(project_connector_view(row), "项目连接配置已保存")
+
+
+@router.post("/projects/{project_id}/connectors/wecom/test")
+def test_project_wecom_connector(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_admin),
+) -> dict[str, Any]:
+    """由管理员主动向当前项目群发送一条无 @ 人员的连接测试消息。"""
+
+    project_for_user_or_403(db, project_id, user)
+    try:
+        result = send_project_wecom_test(db, project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (httpx.HTTPError, WeComDeliveryError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"企业微信测试消息发送失败：{safe_wecom_error(exc)}",
+        ) from exc
+    audit(
+        db,
+        user,
+        "测试企业微信连接",
+        "向当前项目群发送企业微信机器人测试消息",
+        project_id,
+        "project_connector_config",
+        None,
+    )
+    db.commit()
+    return ok(result, "企业微信测试消息已发送")
 
 
 @router.delete("/projects/{project_id}/connectors/{connector_type}")
@@ -3944,6 +4020,7 @@ def create_task(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    enqueue_task_notification(db, task, "task_created")
     audit(
         db,
         user,
@@ -4013,6 +4090,12 @@ def transition_task(
     except TransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    event_type = {
+        "done": "task_completed",
+        "cancelled": "task_cancelled",
+        "running": "task_rejected",
+    }[target]
+    enqueue_task_notification(db, task, event_type)
     audit(
         db,
         user,
@@ -4070,6 +4153,13 @@ def update_task_step(
     except TransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    if payload.status == "completed":
+        event_type = "task_review" if task.state == "review" else "step_activated"
+    elif payload.status == "blocked":
+        event_type = "step_blocked"
+    else:
+        event_type = "step_activated"
+    enqueue_task_notification(db, task, event_type)
     audit(
         db,
         user,
@@ -4125,6 +4215,12 @@ def reassign_task(
     except TransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    enqueue_task_notification(
+        db,
+        task,
+        "task_reassigned",
+        recipient_user_id=payload.assignee_user_id,
+    )
     audit(
         db,
         user,

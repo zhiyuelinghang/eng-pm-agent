@@ -351,9 +351,9 @@
               <section v-else-if="['wecom', 'feishu', 'dingtalk'].includes(manualSection)" class="project-connector-direct">
                 <form v-if="activeProjectConnector" class="project-connector-editor" @submit.prevent="saveProjectConnector">
                   <label>{{ activeProjectConnector.connectionLabel }}<input v-model.trim="activeProjectConnector.connectionId" maxlength="500" :placeholder="activeProjectConnector.connectionPlaceholder"></label>
-                  <label>{{ activeProjectConnector.secretLabel }}<input v-model="activeProjectConnector.secret" type="password" autocomplete="new-password" :placeholder="activeProjectConnector.hasSecret ? '留空则继续使用已保存的密钥' : '输入应用密钥或签名密钥'"></label>
-                  <div class="project-credential-note"><n-icon :size="17"><ShieldLock /></n-icon><p><strong>凭据保护</strong><span>连接标识保存在项目配置表，密钥仅以服务端密文保存，页面不会回显。</span></p></div>
-                  <footer class="project-connector-actions"><span>{{ activeProjectConnector.updatedAt ? `更新于 ${activeProjectConnector.updatedAt}` : '尚未保存连接信息' }}</span><div><button v-if="activeProjectConnector.configured" type="button" class="secondary danger" :disabled="projectConnectorSaving" @click="clearProjectConnector">清除配置</button><button type="submit" class="primary" :disabled="projectConnectorSaving || projectConnectorLoading"><n-icon :size="17"><Link /></n-icon>{{ projectConnectorSaving ? '正在保存…' : `保存${activeProjectConnector.label}配置` }}</button></div></footer>
+                  <label>{{ activeProjectConnector.secretLabel }}<input v-model="activeProjectConnector.secret" type="password" autocomplete="new-password" :placeholder="activeProjectConnector.hasSecret ? '留空则继续使用已保存的凭据' : activeProjectConnector.secretPlaceholder"></label>
+                  <div class="project-credential-note"><n-icon :size="17"><ShieldLock /></n-icon><p><strong>凭据保护</strong><span>{{ activeProjectConnector.key === 'wecom' ? '群机器人 Webhook 仅以服务端密文保存，页面和接口均不会回显。' : '连接标识保存在项目配置表，密钥仅以服务端密文保存，页面不会回显。' }}</span></p></div>
+                  <footer class="project-connector-actions"><span>{{ activeProjectConnector.updatedAt ? `更新于 ${activeProjectConnector.updatedAt}` : '尚未保存连接信息' }}</span><div><button v-if="activeProjectConnector.key === 'wecom' && activeProjectConnector.configured" type="button" class="secondary" :disabled="projectConnectorSaving || projectConnectorTesting" @click="testProjectConnector">{{ projectConnectorTesting ? '正在测试…' : '测试发送' }}</button><button v-if="activeProjectConnector.configured" type="button" class="secondary danger" :disabled="projectConnectorSaving || projectConnectorTesting" @click="clearProjectConnector">清除配置</button><button type="submit" class="primary" :disabled="projectConnectorSaving || projectConnectorLoading || projectConnectorTesting"><n-icon :size="17"><Link /></n-icon>{{ projectConnectorSaving ? '正在保存…' : `保存${activeProjectConnector.label}配置` }}</button></div></footer>
                 </form>
               </section>
 
@@ -1244,6 +1244,7 @@ type ProjectConnectorConfig = {
   connectionLabel: string
   connectionPlaceholder: string
   secretLabel: string
+  secretPlaceholder: string
   connectionId: string
   secret: string
   configured: boolean
@@ -1488,11 +1489,12 @@ const initializationDraftAllowPartial = ref(false)
 const initializationCredentialForms = ref<InitializationCredentialForm[]>([])
 const projectConnectorLoading = ref(false)
 const projectConnectorSaving = ref(false)
+const projectConnectorTesting = ref(false)
 const activeProjectConnectorKey = ref<ProjectConnectorKey>('wecom')
 const projectConnectors = reactive<ProjectConnectorConfig[]>([
-  { key: 'wecom', label: '企业微信', description: '配置当前项目使用的企业微信应用或项目群机器人。', connectionLabel: '企业 ID / 机器人 Webhook', connectionPlaceholder: '输入企业 ID 或项目群机器人 Webhook', secretLabel: '应用 Secret / 签名密钥', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
-  { key: 'feishu', label: '飞书', description: '配置当前项目使用的飞书应用或项目群机器人。', connectionLabel: '应用 ID / 机器人 Webhook', connectionPlaceholder: '输入应用 ID 或项目群机器人 Webhook', secretLabel: '应用 Secret / 签名密钥', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
-  { key: 'dingtalk', label: '钉钉', description: '配置当前项目使用的钉钉应用或项目群机器人。', connectionLabel: '应用 Key / 机器人 Webhook', connectionPlaceholder: '输入应用 Key 或项目群机器人 Webhook', secretLabel: '应用 Secret / 加签密钥', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
+  { key: 'wecom', label: '企业微信', description: '配置项目群机器人，用于任务下发、节点流转和逾期提醒。', connectionLabel: '项目群名称', connectionPlaceholder: '例如：项目管理群', secretLabel: '群机器人 Webhook', secretPlaceholder: '粘贴企业微信群机器人的完整 Webhook', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
+  { key: 'feishu', label: '飞书', description: '配置当前项目使用的飞书应用或项目群机器人。', connectionLabel: '应用 ID / 机器人 Webhook', connectionPlaceholder: '输入应用 ID 或项目群机器人 Webhook', secretLabel: '应用 Secret / 签名密钥', secretPlaceholder: '输入应用密钥或签名密钥', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
+  { key: 'dingtalk', label: '钉钉', description: '配置当前项目使用的钉钉应用或项目群机器人。', connectionLabel: '应用 Key / 机器人 Webhook', connectionPlaceholder: '输入应用 Key 或项目群机器人 Webhook', secretLabel: '应用 Secret / 加签密钥', secretPlaceholder: '输入应用密钥或加签密钥', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
 ])
 const activeProjectConnector = computed(() => projectConnectors.find(item => item.key === activeProjectConnectorKey.value))
 type ApiProjectConnectorConfig = {
@@ -1526,7 +1528,7 @@ const manualSections = computed(() => [
   { key: 'risks' as const, label: '风险源', description: '维护风险等级、控制要求和资料要求。', count: configScope.riskSources.length, icon: Shield },
   { key: 'mappings' as const, label: '字段映射', description: '维护外部平台填报字段的映射规则。', count: configScope.platformMappings.length, icon: ArrowsLeftRight },
   { key: 'monitor' as const, label: '监控与预警', description: '维护资料目录监控与风险预警提前量。', count: monitorRules.value.length + 1, icon: ListDetails },
-  { key: 'wecom' as const, label: '企业微信配置', description: '维护当前项目使用的企业微信应用或项目群机器人。', count: projectConnectors[0].configured ? 1 : 0, icon: MessageCircle },
+  { key: 'wecom' as const, label: '企业微信配置', description: '维护任务通知使用的项目群机器人。', count: projectConnectors[0].configured ? 1 : 0, icon: MessageCircle },
   { key: 'feishu' as const, label: '飞书配置', description: '维护当前项目使用的飞书应用或项目群机器人。', count: projectConnectors[1].configured ? 1 : 0, icon: MessageCircle },
   { key: 'dingtalk' as const, label: '钉钉配置', description: '维护当前项目使用的钉钉应用或项目群机器人。', count: projectConnectors[2].configured ? 1 : 0, icon: MessageCircle },
 ])
@@ -2625,6 +2627,10 @@ async function saveProjectConnector() {
     message.warning(`请填写${connector.connectionLabel}。`)
     return
   }
+  if (connector.key === 'wecom' && !connector.hasSecret && !connector.secret.trim()) {
+    message.warning('请填写企业微信群机器人 Webhook。')
+    return
+  }
   if (!configProjectId.value) return
   projectConnectorSaving.value = true
   try {
@@ -2643,6 +2649,20 @@ async function saveProjectConnector() {
     message.error(error.response?.data?.detail || '项目连接配置保存失败。')
   } finally {
     projectConnectorSaving.value = false
+  }
+}
+
+async function testProjectConnector() {
+  const connector = activeProjectConnector.value
+  if (connector?.key !== 'wecom' || !connector.configured || !configProjectId.value) return
+  projectConnectorTesting.value = true
+  try {
+    await api.post(`/projects/${configProjectId.value}/connectors/wecom/test`)
+    message.success('测试消息已发送，请到项目群中确认。')
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '企业微信测试消息发送失败。')
+  } finally {
+    projectConnectorTesting.value = false
   }
 }
 

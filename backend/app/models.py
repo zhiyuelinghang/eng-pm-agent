@@ -1300,6 +1300,74 @@ class Notification(TimestampMixin, Base):
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class OutboundNotification(TimestampMixin, Base):
+    """需要投递到外部协同工具的可靠通知队列。"""
+
+    __tablename__ = "outbound_notifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "dedupe_key",
+            name="uq_outbound_notification_dedupe",
+        ),
+        CheckConstraint(
+            "connector_type IN ('wecom')",
+            name="ck_outbound_notification_connector_type",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'sending', 'retrying', 'sent', 'failed', 'skipped')",
+            name="ck_outbound_notification_status",
+        ),
+        Index(
+            "ix_outbound_notifications_due",
+            "status",
+            "next_attempt_at",
+        ),
+        Index("ix_outbound_notifications_project", "project_id"),
+        Index("ix_outbound_notifications_task", "task_id"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+    )
+    connector_type: Mapped[str] = mapped_column(
+        String(32),
+        default="wecom",
+        server_default="wecom",
+    )
+    event_type: Mapped[str] = mapped_column(String(64))
+    task_id: Mapped[str] = mapped_column(String(80))
+    recipient_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    recipient_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    title: Mapped[str] = mapped_column(String(300))
+    content: Mapped[str] = mapped_column(Text)
+    mentioned_user_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    mentioned_mobile: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(24),
+        default="pending",
+        server_default="pending",
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+    )
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    dedupe_key: Mapped[str] = mapped_column(String(500))
+
+
 class Attachment(TimestampMixin, Base):
     __tablename__ = "attachments"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

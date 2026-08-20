@@ -125,8 +125,11 @@ def test_project_connector_is_project_scoped(db: Session) -> None:
         project.id,
         "wecom",
         ProjectConnectorConfigInput(
-            connection_id="https://example.com/project-webhook",
-            secret="signing-secret",
+            connection_id="项目管理群",
+            secret=(
+                "https://qyapi.weixin.qq.com/cgi-bin/webhook/send"
+                "?key=connector-test-key"
+            ),
         ),
         db,
         user,
@@ -139,8 +142,13 @@ def test_project_connector_is_project_scoped(db: Session) -> None:
         ),
     )
     assert stored is not None
-    assert decrypt_connector_secret(stored.secret_encrypted) == "signing-secret"
+    assert decrypt_connector_secret(stored.secret_encrypted) == (
+        "https://qyapi.weixin.qq.com/cgi-bin/webhook/send"
+        "?key=connector-test-key"
+    )
     assert result["data"]["project_id"] == project.id
+    assert result["data"]["connection_id"] == "项目管理群"
+    assert "connector-test-key" not in str(result["data"])
     assert "secret_encrypted" not in result["data"]
     assert len(list_project_connectors(project.id, db, user)["data"]) == 1
 
