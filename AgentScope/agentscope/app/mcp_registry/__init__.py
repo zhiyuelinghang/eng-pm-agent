@@ -13,6 +13,7 @@ from ._models import (
     MCPPackageView,
     MCPPackageVersionView,
     PROJECT_INITIALIZATION_VALIDATION_CAPABILITY,
+    TASK_ENGINE_STORE_CAPABILITY,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "MCPPackageView",
     "MCPPackageVersionView",
     "PROJECT_INITIALIZATION_VALIDATION_CAPABILITY",
+    "TASK_ENGINE_STORE_CAPABILITY",
 ]

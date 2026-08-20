@@ -369,6 +369,45 @@ def test_upload_does_not_reject_dependency_complete_package_by_file_count(
     asyncio.run(scenario())
 
 
+def test_task_engine_store_capability_is_reserved_for_task_engine() -> None:
+    with pytest.raises(ValueError, match="仅允许 task-engine"):
+        MCPPackageManifest(
+            name="lookalike",
+            display_name="伪任务引擎",
+            version="1.0.0",
+            command="server.exe",
+            platform_capabilities=["dobby_task_engine_store"],
+        )
+
+
+def test_task_engine_store_package_requires_trusted_install(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        manager = MCPRegistryManager(tmp_path)
+        async with manager:
+            monkeypatch.setattr(manager, "_probe_package", AsyncMock(return_value=[]))
+            package = _archive(
+                name="task-engine",
+                platform_capabilities=["dobby_task_engine_store"],
+            )
+            with pytest.raises(MCPPackageError, match="平台维护脚本"):
+                await manager.install_archive(package)
+
+            trusted_package = _archive(
+                name="task-engine",
+                platform_capabilities=["dobby_task_engine_store"],
+            )
+            record = await manager.install_archive(
+                trusted_package,
+                allow_task_engine_store_capability=True,
+            )
+            assert record.id == "task-engine"
+
+    asyncio.run(scenario())
+
+
 def test_command_must_resolve_inside_uploaded_package(tmp_path) -> None:
     package_dir = tmp_path / "package"
     runtime_dir = package_dir / "runtime"
@@ -437,6 +476,15 @@ def test_platform_gateway_context_is_injected_only_when_requested(
     monkeypatch.setenv("DOBBY_AGENT_TOOL_TOKEN", "host-gateway-token")
     monkeypatch.setenv("DOBBY_DATABASE_PATH", str(tmp_path / "platform.db"))
     monkeypatch.setenv("AGENTSCOPE_SERVICE_TOKEN", "broader-service-token")
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql://platform-user:platform-password@postgres.test/projectcopilot",
+    )
+    monkeypatch.setenv("TASK_ENGINE_SCHEMA", "task_engine")
+    monkeypatch.setenv("TASK_ENGINE_TZ", "Asia/Shanghai")
+    monkeypatch.setenv("AI_API_KEY", "host-model-key")
+    monkeypatch.setenv("AI_BASE_URL", "https://model.test/v1")
+    monkeypatch.setenv("AI_MODEL", "host-model")
     monkeypatch.setenv("MINERU_FILE_PARSE_URL", "http://mineru.test/file_parse")
     monkeypatch.setenv("MINERU_BACKEND", "hybrid-engine")
     manager = MCPRegistryManager(tmp_path)
@@ -456,6 +504,8 @@ def test_platform_gateway_context_is_injected_only_when_requested(
     assert "DOBBY_AGENT_TOOL_TOKEN" not in plain_env
     assert "DOBBY_DATABASE_PATH" not in plain_env
     assert "AGENTSCOPE_SERVICE_TOKEN" not in plain_env
+    assert "TASK_ENGINE_DATABASE_URL" not in plain_env
+    assert "TASK_ENGINE_AI_KEY" not in plain_env
     assert "MINERU_FILE_PARSE_URL" not in plain_env
     plain_state = Path(plain_env["AGENTSCOPE_MCP_STATE_DIR"])
     assert manager.state_dir / "plain" in plain_state.parents
@@ -504,6 +554,33 @@ def test_platform_gateway_context_is_injected_only_when_requested(
     assert gateway_env["DOBBY_AGENT_TOOL_TOKEN"] == "host-gateway-token"
     assert "MINERU_FILE_PARSE_URL" not in gateway_env
     assert "MINERU_BACKEND" not in gateway_env
+
+    task_engine_env = manager._runtime_environment(
+        MCPPackageManifest(
+            name="task-engine",
+            display_name="任务引擎",
+            version="1.0.0",
+            command="server.exe",
+            env={
+                "TASK_ENGINE_DATABASE_URL": "postgresql://package-override",
+                "TASK_ENGINE_DB": "package-override.db",
+                "TASK_ENGINE_AI_KEY": "package-model-key",
+            },
+            platform_capabilities=["dobby_task_engine_store"],
+        ),
+        user_id="user",
+        agent_id="agent",
+        session_id="session",
+    )
+    assert task_engine_env["TASK_ENGINE_DATABASE_URL"] == (
+        "postgresql://platform-user:platform-password@postgres.test/projectcopilot"
+    )
+    assert "TASK_ENGINE_DB" not in task_engine_env
+    assert task_engine_env["TASK_ENGINE_SCHEMA"] == "task_engine"
+    assert task_engine_env["TASK_ENGINE_TZ"] == "Asia/Shanghai"
+    assert task_engine_env["TASK_ENGINE_AI_KEY"] == "host-model-key"
+    assert task_engine_env["TASK_ENGINE_AI_BASE_URL"] == "https://model.test/v1"
+    assert task_engine_env["TASK_ENGINE_AI_MODEL"] == "host-model"
 
     parser_env = manager._runtime_environment(
         MCPPackageManifest(

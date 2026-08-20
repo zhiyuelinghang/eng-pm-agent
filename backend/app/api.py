@@ -18,6 +18,10 @@ import httpx
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from task_engine.domain.flow import TransitionError
+from task_engine.domain.models import Assignee
+from task_engine.engine import TaskEngine
+
 from .agentscope_client import (
     AgentScopeClient,
     AgentScopeGatewayError,
@@ -27,7 +31,7 @@ from .config import get_settings
 from .connector_secrets import encrypt_connector_secret
 from .db import SessionLocal, get_db
 from .models import (AgentConversation, Attachment, AttachmentText, CollaborationMessage, CollaborationSession, DailyReport, DocumentFolder, DocumentFolderItem, EngineeringKnowledgeConversation, EngineeringKnowledgeMessage, FillPackage, MeetingMinute, Notification, OperationLog, PlatformFieldMapping, Project, ProjectChange, ProjectConnectorConfig, ProjectInformationRecord, ProjectInitializationDraft, ProjectInitializationFile, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectSettings, ProjectStatusSnapshot,
-                      QualityMetric, RiskDraft, RiskSource, Task, TaskStatusHistory, User, UserConnectorConfig, WbsItem, WbsPredecessor, WbsRiskLink)
+                      QualityMetric, RiskDraft, RiskSource, Task, User, UserConnectorConfig, WbsItem, WbsPredecessor, WbsRiskLink)
 from .initialization_validation import (
     InitializationValidationError,
     latest_initialization_validation_run,
@@ -64,6 +68,17 @@ from .security import create_access_token, decode_access_token, hash_password, v
 from .system_attachment_parser import (
     SystemAttachmentParserError,
     parse_uploaded_attachment,
+)
+from .task_engine_gateway import (
+    DOBBY_TO_ENGINE_STATE,
+    PRIORITY_TO_RISK,
+    _to_int,
+    build_flow,
+    dispatch_platform_task,
+    get_engine,
+    get_generator,
+    to_api_history,
+    to_api_task,
 )
 
 
@@ -595,12 +610,11 @@ def _build_agent_project_context(
         .order_by(RiskSource.updated_at.desc())
         .limit(20),
     ).all()
-    tasks = db.scalars(
-        select(Task)
-        .where(Task.project_id == project.id)
-        .order_by(Task.updated_at.desc())
-        .limit(30),
-    ).all()
+    tasks = [
+        task
+        for task in get_engine().list_tasks(limit=200)
+        if task.scope.get("project_id") == project.id
+    ][:30]
     project_settings = db.get(ProjectSettings, project.id)
     weknora_bound = bool(
         project_settings
@@ -642,7 +656,7 @@ def _build_agent_project_context(
         + "\n近期任务："
         + (
             "；".join(
-                f"{item.title}（{item.status}，截止{item.due_at or '未设置'}）"
+                f"{item.title}（{item.state}，截止{item.due_at or '未设置'}）"
                 for item in tasks
             )
             or "暂无"
@@ -2851,11 +2865,15 @@ def delete_project_connector(
 
 
 def refresh_project_notifications(project_id: int, db: Session) -> None:
-    overdue = db.scalars(select(Task).where(Task.project_id == project_id, Task.status == "overdue")).all()
+    overdue = [
+        task
+        for task in get_engine().list_tasks(state="overdue", limit=500)
+        if task.scope.get("project_id") == project_id
+    ]
     waiting_dailies = db.scalars(select(DailyReport).where(DailyReport.project_id == project_id, DailyReport.status == "pending_confirm")).all()
     for task in overdue:
-        exists = db.scalar(select(Notification).where(Notification.project_id == project_id, Notification.source_type == "task", Notification.source_id == task.id, Notification.notification_type == "overdue"))
-        if not exists: db.add(Notification(project_id=project_id, notification_type="overdue", title="任务已逾期", content=task.title, priority="high", source_type="task", source_id=task.id))
+        exists = db.scalar(select(Notification).where(Notification.project_id == project_id, Notification.source_type == "task", Notification.source_id == 0, Notification.notification_type == "overdue", Notification.content == task.title))
+        if not exists: db.add(Notification(project_id=project_id, notification_type="overdue", title="任务已逾期", content=task.title, priority="high", source_type="task", source_id=0))
     for report in waiting_dailies:
         exists = db.scalar(select(Notification).where(Notification.project_id == project_id, Notification.source_type == "daily_report", Notification.source_id == report.id, Notification.notification_type == "daily_confirm"))
         if not exists: db.add(Notification(project_id=project_id, notification_type="daily_confirm", title="日报待确认", content=report.file_name, priority="normal", source_type="daily_report", source_id=report.id))
@@ -2866,7 +2884,11 @@ def refresh_project_notifications(project_id: int, db: Session) -> None:
 def project_dashboard(project_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
     project_for_user_or_403(db, project_id, user); refresh_project_notifications(project_id, db)
     wbs = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id)).all()
-    tasks = db.scalars(select(Task).where(Task.project_id == project_id)).all()
+    tasks = [
+        task
+        for task in get_engine().list_tasks(limit=500)
+        if task.scope.get("project_id") == project_id
+    ]
     risks = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id)).all()
     metrics = db.scalars(select(QualityMetric).where(QualityMetric.project_id == project_id)).all()
     changes = db.scalars(select(ProjectChange).where(ProjectChange.project_id == project_id, ProjectChange.status != "closed")).all()
@@ -2877,7 +2899,7 @@ def project_dashboard(project_id: int, db: Session = Depends(get_db), user: User
                    "risk_warnings": snapshot.risk_warnings, "safety_issues": snapshot.safety_issues, "quality_issues": snapshot.quality_issues,
                    "task_completion_rate": snapshot.task_completion_rate, "open_changes": len(changes), "unread_notifications": len(notifications),
                    "main_risk": snapshot.main_risk, "main_safety": snapshot.main_safety, "main_quality": snapshot.main_quality, "overall": snapshot.overall})
-    done = sum(1 for task in tasks if task.status == "completed")
+    done = sum(1 for task in tasks if str(task.state) == "done")
     parent_ids = {item.parent_id for item in wbs if item.parent_id is not None}
     progress_items = [item for item in wbs if item.id not in parent_ids] or wbs
     progress_rate = (
@@ -3682,149 +3704,468 @@ def delete_link(link_id: int, db: Session = Depends(get_db), user: User = Depend
 
 
 @router.get("/projects/{project_id}/tasks")
-def list_tasks(project_id: int, status_filter: str | None = None, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+def list_tasks(
+    project_id: int,
+    status_filter: str | None = None,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """读取项目任务；逾期判定由任务引擎 tick 主动完成。"""
     project_or_404(db, project_id)
-    open_tasks = db.scalars(select(Task).where(Task.project_id == project_id, Task.status.in_(["pending", "processing", "need_more_info", "pending_confirm"]))).all()
-    today = date.today().isoformat()
-    for task in open_tasks:
-        if task.due_at and task.due_at[:10] < today:
-            previous = task.status; task.status = "overdue"
-            db.add(TaskStatusHistory(task_id=task.id, from_status=previous, to_status="overdue", note="系统根据截止日期自动标记逾期"))
-            db.add(OperationLog(project_id=project_id, action="任务逾期提醒", detail=f"任务「{task.title}」已逾期", target_type="task", target_id=task.id))
-    if any(task.due_at and task.due_at[:10] < today for task in open_tasks): db.commit()
-    stmt = select(Task).where(Task.project_id == project_id)
-    if status_filter: stmt = stmt.where(Task.status == status_filter)
-    return ok([serialize(row) for row in db.scalars(stmt.order_by(Task.updated_at.desc())).all()])
+    engine = get_engine()
+
+    state = DOBBY_TO_ENGINE_STATE.get(status_filter) if status_filter else None
+    tasks = engine.list_tasks(state=state, limit=200)
+    tasks = [task for task in tasks if task.scope.get("project_id") == project_id]
+
+    return ok([to_api_task(task) for task in tasks])
+
+
+@router.get("/projects/{project_id}/tasks/pending-my-review")
+def pending_my_review(
+    project_id: int,
+    engine: TaskEngine = Depends(get_engine),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """查询当前用户作为确认人的待验收任务。"""
+    tasks = engine.list_tasks(
+        confirmer=str(user.id),
+        state="review",
+        limit=50,
+    )
+    tasks = [task for task in tasks if task.scope.get("project_id") == project_id]
+    return ok([to_api_task(task) for task in tasks])
+
+
+@router.get("/projects/{project_id}/wbs/{wbs_item_id}/tasks")
+def tasks_by_site(
+    project_id: int,
+    wbs_item_id: int,
+    open_only: bool = True,
+    engine: TaskEngine = Depends(get_engine),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """查询指定 WBS 工点上的任务。"""
+    tasks = engine.list_tasks(
+        site=str(wbs_item_id),
+        open_only=open_only,
+        limit=100,
+    )
+    tasks = [task for task in tasks if task.scope.get("project_id") == project_id]
+    return ok([to_api_task(task) for task in tasks])
+
+
+@router.get("/projects/{project_id}/tasks/archive")
+def list_archived_tasks(
+    project_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """合并引擎已闭环任务与旧表只读历史任务。"""
+    engine = get_engine()
+
+    closed = [
+        task
+        for task in engine.list_tasks(limit=500)
+        if task.scope.get("project_id") == project_id
+        and str(task.state) in ("done", "cancelled")
+    ]
+    result = [to_api_task(task) for task in closed]
+
+    legacy = db.scalars(
+        select(Task).where(
+            Task.project_id == project_id,
+            Task.status.in_(["completed", "cancelled"]),
+        ),
+    ).all()
+    for row in legacy:
+        item = serialize(row)
+        item["id"] = f"legacy_{row.id}"
+        result.append(item)
+
+    result.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+    return ok(result)
 
 
 @router.post("/projects/{project_id}/tasks/generate-flow")
-def generate_task_flow(project_id: int, payload: TaskFlowGenerateInput, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
+def generate_task_flow(
+    project_id: int,
+    payload: TaskFlowGenerateInput,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """通过引擎生成可由现有前端直接编辑的任务流。"""
     project = project_or_404(db, project_id)
-    project_members = db.execute(
+    engine, generator = get_engine(), get_generator()
+
+    rows = db.execute(
         select(ProjectMember, User)
         .join(User, User.id == ProjectMember.user_id)
         .where(ProjectMember.project_id == project_id),
     ).all()
-    members = [
-        {"id": member.user_id, "name": account.real_name}
-        for member, account in project_members
+    assignees = [
+        Assignee(ref=str(member.user_id), display_name=user.real_name)
+        for member, user in rows
     ]
-    wbs_items = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id)).all()
-    risks = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id, RiskSource.status == "active")).all()
-    fallback = build_fallback_task_flow(payload.requirement, payload.template_type, [member["id"] for member in members])
-    settings = get_settings()
-    generated: dict[str, Any] = fallback
-    generated_by = "rules"
-    model_error = ""
 
-    if settings.ai_api_key:
-        context = {
-            "project": {"id": project.id, "name": project.name, "description": project.engineering_type_description},
-            "members": members,
-            "wbs_items": [{"id": item.id, "code": item.wbs_code, "name": item.name, "progress": float(item.progress_percent or 0), "status": item.status_text} for item in wbs_items],
-            "risk_sources": [{"id": risk.id, "name": risk.risk_part, "level": risk.risk_level, "type": risk.related_process_name} for risk in risks],
-        }
-        prompt = f"""你是 Dobby 工程项目任务流设计助手。根据用户需求和项目上下文，生成一个可执行、可追溯的任务流。
-用户需求：{payload.requirement}
-项目上下文：{json.dumps(context, ensure_ascii=False)}
+    wbs_items = db.scalars(
+        select(WbsItem).where(WbsItem.project_id == project_id),
+    ).all()
+    risks = db.scalars(
+        select(RiskSource).where(
+            RiskSource.project_id == project_id,
+            RiskSource.status == "active",
+        ),
+    ).all()
 
-只返回一个 JSON 对象，不要使用 Markdown。字段必须为：
-title；task_type（仅 risk_alert/material_missing/daily_confirm/draft_review/fill_platform）；risk_level（仅 low/medium/high/critical）；assignee_user_id；confirmer_user_id；wbs_item_id；risk_source_id；run_mode（single/scheduled）；trigger_date（YYYY-MM-DD）；trigger_time（HH:mm）；trigger_rule；trigger_interval_value（正整数）；trigger_interval_unit（仅 hour/day/week/month）；cc；steps。
-steps 必须有 2 至 8 个节点，每个节点字段为 name、owner_user_id、due_at（YYYY-MM-DD）、material。人员、WBS、风险只能使用上下文中存在的 id；不确定时返回 null。节点要按真实流转顺序排列，并包含执行、复核和闭环。"""
-        try:
-            response = httpx.post(
-                f"{settings.ai_base_url.rstrip('/')}/chat/completions",
-                headers={"Authorization": f"Bearer {settings.ai_api_key}"},
-                json={"model": settings.ai_model, "response_format": {"type": "json_object"}, "messages": [{"role": "system", "content": "你负责把工程任务需求转换为结构化任务流。"}, {"role": "user", "content": prompt}]},
-                timeout=30,
-            )
-            response.raise_for_status()
-            generated = extract_json_object(response.json()["choices"][0]["message"]["content"])
-            generated_by = "ai"
-        except Exception as exc:  # 模型连接异常时仍返回可编辑的规则流程，避免中断用户工作。
-            model_error = str(exc)[:180]
+    flow = generator.generate(
+        payload.requirement,
+        now=engine.now(),
+        assignees=assignees,
+        context={
+            "project": {"id": project.id, "name": project.name},
+            "wbs_items": [
+                {"id": item.id, "code": item.wbs_code, "name": item.name}
+                for item in wbs_items
+            ],
+            "risk_sources": [
+                {
+                    "id": risk.id,
+                    "name": risk.risk_part,
+                    "level": risk.risk_level,
+                }
+                for risk in risks
+            ],
+        },
+    )
 
-    normalized = normalize_task_flow(generated, fallback, members, {item.id for item in wbs_items}, {risk.id for risk in risks})
-    normalized["generated_by"] = generated_by
-    normalized["generation_note"] = "Dobby 已根据需求和当前项目数据生成流程" if generated_by == "ai" else "当前使用规则模板生成，可继续手动调整" + (f"（模型暂不可用：{model_error}）" if model_error else "")
-    return ok(normalized, "任务流已生成")
+    trigger = flow.trigger
+    first_at = trigger.first_at or engine.now()
+    return ok(
+        {
+            "title": flow.title,
+            "task_type": (
+                flow.category
+                if flow.category
+                in {
+                    "risk_alert",
+                    "material_missing",
+                    "daily_confirm",
+                    "draft_review",
+                    "fill_platform",
+                }
+                else "risk_alert"
+            ),
+            "risk_level": PRIORITY_TO_RISK.get(flow.priority, "medium"),
+            "assignee_user_id": (
+                _to_int(flow.steps[0].assignee.ref)
+                if flow.steps[0].assignee
+                else None
+            ),
+            "confirmer_user_id": None,
+            "wbs_item_id": None,
+            "risk_source_id": None,
+            "run_mode": "scheduled" if trigger.is_recurring else "single",
+            "trigger_date": first_at.strftime("%Y-%m-%d"),
+            "trigger_time": first_at.strftime("%H:%M"),
+            "trigger_rule": trigger.describe(),
+            "trigger_interval_value": trigger.interval_value,
+            "trigger_interval_unit": str(trigger.interval_unit),
+            "cc": "，".join(watcher.display_name for watcher in flow.watchers),
+            "steps": [
+                {
+                    "name": step.name,
+                    "owner_user_id": (
+                        _to_int(step.assignee.ref) if step.assignee else None
+                    ),
+                    "due_at": None,
+                    "material": step.deliverable,
+                }
+                for step in flow.steps
+            ],
+            "generated_by": "ai" if flow.origin == "ai" else "rules",
+            "generation_note": flow.origin_note,
+        },
+        "任务流已生成",
+    )
 
 
 @router.post("/projects/{project_id}/tasks")
-def create_task(project_id: int, payload: TaskInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    project_or_404(db, project_id); task = Task(project_id=project_id, **payload.model_dump()); db.add(task); db.flush()
-    db.add(TaskStatusHistory(task_id=task.id, to_status="pending", changed_by=user.id, note="创建任务"))
-    audit(db, user, "创建任务", f"创建任务「{task.title}」", project_id, "task", task.id); db.commit(); db.refresh(task)
-    return ok(serialize(task), "任务已创建")
+def create_task(
+    project_id: int,
+    payload: TaskInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """立即布置任务，或登记由 tick 自动布置的单次/周期计划。"""
+    project_or_404(db, project_id)
+    engine = get_engine()
+    try:
+        flow = build_flow(db, project_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if payload.run_mode in {"once", "recurring", "scheduled"}:
+        try:
+            flow.require_dispatchable()
+            plan = engine.schedule(flow)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        audit(
+            db,
+            user,
+            "登记周期任务" if flow.trigger.is_recurring else "登记定时单次任务",
+            f"任务流「{flow.title}」：{flow.trigger.describe()}",
+            project_id,
+            "task_schedule",
+            0,
+        )
+        db.commit()
+        return ok(
+            {
+                "schedule_id": plan.id,
+                "flow_id": flow.id,
+                "title": flow.title,
+                "trigger_description": flow.trigger.describe(),
+                "next_fire_at": (
+                    plan.next_fire_at.isoformat() if plan.next_fire_at else None
+                ),
+            },
+            f"执行计划已登记：{flow.trigger.describe()}",
+        )
+
+    try:
+        task = engine.dispatch(
+            flow,
+            actor=str(user.id),
+            trigger_note=payload.trigger_reason or "手动布置",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    audit(
+        db,
+        user,
+        "创建任务",
+        f"创建任务「{task.title}」",
+        project_id,
+        "task",
+        0,
+    )
+    db.commit()
+    return ok(to_api_task(task), "任务已创建")
 
 
 @router.get("/tasks/{task_id}")
-def get_task(task_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    task = entity_or_404(db, Task, task_id, "任务不存在"); data = serialize(task)
-    data["history"] = [serialize(row) for row in db.scalars(select(TaskStatusHistory).where(TaskStatusHistory.task_id == task_id).order_by(TaskStatusHistory.created_at)).all()]
+def get_task(
+    task_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    engine = get_engine()
+    task = engine.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    data = to_api_task(task)
+    data["history"] = to_api_history(task)
     return ok(data)
 
 
 @router.post("/tasks/{task_id}/transition")
-def transition_task(task_id: int, payload: TaskTransitionInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    task = entity_or_404(db, Task, task_id, "任务不存在")
-    transitions = {
-        "pending": {"processing", "cancelled"}, "processing": {"need_more_info", "pending_confirm", "cancelled"},
-        "need_more_info": {"processing", "cancelled"}, "pending_confirm": {"processing", "completed", "cancelled"},
-        "overdue": {"processing", "cancelled"}, "completed": set(), "cancelled": set(),
-    }
-    if payload.status not in transitions.get(task.status, set()): raise HTTPException(status_code=409, detail=f"任务当前为 {task.status}，不能流转到 {payload.status}")
-    previous = task.status; task.status = payload.status
-    db.add(TaskStatusHistory(task_id=task.id, from_status=previous, to_status=task.status, note=payload.note, changed_by=user.id))
-    audit(db, user, "任务状态流转", f"任务「{task.title}」由 {previous} 变更为 {task.status}", task.project_id, "task", task.id); db.commit(); db.refresh(task)
-    return ok(serialize(task), "任务状态已更新")
+def transition_task(
+    task_id: str,
+    payload: TaskTransitionInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """只把验收、退回和取消交给引擎；其余状态由节点流转推导。"""
+    engine = get_engine()
+    target = DOBBY_TO_ENGINE_STATE.get(payload.status, payload.status)
+
+    try:
+        if target == "done":
+            task = engine.accept(
+                task_id,
+                actor=str(user.id),
+                note=payload.note or "",
+            )
+        elif target == "cancelled":
+            task = engine.cancel_task(
+                task_id,
+                actor=str(user.id),
+                reason=payload.note or "",
+            )
+        elif target == "running":
+            task = engine.reject(
+                task_id,
+                actor=str(user.id),
+                reason=payload.note or "",
+            )
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail=f"状态 {payload.status} 不能直接设置，请通过节点操作推进",
+            )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在") from None
+    except TransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    audit(
+        db,
+        user,
+        "任务状态流转",
+        f"任务「{task.title}」变更为 {task.state}",
+        task.scope.get("project_id"),
+        "task",
+        0,
+    )
+    db.commit()
+    return ok(to_api_task(task), "任务状态已更新")
 
 
 @router.post("/tasks/{task_id}/steps/{step_index}")
-def update_task_step(task_id: int, step_index: int, payload: TaskStepUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    task = entity_or_404(db, Task, task_id, "任务不存在")
-    steps = list(task.workflow_steps or [])
-    if step_index < 0 or step_index >= len(steps): raise HTTPException(status_code=404, detail="任务步骤不存在")
-    if payload.status not in {"pending", "processing", "completed", "blocked"}: raise HTTPException(status_code=422, detail="不支持的步骤状态")
-    step = {**steps[step_index], "status": payload.status, "note": payload.note, "updated_at": datetime.now(UTC).isoformat(), "updated_by": user.id}
-    steps[step_index] = step; task.workflow_steps = steps
-    audit(db, user, "更新任务步骤", f"任务「{task.title}」步骤「{step.get('name', step_index + 1)}」更新为 {payload.status}", task.project_id, "task", task.id)
-    if steps and all(item.get("status") == "completed" for item in steps) and task.status == "processing":
-        previous = task.status; task.status = "pending_confirm"
-        db.add(TaskStatusHistory(task_id=task.id, from_status=previous, to_status="pending_confirm", note="全部任务步骤已完成，等待复核", changed_by=user.id))
-    db.commit(); db.refresh(task)
-    return ok(serialize(task), "任务步骤已更新")
+def update_task_step(
+    task_id: str,
+    step_index: int,
+    payload: TaskStepUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """按引擎顺序约束更新节点，并保留材料附件。"""
+    engine = get_engine()
+
+    try:
+        if payload.status == "completed":
+            task = engine.complete_step(
+                task_id,
+                step_index,
+                actor=str(user.id),
+                comment=payload.note or "",
+                attachments=payload.attachments,
+            )
+        elif payload.status == "blocked":
+            task = engine.block_step(
+                task_id,
+                step_index,
+                actor=str(user.id),
+                reason=payload.note or "",
+            )
+        elif payload.status == "processing":
+            task = engine.unblock_step(
+                task_id,
+                step_index,
+                actor=str(user.id),
+                note=payload.note or "",
+            )
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail=f"不支持的步骤状态：{payload.status}",
+            )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在") from None
+    except TransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    audit(
+        db,
+        user,
+        "更新任务步骤",
+        f"任务「{task.title}」步骤 {step_index + 1} → {payload.status}",
+        task.scope.get("project_id"),
+        "task",
+        0,
+    )
+    db.commit()
+    return ok(to_api_task(task), "任务步骤已更新")
 
 
 @router.post("/tasks/{task_id}/reassign")
-def reassign_task(task_id: int, payload: TaskReassignInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    task = entity_or_404(db, Task, task_id, "任务不存在")
-    project_member = db.scalar(select(ProjectMember).where(ProjectMember.project_id == task.project_id, ProjectMember.user_id == payload.assignee_user_id))
-    if not project_member:
+def reassign_task(
+    task_id: str,
+    payload: TaskReassignInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """通过引擎转办当前节点，已完成节点保持历史责任归属。"""
+    engine = get_engine()
+    task = engine.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    project_id = task.scope.get("project_id")
+    member = db.scalar(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == payload.assignee_user_id,
+        ),
+    )
+    if not member:
         raise HTTPException(status_code=422, detail="转交人不属于当前项目")
-    previous_assignee = task.assignee_user_id
-    task.assignee_user_id = payload.assignee_user_id
-    steps = list(task.workflow_steps or [])
-    for index, step in enumerate(steps):
-        if step.get("status") != "completed":
-            steps[index] = {**step, "owner_user_id": str(payload.assignee_user_id)}
-            break
-    task.workflow_steps = steps
-    note = payload.note or f"任务由用户 {previous_assignee or '未指派'} 转交给用户 {payload.assignee_user_id}"
-    db.add(TaskStatusHistory(task_id=task.id, from_status=task.status, to_status=task.status, note=note, changed_by=user.id))
-    audit(db, user, "转交任务", f"任务「{task.title}」转交给用户 {payload.assignee_user_id}", task.project_id, "task", task.id)
-    db.commit(); db.refresh(task)
-    return ok(serialize(task), "任务已转交")
+
+    current = task.current_step
+    if current is None:
+        raise HTTPException(status_code=409, detail="任务没有待办节点")
+
+    target_user = db.get(User, payload.assignee_user_id)
+    try:
+        task = engine.forward_step(
+            task_id,
+            current.seq,
+            to=Assignee(
+                ref=str(payload.assignee_user_id),
+                display_name=target_user.real_name if target_user else "",
+            ),
+            actor=str(user.id),
+            note=payload.note or "",
+        )
+    except TransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    audit(
+        db,
+        user,
+        "转交任务",
+        f"任务「{task.title}」转交给用户 {payload.assignee_user_id}",
+        project_id,
+        "task",
+        0,
+    )
+    db.commit()
+    return ok(to_api_task(task), "任务已转交")
 
 
 @router.post("/tasks/{task_id}/notes")
-def add_task_note(task_id: int, payload: TaskNoteInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    task = entity_or_404(db, Task, task_id, "任务不存在")
-    note = payload.note.strip()
-    if not note:
-        raise HTTPException(status_code=422, detail="任务处理说明不能为空")
-    db.add(TaskStatusHistory(task_id=task.id, from_status=task.status, to_status=task.status, note=note, changed_by=user.id))
-    audit(db, user, "记录任务处置", f"任务「{task.title}」新增处理说明", task.project_id, "task", task.id)
+def add_task_note(
+    task_id: str,
+    payload: TaskNoteInput,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    engine = get_engine()
+    try:
+        task = engine.add_note(
+            task_id,
+            note=payload.note,
+            actor=str(user.id),
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="任务不存在") from None
+    except TransitionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    audit(
+        db,
+        user,
+        "记录任务处置",
+        f"任务「{task.title}」新增处理说明",
+        task.scope.get("project_id"),
+        "task",
+        0,
+    )
     db.commit()
     return ok({"task_id": task.id}, "任务处理说明已记录")
 
@@ -3881,9 +4222,30 @@ def assist_risk_draft(project_id: int, risk_id: int, db: Session = Depends(get_d
     db.add(draft); db.flush()
     task_id = None
     if missing:
-        task = Task(project_id=project_id, title=f"补齐风险资料 — {risk.risk_part}", task_type="material_missing", risk_level=risk.risk_level, assignee_user_id=risk.responsible_user_id, confirmer_user_id=risk.confirmer_user_id, risk_source_id=risk.id, trigger_reason="智能草稿生成时发现风险资料缺项", required_materials=missing)
-        db.add(task); db.flush(); task_id = task.id
-        db.add(TaskStatusHistory(task_id=task.id, to_status="pending", changed_by=user.id, note="智能资料缺项校验自动创建"))
+        link = db.scalar(
+            select(WbsRiskLink)
+            .where(WbsRiskLink.risk_source_id == risk.id)
+            .order_by(WbsRiskLink.id),
+        )
+        try:
+            task = dispatch_platform_task(
+                db,
+                project_id=project_id,
+                title=f"补齐风险资料 — {risk.risk_part}",
+                task_type="material_missing",
+                risk_level=risk.risk_level,
+                assignee_user_id=risk.responsible_user_id,
+                confirmer_user_id=risk.confirmer_user_id,
+                wbs_item_id=link.wbs_item_id if link else None,
+                actor=user.id,
+                trigger_reason="智能草稿生成时发现风险资料缺项",
+                deliverables=missing,
+                risk_source_id=risk.id,
+                step_name="补齐风险资料",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        task_id = task.id
     audit(db, user, "智能生成风险草稿", f"为风险源「{risk.risk_part}」生成草稿" + ("并创建缺项任务" if task_id else ""), project_id, "risk_draft", draft.id)
     db.commit(); db.refresh(draft)
     return ok({"draft": serialize(draft), "task_id": task_id}, "风险草稿与缺项校验已完成")
@@ -3937,9 +4299,13 @@ def transition_fill_package(package_id: int, payload: TaskTransitionInput, db: S
     return ok(serialize(row), "填报状态已更新")
 
 
-def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str, list[int]]:
+def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str, list[str]]:
     project = project_or_404(db, project_id)
-    tasks = db.scalars(select(Task).where(Task.project_id == project_id, Task.status.in_(["overdue", "pending", "processing", "need_more_info", "pending_confirm"])).order_by(Task.updated_at.desc())).all()
+    tasks = [
+        task
+        for task in get_engine().list_tasks(open_only=True, limit=200)
+        if task.scope.get("project_id") == project_id
+    ]
     wbs_items = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id).order_by(WbsItem.wbs_code).limit(30)).all()
     risk_sources = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id).order_by(RiskSource.updated_at.desc()).limit(30)).all()
     quality_metrics = db.scalars(select(QualityMetric).where(QualityMetric.project_id == project_id).order_by(QualityMetric.updated_at.desc()).limit(30)).all()
@@ -3986,7 +4352,7 @@ def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str
             "你是工程项目资料智能体。请只依据已入库资料和项目待办给出简洁、可执行、可追溯的建议。"
             "优先说明：资料可归入的类别、可补全的项目字段、仍缺少的资料；未知内容必须明确标注为待确认，不能编造。"
             f"\n用户请求：{content}\n项目当前数据：{project_context}\n已入库资料：{material_context}\n待办任务："
-            + "；".join(f"{task.title}（{task.status}，截止{task.due_at or '未设置'}）" for task in tasks[:8])
+            + "；".join(f"{task.title}（{task.state}，截止{task.due_at or '未设置'}）" for task in tasks[:8])
         )
         try:
             response = httpx.post(f"{settings.ai_base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {settings.ai_api_key}"}, json={"model": settings.ai_model, "messages": [{"role": "system", "content": "给出简洁、可执行、可追溯的工程资料补全建议。"}, {"role": "user", "content": prompt}]}, timeout=30)
@@ -3995,10 +4361,10 @@ def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str
             return answer, related
         except (httpx.HTTPError, KeyError, IndexError, TypeError):
             pass
-    overdue = next((task for task in tasks if task.status == "overdue"), None)
+    overdue = next((task for task in tasks if str(task.state) == "overdue"), None)
     focus = overdue or (tasks[0] if tasks else None)
     if focus:
-        return f"已基于当前项目的 {len(materials)} 份已入库资料和待办记录生成建议：优先处理「{focus.title}」，状态为{focus.status}，截止日期{focus.due_at or '未设置'}。请核对资料类别、明确对应 WBS/风险项，再补齐缺少材料后提交复核。", related
+        return f"已基于当前项目的 {len(materials)} 份已入库资料和待办记录生成建议：优先处理「{focus.title}」，状态为{focus.state}，截止日期{focus.due_at or '未设置'}。请核对资料类别、明确对应 WBS/风险项，再补齐缺少材料后提交复核。", related
     return f"当前项目已入库 {len(materials)} 份资料，暂无未闭环任务。可先让智能体核对资料类别与资料缺口，再补充 WBS、风险源或质量指标。", []
 
 
@@ -4047,8 +4413,60 @@ def create_collaboration_message(session_id: int, payload: CollaborationMessageI
     answer, task_ids = collaboration_reply(session.project_id, payload.content, db)
     if "创建任务" in payload.content or "生成任务" in payload.content:
         title = payload.content.replace("创建任务", "").replace("生成任务", "").strip(" ：:，,。")[:200] or "协同会话待办"
-        task = Task(project_id=session.project_id, title=f"协同任务 — {title}", task_type="risk_alert", risk_level="medium", assignee_user_id=user.id, trigger_reason=f"由协同会话「{session.title}」自动创建")
-        db.add(task); db.flush(); db.add(TaskStatusHistory(task_id=task.id, to_status="pending", changed_by=user.id, note="协同会话自动创建"))
+        source_task = next(
+            (
+                task
+                for task_id in (session.task_ids or [])
+                if (task := get_engine().get_task(str(task_id))) is not None
+            ),
+            None,
+        )
+        legacy_source = None
+        if source_task is None:
+            for raw_task_id in session.task_ids or []:
+                try:
+                    legacy_id = int(str(raw_task_id).removeprefix("legacy_"))
+                except ValueError:
+                    continue
+                legacy_source = db.get(Task, legacy_id)
+                if legacy_source is not None:
+                    break
+
+        try:
+            task = dispatch_platform_task(
+                db,
+                project_id=session.project_id,
+                title=f"协同任务 — {title}",
+                task_type="risk_alert",
+                risk_level="medium",
+                assignee_user_id=user.id,
+                confirmer_user_id=(
+                    source_task.confirmer.ref
+                    if source_task and source_task.confirmer
+                    else legacy_source.confirmer_user_id
+                    if legacy_source
+                    else None
+                ),
+                wbs_item_id=(
+                    source_task.site.ref
+                    if source_task and source_task.site
+                    else legacy_source.wbs_item_id
+                    if legacy_source
+                    else None
+                ),
+                actor=user.id,
+                trigger_reason=f"由协同会话「{session.title}」自动创建",
+                risk_source_id=(
+                    source_task.scope.get("risk_source_id")
+                    if source_task
+                    else legacy_source.risk_source_id
+                    if legacy_source
+                    else None
+                ),
+                step_name="处理协同事项",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         task_ids = list(dict.fromkeys([*task_ids, task.id])); session.task_ids = list(dict.fromkeys([*(session.task_ids or []), task.id]))
         answer = f"已创建任务「{task.title}」。\n{answer}"
     assistant = CollaborationMessage(session_id=session.id, role="assistant", content=answer, generated_task_ids=task_ids)
@@ -4063,8 +4481,37 @@ def create_meeting_minute(session_id: int, db: Session = Depends(get_db), user: 
     session = session_or_404(db, session_id)
     messages = db.scalars(select(CollaborationMessage).where(CollaborationMessage.session_id == session_id).order_by(CollaborationMessage.created_at)).all()
     task_ids = list(dict.fromkeys([*(session.task_ids or []), *(item for message in messages for item in (message.generated_task_ids or []))]))
-    tasks = [db.get(Task, task_id) for task_id in task_ids]
-    actions = [{"task_id": task.id, "title": task.title, "status": task.status, "assignee_user_id": task.assignee_user_id, "due_at": task.due_at} for task in tasks if task]
+    actions: list[dict[str, Any]] = []
+    engine = get_engine()
+    for raw_task_id in task_ids:
+        engine_task = engine.get_task(str(raw_task_id))
+        if engine_task is not None:
+            task_data = to_api_task(engine_task)
+            actions.append(
+                {
+                    "task_id": engine_task.id,
+                    "title": engine_task.title,
+                    "status": task_data["status"],
+                    "assignee_user_id": task_data["assignee_user_id"],
+                    "due_at": task_data["due_at"],
+                },
+            )
+            continue
+        try:
+            legacy_id = int(str(raw_task_id).removeprefix("legacy_"))
+        except ValueError:
+            continue
+        legacy_task = db.get(Task, legacy_id)
+        if legacy_task is not None:
+            actions.append(
+                {
+                    "task_id": f"legacy_{legacy_task.id}",
+                    "title": legacy_task.title,
+                    "status": legacy_task.status,
+                    "assignee_user_id": legacy_task.assignee_user_id,
+                    "due_at": legacy_task.due_at,
+                },
+            )
     discussion = "；".join(message.content[:120] for message in messages[-6:]) or "暂无会话消息"
     row = MeetingMinute(project_id=session.project_id, session_id=session.id, title=f"会议纪要 — {session.title}", summary=f"会话结论：{discussion}", action_items=actions)
     db.add(row); db.flush(); audit(db, user, "生成会议纪要", f"从会话「{session.title}」生成会议纪要", session.project_id, "meeting_minute", row.id); db.commit(); db.refresh(row)
@@ -5098,11 +5545,23 @@ def parse_daily_attachment(attachment_id: int, db: Session = Depends(get_db), us
                          parse_status="parsed", status="pending_confirm")
     db.add(report); db.flush()
     attachment.source_type = "daily_report"; attachment.source_id = report.id
-    task = Task(project_id=attachment.project_id, title=f"日报解析确认 — {attachment.file_name}", task_type="daily_confirm", risk_level="low",
-                assignee_user_id=user.id, due_at=datetime.now(UTC).date().isoformat(), wbs_item_id=report.matched_wbs_id,
-                trigger_reason="资料入库后登记日报，等待人工确认解析内容", required_materials=[])
-    db.add(task); db.flush()
-    db.add(TaskStatusHistory(task_id=task.id, to_status="pending", changed_by=user.id, note="日报登记后自动创建"))
+    try:
+        dispatch_platform_task(
+            db,
+            project_id=attachment.project_id,
+            title=f"日报解析确认 — {attachment.file_name}",
+            task_type="daily_confirm",
+            risk_level="low",
+            assignee_user_id=user.id,
+            confirmer_user_id=user.id,
+            wbs_item_id=report.matched_wbs_id,
+            actor=user.id,
+            trigger_reason="资料入库后登记日报，等待人工确认解析内容",
+            deliverables=[attachment.file_name],
+            step_name="确认日报解析内容",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     audit(db, user, "登记日报解析", f"资料「{attachment.file_name}」已生成日报确认任务", attachment.project_id, "daily_report", report.id)
     db.commit(); db.refresh(report)
     return ok(serialize(report), "日报已登记，并生成确认任务")

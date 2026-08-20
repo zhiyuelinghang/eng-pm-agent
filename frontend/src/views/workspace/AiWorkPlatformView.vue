@@ -60,6 +60,15 @@
                   </span>
                 </span>
               </button>
+              <div v-if="!pagedHomeWorkItems.length" class="task-mine-queue-empty task-empty-state">
+                <div class="task-empty-robot" aria-hidden="true">
+                  <n-icon :size="26"><Robot /></n-icon>
+                  <span></span>
+                </div>
+                <span class="task-empty-kicker">Dobby 已待命</span>
+                <strong class="task-empty-title">{{ homeEmptyText }}</strong>
+                <p class="task-empty-copy">Dobby 会持续同步任务引擎，新节点到达后会显示在这里。</p>
+              </div>
             </div>
             <nav class="home-pagination" aria-label="工作列表分页">
               <span>{{ homePageRangeText }}</span>
@@ -165,6 +174,16 @@
                 {{ homeWorkUploading ? '上传中…' : '发送' }}
               </button>
             </form>
+          </section>
+
+          <section v-else class="home-work-ai task-mine-ai-empty task-empty-state" aria-label="暂无待处理工作">
+            <div class="task-empty-robot" aria-hidden="true">
+              <n-icon :size="26"><Robot /></n-icon>
+              <span></span>
+            </div>
+            <span class="task-empty-kicker">Dobby 已待命</span>
+            <strong class="task-empty-title">{{ homeEmptyText }}</strong>
+            <p class="task-empty-copy">Dobby 会持续同步任务引擎，新节点到达后会显示在这里。</p>
           </section>
         </div>
 
@@ -519,11 +538,9 @@
         <nav aria-label="任务管理模块">
           <button v-for="tab in taskManagementTabs" :key="tab.key" type="button" :class="{ active: taskManagementTab === tab.key }" @click="taskManagementTab = tab.key">
             <span><n-icon :size="17"><component :is="tab.icon" /></n-icon>{{ tab.label }}</span>
-            <small>{{ tab.hint }}</small>
             <b>{{ tab.count }}</b>
           </button>
         </nav>
-        <div class="task-management-scope"><span>当前项目</span><strong>{{ currentProject?.name || '未选择项目' }}</strong></div>
       </header>
 
       <main v-if="taskManagementTab === 'mine'" class="task-mine-view">
@@ -570,10 +587,14 @@
                   </span>
                 </span>
               </button>
-              <div v-if="!pagedTaskMineWorkItems.length" class="task-mine-queue-empty">
-                <ListCheck :size="30" />
-                <strong>{{ taskMineEmptyText }}</strong>
-                <p>切换其他状态，或等待 Dobby 推送新的流程节点。</p>
+              <div v-if="!pagedTaskMineWorkItems.length" class="task-mine-queue-empty task-empty-state">
+                <div class="task-empty-robot" aria-hidden="true">
+                  <n-icon :size="26"><Robot /></n-icon>
+                  <span></span>
+                </div>
+                <span class="task-empty-kicker">Dobby 已待命</span>
+                <strong class="task-empty-title">{{ taskMineEmptyText }}</strong>
+                <p class="task-empty-copy">Dobby 会持续同步任务引擎，新节点到达后会显示在这里。</p>
               </div>
             </div>
 
@@ -636,10 +657,14 @@
             </form>
           </section>
 
-          <section v-else class="home-work-ai task-mine-ai-empty" aria-label="暂无任务">
-            <ListCheck :size="38" />
-            <h2>{{ taskMineEmptyText }}</h2>
-            <p>选择其他状态后，可在右侧直接与 Dobby 继续处理。</p>
+          <section v-else class="home-work-ai task-mine-ai-empty task-empty-state" aria-label="暂无任务">
+            <div class="task-empty-robot" aria-hidden="true">
+              <n-icon :size="26"><Robot /></n-icon>
+              <span></span>
+            </div>
+            <span class="task-empty-kicker">Dobby 已待命</span>
+            <strong class="task-empty-title">{{ taskMineEmptyText }}</strong>
+            <p class="task-empty-copy">Dobby 会持续同步任务引擎，新节点到达后会显示在这里。</p>
           </section>
         </div>
       </main>
@@ -661,23 +686,35 @@
       </main>
 
       <main v-else class="task-assign-view">
-        <div class="task-flow-scroll" tabindex="0" aria-label="任务流编辑画布，可横向或纵向滚动">
-          <section class="task-flow-modal task-flow-inline" aria-label="布置任务流">
-          <form class="task-flow-form" @submit.prevent="createManualTask">
-            <section class="task-flow-global-settings">
-              <div class="task-flow-global-head">
-                <div class="task-flow-global-copy"><div><span>任务全局配置</span><strong>执行与触发设置</strong></div><p>以下设置作用于整个任务流，不属于任何单个节点。</p></div>
-                <output class="task-flow-trigger-preview" aria-live="polite"><span>触发说明</span><strong>{{ taskTriggerSummary }}</strong></output>
+        <form class="task-flow-builder" @submit.prevent="createManualTask">
+          <section class="task-flow-global-settings" aria-label="任务全局配置：执行与触发设置">
+            <div class="task-flow-global-head">
+              <div class="task-flow-global-copy"><div><span>任务全局配置</span><strong>执行与触发设置</strong></div><p>以下设置作用于整个任务流，不属于任何单个节点。</p></div>
+              <output class="task-flow-trigger-preview" aria-live="polite"><span>触发说明</span><strong>{{ taskTriggerSummary }}</strong></output>
+            </div>
+            <div class="task-flow-global-grid">
+              <label class="form-field task-flow-title-field"><span class="task-flow-field-label"><n-icon :size="16"><Notes /></n-icon>任务名称</span><input v-model.trim="taskCreateForm.title" required placeholder="输入任务流名称"></label>
+              <label class="form-field"><span class="task-flow-field-label"><n-icon :size="16"><MapPin /></n-icon>关联工点</span><select v-model="taskCreateForm.wbs_item_id" required><option value="">请选择工点</option><option v-for="item in store.wbsItems" :key="item.id" :value="item.id">{{ item.code }} {{ item.name }}</option></select></label>
+              <label class="form-field"><span class="task-flow-field-label"><n-icon :size="16"><User /></n-icon>确认人</span><select v-model="taskCreateForm.confirmer_user_id" required><option value="">请选择确认人</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }} · {{ member.title }}</option></select></label>
+              <label class="form-field"><span class="task-flow-field-label"><n-icon :size="16"><Repeat /></n-icon>执行方式</span><select v-model="taskCreateForm.run_mode"><option value="immediate">立即执行</option><option value="once">定时单次</option><option value="recurring">周期执行</option></select></label>
+              <label v-if="taskCreateForm.run_mode !== 'immediate'" class="form-field task-flow-time-field"><span class="task-flow-field-label"><n-icon :size="16"><CalendarEvent /></n-icon>{{ taskCreateForm.run_mode === 'once' ? '计划执行时间' : '首次触发时间' }}</span><input v-model="taskExecutionAt" type="datetime-local" required></label>
+              <label v-if="taskCreateForm.run_mode === 'recurring'" class="form-field task-flow-interval-field"><span class="task-flow-field-label"><n-icon :size="16"><Clock /></n-icon>触发间隔</span><span><input v-model.number="taskCreateForm.trigger_interval_value" type="number" min="1" max="365" required><select v-model="taskCreateForm.trigger_interval_unit"><option value="hour">小时</option><option value="day">天</option><option value="week">周</option><option value="month">个月</option></select></span></label>
+              <label v-if="taskCreateForm.run_mode === 'recurring'" class="form-field"><span class="task-flow-field-label"><n-icon :size="16"><PlayerStop /></n-icon>结束条件</span><select v-model="taskCreateForm.trigger_end_mode"><option value="never">持续执行</option><option value="until">到指定日期</option><option value="count">执行指定次数</option></select></label>
+              <label v-if="taskCreateForm.run_mode === 'recurring' && taskCreateForm.trigger_end_mode === 'until'" class="form-field"><span class="task-flow-field-label"><n-icon :size="16"><CalendarEvent /></n-icon>结束日期</span><input v-model="taskCreateForm.trigger_until_date" type="date" required></label>
+              <label v-if="taskCreateForm.run_mode === 'recurring' && taskCreateForm.trigger_end_mode === 'count'" class="form-field"><span class="task-flow-field-label"><n-icon :size="16"><ListCheck /></n-icon>执行次数</span><input v-model.number="taskCreateForm.trigger_max_fires" type="number" min="1" max="10000" required></label>
+              <label class="form-field task-flow-cc-field"><span class="task-flow-field-label"><n-icon :size="16"><At /></n-icon>抄送人</span><input v-model.trim="taskCreateForm.cc" placeholder="输入姓名，多个用逗号分隔"></label>
+            </div>
+          </section>
+
+          <div class="task-flow-workspace">
+            <main class="task-flow-authoring">
+              <div class="task-flow-assistant-bar">
+                <span class="task-flow-assistant-icon"><n-icon :size="20"><Robot /></n-icon></span>
+                <strong>Dobby 任务流助手</strong>
+                <button type="button" class="task-flow-assistant-toggle" :aria-expanded="taskFlowAssistantOpen" aria-controls="task-flow-assistant-panel" @click="taskFlowAssistantOpen = !taskFlowAssistantOpen">{{ taskFlowAssistantOpen ? '收起助手' : '展开助手' }}<n-icon :size="17"><ChevronDown /></n-icon></button>
               </div>
-              <div class="task-flow-trigger-grid">
-                <label class="form-field">执行方式<select v-model="taskCreateForm.run_mode"><option value="single">单次执行</option><option value="scheduled">定时执行</option></select></label>
-                <label class="form-field">{{ taskCreateForm.run_mode === 'single' ? '执行日期与时间' : '首次触发日期与时间' }}<input v-model="taskExecutionAt" type="datetime-local" required></label>
-                <label v-if="taskCreateForm.run_mode === 'scheduled'" class="form-field task-flow-interval-field">触发间隔<span><input v-model.number="taskCreateForm.trigger_interval_value" type="number" min="1" max="365" required><select v-model="taskCreateForm.trigger_interval_unit"><option value="hour">小时</option><option value="day">天</option><option value="week">周</option><option value="month">个月</option></select></span></label>
-                <label class="form-field task-flow-cc-field">抄送人<input v-model.trim="taskCreateForm.cc" placeholder="输入姓名，多个用逗号分隔"></label>
-              </div>
-            </section>
-            <div class="task-flow-body">
-              <aside class="task-flow-brief">
+
+              <section id="task-flow-assistant-panel" :class="['task-flow-assistant-panel', { collapsed: !taskFlowAssistantOpen }]">
                 <div class="task-flow-mode-switch" aria-label="任务流生成方式">
                   <button type="button" :class="{ active: taskCreateMode === 'dobby' }" @click="taskCreateMode = 'dobby'">Dobby 生成</button>
                   <button type="button" :class="{ active: taskCreateMode === 'template' }" @click="taskCreateMode = 'template'">模板生成</button>
@@ -695,33 +732,40 @@
                   <label class="form-field">任务主题<input v-model.trim="taskTemplateTopic" placeholder="例如：整改现场隐患并完成复核闭环"></label>
                   <button type="button" class="task-flow-generate-button" @click="generateTemplateTaskFlow">按模板生成流程</button>
                 </section>
-              </aside>
-              <main class="task-flow-canvas">
-                <div class="task-flow-canvas-head"><div><span>流程画布</span><h3>{{ taskCreateForm.title || '未命名任务流' }}</h3></div><p>{{ taskFlowSteps.length }} 个节点 · {{ taskCreateForm.run_mode === 'scheduled' ? '定时执行' : '单次执行' }}</p></div>
-                <div class="task-flow-canvas-body">
-                  <section class="task-flow-editor-panel">
-                    <div class="task-flow-editor-head"><div><span>节点配置</span><strong>维护责任人、时间与交付物</strong></div><div class="task-flow-editor-actions"><em>使用上下按钮调整顺序</em><button type="button" class="task-flow-add-button" @click="addTaskFlowStep">＋ 添加节点</button></div></div>
-                    <div class="task-flow-node-grid">
-                      <article v-for="(step, index) in taskFlowSteps" :key="step.id" class="task-flow-node-card" :class="{ active: selectedTaskFlowStepIndex === index }" @click="selectedTaskFlowStepIndex = index">
-                        <header><span>{{ String(index + 1).padStart(2, '0') }}</span><strong>{{ step.name || `节点 ${index + 1}` }}</strong><div><button type="button" :disabled="index === 0" title="上移" @click.stop="moveTaskFlowStep(index, -1)">↑</button><button type="button" :disabled="index === taskFlowSteps.length - 1" title="下移" @click.stop="moveTaskFlowStep(index, 1)">↓</button><button type="button" class="danger" :disabled="taskFlowSteps.length <= 2" title="删除" @click.stop="removeTaskFlowStep(index)">删除</button></div></header>
-                        <div class="task-flow-node-fields"><label class="form-field">节点名称<input v-model.trim="step.name" required></label><label class="form-field">负责人<select v-model="step.owner_user_id"><option value="">待指定</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }}</option></select></label><label class="form-field">截止日期<input v-model="step.due_at" type="date"></label><label class="form-field">所需资料<input v-model.trim="step.material" placeholder="该节点的交付物或依据"></label></div>
-                      </article>
-                    </div>
-                  </section>
-                  <aside class="task-flow-preview-panel">
-                    <div class="task-flow-preview-head"><span>节点预览</span><strong>流转顺序</strong><em>点击节点可定位配置</em></div>
-                    <div class="task-flow-strip" aria-label="任务流转顺序">
-                      <template v-for="(step, index) in taskFlowSteps" :key="step.id"><button type="button" class="task-flow-node" :class="{ active: selectedTaskFlowStepIndex === index }" @click="selectedTaskFlowStepIndex = index"><span>{{ index + 1 }}</span><strong>{{ step.name || `节点 ${index + 1}` }}</strong><em>{{ memberNameById(step.owner_user_id) }}</em></button><span v-if="index < taskFlowSteps.length - 1" class="task-flow-arrow" aria-hidden="true">↓</span></template>
-                      <div v-if="!taskFlowSteps.length" class="task-flow-empty">从左侧生成任务流，或点击“添加节点”手动开始。</div>
-                    </div>
-                  </aside>
-                </div>
-              </main>
-            </div>
-            <div class="task-flow-footer"><p><strong>{{ taskFlowSteps.length }}</strong> 个流程节点，将按当前顺序依次执行并留痕。</p><div class="workflow-modal-actions"><button type="button" class="modal-secondary" @click="taskManagementTab = 'mine'">返回我的任务</button><button type="submit" class="modal-primary" :disabled="!taskCreateForm.title || taskFlowSteps.length < 2">创建任务流</button></div></div>
-          </form>
-          </section>
-        </div>
+              </section>
+
+              <div class="task-flow-editor-head">
+                <div><span>流程节点</span><strong>{{ taskCreateForm.title || '未命名任务流' }}</strong><small>{{ taskFlowSteps.length }} 个节点，将按顺序依次流转</small></div>
+                <div class="task-flow-editor-actions"><em>展开节点后编辑详细配置</em><button type="button" class="task-flow-add-button" @click="addTaskFlowStep"><n-icon :size="16"><Plus /></n-icon>添加节点</button></div>
+              </div>
+
+              <div class="task-flow-node-workspace">
+                <section class="task-flow-node-list" aria-label="流程节点配置">
+                  <article v-for="(step, index) in taskFlowSteps" :key="step.id" class="task-flow-node-card" :class="{ active: selectedTaskFlowStepIndex === index }" @click="selectedTaskFlowStepIndex = index">
+                    <header>
+                      <span>{{ index + 1 }}</span>
+                      <div class="task-flow-node-heading"><strong>{{ step.name || `节点 ${index + 1}` }}</strong><small>{{ memberNameById(step.owner_user_id) }} · {{ step.due_at || '未设置截止日期' }} · {{ step.material || '未设置交付物' }}</small></div>
+                      <em v-if="selectedTaskFlowStepIndex === index">当前节点</em>
+                      <div class="task-flow-node-actions"><button type="button" :disabled="index === 0" title="上移" aria-label="上移节点" @click.stop="moveTaskFlowStep(index, -1)"><n-icon :size="16"><ChevronUp /></n-icon></button><button type="button" :disabled="index === taskFlowSteps.length - 1" title="下移" aria-label="下移节点" @click.stop="moveTaskFlowStep(index, 1)"><n-icon :size="16"><ChevronDown /></n-icon></button><button type="button" class="danger" :disabled="taskFlowSteps.length <= 2" title="删除" aria-label="删除节点" @click.stop="removeTaskFlowStep(index)"><n-icon :size="16"><Trash /></n-icon></button><button type="button" title="展开或收起" :aria-expanded="selectedTaskFlowStepIndex === index" @click.stop="selectedTaskFlowStepIndex = selectedTaskFlowStepIndex === index ? -1 : index"><n-icon :size="16"><component :is="selectedTaskFlowStepIndex === index ? ChevronUp : ChevronDown" /></n-icon></button></div>
+                    </header>
+                    <div v-if="selectedTaskFlowStepIndex === index" class="task-flow-node-fields"><label class="form-field">节点名称<input v-model.trim="step.name" required></label><label class="form-field">节点负责人<select v-model="step.owner_user_id" required><option value="">待指定</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }} · {{ member.title }}</option></select></label><label class="form-field">截止日期<input v-model="step.due_at" type="date"></label><label class="form-field">交付材料 / 留证<input v-model.trim="step.material" placeholder="填写后引擎将要求上传证明材料"></label></div>
+                  </article>
+                </section>
+              </div>
+            </main>
+
+            <aside class="task-flow-validation" aria-label="任务引擎校验">
+              <div class="task-flow-validation-head"><span>引擎校验</span><strong>布置前检查</strong></div>
+              <div class="task-flow-validation-status" :class="{ passed: taskFlowCanSubmit }"><n-icon :size="23"><component :is="taskFlowCanSubmit ? CircleCheck : AlertCircle" /></n-icon><div><strong>{{ taskFlowCanSubmit ? '校验通过' : `还差 ${taskFlowMissingCount} 项` }}</strong><span>{{ taskFlowCanSubmit ? '可以提交给任务引擎' : '补齐后即可布置任务' }}</span></div></div>
+              <ul class="task-flow-validation-list">
+                <li v-for="item in taskFlowValidationItems" :key="item.key" :class="{ ok: item.ok }"><n-icon :size="17"><component :is="item.ok ? CircleCheck : AlertCircle" /></n-icon><div><strong>{{ item.label }}</strong><span>{{ item.detail }}</span></div></li>
+              </ul>
+              <div class="task-flow-validation-note"><strong>引擎约束</strong><p>工点、确认人和每个节点的具体负责人是布置任务的硬约束；交付物填写后，该节点必须留证。</p></div>
+              <button type="submit" class="task-flow-submit" :disabled="!taskFlowCanSubmit">{{ taskCreateForm.run_mode === 'immediate' ? '校验并布置任务' : '校验并登记计划' }}</button>
+              <button type="button" class="task-flow-back" @click="taskManagementTab = 'mine'">返回我的任务</button>
+            </aside>
+          </div>
+        </form>
       </main>
 
       <div v-if="taskDispositionOpen && selectedTask" class="task-disposition-backdrop" @click.self="closeTaskDisposition">
@@ -729,10 +773,10 @@
           <header><div><span>{{ taskTypeLabel(selectedTask.type) }} · {{ statusLabel(selectedTask.status) }}</span><h2 id="task-disposition-title">{{ selectedTask.title }}</h2><p>{{ taskCurrentOwnerName(selectedTask) }} · 截止 {{ taskCurrentStep(selectedTask)?.due_at || selectedTask.deadline }}</p></div><button type="button" aria-label="关闭任务处置" @click="closeTaskDisposition">关闭</button></header>
           <div class="task-disposition-body">
             <section class="task-disposition-ai"><span class="task-disposition-bot"><Robot :size="18" /></span><div><strong>Dobby 处置提示</strong><p>{{ selectedTaskConclusion }}</p><small>依据：{{ selectedTask.triggerReason }}</small></div></section>
-            <section class="task-disposition-flow"><div class="task-disposition-section-title"><span>任务流程</span><strong>{{ selectedTaskCompletedSteps }}/{{ selectedTask.workflowSteps.length || 1 }} 个节点已完成</strong></div><ol><li v-for="(step, index) in selectedTask.workflowSteps" :key="`${selectedTask.id}-dispose-${index}`" :class="step.status"><span>{{ index + 1 }}</span><div><strong>{{ step.name }}</strong><small>{{ step.owner || store.getMemberName(step.owner_user_id || '') || '待指定负责人' }} · {{ step.due_at || '未设置截止时间' }}</small></div><em>{{ taskStepLabel(step.status) }}</em><button v-if="selectedTask.status === 'processing' && step.status !== 'completed'" type="button" @click="store.updateTaskStep(selectedTask.id, index, 'completed')">完成节点</button></li></ol></section>
+            <section class="task-disposition-flow"><div class="task-disposition-section-title"><span>任务流程</span><strong>{{ selectedTaskCompletedSteps }}/{{ selectedTask.workflowSteps.length || 1 }} 个节点已完成</strong></div><ol><li v-for="(step, index) in selectedTask.workflowSteps" :key="`${selectedTask.id}-dispose-${index}`" :class="step.status"><span>{{ index + 1 }}</span><div><strong>{{ step.name }}</strong><small>{{ step.owner || store.getMemberName(step.owner_user_id || '') || '待指定负责人' }} · {{ step.due_at || '未设置截止时间' }}</small><small v-if="step.reopened" class="task-disposition-reopen-hint">⚠ 该节点被退回，需重新提交材料</small></div><em>{{ taskStepLabel(step.status) }}</em><button v-if="selectedTask.status === 'processing' && step.status !== 'completed'" type="button" @click="store.updateTaskStep(selectedTask.id, index, 'completed')">完成节点</button></li></ol></section>
             <section class="task-disposition-form"><div class="task-disposition-section-title"><span>回复与材料</span><strong>结果将进入任务处理记录</strong></div><textarea v-model.trim="taskDispositionReply" rows="5" placeholder="回复 Dobby，例如：已完成复核，照片符合闭环要求"></textarea><label class="task-disposition-files"><input type="file" multiple @change="handleTaskDispositionFiles"><span><Paperclip :size="16" />选择文件或图片</span><small>{{ taskDispositionFiles.length ? `已选择 ${taskDispositionFiles.length} 个文件` : '支持提交本节点的证明材料' }}</small></label><label class="task-disposition-forward"><span>转交当前节点</span><select v-model="taskDispositionForwardId"><option value="">不转交</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }} · {{ member.title }}</option></select></label></section>
           </div>
-          <footer><button type="button" class="task-disposition-history" @click="openTaskHistory(selectedTask.id)">查看处理记录</button><router-link to="/ai">发起讨论</router-link><button type="button" class="task-disposition-submit" :disabled="taskDispositionSubmitting" @click="submitTaskDisposition">{{ taskDispositionSubmitting ? '正在提交…' : '回复并推进' }}</button></footer>
+          <footer><button type="button" class="task-disposition-history" @click="openTaskHistory(selectedTask.id)">查看处理记录</button><router-link to="/ai">发起讨论</router-link><button type="button" class="task-disposition-submit" :disabled="taskDispositionSubmitting || needsFreshEvidence" @click="submitTaskDisposition">{{ taskDispositionSubmitting ? '正在提交…' : needsFreshEvidence ? '需重新上传材料' : '回复并推进' }}</button></footer>
         </aside>
       </div>
       <div v-if="taskHistoryOpenId && selectedTaskHistoryTask" class="workflow-modal-backdrop" @click.self="closeTaskHistory">
@@ -977,13 +1021,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, shallowRef, watch, type Component } from 'vue'
 import { useRoute } from 'vue-router'
 import { NIcon, useMessage } from 'naive-ui'
 import {
-  AdjustmentsHorizontal, At, CalendarEvent, ChartBar, ChevronDown, ChevronLeft, ChevronRight,
-  Dots, FileText, Folder, ListCheck, Notes, Paperclip, Pin, PlayerStop, Plus, Robot,
-  Search, Send, Settings, Table, User, UserPlus,
+  AdjustmentsHorizontal, AlertCircle, At, CalendarEvent, ChartBar, ChevronDown,
+  ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Clock, Dots, FileText, Folder,
+  ListCheck, MapPin, Notes, Paperclip, Pin, PlayerStop, Plus, Repeat, Robot, Search,
+  Send, Settings, Table, Trash, User, UserPlus,
 } from '@vicons/tabler'
 import { useAppStore, type AttachmentRecord } from '@/stores/app'
 import api, { type ApiEnvelope } from '@/api/client'
@@ -1033,6 +1078,8 @@ type ApiAgentConversation = {
 }
 type TaskFlowStepDraft = { id: string; name: string; owner_user_id: string; due_at: string; material: string }
 type TriggerIntervalUnit = 'hour' | 'day' | 'week' | 'month'
+type TaskRunMode = 'immediate' | 'once' | 'recurring'
+type TriggerEndMode = 'never' | 'until' | 'count'
 type GeneratedTaskFlow = {
   title: string
   task_type: Task['type']
@@ -1041,7 +1088,7 @@ type GeneratedTaskFlow = {
   confirmer_user_id?: number | null
   wbs_item_id?: number | null
   risk_source_id?: number | null
-  run_mode: 'single' | 'scheduled'
+  run_mode: 'single' | 'scheduled' | TaskRunMode
   trigger_date: string
   trigger_time: string
   trigger_rule: string
@@ -1204,122 +1251,124 @@ const homeModeTabs = [
   { key: 'quick' as const, label: '问问Dobby' },
 ]
 type WorkQueueStatus = 'pending' | 'overdue' | 'processing'
+type WorkQueueCategory = 'decision' | 'upload' | 'generated'
+type WorkQueueTone = 'danger' | 'upload' | 'warning' | 'info'
+type HomeWorkItem = {
+  id: string
+  rank: number
+  workflowStatus: WorkQueueStatus
+  category: WorkQueueCategory
+  label: string
+  title: string
+  reason: string
+  tags: string[]
+  owner: string
+  role: string
+  deadline: string
+  action: string
+  to: string
+  tone: WorkQueueTone
+  icon: Component
+}
 
 const homeStatus = ref<WorkQueueStatus>('pending')
 const homePageIndex = ref(0)
 const homePageSize = 5
 const homeWorkThreadViewport = ref<HTMLElement | null>(null)
-const selectedHomeWorkItemId = ref('home-1')
+const selectedHomeWorkItemId = ref('')
 const homeWorkCommand = ref('')
 const homeWorkFiles = ref<File[]>([])
 const homeWorkUploading = ref(false)
 const quickFiles = ref<File[]>([])
 const quickUploading = ref(false)
 const homeWorkThreads = ref<Record<string, ChatMessage[]>>({})
-const homeWorkItems = computed(() => [
-  {
-    id: 'home-1',
-    rank: 1,
-    workflowStatus: 'pending' as const,
-    category: 'decision',
-    label: '需我决策',
-    title: '深基坑风险草稿审核',
-    reason: '原因：已生成风险草稿，需要你确认关键结论与管控措施。',
-    tags: ['风险等级 重大', '关联 WBS', '基坑开挖'],
-    owner: '王芳',
-    role: '资料与填报负责人',
-    deadline: '截止 2026-06-10 18:00:00',
-    action: '协同处理',
-    to: '/ai',
-    tone: 'danger',
-    icon: Notes,
-  },
-  {
-    id: 'home-2',
-    rank: 2,
-    workflowStatus: 'overdue' as const,
-    category: 'upload',
-    label: '需我上传资料',
-    title: '地面沉降监测材料缺项',
-    reason: '原因：检测到风险草稿缺少关键监测报告，请尽快补充。',
-    tags: ['缺项资料', '地表沉降监测报告'],
-    owner: '李明',
-    role: '项目执行人',
-    deadline: '截止 2026-06-10 18:00:00',
-    action: '上传关键资料',
-    to: '/docs',
-    tone: 'upload',
-    icon: Folder,
-  },
-  {
-    id: 'home-3',
-    rank: 3,
-    workflowStatus: 'processing' as const,
-    category: 'generated',
-    label: '需我协同',
-    title: '日报解析确认（2026-06-09 施工日报）',
-    reason: '原因：已解析日报，需确认关键进度与风险引用是否正确。',
-    tags: ['关联 WBS', '基坑开挖', '置信度 85%'],
-    owner: '王芳',
-    role: '资料与填报负责人',
-    deadline: '截止 2026-06-10 18:00:00',
-    action: '协同处理',
-    to: '/ai',
-    tone: 'warning',
-    icon: FileText,
-  },
-  {
-    id: 'home-4',
-    rank: 4,
-    workflowStatus: 'overdue' as const,
-    category: 'upload',
-    label: '需我上传资料',
-    title: '顶管推进偏差预警相关资料',
-    reason: '原因：检测到预警阈值需佐证资料，请补充测量记录。',
-    tags: ['缺项资料', '顶管测量记录', '纠偏记录'],
-    owner: '李明',
-    role: '项目执行人',
-    deadline: '截止 2026-06-11 09:00:00',
-    action: '上传关键资料',
-    to: '/docs',
-    tone: 'upload',
-    icon: Folder,
-  },
-  {
-    id: 'home-5',
-    rank: 5,
-    workflowStatus: 'processing' as const,
-    category: 'generated',
-    label: '需我协同',
-    title: '重大风险动态管控月报填报启动',
-    reason: '原因：已生成填报包草案，需要你确认范围与责任人。',
-    tags: ['填报包', '2026 年 6 月', '周期 月报'],
-    owner: '张伟',
-    role: '项目现场负责人',
-    deadline: '截止 2026-06-12 18:00:00',
-    action: '协同处理',
-    to: '/ai',
-    tone: 'warning',
-    icon: FileText,
-  },
-  {
-    id: 'home-6',
-    rank: 6,
-    workflowStatus: 'pending' as const,
-    category: 'decision',
-    label: '需我协调',
-    title: '接收井施工验收准备会',
-    reason: '原因：建议召开准备会，协调参与人并确认时间。',
-    tags: ['建议时间', '2026-06-11 14:00'],
-    owner: '涉及 3 人',
-    role: '张伟、李明、王芳',
-    deadline: '建议 2026-06-11 14:00',
-    action: '发起协调',
-    to: '/ai',
-    tone: 'info',
-    icon: ListCheck,
-  },
-])
+
+function workQueueStatus(task: Task): WorkQueueStatus {
+  if (task.status === 'overdue') return 'overdue'
+  if (task.status === 'processing') return 'processing'
+  return 'pending'
+}
+
+function workQueueCategory(task: Task): WorkQueueCategory {
+  if (task.status === 'need_more_info' || task.type === 'material_missing') return 'upload'
+  if (task.status === 'processing' || task.type === 'fill_platform') return 'generated'
+  return 'decision'
+}
+
+function workQueueLabel(task: Task) {
+  if (task.status === 'need_more_info') return '需补充资料'
+  if (task.status === 'waiting_confirm') return '待我验收'
+  if (task.status === 'overdue') return '已逾期'
+  if (task.status === 'processing') return '执行中'
+  return '待处理'
+}
+
+function workQueueDeadline(value: string) {
+  if (!value) return '未设置截止时间'
+  if (!value.includes(':')) return `截止 ${formatDateTime(value, 'end')}`
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return `截止 ${value.replace('T', ' ')}`
+  const date = new Date(timestamp)
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `截止 ${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+function workQueueTags(task: Task) {
+  const tags = [taskTypeLabel(task.type), `风险等级 ${riskLabel(task.riskLevel)}`]
+  tags.push(...task.linkedWbsIds.map(id => `工点 ${store.getWbsName(id)}`))
+  if (task.linkedRiskId) tags.push(`风险 ${store.getRiskName(task.linkedRiskId)}`)
+  const currentStep = task.workflowSteps.find(step => step.status !== 'completed')
+  if (currentStep?.material) tags.push(`交付 ${currentStep.material}`)
+  return Array.from(new Set(tags.filter(Boolean))).slice(0, 4)
+}
+
+function isCurrentUserTask(task: Task) {
+  if (['done', 'cancelled'].includes(task.status) || !currentUserId.value) return false
+  const currentStep = task.workflowSteps.find(step => step.status !== 'completed')
+  return task.responsibleId === currentUserId.value
+    || currentStep?.owner_user_id === currentUserId.value
+    || (task.status === 'waiting_confirm' && task.confirmatorId === currentUserId.value)
+}
+
+const homeWorkItems = computed<HomeWorkItem[]>(() => {
+  const statusRank: Record<TaskStatus, number> = {
+    overdue: 0,
+    waiting_confirm: 1,
+    need_more_info: 2,
+    pending: 3,
+    processing: 4,
+    done: 5,
+    cancelled: 6,
+  }
+  return store.tasks
+    .filter(isCurrentUserTask)
+    .slice()
+    .sort((left, right) => statusRank[left.status] - statusRank[right.status] || (left.deadline || '9999').localeCompare(right.deadline || '9999'))
+    .map((task, index) => {
+      const currentStep = task.workflowSteps.find(step => step.status !== 'completed') ?? task.workflowSteps[task.workflowSteps.length - 1]
+      const confirmationTask = task.status === 'waiting_confirm'
+      const ownerId = confirmationTask ? task.confirmatorId : currentStep?.owner_user_id || task.responsibleId
+      const category = workQueueCategory(task)
+      const reason = task.triggerReason.trim()
+      return {
+        id: task.id,
+        rank: index + 1,
+        workflowStatus: workQueueStatus(task),
+        category,
+        label: workQueueLabel(task),
+        title: task.title,
+        reason: reason ? (/^(原因|结果)：/.test(reason) ? reason : `原因：${reason}`) : '原因：由任务引擎生成，等待当前责任节点处理。',
+        tags: workQueueTags(task),
+        owner: confirmationTask ? store.getMemberName(ownerId) : currentStep?.owner || store.getMemberName(ownerId),
+        role: confirmationTask ? '任务验收人' : currentStep?.name || '当前责任节点',
+        deadline: workQueueDeadline(task.deadline),
+        action: task.status === 'need_more_info' ? '补充资料' : confirmationTask ? '验收确认' : task.status === 'processing' ? '继续处理' : '开始处理',
+        to: '/tasks',
+        tone: task.status === 'overdue' ? 'danger' : category === 'upload' ? 'upload' : task.status === 'processing' ? 'warning' : 'info',
+        icon: category === 'upload' ? Folder : confirmationTask ? Notes : task.status === 'processing' ? FileText : ListCheck,
+      }
+    })
+})
 const filteredHomeWorkItems = computed(() => homeWorkItems.value.filter(item => item.workflowStatus === homeStatus.value))
 const homePageCount = computed(() =>
   Math.max(1, Math.ceil(filteredHomeWorkItems.value.length / homePageSize))
@@ -1329,7 +1378,7 @@ const pagedHomeWorkItems = computed(() => {
   return filteredHomeWorkItems.value.slice(start, start + homePageSize)
 })
 const selectedHomeWorkItem = computed(() =>
-  homeWorkItems.value.find(item => item.id === selectedHomeWorkItemId.value)
+  pagedHomeWorkItems.value.find(item => item.id === selectedHomeWorkItemId.value)
   ?? pagedHomeWorkItems.value[0]
   ?? null
 )
@@ -1372,6 +1421,11 @@ const homeStatusTabs = computed(() => [
   { key: 'overdue' as const, label: '已逾期', count: homeWorkItems.value.filter(item => item.workflowStatus === 'overdue').length },
   { key: 'processing' as const, label: '执行中', count: homeWorkItems.value.filter(item => item.workflowStatus === 'processing').length },
 ])
+const homeEmptyText = computed(() => ({
+  pending: '当前没有需要立即处理的任务',
+  overdue: '当前没有已逾期任务',
+  processing: '当前没有执行中的任务',
+})[homeStatus.value])
 function clampHomePageIndex() {
   homePageIndex.value = Math.min(homePageIndex.value, homePageCount.value - 1)
 }
@@ -2165,7 +2219,7 @@ const taskManagementTab = ref<TaskManagementTab>('mine')
 const taskMineStatus = ref<WorkQueueStatus>('pending')
 const taskMinePageIndex = ref(0)
 const taskMinePageSize = 5
-const selectedTaskMineWorkItemId = ref('home-1')
+const selectedTaskMineWorkItemId = ref('')
 const taskMineThreadViewport = ref<HTMLElement | null>(null)
 const taskMineCommand = ref('')
 const taskMineFiles = ref<File[]>([])
@@ -2189,6 +2243,7 @@ const taskHistories = ref<Record<string, Array<{ id: number; from_status?: strin
 const taskHistoryLoading = ref(false)
 const selectedTaskHistoryTask = computed(() => store.tasks.find(task => task.id === taskHistoryOpenId.value))
 const taskCreateMode = ref<'dobby' | 'template'>('dobby')
+const taskFlowAssistantOpen = ref(true)
 const taskFlowRequirement = ref('')
 const taskFlowGenerating = ref(false)
 const taskFlowGenerationNote = ref('')
@@ -2197,7 +2252,21 @@ const taskTemplateType = ref<(typeof taskTemplateOptions)[number]>('隐患整改
 const taskTemplateTopic = ref('整改现场隐患并完成复核闭环')
 const selectedTaskFlowStepIndex = ref(0)
 const taskFlowExamples = ['每周核查基坑监测数据并完成复核归档', '发现临边防护缺失后发起整改并闭环', '补齐日报缺失资料并由资料员复核']
-const taskCreateForm = ref({ title: taskTemplateTopic.value, task_type: 'risk_alert' as Task['type'], run_mode: 'single' as 'single' | 'scheduled', trigger_date: todayDateString(), trigger_time: '09:00', trigger_interval_value: 1, trigger_interval_unit: 'week' as TriggerIntervalUnit, cc: '项目经理' })
+const taskCreateForm = ref({
+  title: taskTemplateTopic.value,
+  task_type: 'risk_alert' as Task['type'],
+  run_mode: 'immediate' as TaskRunMode,
+  trigger_date: todayDateString(),
+  trigger_time: '09:00',
+  trigger_interval_value: 1,
+  trigger_interval_unit: 'week' as TriggerIntervalUnit,
+  trigger_end_mode: 'never' as TriggerEndMode,
+  trigger_until_date: todayDateString(30),
+  trigger_max_fires: 4,
+  cc: '项目经理',
+  wbs_item_id: '',
+  confirmer_user_id: '',
+})
 const taskExecutionAt = computed({
   get: () => `${taskCreateForm.value.trigger_date}T${taskCreateForm.value.trigger_time}`,
   set: (value: string) => {
@@ -2207,10 +2276,43 @@ const taskExecutionAt = computed({
   },
 })
 const triggerIntervalUnitLabel = computed(() => ({ hour: '小时', day: '天', week: '周', month: '个月' })[taskCreateForm.value.trigger_interval_unit])
-const taskTriggerSummary = computed(() => taskCreateForm.value.run_mode === 'single'
-  ? `${taskCreateForm.value.trigger_date} ${taskCreateForm.value.trigger_time} 单次执行`
-  : `${taskCreateForm.value.trigger_date} ${taskCreateForm.value.trigger_time} 首次执行，之后每 ${taskCreateForm.value.trigger_interval_value} ${triggerIntervalUnitLabel.value}执行一次`)
 const taskFlowSteps = ref<TaskFlowStepDraft[]>(createTemplateFlowSteps('隐患整改'))
+const taskTriggerSummary = computed(() => {
+  const form = taskCreateForm.value
+  if (form.run_mode === 'immediate') return '提交后立即创建任务并激活首个节点'
+  if (form.run_mode === 'once') return `${form.trigger_date} ${form.trigger_time} 自动执行一次`
+  const ending = form.trigger_end_mode === 'until'
+    ? `，执行至 ${form.trigger_until_date}`
+    : form.trigger_end_mode === 'count'
+      ? `，共执行 ${form.trigger_max_fires} 次`
+      : '，持续执行'
+  return `${form.trigger_date} ${form.trigger_time} 首次执行，之后每 ${form.trigger_interval_value} ${triggerIntervalUnitLabel.value}执行一次${ending}`
+})
+const taskScheduleIsValid = computed(() => {
+  const form = taskCreateForm.value
+  if (form.run_mode === 'immediate') return true
+  if (!form.trigger_date || !form.trigger_time) return false
+  if (form.run_mode === 'once') return true
+  if (!Number.isFinite(form.trigger_interval_value) || form.trigger_interval_value < 1) return false
+  if (form.trigger_end_mode === 'until') return !!form.trigger_until_date && form.trigger_until_date >= form.trigger_date
+  if (form.trigger_end_mode === 'count') return Number.isFinite(form.trigger_max_fires) && form.trigger_max_fires >= 1
+  return true
+})
+const taskFlowValidationItems = computed(() => {
+  const form = taskCreateForm.value
+  const namedSteps = taskFlowSteps.value.filter(step => step.name.trim()).length
+  const assignedSteps = taskFlowSteps.value.filter(step => step.owner_user_id).length
+  return [
+    { key: 'title', label: '任务名称', ok: !!form.title.trim(), detail: form.title.trim() || '请填写任务名称' },
+    { key: 'site', label: '关联工点', ok: !!form.wbs_item_id, detail: form.wbs_item_id ? store.getWbsName(form.wbs_item_id) : '请选择具体 WBS 工点' },
+    { key: 'confirmer', label: '确认人', ok: !!form.confirmer_user_id, detail: form.confirmer_user_id ? memberNameById(form.confirmer_user_id) : '请选择最终验收人' },
+    { key: 'schedule', label: '执行计划', ok: taskScheduleIsValid.value, detail: taskScheduleIsValid.value ? taskTriggerSummary.value : '请补全有效的触发设置' },
+    { key: 'steps', label: '流程节点', ok: taskFlowSteps.value.length >= 2 && namedSteps === taskFlowSteps.value.length, detail: `${namedSteps}/${taskFlowSteps.value.length} 个节点名称完整` },
+    { key: 'assignees', label: '节点负责人', ok: taskFlowSteps.value.length >= 2 && assignedSteps === taskFlowSteps.value.length, detail: `${assignedSteps}/${taskFlowSteps.value.length} 个节点已落到具体人员` },
+  ]
+})
+const taskFlowCanSubmit = computed(() => taskFlowValidationItems.value.every(item => item.ok))
+const taskFlowMissingCount = computed(() => taskFlowValidationItems.value.filter(item => !item.ok).length)
 const taskTabCounts = computed<Record<'all' | TaskStatus, number>>(() => ({
   all: store.tasks.length,
   overdue: store.tasks.filter(task => task.status === 'overdue').length,
@@ -2223,6 +2325,10 @@ const taskTabCounts = computed<Record<'all' | TaskStatus, number>>(() => ({
 }))
 const selectedTask = computed(() => store.tasks.find(task => task.id === selectedTaskId.value))
 const selectedTaskCompletedSteps = computed(() => selectedTask.value?.workflowSteps.filter(step => step.status === 'completed').length ?? 0)
+const needsFreshEvidence = computed(() => {
+  const step = selectedTask.value?.workflowSteps.find(item => item.status === 'processing' && item.reopened)
+  return !!step && !taskDispositionFiles.value.length
+})
 
 function taskCurrentStep(task: Task) {
   return task.workflowSteps.find(step => step.status !== 'completed') || task.workflowSteps[task.workflowSteps.length - 1]
@@ -2269,9 +2375,9 @@ const filteredHistoryTasks = computed(() => closedTasks.value.filter(task => {
   return searchMatched && (!taskHistoryStart.value || date >= taskHistoryStart.value) && (!taskHistoryEnd.value || date <= taskHistoryEnd.value)
 }))
 const taskManagementTabs = computed(() => [
-  { key: 'mine' as const, label: '我的任务', hint: '处理当前责任节点', count: homeWorkItems.value.length, icon: ListCheck },
-  { key: 'history' as const, label: '历史任务', hint: '查询闭环与流转记录', count: closedTasks.value.length, icon: Notes },
-  { key: 'assign' as const, label: '布置任务', hint: '模板或语言生成流程', count: 'AI', icon: Plus },
+  { key: 'mine' as const, label: '我的任务', count: homeWorkItems.value.length, icon: ListCheck },
+  { key: 'history' as const, label: '历史任务', count: closedTasks.value.length, icon: Notes },
+  { key: 'assign' as const, label: '布置任务', count: 'AI', icon: Plus },
 ])
 const selectedTaskConclusion = computed(() => {
   const task = selectedTask.value
@@ -2392,18 +2498,35 @@ async function submitTaskDisposition() {
   }
   taskDispositionSubmitting.value = true
   try {
+    const attachmentRefs = taskDispositionFiles.value.map(file => file.name)
     for (const file of taskDispositionFiles.value) await store.uploadAttachment(file, '任务处置')
     let dispositionRecorded = false
     if (taskDispositionForwardId.value && taskDispositionForwardId.value !== taskCurrentOwnerId(task)) {
       await store.reassignTask(task.id, taskDispositionForwardId.value, taskDispositionReply.value || '转交当前任务节点')
       dispositionRecorded = true
     }
-    if (task.status === 'pending' || task.status === 'overdue') {
-      await store.updateTaskStatus(task.id, 'processing', taskDispositionReply.value || '开始处理任务')
-      dispositionRecorded = true
-    } else if (task.status === 'need_more_info' && (taskDispositionReply.value || taskDispositionFiles.value.length)) {
-      await store.updateTaskStatus(task.id, 'processing', taskDispositionReply.value || '已补充材料，继续处理')
-      dispositionRecorded = true
+    if (!dispositionRecorded) {
+      const currentStepIndex = task.workflowSteps.findIndex(step => step.status === 'processing' || step.status === 'blocked')
+      const currentStepWasBlocked = currentStepIndex >= 0 && task.workflowSteps[currentStepIndex].status === 'blocked'
+      if (currentStepWasBlocked) {
+        await store.updateTaskStep(
+          task.id,
+          currentStepIndex,
+          'processing',
+          taskDispositionReply.value || '已补充材料，继续处理',
+        )
+        dispositionRecorded = true
+      }
+      if (currentStepIndex >= 0 && (!currentStepWasBlocked || attachmentRefs.length)) {
+        await store.updateTaskStep(
+          task.id,
+          currentStepIndex,
+          'completed',
+          taskDispositionReply.value,
+          attachmentRefs,
+        )
+        dispositionRecorded = true
+      }
     }
     if (!dispositionRecorded) await store.addTaskNote(task.id, taskDispositionReply.value || `已提交 ${taskDispositionFiles.value.length} 个任务材料`)
     message.success('任务处置结果已记录。')
@@ -2492,6 +2615,12 @@ function memberNameById(memberId: string) {
   return store.members.find(member => member.id === memberId)?.name || '待指定'
 }
 
+function normalizeGeneratedRunMode(mode: GeneratedTaskFlow['run_mode']): TaskRunMode {
+  if (mode === 'scheduled' || mode === 'recurring') return 'recurring'
+  if (mode === 'once') return 'once'
+  return 'immediate'
+}
+
 function generateTemplateTaskFlow() {
   taskCreateForm.value.title = taskTemplateTopic.value || `${taskTemplateType.value}任务`
   taskCreateForm.value.task_type = taskTypeFromTemplate(taskTemplateType.value)
@@ -2503,6 +2632,14 @@ function generateTemplateTaskFlow() {
 function applyGeneratedTaskFlow(flow: GeneratedTaskFlow) {
   taskCreateForm.value.title = flow.title
   taskCreateForm.value.task_type = flow.task_type
+  taskCreateForm.value.run_mode = normalizeGeneratedRunMode(flow.run_mode)
+  taskCreateForm.value.trigger_date = flow.trigger_date
+  taskCreateForm.value.trigger_time = flow.trigger_time
+  taskCreateForm.value.trigger_interval_value = flow.trigger_interval_value
+  taskCreateForm.value.trigger_interval_unit = flow.trigger_interval_unit
+  taskCreateForm.value.cc = flow.cc
+  taskCreateForm.value.wbs_item_id = flow.wbs_item_id ? String(flow.wbs_item_id) : ''
+  taskCreateForm.value.confirmer_user_id = flow.confirmer_user_id ? String(flow.confirmer_user_id) : ''
   taskFlowSteps.value = flow.steps.map((step, index) => ({ id: `generated-${Date.now()}-${index}`, name: step.name, owner_user_id: step.owner_user_id ? String(step.owner_user_id) : '', due_at: step.due_at?.slice(0, 10) || todayDateString(index + 1), material: step.material || '' }))
   selectedTaskFlowStepIndex.value = 0
   taskFlowGenerationNote.value = flow.generation_note
@@ -2544,27 +2681,67 @@ function removeTaskFlowStep(index: number) {
 }
 
 function resetTaskFlowCreator() {
-  taskCreateMode.value = 'template'
+  taskCreateMode.value = 'dobby'
+  taskFlowAssistantOpen.value = true
   taskFlowRequirement.value = ''
   taskFlowGenerationNote.value = ''
   taskTemplateType.value = '隐患整改'
   taskTemplateTopic.value = '整改现场隐患并完成复核闭环'
-  taskCreateForm.value = { title: taskTemplateTopic.value, task_type: 'risk_alert', run_mode: 'single', trigger_date: todayDateString(), trigger_time: '09:00', trigger_interval_value: 1, trigger_interval_unit: 'week', cc: '项目经理' }
+  taskCreateForm.value = {
+    title: taskTemplateTopic.value,
+    task_type: 'risk_alert',
+    run_mode: 'immediate',
+    trigger_date: todayDateString(),
+    trigger_time: '09:00',
+    trigger_interval_value: 1,
+    trigger_interval_unit: 'week',
+    trigger_end_mode: 'never',
+    trigger_until_date: todayDateString(30),
+    trigger_max_fires: 4,
+    cc: '项目经理',
+    wbs_item_id: '',
+    confirmer_user_id: '',
+  }
   taskFlowSteps.value = createTemplateFlowSteps('隐患整改')
   selectedTaskFlowStepIndex.value = 0
 }
 
 async function createManualTask() {
-  if (!taskCreateForm.value.title || taskFlowSteps.value.length < 2) return
+  if (!taskFlowCanSubmit.value) return
   const form = taskCreateForm.value
   const requiredMaterials = Array.from(new Set(taskFlowSteps.value.map(step => step.material.trim()).filter(Boolean)))
   const workflow_steps = taskFlowSteps.value.map((step, index) => ({ name: step.name.trim(), owner: memberNameById(step.owner_user_id), owner_user_id: step.owner_user_id || undefined, due_at: step.due_at || undefined, material: step.material.trim(), order: index + 1, next_step: index < taskFlowSteps.value.length - 1 ? index + 2 : undefined, status: 'pending' as const })) as Task['workflowSteps']
   const triggerParts = [taskTriggerSummary.value, form.cc ? `抄送：${form.cc}` : ''].filter(Boolean)
   try {
-    await store.createTask({ title: form.title, task_type: form.task_type, risk_level: 'medium', assignee_user_id: taskFlowSteps.value[0]?.owner_user_id, due_at: taskFlowSteps.value[taskFlowSteps.value.length - 1]?.due_at, trigger_reason: triggerParts.join(' · '), required_materials: requiredMaterials, workflow_steps })
-    message.success('任务流已创建并进入我的任务。')
-    taskManagementTab.value = 'mine'
-    resetTaskFlowCreator()
+    await store.createTask({
+      title: form.title,
+      task_type: form.task_type,
+      risk_level: 'medium',
+      assignee_user_id: taskFlowSteps.value[0]?.owner_user_id,
+      due_at: taskFlowSteps.value[taskFlowSteps.value.length - 1]?.due_at,
+      trigger_reason: triggerParts.join(' · '),
+      required_materials: requiredMaterials,
+      workflow_steps,
+      run_mode: form.run_mode,
+      trigger_date: form.trigger_date,
+      trigger_time: form.trigger_time,
+      trigger_interval_value: form.trigger_interval_value,
+      trigger_interval_unit: form.trigger_interval_unit,
+      trigger_end_mode: form.trigger_end_mode,
+      trigger_until_date: form.trigger_until_date,
+      trigger_max_fires: form.trigger_max_fires,
+      cc: form.cc,
+      wbs_item_id: form.wbs_item_id,
+      confirmer_user_id: form.confirmer_user_id,
+    })
+    if (form.run_mode !== 'immediate') {
+      message.success(`执行计划已登记：${taskTriggerSummary.value}`)
+      resetTaskFlowCreator()
+    } else {
+      message.success('任务流已创建并进入我的任务。')
+      taskManagementTab.value = 'mine'
+      resetTaskFlowCreator()
+    }
   } catch (error: any) {
     message.error(error.response?.data?.detail || '任务流创建失败，请检查填写内容后重试。')
   }
@@ -5637,49 +5814,42 @@ function nowStr() {
   min-height: 680px;
   min-width: 0;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 12px;
+  gap: 8px;
   overflow: hidden;
   container-name: task-management;
   container-type: inline-size;
 }
 .task-management-nav {
   display: flex;
-  align-items: stretch;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 8px;
+  min-height: 42px;
+  align-items: center;
+  padding: 3px;
   border: 1px solid rgba(25, 61, 58, .11);
-  border-radius: 10px;
+  border-radius: 8px;
   background: rgba(255,255,255,.94);
-  box-shadow: 0 10px 26px rgba(27, 55, 52, .055);
+  box-shadow: 0 5px 16px rgba(27, 55, 52, .04);
 }
-.task-management-nav nav { display: grid; flex: 1 1 auto; max-width: 780px; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.task-management-nav nav { display: flex; min-width: 0; align-items: center; gap: 2px; }
 .task-management-nav nav button {
-  position: relative;
-  display: grid;
+  display: inline-flex;
   min-width: 0;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 3px 10px;
-  padding: 9px 12px;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 13px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 6px;
   color: #58716b;
   background: transparent;
   font: inherit;
-  text-align: left;
   cursor: pointer;
-  transition: transform .2s ease, color .2s ease, border-color .2s ease, background .2s ease;
+  transition: color .18s ease, border-color .18s ease, background .18s ease;
 }
-.task-management-nav nav button:hover { transform: translateY(-1px); color: #0f766e; background: #f0f7f4; }
-.task-management-nav nav button.active { border-color: #204b47; color: #fff; background: #173f3d; box-shadow: 0 7px 16px rgba(23,63,61,.16); }
+.task-management-nav nav button:hover { color: #0f766e; background: #f0f7f4; }
+.task-management-nav nav button.active { border-color: #cfe2dc; color: #0d625b; background: #e9f4f0; box-shadow: inset 0 -2px 0 #0f766e; }
 .task-management-nav nav button > span { display: inline-flex; min-width: 0; align-items: center; gap: 7px; font-size: 13px; font-weight: 820; }
-.task-management-nav nav button small { grid-column: 1; overflow: hidden; color: #839590; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.task-management-nav nav button.active small { color: #c7dcd7; }
-.task-management-nav nav button b { grid-column: 2; grid-row: 1 / 3; align-self: center; min-width: 24px; padding: 4px 6px; border-radius: 5px; color: #49645e; background: #e7efec; font-size: 12px; line-height: 1; text-align: center; font-variant-numeric: tabular-nums; }
-.task-management-nav nav button.active b { color: #173f3d; background: #e1f1ec; }
-.task-management-scope { display: grid; flex: 0 1 300px; min-width: 170px; align-content: center; padding: 3px 12px 3px 17px; border-left: 1px solid #e1e9e6; }
-.task-management-scope span { color: #82938e; font-size: 12px; }
-.task-management-scope strong { overflow: hidden; margin-top: 4px; color: #294b47; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-management-nav nav button b { min-width: 22px; padding: 3px 5px; border-radius: 5px; color: #49645e; background: #e7efec; font-size: 12px; line-height: 1; text-align: center; font-variant-numeric: tabular-nums; }
+.task-management-nav nav button.active b { color: #0d625b; background: #fff; }
 
 .task-mine-view,
 .task-history-view,
@@ -5693,19 +5863,70 @@ function nowStr() {
   box-shadow: 0 12px 30px rgba(25, 53, 50, .055);
 }
 .task-mine-queue-empty {
-  display: grid;
   grid-row: 1 / -1;
-  place-content: center;
-  justify-items: center;
-  padding: 30px;
+}
+.task-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  padding: clamp(24px, 6vh, 48px) 24px;
   color: #81948e;
   text-align: center;
 }
-.task-mine-queue-empty strong { margin-top: 10px; color: #405f59; font-size: 14px; }
-.task-mine-queue-empty p { max-width: 30ch; margin: 6px 0 0; font-size: 12px; line-height: 1.55; }
-.task-mine-ai-empty { place-content: center; justify-items: center; color: #82958f; text-align: center; }
-.task-mine-ai-empty h2 { margin: 12px 0 0; color: #36554f; font-size: 17px; }
-.task-mine-ai-empty p { margin: 6px 0 0; font-size: 12px; }
+.task-empty-robot {
+  position: relative;
+  display: grid;
+  width: 54px;
+  height: 54px;
+  place-items: center;
+  border: 1px solid rgba(15, 118, 110, .16);
+  border-radius: 18px;
+  color: #0f766e;
+  background:
+    radial-gradient(circle at 30% 22%, rgba(255, 255, 255, .95), transparent 42%),
+    #eaf5f2;
+  box-shadow: 0 12px 28px rgba(31, 85, 77, .12), inset 0 0 0 1px rgba(255, 255, 255, .62);
+  transform: rotate(-2deg);
+}
+.task-empty-robot .n-icon { transform: rotate(2deg); }
+.task-empty-robot > span {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #27a478;
+  box-shadow: 0 0 0 3px rgba(39, 164, 120, .1);
+}
+.task-empty-kicker {
+  margin-top: 14px;
+  color: #5d7771;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .04em;
+}
+.task-empty-title {
+  max-width: 28ch;
+  margin-top: 5px;
+  color: #31524c;
+  font-size: 14px;
+  font-weight: 780;
+  line-height: 1.45;
+  text-wrap: balance;
+}
+.task-empty-copy {
+  max-width: 32ch;
+  margin: 7px 0 0;
+  color: #7a8f89;
+  font-size: 12px;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+.task-mine-ai-empty { grid-template-rows: none; }
 .task-mine-intro {
   display: flex;
   align-items: center;
@@ -5822,16 +6043,11 @@ function nowStr() {
 }
 
 @container task-management (max-width: 1050px) {
-  .task-management-scope { display: none; }
-  .task-management-nav nav { max-width: none; }
   .task-assign-head > small { display: none; }
   .task-assign-head h1 { font-size: 18px; }
 }
 
 @container task-management (max-width: 820px) {
-  .task-management-nav nav button small { display: none; }
-  .task-management-nav nav button { align-items: center; }
-  .task-management-nav nav button b { grid-row: 1; }
   .task-mine-intro { align-items: flex-start; flex-direction: column; }
   .task-mine-intro dl { width: 100%; }
 }
@@ -5863,6 +6079,7 @@ function nowStr() {
 .task-disposition-flow li div { min-width: 0; }
 .task-disposition-flow li div strong { display: block; overflow: hidden; color: #35534f; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .task-disposition-flow li div small { display: block; overflow: hidden; margin-top: 3px; color: #85958f; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-disposition-flow li div .task-disposition-reopen-hint { color: #b45309; font-size: 12px; font-weight: 700; text-overflow: clip; white-space: normal; }
 .task-disposition-flow li em { color: #738983; font-size: 12px; font-style: normal; }
 .task-disposition-flow li button { border: 1px solid #c8d9d4; border-radius: 5px; padding: 5px 7px; color: #0f766e; background: #fff; font: inherit; font-size: 12px; cursor: pointer; }
 .task-disposition-form textarea { width: 100%; min-height: 92px; box-sizing: border-box; padding: 10px; border: 1px solid #cddbd7; border-radius: 6px; color: #294844; background: #fff; font: inherit; font-size: 12px; line-height: 1.6; resize: vertical; }
@@ -6084,7 +6301,7 @@ function nowStr() {
 .task-flow-global-copy p { overflow:hidden; margin:0; color:#6c827e; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
 .task-flow-global-settings .form-field { gap:5px; font-size:12px; }
 .task-flow-global-settings .form-field input,.task-flow-global-settings .form-field select { min-height:36px; padding:7px 9px; font-size:12px; }
-.task-flow-trigger-grid { display:flex; align-items:end; gap:9px; }
+.task-flow-trigger-grid { display:flex; flex-wrap:wrap; align-items:end; gap:9px; }
 .task-flow-trigger-grid>.form-field { flex:0 1 190px; }
 .task-flow-trigger-grid>.form-field:nth-child(2) { flex-basis:230px; }
 .task-flow-trigger-grid>.task-flow-cc-field { flex:1 1 240px; }
@@ -6910,7 +7127,6 @@ function nowStr() {
 
 @media (max-width: 1180px) {
   .task-lifecycle-board { grid-template-columns: minmax(0, 1.08fr) minmax(320px, .92fr); }
-  .task-management-scope { display: none; }
   .task-commandbar { grid-template-columns: minmax(0, 1fr) auto; gap: 14px; }
   .task-command-stats { display: none; }
   .task-ai-workbench { grid-template-columns: minmax(320px, 39%) minmax(0, 61%); }
@@ -6998,10 +7214,8 @@ function nowStr() {
 @media (max-width: 720px) {
   .ai-platform { padding: 12px; }
   .task-management-nav { padding: 6px; }
-  .task-management-nav nav { max-width: none; }
   .task-management-nav nav button { display: flex; min-height: 42px; align-items: center; justify-content: center; padding: 7px 6px; text-align: center; }
   .task-management-nav nav button > span { font-size: 12px; }
-  .task-management-nav nav button small,
   .task-management-nav nav button b { display: none; }
   .task-mine-view,
   .task-history-view,
@@ -7205,5 +7419,209 @@ function nowStr() {
   .task-create-form,.change-create-form,.draft-create-form { grid-template-columns: 1fr; }
   .task-form-title,.task-form-workflow,.change-form-content,.draft-form-content { grid-column: auto; }
   .message-row { max-width: 100%; }
+}
+
+/* 布置任务：紧凑全局约束 + 可展开节点 + 引擎校验 */
+.task-flow-builder {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #dce6e3;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 10px 28px rgba(25, 53, 50, .055);
+}
+.task-flow-builder .task-flow-global-settings { display: grid; flex: 0 0 auto; gap: 9px; padding: 10px 16px 12px; border-bottom: 1px solid #dfe8e6; background: #f8faf9; }
+.task-flow-builder .task-flow-global-head { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.task-flow-builder .task-flow-global-copy { display: flex; min-width: 0; align-items: center; gap: 15px; }
+.task-flow-builder .task-flow-global-copy > div { display: flex; flex: 0 0 auto; align-items: baseline; gap: 9px; }
+.task-flow-builder .task-flow-global-copy span { color: #0f766e; font-size: 12px; font-weight: 850; }
+.task-flow-builder .task-flow-global-copy strong { color: #173235; font-size: 14px; }
+.task-flow-builder .task-flow-global-copy p { overflow: hidden; margin: 0; color: #6c817d; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-flow-builder .task-flow-trigger-preview { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 5px 9px; border-left: 2px solid #58a698; background: #edf6f3; }
+.task-flow-builder .task-flow-trigger-preview span { flex: 0 0 auto; color: #66817b; font-size: 12px; }
+.task-flow-builder .task-flow-trigger-preview strong { overflow: hidden; max-width: 420px; color: #164a43; font-size: 12px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.task-flow-global-grid { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.task-flow-global-grid > .form-field { min-width: 150px; flex: 1 1 170px; gap: 5px; color: #4a625e; font-size: 12px; }
+.task-flow-global-grid > .task-flow-title-field { min-width: 220px; flex-basis: 250px; }
+.task-flow-global-grid > .task-flow-time-field { min-width: 210px; flex-basis: 220px; }
+.task-flow-global-grid > .task-flow-cc-field { min-width: 210px; flex-basis: 230px; }
+.task-flow-global-grid .form-field input,.task-flow-global-grid .form-field select { min-height: 34px; padding: 6px 9px; font-size: 12px; }
+.task-flow-field-label { display: inline-flex; align-items: center; gap: 5px; color: #48615d; font-size: 12px; font-weight: 700; }
+.task-flow-field-label .n-icon { color: #0f766e; }
+.task-flow-global-grid .task-flow-interval-field > span:last-child { display: grid; grid-template-columns: minmax(70px, .72fr) minmax(88px, 1fr); gap: 6px; }
+
+.task-flow-workspace { display: grid; flex: 1 1 auto; min-width: 0; min-height: 0; grid-template-columns: minmax(0, 1fr) 245px; }
+.task-flow-authoring { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 10px; padding: 12px 14px 14px; overflow: hidden; background: #fff; }
+.task-flow-assistant-bar { display: grid; min-height: 48px; flex: 0 0 auto; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; gap: 10px; border: 1px solid #bcd8d2; border-radius: 8px; padding: 7px 10px; color: #43605b; background: #f7fbfa; }
+.task-flow-assistant-icon { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 7px; color: #fff; background: #0f766e; }
+.task-flow-assistant-bar > strong { color: #0b655d; font-size: 13px; }
+.task-flow-assistant-toggle { display: inline-flex; min-height: 32px; align-items: center; gap: 4px; border: 0; border-radius: 6px; padding: 5px 7px; color: #47716a; background: transparent; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.task-flow-assistant-toggle:hover { color: #0f766e; background: #e8f3f0; }
+.task-flow-assistant-toggle:focus-visible { outline: 2px solid rgba(15, 118, 110, .3); outline-offset: 1px; }
+.task-flow-assistant-toggle[aria-expanded="true"] .n-icon { transform: rotate(180deg); }
+.task-flow-assistant-panel { display: grid; flex: 0 0 auto; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 9px; overflow: visible; border: 1px solid #dce7e4; border-radius: 8px; background: #f8faf9; }
+.task-flow-assistant-panel.collapsed { display: none; }
+.task-flow-assistant-panel .task-flow-mode-switch { display: grid; width: min(300px, 100%); align-self: start; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 3px; }
+.task-flow-assistant-panel .task-flow-mode-switch button { min-height: 36px; }
+.task-flow-assistant-panel .task-flow-generator { min-height: 0; margin: 0; padding: 9px 10px 10px; overflow: visible; }
+.task-flow-assistant-panel .task-flow-section-title { margin-bottom: 8px; }
+.task-flow-assistant-panel .dobby-generator textarea { min-height: 72px; flex: 0 0 auto; }
+.task-flow-assistant-panel .task-flow-generate-button { min-height: 40px; }
+.task-flow-assistant-panel .template-generator { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 8px; }
+.task-flow-assistant-panel .template-generator .task-flow-section-title,.task-flow-assistant-panel .template-generator .task-flow-generate-button { grid-column: 1 / -1; }
+
+.task-flow-builder .task-flow-editor-head { display: flex; min-height: 42px; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 14px; margin: 0; padding: 0 2px; }
+.task-flow-builder .task-flow-editor-head > div:first-child { display: flex; min-width: 0; align-items: baseline; gap: 9px; }
+.task-flow-builder .task-flow-editor-head span { color: #0f766e; font-size: 12px; font-weight: 850; }
+.task-flow-builder .task-flow-editor-head strong { overflow: hidden; color: #173235; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.task-flow-builder .task-flow-editor-head small { color: #7b8c87; font-size: 12px; white-space: nowrap; }
+.task-flow-builder .task-flow-editor-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+.task-flow-builder .task-flow-editor-actions em { color: #7a8d88; font-size: 12px; font-style: normal; }
+.task-flow-builder .task-flow-add-button { display: inline-flex; align-items: center; gap: 5px; padding: 7px 10px; }
+.task-flow-node-workspace { display: grid; flex: 1 1 auto; min-width: 0; min-height: 0; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
+.task-flow-node-list { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 8px; padding: 3px 5px 12px 0; overflow-y: auto; scrollbar-color: transparent transparent; scrollbar-width: thin; }
+.task-flow-node-list:hover { scrollbar-color: #b8c8c4 transparent; }
+.task-flow-node-list::-webkit-scrollbar { width: 6px; }
+.task-flow-node-list::-webkit-scrollbar-track { background: transparent; }
+.task-flow-node-list::-webkit-scrollbar-thumb { border-radius: 999px; background: transparent; }
+.task-flow-node-list:hover::-webkit-scrollbar-thumb { background: #b8c8c4; }
+.task-flow-builder .task-flow-node-card { flex: 0 0 auto; border: 1px solid #dce6e3; border-radius: 8px; padding: 0; background: #fff; box-shadow: none; }
+.task-flow-builder .task-flow-node-card.active { border-color: #67a99d; box-shadow: 0 0 0 2px rgba(15, 118, 110, .08); }
+.task-flow-builder .task-flow-node-card header { display: grid; min-height: 54px; grid-template-columns: 29px minmax(0, 1fr) auto auto; align-items: center; gap: 9px; margin: 0; padding: 7px 9px; cursor: pointer; }
+.task-flow-builder .task-flow-node-card header > span { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 50%; color: #fff; background: #809993; font-size: 12px; font-weight: 850; }
+.task-flow-builder .task-flow-node-card.active header > span { background: #0f766e; }
+.task-flow-node-heading { min-width: 0; }
+.task-flow-node-heading strong,.task-flow-node-heading small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-flow-node-heading strong { color: #203d38; font-size: 13px; }
+.task-flow-node-heading small { margin-top: 3px; color: #7b8d88; font-size: 12px; }
+.task-flow-builder .task-flow-node-card header > em { border: 1px solid #c7ddd7; border-radius: 5px; padding: 3px 6px; color: #0f766e; background: #eef7f4; font-size: 12px; font-style: normal; font-weight: 700; }
+.task-flow-node-actions { display: flex; gap: 4px; }
+.task-flow-builder .task-flow-node-card .task-flow-node-actions button { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid #d8e3e0; border-radius: 5px; padding: 0; color: #48645f; background: #f8faf9; cursor: pointer; }
+.task-flow-builder .task-flow-node-card .task-flow-node-actions button.danger { color: #b24b2b; }
+.task-flow-builder .task-flow-node-card .task-flow-node-actions button:disabled { opacity: .35; cursor: not-allowed; }
+.task-flow-builder .task-flow-node-fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 4px 9px 10px 47px; border-top: 1px solid #e6ecea; }
+.task-flow-builder .task-flow-node-fields .form-field { gap: 5px; color: #536a66; font-size: 12px; }
+.task-flow-builder .task-flow-node-fields input,.task-flow-builder .task-flow-node-fields select { min-height: 35px; padding: 7px 8px; font-size: 12px; }
+
+.task-flow-validation { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 11px; padding: 14px; overflow: hidden; border-left: 1px solid #e0e8e6; background: #f8faf9; }
+.task-flow-validation-head { display: grid; gap: 3px; }
+.task-flow-validation-head span { color: #0f766e; font-size: 12px; font-weight: 850; }
+.task-flow-validation-head strong { color: #173235; font-size: 15px; }
+.task-flow-validation-status { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: center; gap: 9px; padding: 10px; border: 1px solid #ead7cc; border-radius: 8px; color: #b25b2e; background: #fff8f4; }
+.task-flow-validation-status.passed { border-color: #bfd9d3; color: #0f766e; background: #eff8f5; }
+.task-flow-validation-status div { min-width: 0; }
+.task-flow-validation-status strong,.task-flow-validation-status span { display: block; }
+.task-flow-validation-status strong { color: #314f49; font-size: 13px; }
+.task-flow-validation-status span { margin-top: 2px; color: #768984; font-size: 12px; }
+.task-flow-validation-list { display: grid; min-height: 0; flex: 1 1 auto; align-content: start; gap: 9px; margin: 0; padding: 0 3px 0 0; overflow-y: auto; list-style: none; }
+.task-flow-validation-list li { display: grid; grid-template-columns: 19px minmax(0, 1fr); gap: 7px; color: #bd6b39; }
+.task-flow-validation-list li.ok { color: #16806f; }
+.task-flow-validation-list li div { min-width: 0; }
+.task-flow-validation-list strong,.task-flow-validation-list span { display: block; }
+.task-flow-validation-list strong { color: #36534e; font-size: 12px; }
+.task-flow-validation-list span { overflow: hidden; margin-top: 2px; color: #82918d; font-size: 12px; line-height: 1.4; text-overflow: ellipsis; }
+.task-flow-validation-note { flex: 0 0 auto; padding-top: 9px; border-top: 1px solid #dfe7e5; }
+.task-flow-validation-note strong { color: #395650; font-size: 12px; }
+.task-flow-validation-note p { margin: 5px 0 0; color: #788b86; font-size: 12px; line-height: 1.55; }
+.task-flow-submit,.task-flow-back { min-height: 40px; border-radius: 7px; padding: 9px 11px; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; }
+.task-flow-submit { border: 0; color: #fff; background: #0f766e; box-shadow: 0 5px 12px rgba(15, 118, 110, .16); }
+.task-flow-submit:disabled { opacity: .45; cursor: not-allowed; box-shadow: none; }
+.task-flow-back { border: 1px solid #d4dfdc; color: #526b66; background: #fff; }
+
+@media (max-width: 1180px) {
+  .task-flow-workspace { grid-template-columns: minmax(0, 1fr) 225px; }
+  .task-flow-builder .task-flow-node-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 860px) {
+  .task-assign-view { min-height: 920px; overflow: visible; }
+  .task-flow-builder { height: auto; min-height: 920px; overflow: visible; }
+  .task-flow-builder .task-flow-global-head { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .task-flow-builder .task-flow-global-copy { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .task-flow-builder .task-flow-global-copy p { white-space: normal; }
+  .task-flow-builder .task-flow-trigger-preview { width: 100%; box-sizing: border-box; }
+  .task-flow-workspace { display: block; }
+  .task-flow-authoring { min-height: 620px; overflow: visible; }
+  .task-flow-assistant-panel { grid-template-columns: 1fr; }
+  .task-flow-node-workspace { grid-template-columns: 1fr; overflow: visible; }
+  .task-flow-node-list { overflow: visible; }
+  .task-flow-validation { border-top: 1px solid #e0e8e6; border-left: 0; }
+}
+
+@container task-management (min-width: 1100px) {
+  .task-flow-builder .task-flow-global-settings {
+    gap: 0;
+    padding: 8px 14px 9px;
+  }
+  .task-flow-builder .task-flow-global-head { display: none; }
+  .task-flow-global-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 8px;
+  }
+  .task-flow-builder .task-flow-global-grid > .form-field,
+  .task-flow-builder .task-flow-global-grid > .task-flow-title-field,
+  .task-flow-builder .task-flow-global-grid > .task-flow-time-field,
+  .task-flow-builder .task-flow-global-grid > .task-flow-cc-field {
+    min-width: 0;
+    flex: none;
+  }
+  .task-flow-authoring {
+    display: grid;
+    grid-template-columns: minmax(320px, 38%) minmax(0, 1fr);
+    grid-template-rows: 48px minmax(0, 1fr);
+    gap: 10px 14px;
+  }
+  .task-flow-authoring .task-flow-assistant-bar {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .task-flow-authoring .task-flow-assistant-toggle { display: none; }
+  .task-flow-authoring .task-flow-assistant-panel,
+  .task-flow-authoring .task-flow-assistant-panel.collapsed {
+    display: grid;
+    min-height: 0;
+    grid-column: 1;
+    grid-row: 2;
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+  }
+  .task-flow-authoring .task-flow-assistant-panel .task-flow-mode-switch { width: 100%; }
+  .task-flow-authoring .task-flow-assistant-panel .task-flow-generator {
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .task-flow-authoring .task-flow-assistant-panel .dobby-generator textarea {
+    min-height: 132px;
+    flex: 1 1 132px;
+  }
+  .task-flow-authoring .task-flow-editor-head {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .task-flow-authoring .task-flow-editor-head small,
+  .task-flow-authoring .task-flow-editor-actions em { display: none; }
+  .task-flow-authoring .task-flow-node-workspace {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .task-flow-builder .task-flow-node-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@container task-management (min-width: 1480px) {
+  .task-flow-workspace {
+    grid-template-columns: minmax(0, 1fr) clamp(330px, 22%, 380px);
+  }
+  .task-flow-validation { padding-right: 18px; padding-left: 18px; }
+  .task-flow-authoring {
+    grid-template-columns: minmax(340px, 36%) minmax(0, 1fr);
+  }
+  .task-flow-authoring .task-flow-editor-head small { display: inline; }
+  .task-flow-builder .task-flow-node-fields { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 </style>

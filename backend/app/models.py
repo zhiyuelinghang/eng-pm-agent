@@ -613,7 +613,7 @@ class CollaborationSession(TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(300))
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     participant_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
-    task_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    task_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
 
 
 class CollaborationMessage(Base):
@@ -622,7 +622,7 @@ class CollaborationMessage(Base):
     session_id: Mapped[int] = mapped_column(ForeignKey("collaboration_sessions.id", ondelete="CASCADE"), index=True)
     role: Mapped[str] = mapped_column(String(32))
     content: Mapped[str] = mapped_column(Text)
-    generated_task_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    generated_task_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

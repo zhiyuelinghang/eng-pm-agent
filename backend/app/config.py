@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     agentscope_request_timeout_seconds: float = 150.0
     agentscope_poll_interval_seconds: float = 0.35
 
+    # 任务引擎：沿用平台 DATABASE_URL，仅使用独立 schema 隔离引擎表。
+    task_engine_schema: str = "task_engine"
+    task_engine_tz: str = "Asia/Shanghai"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property

@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 _MCP_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
@@ -11,6 +11,7 @@ _VERSION_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 PROJECT_INITIALIZATION_VALIDATION_CAPABILITY = (
     "project_initialization_validation"
 )
+TASK_ENGINE_STORE_CAPABILITY = "dobby_task_engine_store"
 
 
 def utc_now() -> datetime:
@@ -55,6 +56,7 @@ class MCPPackageManifest(BaseModel):
     platform_capabilities: list[
         Literal[
             "dobby_database_interactions",
+            "dobby_task_engine_store",
             "project_initialization_validation",
         ]
     ] = Field(
@@ -99,16 +101,29 @@ class MCPPackageManifest(BaseModel):
         values: list[
             Literal[
                 "dobby_database_interactions",
+                "dobby_task_engine_store",
                 "project_initialization_validation",
             ]
         ],
     ) -> list[
         Literal[
             "dobby_database_interactions",
+            "dobby_task_engine_store",
             "project_initialization_validation",
         ]
     ]:
         return list(dict.fromkeys(values))
+
+    @model_validator(mode="after")
+    def _validate_task_engine_store_owner(self) -> "MCPPackageManifest":
+        if (
+            TASK_ENGINE_STORE_CAPABILITY in self.platform_capabilities
+            and self.name != "task-engine"
+        ):
+            raise ValueError(
+                "dobby_task_engine_store 仅允许 task-engine 包申请",
+            )
+        return self
 
 
 class MCPPackageTool(BaseModel):

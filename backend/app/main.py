@@ -1,5 +1,7 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from datetime import date, datetime
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,9 +15,33 @@ from .config import get_settings
 from .db import Base, SessionLocal, engine
 from .models import (Attachment, DailyReport, DocumentFolder, DocumentFolderItem, Project, ProjectChange,
                      ProjectInformationRecord, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectStatusSnapshot, QualityMetric, RiskSource,
-                     Task, User, WbsItem, WbsRiskLink)
+                     User, WbsItem, WbsRiskLink)
 from .security import hash_password
 from .schema_migrations import upgrade_database_schema
+from .task_engine_gateway import get_engine
+
+
+logger = logging.getLogger(__name__)
+TICK_INTERVAL_SECONDS = 300
+
+
+async def _tick_loop() -> None:
+    """每 5 分钟触发到期计划并主动扫描逾期任务。"""
+    task_engine = get_engine()
+    while True:
+        try:
+            report = await asyncio.to_thread(task_engine.tick)
+            if report.created_count or report.overdue_task_ids:
+                logger.info("任务引擎：%s", report.describe())
+            for failure in (item for item in report.fired if not item.ok):
+                logger.warning(
+                    "触发失败 %s：%s",
+                    failure.schedule_id,
+                    failure.error,
+                )
+        except Exception:
+            logger.exception("任务引擎 tick 失败")
+        await asyncio.sleep(TICK_INTERVAL_SECONDS)
 
 
 def seed_admin() -> None:
@@ -196,9 +222,7 @@ def ensure_prototype_status_data(db, project: Project) -> None:
         {"title": "补齐降水井运行记录", "type": "material_missing", "risk": "low", "owner": "刘资料", "wbs": "降水运行", "risk_name": None, "due": "2026-07-21", "status": "pending", "source": "6月18日施工日报", "materials": ["降水井运行记录"], "steps": workflow("过程", "未闭环", [("AI识别缺失", "AI", "completed", "施工日报"), ("资料员补齐", "刘资料", "processing", "降水井运行记录"), ("安全员抽查", "赵安全", "pending", "抽查意见")])},
         {"title": "完成冠梁验收资料归档", "type": "material_missing", "risk": "low", "owner": "刘资料", "wbs": "支撑安装", "risk_name": None, "due": "2026-07-14", "status": "completed", "source": "6月18日施工日报", "materials": ["冠梁验收资料"], "steps": workflow("归档", "已闭环", [("安全员确认验收", "赵安全", "completed", "验收照片"), ("资料员归档", "刘资料", "completed", "冠梁验收资料"), ("闭环确认", "赵安全", "completed", "闭环记录")])},
     ]
-    for spec in task_specs:
-        if not db.scalar(select(Task).where(Task.project_id == project.id, Task.title == spec["title"])):
-            db.add(Task(project_id=project.id, title=spec["title"], task_type=spec["type"], risk_level=spec["risk"], status=spec["status"], assignee_user_id=users[spec["owner"]].id, confirmer_user_id=users["赵安全"].id, due_at=spec["due"], wbs_item_id=wbs[spec["wbs"]].id, risk_source_id=risks[spec["risk_name"]].id if spec["risk_name"] else None, trigger_reason=spec["source"], required_materials=spec["materials"], workflow_steps=spec["steps"]))
+    # 原型任务已归入旧表历史数据；接入引擎后不再向旧 tasks 表补种新记录。
 
     information_specs = [
         ("微信群", "深基坑施工群", "张工", "2026-06-18 17:42", "待确认", "中", "北侧第一道支撑完成，明天计划开挖至-4.5m，监测点S3今日位移接近预警值。"),
@@ -331,7 +355,11 @@ async def lifespan(_: FastAPI):
     with SessionLocal() as db:
         bootstrap_declarative_catalog(db)
     seed_admin()
+    tick_task = asyncio.create_task(_tick_loop())
     yield
+    tick_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await tick_task
 
 
 settings = get_settings()

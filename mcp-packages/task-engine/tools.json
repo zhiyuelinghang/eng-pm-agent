@@ -1,0 +1,418 @@
+[
+  {
+    "name": "generate_task_flow",
+    "title": "生成任务流",
+    "description": "把一句自然语言需求转换成结构化任务流，自动识别周期触发规则（如「每周五」「每3天」）并选配合适的流程模板。已配置模型时由模型生成，未配置或模型不可用时自动降级为规则生成，始终返回可用结果。返回的 missing_requirements 会列出布置前还缺什么（责任人/确认人/工点）。生成的任务流不会自动布置，需再调用 dispatch_task 或 create_schedule。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "requirement": {
+          "type": "string",
+          "description": "需求描述，例如「每周五检查基坑监测数据，接近预警值时由监测员复核，项目负责人确认后归档」",
+          "minLength": 4
+        },
+        "assignees": {
+          "type": "array",
+          "description": "可指派的人员名单，按顺序轮流分配给各节点。必须是具体的人，不接受「安全员」「资料员」这类岗位——岗位到人的解析应在调用前完成。",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ref": { "type": "string", "description": "人员标识，宿主系统里的稳定 id 或工号" },
+              "name": { "type": "string", "description": "姓名" }
+            },
+            "required": ["ref"]
+          }
+        },
+        "confirmer": {
+          "type": "object",
+          "description": "确认人：全部节点完成后由谁验收。只有此人能通过或退回该任务。",
+          "properties": {
+            "ref": { "type": "string" },
+            "name": { "type": "string" }
+          },
+          "required": ["ref"]
+        },
+        "site": {
+          "type": "object",
+          "description": "工点：任务发生的具体位置，如「3号楼-地下室」。同一类隐患在不同工点是不同的任务。",
+          "properties": {
+            "ref": { "type": "string", "description": "工点标识，如 WBS id" },
+            "name": { "type": "string", "description": "工点名称" },
+            "code": { "type": "string", "description": "工点编号" }
+          },
+          "required": ["ref"]
+        },
+        "watchers": {
+          "type": "array",
+          "description": "抄送人名单",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ref": { "type": "string" },
+              "name": { "type": "string" }
+            },
+            "required": ["ref"]
+          }
+        },
+        "context": {
+          "type": "object",
+          "description": "项目上下文，会附给模型作为参考（如项目名、WBS 条目、风险源）"
+        },
+        "save": {
+          "type": "boolean",
+          "description": "是否保存为可复用的任务流定义，默认 true",
+          "default": true
+        }
+      },
+      "required": ["requirement"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": false }
+  },
+  {
+    "name": "list_templates",
+    "title": "列出流程模板",
+    "description": "列出内置的任务流模板（隐患整改、条件核查、资料补全、风险处置、报告审核、周期巡检、通用流程）。每个模板都包含执行、复核、归档环节。",
+    "inputSchema": { "type": "object", "properties": {} },
+    "annotations": { "readOnlyHint": true, "idempotentHint": true }
+  },
+  {
+    "name": "create_flow_from_template",
+    "title": "按模板创建任务流",
+    "description": "根据指定模板生成任务流定义。适合流程已经标准化、不需要模型介入的场景。返回的 missing_requirements 会列出布置前还缺什么。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "template": { "type": "string", "description": "模板 key 或中文名，如 hazard_rectification 或「隐患整改」" },
+        "title": { "type": "string", "description": "任务流标题，留空则用模板名" },
+        "assignees": {
+          "type": "array",
+          "description": "责任人名单，按顺序轮流分配给各节点。必须是具体的人，不接受岗位名。",
+          "items": {
+            "type": "object",
+            "properties": { "ref": { "type": "string" }, "name": { "type": "string" } },
+            "required": ["ref"]
+          }
+        },
+        "confirmer": {
+          "type": "object",
+          "description": "确认人：全部节点完成后由谁验收",
+          "properties": { "ref": { "type": "string" }, "name": { "type": "string" } },
+          "required": ["ref"]
+        },
+        "site": {
+          "type": "object",
+          "description": "工点：任务发生的具体位置",
+          "properties": {
+            "ref": { "type": "string" },
+            "name": { "type": "string" },
+            "code": { "type": "string" }
+          },
+          "required": ["ref"]
+        },
+        "watchers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": { "ref": { "type": "string" }, "name": { "type": "string" } },
+            "required": ["ref"]
+          }
+        },
+        "save": { "type": "boolean", "default": true }
+      },
+      "required": ["template"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": false }
+  },
+  {
+    "name": "dispatch_task",
+    "title": "立即布置任务",
+    "description": "由任务流定义立即创建一个任务实例并激活首个节点，责任人马上能在「我的任务」里看到。用于一次性、当下就要执行的任务。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "flow_id": { "type": "string", "description": "已保存的任务流 id" },
+        "actor": { "type": "string", "description": "布置人标识", "default": "system" },
+        "trigger_note": { "type": "string", "description": "本次布置的缘由说明" }
+      },
+      "required": ["flow_id"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": false }
+  },
+  {
+    "name": "create_schedule",
+    "title": "登记触发计划",
+    "description": "把任务流与触发时间绑定，到点自动布置任务。这是「每周五自动派发巡检任务」这类需求的落地方式——登记后由 tick 驱动，无需人工干预。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "flow_id": { "type": "string", "description": "已保存的任务流 id" },
+        "run_mode": {
+          "type": "string",
+          "enum": ["once", "recurring"],
+          "description": "once 到点执行一次；recurring 按间隔重复"
+        },
+        "first_at": {
+          "type": "string",
+          "description": "首次触发时刻，ISO8601 或「YYYY-MM-DD HH:MM」。留空则沿用任务流自带的触发设置。"
+        },
+        "interval_value": { "type": "integer", "minimum": 1, "description": "重复间隔数值" },
+        "interval_unit": {
+          "type": "string",
+          "enum": ["hour", "day", "week", "month"],
+          "description": "重复间隔单位"
+        },
+        "max_fires": { "type": "integer", "minimum": 1, "description": "最多触发几次，留空为不限" },
+        "until": { "type": "string", "description": "重复截止时刻，留空为不限" }
+      },
+      "required": ["flow_id"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": false }
+  },
+  {
+    "name": "list_schedules",
+    "title": "查看触发计划",
+    "description": "列出所有触发计划及其下次触发时间、已触发次数与状态。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "active_only": { "type": "boolean", "description": "只看生效中的计划", "default": false }
+      }
+    },
+    "annotations": { "readOnlyHint": true, "idempotentHint": true }
+  },
+  {
+    "name": "pause_schedule",
+    "title": "暂停或恢复计划",
+    "description": "暂停触发计划（保留进度，可随时恢复），或恢复已暂停的计划。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "schedule_id": { "type": "string" },
+        "paused": { "type": "boolean", "description": "true 暂停，false 恢复", "default": true }
+      },
+      "required": ["schedule_id"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": true }
+  },
+  {
+    "name": "cancel_schedule",
+    "title": "停用触发计划",
+    "description": "永久停用一个触发计划，不再触发。已创建的任务不受影响。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "schedule_id": { "type": "string" } },
+      "required": ["schedule_id"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": true, "destructiveHint": true }
+  },
+  {
+    "name": "tick",
+    "title": "推进引擎",
+    "description": "推进引擎一步：触发所有到期的计划并创建任务，同时扫描标记逾期任务。幂等——同一触发时刻只会创建一次任务，重复调用安全。建议由外部定时器（cron / 宿主定时任务）周期调用。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "now": { "type": "string", "description": "指定当前时刻（ISO8601），仅用于测试与补偿，留空取系统时间" }
+      }
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": true }
+  },
+  {
+    "name": "list_tasks",
+    "title": "查询任务",
+    "description": "查询任务列表。按 assignee 过滤时返回「此人当前负责」的任务——即他所在节点正处于活跃状态的任务，这正是「我的任务」的语义。按 confirmer + state=review 过滤即「待我验收」。按 site 过滤即「这个工点上的任务」。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "assignee": { "type": "string", "description": "责任人 ref，查「我的任务」时使用" },
+        "confirmer": { "type": "string", "description": "确认人 ref，配合 state=review 查「待我验收」" },
+        "site": { "type": "string", "description": "工点 ref，查某个工点上的任务" },
+        "state": {
+          "type": "string",
+          "enum": ["pending", "running", "blocked", "review", "done", "cancelled", "overdue"],
+          "description": "按任务状态过滤"
+        },
+        "category": { "type": "string", "description": "按业务分类过滤" },
+        "open_only": { "type": "boolean", "description": "只看未闭环的任务", "default": false },
+        "limit": { "type": "integer", "default": 20, "maximum": 100 },
+        "offset": { "type": "integer", "default": 0 }
+      }
+    },
+    "annotations": { "readOnlyHint": true, "idempotentHint": true }
+  },
+  {
+    "name": "get_task",
+    "title": "任务详情",
+    "description": "获取任务的完整信息，包括所有节点状态与流转历史时间线。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "include_history": { "type": "boolean", "description": "是否包含流转历史", "default": true }
+      },
+      "required": ["task_id"]
+    },
+    "annotations": { "readOnlyHint": true, "idempotentHint": true }
+  },
+  {
+    "name": "complete_step",
+    "title": "完成节点",
+    "description": "完成当前节点并把流转推进到下一节点。只能完成当前轮到的节点——前序节点未完成时不能跨越办理，这保证了「先整改后归档」的顺序不被绕过。全部节点完成后任务自动进入待验收。若节点要求上传证明材料而未提供，会被拒绝。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "seq": { "type": "integer", "description": "节点序号，从 0 开始" },
+        "actor": { "type": "string", "description": "办理人标识" },
+        "comment": { "type": "string", "description": "办理意见" },
+        "attachments": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "证明材料的引用（文件名或 URL）"
+        }
+      },
+      "required": ["task_id", "seq"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": false }
+  },
+  {
+    "name": "forward_step",
+    "title": "转办节点",
+    "description": "改派节点责任人。流转位置不变，只换人，改派记录会留痕。可改派当前正在流转的节点（转办：本人干不了，换人接手），也可改派尚未轮到的节点（排班：提前安排后续人手）。已完成或已跳过的节点不可改派。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "seq": { "type": "integer" },
+        "to_ref": { "type": "string", "description": "接收人标识" },
+        "to_name": { "type": "string", "description": "接收人姓名" },
+        "actor": { "type": "string", "description": "转办人标识" },
+        "note": { "type": "string", "description": "转办说明" }
+      },
+      "required": ["task_id", "seq", "to_ref"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": false }
+  },
+  {
+    "name": "skip_step",
+    "title": "跳过节点",
+    "description": "跳过一个可选节点。只有标记为 optional 的节点才允许跳过。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "seq": { "type": "integer" },
+        "actor": { "type": "string" },
+        "reason": { "type": "string", "description": "跳过原因" }
+      },
+      "required": ["task_id", "seq"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": false }
+  },
+  {
+    "name": "block_step",
+    "title": "标记节点受阻",
+    "description": "把节点标记为受阻（如等待材料进场、上游未完成），任务整体转入受阻状态。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "seq": { "type": "integer" },
+        "actor": { "type": "string" },
+        "reason": { "type": "string", "description": "受阻原因" }
+      },
+      "required": ["task_id", "seq"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": false }
+  },
+  {
+    "name": "unblock_step",
+    "title": "解除节点阻塞",
+    "description": "解除节点的受阻状态，任务恢复流转。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "seq": { "type": "integer" },
+        "actor": { "type": "string" },
+        "note": { "type": "string" }
+      },
+      "required": ["task_id", "seq"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": false }
+  },
+  {
+    "name": "add_note",
+    "title": "添加处理说明",
+    "description": "给任务追加一条处理说明，进入流转历史，不改变流转位置。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "note": { "type": "string" },
+        "actor": { "type": "string" },
+        "seq": { "type": "integer", "description": "关联的节点序号，可选" }
+      },
+      "required": ["task_id", "note"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": false }
+  },
+  {
+    "name": "accept_task",
+    "title": "验收通过",
+    "description": "验收通过，任务闭环。只有处于待验收状态的任务可以通过，且只有任务指定的确认人能操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "actor": { "type": "string", "description": "验收人标识，必须与任务的确认人一致" },
+        "note": { "type": "string" }
+      },
+      "required": ["task_id"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": false }
+  },
+  {
+    "name": "reject_task",
+    "title": "验收退回",
+    "description": "验收退回：把最后一个已完成节点重新打开，任务回到流转中重做。只有任务指定的确认人能操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "actor": { "type": "string", "description": "退回人标识，必须与任务的确认人一致" },
+        "reason": { "type": "string", "description": "退回原因" }
+      },
+      "required": ["task_id"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": false }
+  },
+  {
+    "name": "cancel_task",
+    "title": "取消任务",
+    "description": "取消一个任务，任务进入终态不可再操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "actor": { "type": "string" },
+        "reason": { "type": "string" }
+      },
+      "required": ["task_id"]
+    },
+    "annotations": { "readOnlyHint": false, "idempotentHint": true, "destructiveHint": true }
+  },
+  {
+    "name": "list_flows",
+    "title": "查看任务流定义",
+    "description": "列出已保存的任务流定义，可按分类过滤。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "category": { "type": "string" },
+        "limit": { "type": "integer", "default": 50 }
+      }
+    },
+    "annotations": { "readOnlyHint": true, "idempotentHint": true }
+  }
+]

@@ -25,6 +25,7 @@ from ._models import (
     MCPPackageVersionView,
     MCPPackageView,
     PROJECT_INITIALIZATION_VALIDATION_CAPABILITY,
+    TASK_ENGINE_STORE_CAPABILITY,
     utc_now,
 )
 
@@ -369,12 +370,13 @@ class MCPRegistryManager:
         archive: BinaryIO,
         *,
         allow_system_tool_package: bool = False,
+        allow_task_engine_store_capability: bool = False,
     ) -> MCPPackageRecord:
         """Validate, probe and publish one dependency-complete ZIP package.
 
-        Fixed system-tool packages can only be updated by an explicit trusted
-        maintenance caller.  The ordinary management upload path deliberately
-        leaves ``allow_system_tool_package`` disabled.
+        Fixed system-tool packages and packages requesting direct task-engine
+        storage access can only be installed by explicit trusted maintenance
+        callers.  Ordinary management uploads leave both flags disabled.
         """
         async with self._install_lock:
             stage = self.staging_dir / uuid.uuid4().hex
@@ -395,6 +397,14 @@ class MCPRegistryManager:
                     raise MCPPackageError(
                         f"「{manifest.display_name}」是平台固定系统工具，"
                         "不能在智能体管理端上传或替换。",
+                    )
+                if (
+                    TASK_ENGINE_STORE_CAPABILITY
+                    in manifest.platform_capabilities
+                    and not allow_task_engine_store_capability
+                ):
+                    raise MCPPackageError(
+                        "任务引擎存储能力只能由平台维护脚本安装或更新。",
                     )
                 existing = await self.get_record(manifest.name)
                 if (
@@ -598,6 +608,8 @@ class MCPRegistryManager:
         # Direct database-file injection was removed in the structured-store
         # migration.  A stale uploaded manifest cannot re-enable it.
         env.pop("DOBBY_DATABASE_PATH", None)
+        # 任务引擎只能使用宿主注入的连接信息，上传包中的值不能覆盖。
+        env.pop("TASK_ENGINE_DATABASE_URL", None)
         if {
             "dobby_database_interactions",
         } & set(manifest.platform_capabilities):
@@ -629,6 +641,43 @@ class MCPRegistryManager:
                 env["DOBBY_DATABASE_INTERACTION_BASE_URL"] = (
                     database_api_url + "/database-interactions"
                 )
+        if TASK_ENGINE_STORE_CAPABILITY in manifest.platform_capabilities:
+            database_url = (
+                os.getenv("TASK_ENGINE_DATABASE_URL", "").strip()
+                or os.getenv("DATABASE_URL", "").strip()
+            )
+            if database_url:
+                env["TASK_ENGINE_DATABASE_URL"] = database_url
+            env.pop("TASK_ENGINE_DB", None)
+            env["TASK_ENGINE_SCHEMA"] = (
+                os.getenv("TASK_ENGINE_SCHEMA", "").strip()
+                or "task_engine"
+            )
+            env["TASK_ENGINE_TZ"] = (
+                os.getenv("TASK_ENGINE_TZ", "").strip()
+                or env.get("TASK_ENGINE_TZ", "Asia/Shanghai")
+            )
+            for target, sources in {
+                "TASK_ENGINE_AI_KEY": ("TASK_ENGINE_AI_KEY", "AI_API_KEY"),
+                "TASK_ENGINE_AI_BASE_URL": (
+                    "TASK_ENGINE_AI_BASE_URL",
+                    "AI_BASE_URL",
+                ),
+                "TASK_ENGINE_AI_MODEL": (
+                    "TASK_ENGINE_AI_MODEL",
+                    "AI_MODEL",
+                ),
+            }.items():
+                value = next(
+                    (
+                        os.getenv(source, "").strip()
+                        for source in sources
+                        if os.getenv(source, "").strip()
+                    ),
+                    "",
+                )
+                if value:
+                    env[target] = value
         if manifest.name == "attachment-parser":
             # Attachment-parser MCP packages ship with usable defaults, while
             # deployments may redirect them to a private MinerU router without

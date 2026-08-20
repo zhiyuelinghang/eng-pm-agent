@@ -148,7 +148,16 @@ def test_project_connector_is_project_scoped(db: Session) -> None:
     assert list_project_connectors(project.id, db, user)["data"] == []
 
 
-def test_dashboard_fallback_uses_canonical_project_fields(db: Session) -> None:
+def test_dashboard_fallback_uses_canonical_project_fields(
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class EmptyTaskEngine:
+        @staticmethod
+        def list_tasks(**_: object) -> list[object]:
+            return []
+
+    monkeypatch.setattr("backend.app.api.get_engine", lambda: EmptyTaskEngine())
     user, project = _admin_and_project(db)
     root = WbsItem(
         project_id=project.id,

@@ -783,12 +783,13 @@ export const useAppStore = defineStore('app', () => {
     if (!projectId) return
     const previousSettingsProjectId = id(projectSettings.value?.project_id)
     const previousWeKnoraAgentId = projectSettings.value?.weknora_agent_id || ''
-    const [memberResult, wbsResult, riskResult, qualityResult, mappingResult, linkResult, taskResult, dailyResult, informationResult, draftResult, fillResult, logResult, settingsResult, dashboardResult, changesResult, notificationsResult] = await Promise.all([
-      api.get<ApiEnvelope<ApiMember[]>>(`/projects/${projectId}/members`), api.get<ApiEnvelope<ApiWbs[]>>(`/projects/${projectId}/wbs`), api.get<ApiEnvelope<ApiRisk[]>>(`/projects/${projectId}/risks`), api.get<ApiEnvelope<ApiQualityMetric[]>>(`/projects/${projectId}/quality-metrics`), api.get<ApiEnvelope<ApiPlatformMapping[]>>(`/projects/${projectId}/platform-field-mappings`), api.get<ApiEnvelope<ApiLink[]>>(`/projects/${projectId}/wbs-risk-links`), api.get<ApiEnvelope<ApiTask[]>>(`/projects/${projectId}/tasks`), api.get<ApiEnvelope<ApiDaily[]>>(`/projects/${projectId}/daily-reports`), api.get<ApiEnvelope<ApiInformationRecord[]>>(`/projects/${projectId}/information-records`), api.get<ApiEnvelope<ApiDraft[]>>(`/projects/${projectId}/risk-drafts`), api.get<ApiEnvelope<ApiFill[]>>(`/projects/${projectId}/fill-packages`), api.get<ApiEnvelope<ApiLog[]>>(`/projects/${projectId}/operation-logs`), api.get<ApiEnvelope<ApiProjectSettings>>(`/projects/${projectId}/settings`), api.get<ApiEnvelope<ProjectDashboard>>(`/projects/${projectId}/dashboard`), api.get<ApiEnvelope<ProjectChangeRecord[]>>(`/projects/${projectId}/changes`), api.get<ApiEnvelope<NotificationRecord[]>>(`/projects/${projectId}/notifications`),
+    const [memberResult, wbsResult, riskResult, qualityResult, mappingResult, linkResult, taskResult, archiveTaskResult, dailyResult, informationResult, draftResult, fillResult, logResult, settingsResult, dashboardResult, changesResult, notificationsResult] = await Promise.all([
+      api.get<ApiEnvelope<ApiMember[]>>(`/projects/${projectId}/members`), api.get<ApiEnvelope<ApiWbs[]>>(`/projects/${projectId}/wbs`), api.get<ApiEnvelope<ApiRisk[]>>(`/projects/${projectId}/risks`), api.get<ApiEnvelope<ApiQualityMetric[]>>(`/projects/${projectId}/quality-metrics`), api.get<ApiEnvelope<ApiPlatformMapping[]>>(`/projects/${projectId}/platform-field-mappings`), api.get<ApiEnvelope<ApiLink[]>>(`/projects/${projectId}/wbs-risk-links`), api.get<ApiEnvelope<ApiTask[]>>(`/projects/${projectId}/tasks`), api.get<ApiEnvelope<ApiTask[]>>(`/projects/${projectId}/tasks/archive`), api.get<ApiEnvelope<ApiDaily[]>>(`/projects/${projectId}/daily-reports`), api.get<ApiEnvelope<ApiInformationRecord[]>>(`/projects/${projectId}/information-records`), api.get<ApiEnvelope<ApiDraft[]>>(`/projects/${projectId}/risk-drafts`), api.get<ApiEnvelope<ApiFill[]>>(`/projects/${projectId}/fill-packages`), api.get<ApiEnvelope<ApiLog[]>>(`/projects/${projectId}/operation-logs`), api.get<ApiEnvelope<ApiProjectSettings>>(`/projects/${projectId}/settings`), api.get<ApiEnvelope<ProjectDashboard>>(`/projects/${projectId}/dashboard`), api.get<ApiEnvelope<ProjectChangeRecord[]>>(`/projects/${projectId}/changes`), api.get<ApiEnvelope<NotificationRecord[]>>(`/projects/${projectId}/notifications`),
     ])
     allMembers.value = memberResult.data.data.map(mapMember); allWbsItems.value = wbsResult.data.data.map(mapWbs); allRiskSources.value = riskResult.data.data.map(mapRisk); allQualityMetrics.value = qualityResult.data.data.map(row => mapQualityMetric(row, allWbsItems.value)); allPlatformMappings.value = mappingResult.data.data.map(mapPlatformMapping)
     allWbsRiskLinks.value = linkResult.data.data.map(link => ({ id: id(link.id), wbsId: id(link.wbs_item_id), riskId: id(link.risk_source_id), alertDays: link.alert_days, notifyMethods: link.notify_methods, basis: link.basis }))
-    allTasks.value = taskResult.data.data.map(mapTask); allDailyReports.value = dailyResult.data.data.map(mapDaily); informationRecords.value = informationResult.data.data.map(mapInformationRecord); allRiskDrafts.value = draftResult.data.data.map(mapDraft); allFillPackages.value = fillResult.data.data.map(mapFill); logs.value = logResult.data.data.map(mapLog); projectSettings.value = settingsResult.data.data; dashboard.value = dashboardResult.data.data; projectChanges.value = changesResult.data.data; notifications.value = notificationsResult.data.data
+    const activeTasks = taskResult.data.data.map(mapTask).filter(task => !['done', 'cancelled'].includes(task.status))
+    allTasks.value = [...activeTasks, ...archiveTaskResult.data.data.map(mapTask)]; allDailyReports.value = dailyResult.data.data.map(mapDaily); informationRecords.value = informationResult.data.data.map(mapInformationRecord); allRiskDrafts.value = draftResult.data.data.map(mapDraft); allFillPackages.value = fillResult.data.data.map(mapFill); logs.value = logResult.data.data.map(mapLog); projectSettings.value = settingsResult.data.data; dashboard.value = dashboardResult.data.data; projectChanges.value = changesResult.data.data; notifications.value = notificationsResult.data.data
     const nextWeKnoraAgentId = settingsResult.data.data.weknora_agent_id || ''
     if (nextWeKnoraAgentId) {
       try {
@@ -940,7 +941,37 @@ export const useAppStore = defineStore('app', () => {
   async function createPlatformMapping(payload: Omit<PlatformFieldMapping, 'id' | 'projectId'>, projectId = currentProjectId.value) { await api.post(`/projects/${projectId}/platform-field-mappings`, { platform_name: payload.platformName, source_field: payload.sourceField, target_field: payload.targetField, transform_rule: payload.transformRule, required: payload.required, enabled: payload.enabled }); if (projectId === currentProjectId.value) await loadProjectData(projectId) }
   async function updatePlatformMapping(mappingId: string, payload: Omit<PlatformFieldMapping, 'id' | 'projectId'>, projectId = currentProjectId.value) { await api.patch(`/platform-field-mappings/${mappingId}`, { platform_name: payload.platformName, source_field: payload.sourceField, target_field: payload.targetField, transform_rule: payload.transformRule, required: payload.required, enabled: payload.enabled }); if (projectId === currentProjectId.value) await loadProjectData(projectId) }
   async function removePlatformMapping(mappingId: string, projectId = currentProjectId.value) { await api.delete(`/platform-field-mappings/${mappingId}`); if (projectId === currentProjectId.value) await loadProjectData(projectId) }
-  async function createTask(payload: { title: string; task_type: Task['type']; risk_level?: Task['riskLevel']; assignee_user_id?: string; confirmer_user_id?: string; due_at?: string; risk_source_id?: string; wbs_item_id?: string; trigger_reason?: string; required_materials?: string[]; workflow_steps?: Task['workflowSteps'] }) { await api.post(`/projects/${currentProjectId.value}/tasks`, { ...payload, assignee_user_id: payload.assignee_user_id ? Number(payload.assignee_user_id) : null, confirmer_user_id: payload.confirmer_user_id ? Number(payload.confirmer_user_id) : null, risk_source_id: payload.risk_source_id ? Number(payload.risk_source_id) : null, wbs_item_id: payload.wbs_item_id ? Number(payload.wbs_item_id) : null }); await loadProjectData() }
+  async function createTask(payload: {
+    title: string
+    task_type: Task['type']
+    risk_level?: Task['riskLevel']
+    assignee_user_id?: string
+    confirmer_user_id?: string
+    due_at?: string
+    risk_source_id?: string
+    wbs_item_id?: string
+    trigger_reason?: string
+    required_materials?: string[]
+    workflow_steps?: Task['workflowSteps']
+    run_mode?: 'single' | 'scheduled' | 'immediate' | 'once' | 'recurring'
+    trigger_date?: string
+    trigger_time?: string
+    trigger_interval_value?: number
+    trigger_interval_unit?: 'hour' | 'day' | 'week' | 'month'
+    trigger_end_mode?: 'never' | 'until' | 'count'
+    trigger_until_date?: string
+    trigger_max_fires?: number
+    cc?: string
+  }) {
+    await api.post(`/projects/${currentProjectId.value}/tasks`, {
+      ...payload,
+      assignee_user_id: payload.assignee_user_id ? Number(payload.assignee_user_id) : null,
+      confirmer_user_id: payload.confirmer_user_id ? Number(payload.confirmer_user_id) : null,
+      risk_source_id: payload.risk_source_id ? Number(payload.risk_source_id) : null,
+      wbs_item_id: payload.wbs_item_id ? Number(payload.wbs_item_id) : null,
+    })
+    await loadProjectData()
+  }
   async function uploadAttachment(file: File, _category = '自动归类', folderId?: string) {
     if (!currentProjectId.value) throw new Error('请先选择项目。')
     if (!weknoraKnowledgeBases.value.length) await loadEngineeringDocuments(currentProjectId.value, true)
@@ -1314,7 +1345,20 @@ export const useAppStore = defineStore('app', () => {
   async function assistRiskDraft(riskId: string) { await api.post(`/projects/${currentProjectId.value}/risk-drafts/assist/${riskId}`); await loadProjectData() }
   async function submitDraftReview(draftId: string) { await api.post(`/risk-drafts/${draftId}/submit-review`); await loadProjectData() }
   async function updateTaskStatus(taskId: string, taskStatus: Task['status'], note?: string) { await api.post(`/tasks/${taskId}/transition`, { status: apiTaskStatus(taskStatus), note }); await loadProjectData() }
-  async function updateTaskStep(taskId: string, stepIndex: number, taskStatus: 'pending' | 'processing' | 'completed' | 'blocked') { await api.post(`/tasks/${taskId}/steps/${stepIndex}`, { status: taskStatus }); await loadProjectData() }
+  async function updateTaskStep(
+    taskId: string,
+    stepIndex: number,
+    taskStatus: 'pending' | 'processing' | 'completed' | 'blocked',
+    note?: string,
+    attachments: string[] = [],
+  ) {
+    await api.post(`/tasks/${taskId}/steps/${stepIndex}`, {
+      status: taskStatus,
+      note,
+      attachments,
+    })
+    await loadProjectData()
+  }
   async function reassignTask(taskId: string, assigneeUserId: string, note?: string) { await api.post(`/tasks/${taskId}/reassign`, { assignee_user_id: Number(assigneeUserId), note }); await loadProjectData() }
   async function addTaskNote(taskId: string, note: string) { await api.post(`/tasks/${taskId}/notes`, { note }) }
   async function getTaskHistory(taskId: string) { const response = await api.get<ApiEnvelope<{ history: Array<{ id: number; from_status?: string; to_status: string; note?: string; created_at: string }> }>>(`/tasks/${taskId}`); return response.data.data.history }
