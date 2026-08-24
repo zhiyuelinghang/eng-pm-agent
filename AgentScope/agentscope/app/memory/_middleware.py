@@ -186,9 +186,12 @@ class DobbyMemoryMiddleware(MiddlewareBase):
         runtime: MemoryRuntime,
         scope: MemoryScope,
         settings: Any | None = None,
+        *,
+        include_knowledge_base: bool = True,
     ) -> None:
         self.runtime = runtime
         self.scope = scope
+        self.include_knowledge_base = include_knowledge_base
         self.settings = (
             dict(settings.model_dump())
             if hasattr(settings, "model_dump")
@@ -198,6 +201,26 @@ class DobbyMemoryMiddleware(MiddlewareBase):
         self.active_state: dict[str, Any] | None = None
         self.active_agent: Agent | None = None
         self._tool_names: list[str] = []
+        self._background_tasks: set[asyncio.Task[Any]] = set()
+
+    def _track_background(self, coroutine: Any, *, name: str) -> None:
+        """Keep best-effort memory writes alive without blocking chat."""
+
+        task = asyncio.create_task(coroutine, name=name)
+        self._background_tasks.add(task)
+
+        def _done(completed: asyncio.Task[Any]) -> None:
+            self._background_tasks.discard(completed)
+            if completed.cancelled():
+                return
+            error = completed.exception()
+            if error is not None:
+                logger.error(
+                    "Deferred Dobby memory write failed",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        task.add_done_callback(_done)
 
     async def get_middleware_key(self) -> str:
         return f"DobbyMemoryMiddleware:{self.scope.scope_key}"
@@ -205,7 +228,15 @@ class DobbyMemoryMiddleware(MiddlewareBase):
     async def list_tools(self) -> list[ToolBase]:
         from utils.memory_tools import TOOL_SCHEMAS
 
-        return [_DobbyMemoryTool(self, schema) for schema in TOOL_SCHEMAS]
+        schemas = TOOL_SCHEMAS
+        if not self.include_knowledge_base:
+            schemas = [
+                schema
+                for schema in TOOL_SCHEMAS
+                if schema.get("function", {}).get("name")
+                != "search_knowledge_base"
+            ]
+        return [_DobbyMemoryTool(self, schema) for schema in schemas]
 
     async def _load_state(self, agent: "Agent") -> dict[str, Any]:
         from utils.langgraph_utils import DobbyState
@@ -343,6 +374,7 @@ class DobbyMemoryMiddleware(MiddlewareBase):
         importance: float,
         memory_type: str,
         source: str,
+        defer_persistence: bool = False,
     ) -> int:
         """Classify and persist content without widening an uncertain scope."""
 
@@ -371,8 +403,7 @@ class DobbyMemoryMiddleware(MiddlewareBase):
             bool(self.settings.get("mem0_infer_enabled", False))
             and bool(self.settings.get("mem0_infer_async", True))
         )
-        stored = 0
-        for item in routed:
+        async def _persist(item: Any) -> int:
             target = self.scope.memory_target(item.scope_type)
             metadata = self._target_metadata(
                 target,
@@ -389,11 +420,10 @@ class DobbyMemoryMiddleware(MiddlewareBase):
                 metadata=metadata,
                 infer=infer_sync,
             )
-            stored += len(created)
             if infer_async:
                 from utils.langgraph_utils import _background_enrich_memory
 
-                asyncio.create_task(
+                self._track_background(
                     _background_enrich_memory(
                         item.content,
                         target.user_id,
@@ -410,7 +440,24 @@ class DobbyMemoryMiddleware(MiddlewareBase):
                         f"{self.scope.session_id}:{item.scope_type}"
                     ),
                 )
-        return stored
+            return len(created)
+
+        if defer_persistence:
+            for item in routed:
+                self._track_background(
+                    _persist(item),
+                    name=(
+                        "dobby-memory-write:"
+                        f"{self.scope.session_id}:{item.scope_type}"
+                    ),
+                )
+            return len(routed)
+
+        results = await asyncio.gather(
+            *(_persist(item) for item in routed),
+            return_exceptions=True,
+        )
+        return sum(item for item in results if isinstance(item, int))
 
     def _save_state(self, agent: "Agent", state: dict[str, Any]) -> None:
         agent.state.middle_context[_STATE_KEY] = _serializable_state(state)
@@ -461,6 +508,7 @@ class DobbyMemoryMiddleware(MiddlewareBase):
                     query,
                     system_prompt=getattr(agent, "_system_prompt", None),
                     mode="auto",
+                    include_knowledge_base=self.include_knowledge_base,
                 )
                 injected = self._injection_messages(assembly)
                 state["last_context_mode"] = assembly.mode_used
@@ -470,7 +518,6 @@ class DobbyMemoryMiddleware(MiddlewareBase):
                 logger.exception("Dobby context assembly failed; continuing without injection")
 
         final_msg: Msg | None = None
-        terminal_events: list[ReplyEndEvent] = []
 
         async def _finalize_turn() -> None:
             if injected:
@@ -501,21 +548,18 @@ class DobbyMemoryMiddleware(MiddlewareBase):
                     agent.state.context.extend(injected)
                 if isinstance(item, Msg) and item.role == "assistant":
                     final_msg = item
-                if isinstance(item, ReplyEndEvent):
-                    # Agent._reply_impl emits ReplyEndEvent before its final
-                    # AssistantMsg. Holding the terminal event lets us capture
-                    # that message and finish all Dobby writes before clients
-                    # are told the session is ready for another turn.
-                    terminal_events.append(item)
-                    continue
+                # ReplyEndEvent must cross the complete middleware chain
+                # immediately. Agent._reply_impl deliberately waits for that
+                # acknowledgement before it yields the final AssistantMsg and
+                # exits. Swallowing the event here makes the agent interpret
+                # the turn as unfinished and start an unintended extra model
+                # call.
                 yield item
         except BaseException:
             await _finalize_turn()
             raise
         else:
             await _finalize_turn()
-            for terminal_event in terminal_events:
-                yield terminal_event
 
     async def _record_completed_turn(
         self,
@@ -555,6 +599,7 @@ class DobbyMemoryMiddleware(MiddlewareBase):
             importance=0.5,
             memory_type="interaction",
             source="conversation",
+            defer_persistence=True,
         )
 
         if _extract_correction_rule(query):

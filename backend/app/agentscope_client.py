@@ -660,6 +660,7 @@ class AgentScopeClient:
         *,
         before: str | None = None,
         limit: int = 200,
+        wait_for_response: bool = False,
     ) -> dict[str, Any]:
         params: dict[str, str] = {
             "agent_id": agent_id,
@@ -671,6 +672,7 @@ class AgentScopeClient:
             "GET",
             f"/sessions/{session_id}/messages",
             params=params,
+            wait_for_response=wait_for_response,
         )
 
     def list_all_messages(
@@ -712,11 +714,18 @@ class AgentScopeClient:
             json={"metadata": metadata},
         )
 
-    def session_status(self, session_id: str, agent_id: str) -> str:
+    def session_status(
+        self,
+        session_id: str,
+        agent_id: str,
+        *,
+        wait_for_response: bool = False,
+    ) -> str:
         payload = self._request(
             "GET",
             f"/sessions/{session_id}/status",
             params={"agent_id": agent_id},
+            wait_for_response=wait_for_response,
         )
         return str(payload["status"])
 
@@ -724,6 +733,8 @@ class AgentScopeClient:
         self,
         session_id: str,
         agent_id: str,
+        *,
+        wait_for_response: bool = False,
     ) -> tuple[bool, bool]:
         """Return ``(team_exists, member_work_is_pending)``.
 
@@ -732,7 +743,11 @@ class AgentScopeClient:
         Member sessions are checked individually so the gateway waits for
         actual collaboration work, not for an optional ``TeamDelete`` call.
         """
-        state = self.session_team_state_detail(session_id, agent_id)
+        state = self.session_team_state_detail(
+            session_id,
+            agent_id,
+            wait_for_response=wait_for_response,
+        )
         return state.team_exists, state.pending
 
     def session_team_work_pending(
@@ -750,12 +765,15 @@ class AgentScopeClient:
         self,
         session_id: str,
         agent_id: str,
+        *,
+        wait_for_response: bool = False,
     ) -> AgentScopeTeamState:
         """Read durable member and leader-summary revisions."""
         payload = self._request(
             "GET",
             "/sessions/",
             params={"agent_id": agent_id},
+            wait_for_response=wait_for_response,
         )
         for view in payload.get("sessions", []):
             session = view.get("session") or {}
@@ -865,7 +883,11 @@ class AgentScopeClient:
         user_message_id: str | None = None,
         content_blocks: list[dict[str, Any]] | None = None,
     ) -> AgentScopeReply:
-        before = self.list_messages(session_id, agent_id)
+        before = self.list_messages(
+            session_id,
+            agent_id,
+            wait_for_response=True,
+        )
         existing_ids = {
             str(message.get("id"))
             for message in before.get("messages", [])
@@ -889,6 +911,7 @@ class AgentScopeClient:
                     "metadata": metadata,
                 },
             },
+            wait_for_response=True,
         )
 
         observed_running = False
@@ -898,8 +921,17 @@ class AgentScopeClient:
         settled_message_id: str | None = None
         settled_since: float | None = None
         settle_seconds = max(0.6, self._poll_interval * 2)
+        idle_without_reply_polls = 0
+        idle_without_reply_limit = max(
+            3,
+            int(3.0 / max(0.1, self._poll_interval)) + 1,
+        )
         while True:
-            messages_payload = self.list_messages(session_id, agent_id)
+            messages_payload = self.list_messages(
+                session_id,
+                agent_id,
+                wait_for_response=True,
+            )
             new_assistants = [
                 message
                 for message in messages_payload.get("messages", [])
@@ -909,8 +941,34 @@ class AgentScopeClient:
             if new_assistants:
                 last_assistant = new_assistants[-1]
 
-            status = self.session_status(session_id, agent_id)
-            observed_running = observed_running or status == "running"
+            status = self.session_status(
+                session_id,
+                agent_id,
+                wait_for_response=True,
+            )
+            runtime_running = (
+                status == "running"
+                or bool(messages_payload.get("is_running"))
+            )
+            observed_running = observed_running or runtime_running
+            if status == "idle" and not runtime_running and not new_assistants:
+                idle_without_reply_polls += 1
+                if idle_without_reply_polls >= idle_without_reply_limit:
+                    _, team_work_pending = self.session_team_state(
+                        session_id,
+                        agent_id,
+                        wait_for_response=True,
+                    )
+                    if team_work_pending:
+                        idle_without_reply_polls = 0
+                    else:
+                        raise AgentScopeGatewayError(
+                            "AgentScope 本次运行已结束，但未生成任何智能体回复。"
+                            "请查看 AgentScope 服务日志。",
+                            status_code=502,
+                        )
+            else:
+                idle_without_reply_polls = 0
             if status in {
                 "awaiting_permission",
                 "awaiting_external_result",
@@ -941,6 +999,7 @@ class AgentScopeClient:
                 _, team_work_pending = self.session_team_state(
                     session_id,
                     agent_id,
+                    wait_for_response=True,
                 )
                 if team_work_pending:
                     if last_assistant.get("id"):
@@ -1028,7 +1087,11 @@ class AgentScopeClient:
         rules: list[dict[str, Any]] | None = None,
     ) -> AgentScopeConfirmationSubmission:
         """Validate and enqueue one HITL decision without waiting for output."""
-        before = self.list_messages(session_id, agent_id)
+        before = self.list_messages(
+            session_id,
+            agent_id,
+            wait_for_response=True,
+        )
         matching_reply = next(
             (
                 message
@@ -1074,6 +1137,7 @@ class AgentScopeClient:
                     ],
                 },
             },
+            wait_for_response=True,
         )
         return AgentScopeConfirmationSubmission(
             existing_ids=existing_ids,
@@ -1112,7 +1176,11 @@ class AgentScopeClient:
         settled_since: float | None = None
         settle_seconds = max(0.6, self._poll_interval * 2)
         while True:
-            messages_payload = self.list_messages(session_id, agent_id)
+            messages_payload = self.list_messages(
+                session_id,
+                agent_id,
+                wait_for_response=True,
+            )
             relevant = [
                 message
                 for message in messages_payload.get("messages", [])
@@ -1124,7 +1192,11 @@ class AgentScopeClient:
             ]
             if relevant:
                 last_assistant = relevant[-1]
-            status = self.session_status(session_id, agent_id)
+            status = self.session_status(
+                session_id,
+                agent_id,
+                wait_for_response=True,
+            )
             if status in {
                 "awaiting_permission",
                 "awaiting_external_result",
@@ -1163,6 +1235,7 @@ class AgentScopeClient:
                 _, team_work_pending = self.session_team_state(
                     session_id,
                     agent_id,
+                    wait_for_response=True,
                 )
                 if team_work_pending:
                     if last_assistant.get("id"):

@@ -639,6 +639,14 @@ def _build_agent_project_context(
         project_settings
         and (project_settings.weknora_agent_id or "").strip()
     )
+    knowledge_context = (
+        "\n工程资料：由当前项目绑定的 WeKnora 机器人统一管理。只有用户问题"
+        "确实需要查阅资料、规范、图纸、方案或历史文件时，才调用 "
+        "weknora_query_project_knowledge；普通对话不要调用。不得使用旧的"
+        "本地附件表推断工程资料内容。"
+        if weknora_bound
+        else ""
+    )
     return (
         "<platform-context>\n"
         "以下内容由工程管理平台后端按当前登录用户和项目权限注入，只能作为"
@@ -680,15 +688,7 @@ def _build_agent_project_context(
             )
             or "暂无"
         )
-        + "\n工程资料："
-        + (
-            "由当前项目绑定的 WeKnora 机器人统一管理。只有用户问题确实需要"
-            "查阅资料、规范、图纸、方案或历史文件时，才调用 "
-            "weknora_query_project_knowledge；普通对话不要调用。不得使用旧的"
-            "本地附件表推断工程资料内容。"
-            if weknora_bound
-            else "当前项目尚未绑定 WeKnora 机器人，不能声称已经查询工程资料。"
-        )
+        + knowledge_context
         + "\n</platform-context>"
     )
 

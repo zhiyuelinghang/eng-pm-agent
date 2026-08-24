@@ -1589,17 +1589,18 @@ async function dispatchQuickCommand() {
         completion.runtimeStatus = payload.runtime_status
       },
     })
-    if (completion.message) {
-      homeQuickChatMessages.value = [
-        ...homeQuickChatMessages.value,
-        mapAgentMessage(completion.message),
-      ]
-      homeQuickStreamingTrace.value = null
-      homeAgentConversation.value = {
-        ...conversation,
-        status: completion.runtimeStatus,
-        updated_at: nowStr(),
-      }
+    if (!completion.message) {
+      throw new Error('AgentScope 已结束事件流，但没有返回最终消息。')
+    }
+    homeQuickChatMessages.value = [
+      ...homeQuickChatMessages.value,
+      mapAgentMessage(completion.message),
+    ]
+    homeQuickStreamingTrace.value = null
+    homeAgentConversation.value = {
+      ...conversation,
+      status: completion.runtimeStatus,
+      updated_at: nowStr(),
     }
     store.addLog({
       id: `log${Date.now()}`,
@@ -1612,6 +1613,14 @@ async function dispatchQuickCommand() {
     await nextTick()
     scrollHomeQuick(true)
   } catch (error: any) {
+    homeQuickStreamingTrace.value = null
+    if (homeAgentConversation.value) {
+      homeAgentConversation.value = {
+        ...homeAgentConversation.value,
+        status: 'error',
+        updated_at: nowStr(),
+      }
+    }
     message.error(error?.response?.data?.detail || error?.message || '主智能体处理失败，请检查 AgentScope 配置后重试。')
   } finally {
     quickUploading.value = false

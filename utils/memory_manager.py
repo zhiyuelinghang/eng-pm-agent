@@ -15,7 +15,6 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -426,6 +425,7 @@ class MemoryManager:
         user_input: str,
         system_prompt: str | None = None,
         mode: str = "auto",
+        include_knowledge_base: bool = True,
     ) -> ContextAssembly:
         """Assemble 7-layer context for an LLM call.
 
@@ -441,6 +441,8 @@ class MemoryManager:
             state: current DobbyState
             user_input: the current user message text
             system_prompt: override system prompt (uses role default if None)
+            include_knowledge_base: whether to retrieve from the legacy
+                globally configured WeKnora knowledge base
 
         Returns:
             ContextAssembly with assembled messages and budget diagnostics
@@ -487,7 +489,11 @@ class MemoryManager:
                         role_id,
                         memory_targets=memory_targets,
                     ),
-                    self._search_knowledge(user_input),
+                    (
+                        self._search_knowledge(user_input)
+                        if include_knowledge_base
+                        else asyncio.sleep(0, result=[])
+                    ),
                     _graphiti_search(project_id, user_input),
                     _search_experiences_structured(user_input, project_id),
                     self._search_graph_rag(user_input),
@@ -562,7 +568,11 @@ class MemoryManager:
             msgs.append(_make_system(f"<summary>\n{summary}\n</summary>"))
 
         # ── Auto-hints (minimal mode only) ──
-        if mode == "minimal" and _cfg.WEKNORA_ENABLED:
+        if (
+            mode == "minimal"
+            and include_knowledge_base
+            and _cfg.WEKNORA_ENABLED
+        ):
             try:
                 hints = await self._auto_hinter.get_hints(
                     user_input,
@@ -855,24 +865,26 @@ class MemoryManager:
                     infer=infer,
                 )
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                result = pool.submit(_sync_add).result(timeout=30)
-                # mem0 v2 返回 {"results": [...]} — 与 recall() 相同的解包
-                items = result.get("results", result) if isinstance(result, dict) else result
-                # 实体图增量: 图已加载时同步新记忆
-                if self._entity_graph is not None:
-                    for item in items if isinstance(items, list) else [items]:
-                        if isinstance(item, dict):
-                            mid = str(item.get("id", ""))
-                            content = str(item.get("memory", item.get("data", "")) or "")
-                            if mid and content:
-                                self._entity_graph.add_memory(
-                                    mid, content, EntityExtractor.extract(content),
-                                    created_at=item.get("created_at"),
-                                )
-                # 返回解包后的列表 (mem0 v2 dict 形状下旧代码返回 [{"results": [...]}],
-                # 文档契约是 "list of memory items created by Mem0", 代码库无调用方消费返回值)
-                return items if isinstance(items, list) else [items]
+            result = await asyncio.wait_for(
+                asyncio.to_thread(_sync_add),
+                timeout=30,
+            )
+            # mem0 v2 返回 {"results": [...]} — 与 recall() 相同的解包
+            items = result.get("results", result) if isinstance(result, dict) else result
+            # 实体图增量: 图已加载时同步新记忆
+            if self._entity_graph is not None:
+                for item in items if isinstance(items, list) else [items]:
+                    if isinstance(item, dict):
+                        mid = str(item.get("id", ""))
+                        content = str(item.get("memory", item.get("data", "")) or "")
+                        if mid and content:
+                            self._entity_graph.add_memory(
+                                mid, content, EntityExtractor.extract(content),
+                                created_at=item.get("created_at"),
+                            )
+            # 返回解包后的列表 (mem0 v2 dict 形状下旧代码返回 [{"results": [...]}],
+            # 文档契约是 "list of memory items created by Mem0", 代码库无调用方消费返回值)
+            return items if isinstance(items, list) else [items]
         except Exception:
             return []
 
@@ -913,40 +925,42 @@ class MemoryManager:
                     )),
                 )
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                result = pool.submit(_sync_search).result(timeout=30)
+            result = await asyncio.wait_for(
+                asyncio.to_thread(_sync_search),
+                timeout=30,
+            )
 
-                # P0-1: Bump recall_count for high-similarity results
-                items = (
-                    result.get("results", [])
-                    if isinstance(result, dict)
-                    else result
-                    if isinstance(result, list)
-                    else []
-                )
+            # P0-1: Bump recall_count for high-similarity results
+            items = (
+                result.get("results", [])
+                if isinstance(result, dict)
+                else result
+                if isinstance(result, list)
+                else []
+            )
 
-                # P0-1: Bump recall_count for high-similarity results.
-                # mem0ai 2.x wraps search results in {"results": [...]}, so
-                # reinforcement must run after normalising the response shape.
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    sim = item.get("score", item.get("similarity", 0))
-                    if sim < float(self._setting(
-                        "recall_reinforce_threshold",
-                        _cfg.MEMORY_REINFORCE_THRESHOLD,
-                    )):
-                        continue
-                    try:
-                        meta = item.get("metadata", {})
-                        if isinstance(meta, dict):
-                            meta = dict(meta)
-                            meta["recall_count"] = int(meta.get("recall_count", 0)) + 1
-                            meta["strength"] = item.get("strength", 1.0)
-                            get_mem0().update(item["id"], metadata=meta)
-                    except Exception:
-                        pass
-                return items
+            # P0-1: Bump recall_count for high-similarity results.
+            # mem0ai 2.x wraps search results in {"results": [...]}, so
+            # reinforcement must run after normalising the response shape.
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                sim = item.get("score", item.get("similarity", 0))
+                if sim < float(self._setting(
+                    "recall_reinforce_threshold",
+                    _cfg.MEMORY_REINFORCE_THRESHOLD,
+                )):
+                    continue
+                try:
+                    meta = item.get("metadata", {})
+                    if isinstance(meta, dict):
+                        meta = dict(meta)
+                        meta["recall_count"] = int(meta.get("recall_count", 0)) + 1
+                        meta["strength"] = item.get("strength", 1.0)
+                        get_mem0().update(item["id"], metadata=meta)
+                except Exception:
+                    pass
+            return items
         except Exception:
             return []
 
@@ -1052,10 +1066,12 @@ class MemoryManager:
                 m.delete(memory_id)
                 return True
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                pool.submit(_sync_delete).result(timeout=15)
-                self.invalidate_entity_graph()
-                return True
+            await asyncio.wait_for(
+                asyncio.to_thread(_sync_delete),
+                timeout=15,
+            )
+            self.invalidate_entity_graph()
+            return True
         except Exception:
             return False
 
@@ -1263,8 +1279,10 @@ class MemoryManager:
                     if isinstance(items, list):
                         merged.extend(item for item in items if isinstance(item, dict))
                 return merged
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                all_mems = pool.submit(_sync_get_all).result(timeout=30)
+            all_mems = await asyncio.wait_for(
+                asyncio.to_thread(_sync_get_all),
+                timeout=30,
+            )
         except Exception:
             return None  # 优雅降级: mem0 不可用时无图, 走原检索路径
 

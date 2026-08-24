@@ -36,7 +36,6 @@ from agentscope.app.storage import (
     MemorySettingsData,
     RedisStorage,
     StorageBase,
-    WeKnoraConnectionConfig,
 )
 from agentscope.app._service import ResourceAccessService
 from agentscope.app._tool import WeKnoraProjectKnowledgeTool
@@ -253,35 +252,6 @@ async def _memory_settings(user_id: str) -> MemorySettingsData:
     return record.data.memory_settings
 
 
-def _configure_weknora_runtime(
-    connection: WeKnoraConnectionConfig | None,
-) -> None:
-    """Make persisted platform WeKnora settings authoritative for chat tools."""
-
-    if connection is None:
-        return
-    from utils import config as runtime_config
-    from utils.langgraph_utils import invalidate_weknora_kb_cache
-
-    next_base_url = (
-        f"{connection.base_url}{connection.api_prefix}"
-    )
-    next_api_key = connection.api_key.get_secret_value()
-    connection_changed = (
-        runtime_config.WEKNORA_BASE_URL != next_base_url
-        or runtime_config.WEKNORA_API_KEY != next_api_key
-    )
-    runtime_config.WEKNORA_BASE_URL = next_base_url
-    runtime_config.WEKNORA_API_KEY = next_api_key
-    runtime_config.WEKNORA_AGENT_ID = connection.agent_id
-    runtime_config.WEKNORA_ENABLED = bool(runtime_config.WEKNORA_API_KEY)
-    # No single knowledge base is pinned globally. The AgentScope tool lists
-    # the tenant's available bases and searches them unless a turn selects one.
-    runtime_config.WEKNORA_KB_NAME = ""
-    if connection_changed:
-        invalidate_weknora_kb_cache()
-
-
 async def _create_memory_middlewares(
     user_id: str,
     agent_id: str,
@@ -296,11 +266,6 @@ async def _create_memory_middlewares(
         platform_settings.data.memory_settings
         if platform_settings is not None
         else MemorySettingsData()
-    )
-    _configure_weknora_runtime(
-        platform_settings.data.weknora_connection
-        if platform_settings is not None
-        else None,
     )
     await configure_platform_memory_model(
         user_id,
@@ -324,7 +289,14 @@ async def _create_memory_middlewares(
             else None
         ),
     )
-    return [DobbyMemoryMiddleware(runtime, scope, settings)]
+    return [
+        DobbyMemoryMiddleware(
+            runtime,
+            scope,
+            settings,
+            include_knowledge_base=False,
+        ),
+    ]
 
 
 async def _end_memory_session(
@@ -357,9 +329,12 @@ async def _end_memory_session(
             else None
         ),
     )
-    await DobbyMemoryMiddleware(runtime, scope, settings).end_persisted_session(
-        session.state,
-    )
+    await DobbyMemoryMiddleware(
+        runtime,
+        scope,
+        settings,
+        include_knowledge_base=False,
+    ).end_persisted_session(session.state)
 
 
 async def _create_platform_agent_tools(

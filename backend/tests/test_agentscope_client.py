@@ -20,6 +20,7 @@ from backend.app.api import (
     _agentscope_assistant_groups,
     _agentscope_platform_messages,
     _agentscope_reply_from_group,
+    _build_agent_project_context,
     _catalog_agent_for_conversation,
     _platform_session_context,
     _project_weknora_reference_urls,
@@ -318,6 +319,85 @@ class AgentScopeClientTest(TestCase):
             conversation,
         )
         self.assertEqual(business_context["auto_allowed_tool_names"], [])
+
+    def test_platform_context_reads_latest_project_robot_binding(self) -> None:
+        user = SimpleNamespace(id=1, username="admin", real_name="管理员")
+        project = SimpleNamespace(id=2, name="测试项目")
+        conversation = SimpleNamespace(
+            id=3,
+            title="项目协同",
+            conversation_type="primary",
+            agent_name="Dobby",
+        )
+        project_settings = SimpleNamespace(weknora_agent_id=None)
+        db = SimpleNamespace(get=Mock(return_value=project_settings))
+
+        before_binding = _platform_session_context(
+            user,
+            project,
+            conversation,
+            db,
+        )
+        project_settings.weknora_agent_id = " robot-current "
+        after_binding = _platform_session_context(
+            user,
+            project,
+            conversation,
+            db,
+        )
+
+        self.assertIsNone(before_binding["weknora_agent_id"])
+        self.assertEqual(after_binding["weknora_agent_id"], "robot-current")
+        self.assertEqual(db.get.call_count, 2)
+
+    @staticmethod
+    def _project_context_fixtures(robot_id: str | None):
+        project = SimpleNamespace(
+            id=2,
+            name="测试项目",
+            engineering_type_description="",
+            construction_unit_name=None,
+            general_contractor_unit_name=None,
+            supervision_unit_name=None,
+            design_unit_name=None,
+            survey_unit_name=None,
+        )
+        user = SimpleNamespace(id=1, real_name="管理员", role="admin")
+        db = SimpleNamespace(
+            scalars=Mock(
+                return_value=SimpleNamespace(all=Mock(return_value=[])),
+            ),
+            get=Mock(
+                return_value=SimpleNamespace(weknora_agent_id=robot_id),
+            ),
+        )
+        return db, project, user
+
+    def test_project_context_omits_knowledge_capability_when_unbound(self) -> None:
+        db, project, user = self._project_context_fixtures(None)
+
+        with patch(
+            "backend.app.api.get_engine",
+            return_value=SimpleNamespace(list_tasks=Mock(return_value=[])),
+        ):
+            context = _build_agent_project_context(db, project, user)
+
+        self.assertNotIn("WeKnora", context)
+        self.assertNotIn("机器人", context)
+        self.assertNotIn("weknora_query_project_knowledge", context)
+        self.assertNotIn("工程资料：", context)
+
+    def test_project_context_exposes_knowledge_capability_when_bound(self) -> None:
+        db, project, user = self._project_context_fixtures("robot-current")
+
+        with patch(
+            "backend.app.api.get_engine",
+            return_value=SimpleNamespace(list_tasks=Mock(return_value=[])),
+        ):
+            context = _build_agent_project_context(db, project, user)
+
+        self.assertIn("工程资料：", context)
+        self.assertIn("weknora_query_project_knowledge", context)
 
     def test_agent_conversation_is_private_even_from_platform_admin(
         self,
@@ -802,6 +882,37 @@ class AgentScopeClientTest(TestCase):
         self.assertEqual(reply.message_id, "final")
         self.assertEqual(reply.content, "协同任务已完成")
 
+    def test_chat_fails_when_run_ends_without_assistant_reply(self) -> None:
+        client = _client()
+        client.list_messages = Mock(  # type: ignore[method-assign]
+            return_value={"messages": [], "is_running": False},
+        )
+        client.session_status = Mock(return_value="idle")  # type: ignore[method-assign]
+        client.session_team_state = Mock(  # type: ignore[method-assign]
+            return_value=(False, False),
+        )
+        client._request = Mock(return_value={"status": "started"})  # type: ignore[method-assign]
+
+        with patch("backend.app.agentscope_client.time.sleep"):
+            with self.assertRaisesRegex(
+                AgentScopeGatewayError,
+                "未生成任何智能体回复",
+            ) as raised:
+                client.chat(
+                    agent_id="agent-1",
+                    session_id="session-1",
+                    content="测试异常启动",
+                    sender_name="测试用户",
+                    metadata={},
+                )
+
+        self.assertEqual(raised.exception.status_code, 502)
+        client.session_team_state.assert_called_once_with(
+            "session-1",
+            "agent-1",
+            wait_for_response=True,
+        )
+
     def test_chat_has_no_wall_clock_deadline(self) -> None:
         client = _client()
         client._request_timeout = 0.01
@@ -848,6 +959,7 @@ class AgentScopeClientTest(TestCase):
         self.assertEqual(reply.status, "completed")
         self.assertEqual(reply.message_id, "finished-after-long-run")
         self.assertEqual(reply.content, "长任务处理完成")
+        self.assertTrue(client._request.call_args.kwargs["wait_for_response"])
 
     def test_chat_returns_generated_content_with_interrupted_status(
         self,

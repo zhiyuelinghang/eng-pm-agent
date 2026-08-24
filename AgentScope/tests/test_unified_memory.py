@@ -245,6 +245,71 @@ class MemoryScopeRouterTest(IsolatedAsyncioTestCase):
 
 
 class MemoryManagerScopeTest(IsolatedAsyncioTestCase):
+    @staticmethod
+    def _empty_state() -> dict:
+        return {
+            "project_id": "project_7",
+            "current_role": "agent-a",
+            "memory_targets": [],
+            "summary": "",
+            "tasks": {},
+            "messages": [],
+        }
+
+    async def test_context_can_skip_legacy_knowledge_retrieval(self) -> None:
+        manager = MemoryManager(project_id="project_7", role_id="agent-a")
+        manager._search_memory = AsyncMock(return_value=[])
+        manager._search_knowledge = AsyncMock(
+            return_value=[{"content": "不应进入上下文"}],
+        )
+        manager._search_graph_rag = AsyncMock(return_value={})
+        manager._fusion.fuse = MagicMock(return_value=[])
+
+        with (
+            patch(
+                "utils.graphiti_client.graphiti_search",
+                new=AsyncMock(return_value={}),
+            ),
+            patch(
+                "utils.memory_manager._search_experiences_structured",
+                new=AsyncMock(return_value=[]),
+            ),
+            patch(
+                "utils.memory_manager.SkillRegistry.render_injection",
+                new=AsyncMock(return_value=""),
+            ),
+        ):
+            await manager.assemble_context(
+                self._empty_state(),
+                "数据库采用什么方案？",
+                mode="standard",
+                include_knowledge_base=False,
+            )
+
+        manager._search_knowledge.assert_not_awaited()
+
+    async def test_minimal_context_can_skip_legacy_knowledge_hints(self) -> None:
+        manager = MemoryManager(project_id="project_7", role_id="agent-a")
+        manager._auto_hinter.get_hints = AsyncMock(
+            return_value="不应进入上下文",
+        )
+
+        with (
+            patch("utils.memory_manager._cfg.WEKNORA_ENABLED", True),
+            patch(
+                "utils.memory_manager.SkillRegistry.render_injection",
+                new=AsyncMock(return_value=""),
+            ),
+        ):
+            await manager.assemble_context(
+                self._empty_state(),
+                "你好",
+                mode="minimal",
+                include_knowledge_base=False,
+            )
+
+        manager._auto_hinter.get_hints.assert_not_awaited()
+
     async def test_weknora_search_preserves_documented_source_metadata(
         self,
     ) -> None:
@@ -411,9 +476,11 @@ class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
             compress_if_needed=AsyncMock(return_value=False),
             end_session=AsyncMock(return_value={}),
         )
-        runtime = SimpleNamespace(manager=MagicMock(return_value=self.manager))
+        self.runtime = SimpleNamespace(
+            manager=MagicMock(return_value=self.manager),
+        )
         self.middleware = DobbyMemoryMiddleware(
-            runtime,
+            self.runtime,
             self.scope,
             MemorySettingsData(),
         )
@@ -442,6 +509,57 @@ class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
                 "search_experiences",
                 "get_session_summary",
                 "search_graph_rag",
+            ],
+        )
+
+    async def test_can_disable_legacy_knowledge_base_tool(self) -> None:
+        middleware = DobbyMemoryMiddleware(
+            self.runtime,
+            self.scope,
+            MemorySettingsData(),
+            include_knowledge_base=False,
+        )
+
+        tools = await middleware.list_tools()
+
+        self.assertEqual(
+            [tool.name for tool in tools],
+            [
+                "search_memory",
+                "add_memory",
+                "search_experiences",
+                "get_session_summary",
+                "search_graph_rag",
+            ],
+        )
+
+    async def test_disabled_legacy_knowledge_is_excluded_from_context(self) -> None:
+        middleware = DobbyMemoryMiddleware(
+            self.runtime,
+            self.scope,
+            MemorySettingsData(),
+            include_knowledge_base=False,
+        )
+        agent = self._agent()
+        user_message = UserMsg("user", "数据库采用什么方案？")
+
+        async def next_handler(**_kwargs):
+            yield ReplyStartEvent(
+                session_id="session-a",
+                reply_id="reply-a",
+                name="agent-a",
+            )
+
+        async for _event in middleware.on_reply(
+            agent,
+            {"inputs": user_message},
+            next_handler,
+        ):
+            pass
+
+        self.assertFalse(
+            self.manager.assemble_context.await_args.kwargs[
+                "include_knowledge_base"
             ],
         )
 
@@ -480,6 +598,11 @@ class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(agent.state.context, [user_message, assistant_message])
         self.manager.assemble_context.assert_awaited_once()
+        self.assertTrue(
+            self.manager.assemble_context.await_args.kwargs[
+                "include_knowledge_base"
+            ],
+        )
         self.middleware._record_completed_turn.assert_awaited_once()
         self.assertIn("dobby_memory_state", agent.state.middle_context)
         persisted = agent.state.middle_context["dobby_memory_state"]
@@ -520,7 +643,42 @@ class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
             "user_project",
         )
 
-    async def test_reply_end_waits_until_memory_state_is_persisted(self) -> None:
+    async def test_automatic_memory_write_can_finish_after_chat(self) -> None:
+        agent = self._agent()
+        self.middleware._call_agent_model = AsyncMock(
+            return_value=AssistantMsg(
+                "assistant",
+                '{"user":[],"user_project":["本项目使用 PostgreSQL"]}',
+            ),
+        )
+        write_started = asyncio.Event()
+        allow_write = asyncio.Event()
+
+        async def remember(*_args, **_kwargs):
+            write_started.set()
+            await allow_write.wait()
+            return [{"id": "memory-a"}]
+
+        self.manager.remember = AsyncMock(side_effect=remember)
+
+        queued = await self.middleware._remember_routed(
+            agent,
+            "本项目使用 PostgreSQL。",
+            importance=0.5,
+            memory_type="interaction",
+            source="conversation",
+            defer_persistence=True,
+        )
+
+        self.assertEqual(queued, 1)
+        await write_started.wait()
+        self.assertTrue(self.middleware._background_tasks)
+
+        allow_write.set()
+        await asyncio.gather(*list(self.middleware._background_tasks))
+        self.manager.remember.assert_awaited_once()
+
+    async def test_reply_end_crosses_middleware_before_post_turn_memory(self) -> None:
         agent = self._agent()
         user_message = UserMsg("user", "数据库采用什么方案？")
         assistant_message = AssistantMsg("agent-a", "统一使用 PostgreSQL。")
@@ -554,19 +712,20 @@ class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
         )
 
         self.assertIsInstance(await anext(stream), ReplyStartEvent)
+        terminal_event = await anext(stream)
+        self.assertIsInstance(terminal_event, ReplyEndEvent)
+        self.assertFalse(record_started.is_set())
         self.assertIs(await anext(stream), assistant_message)
 
-        terminal_task = asyncio.create_task(anext(stream))
+        completion_task = asyncio.create_task(anext(stream))
         await record_started.wait()
         await asyncio.sleep(0)
-        self.assertFalse(terminal_task.done())
+        self.assertFalse(completion_task.done())
 
         allow_record_to_finish.set()
-        terminal_event = await terminal_task
-        self.assertIsInstance(terminal_event, ReplyEndEvent)
-        self.assertIn("dobby_memory_state", agent.state.middle_context)
         with self.assertRaises(StopAsyncIteration):
-            await anext(stream)
+            await completion_task
+        self.assertIn("dobby_memory_state", agent.state.middle_context)
 
     async def test_persisted_session_calls_upstream_end_session(self) -> None:
         agent = self._agent()
