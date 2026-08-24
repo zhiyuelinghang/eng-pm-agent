@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
 
@@ -24,6 +24,8 @@ if errorlevel 1 goto FAILED
 call :REQUIRE_FILE "scripts\agentscope_dev_app.py"
 if errorlevel 1 goto FAILED
 call :REQUIRE_FILE "scripts\dobby_web_gateway.py"
+if errorlevel 1 goto FAILED
+call :REQUIRE_FILE "mcp-packages\task-engine\src\task_engine\__init__.py"
 if errorlevel 1 goto FAILED
 call :REQUIRE_FILE "python-3.13.14\python.exe"
 if errorlevel 1 goto FAILED
@@ -71,10 +73,14 @@ call :COPY_CODE_DIR "AgentScope" "AgentScope"
 if errorlevel 1 goto FAILED
 call :COPY_CODE_DIR "scripts" "scripts"
 if errorlevel 1 goto FAILED
+call :COPY_CODE_DIR "mcp-packages\task-engine" "mcp-packages\task-engine"
+if errorlevel 1 goto FAILED
 
 mkdir "%UPDATE_TARGET%\python-3.13.14" >nul 2>nul
 copy /Y "%ROOT%python-3.13.14\python313._pth" "%UPDATE_TARGET%\python-3.13.14\python313._pth" >nul
 if errorlevel 1 goto COPY_FAILED
+call :ENSURE_PYTHON_PATH "%UPDATE_TARGET%\python-3.13.14\python313._pth" "..\mcp-packages\task-engine\src"
+if errorlevel 1 goto FAILED
 
 for %%F in (
     ".env.example"
@@ -110,6 +116,8 @@ if !ROBOCOPY_EXIT! GEQ 8 (
     echo [失败] 复制便携 Python 运行时失败，Robocopy 退出码：!ROBOCOPY_EXIT!
     goto FAILED
 )
+call :ENSURE_PYTHON_PATH "%FIRST_TARGET%\python-3.13.14\python313._pth" "..\mcp-packages\task-engine\src"
+if errorlevel 1 goto FAILED
 
 call :WRITE_VERSION "%FIRST_TARGET%\VERSION.txt" "首次部署包" "包含完整便携 Python 与 AgentScope 依赖"
 if errorlevel 1 goto FAILED
@@ -201,6 +209,22 @@ set "ROBOCOPY_EXIT=!ERRORLEVEL!"
 if !ROBOCOPY_EXIT! GEQ 8 (
     echo [失败] 复制目录失败：%SOURCE_DIR%
     echo [失败] Robocopy 退出码：!ROBOCOPY_EXIT!
+    exit /b 1
+)
+exit /b 0
+
+:ENSURE_PYTHON_PATH
+set "PTH_FILE=%~1"
+set "PTH_ENTRY=%~2"
+if not exist "%PTH_FILE%" (
+    echo [失败] 缺少 Python 路径配置：%PTH_FILE%
+    exit /b 1
+)
+findstr /X /L /C:"%PTH_ENTRY%" "%PTH_FILE%" >nul 2>nul
+if errorlevel 1 >>"%PTH_FILE%" echo %PTH_ENTRY%
+findstr /X /L /C:"%PTH_ENTRY%" "%PTH_FILE%" >nul 2>nul
+if errorlevel 1 (
+    echo [失败] 无法写入任务引擎运行路径：%PTH_FILE%
     exit /b 1
 )
 exit /b 0
