@@ -3,6 +3,7 @@
 import re
 from contextlib import AsyncExitStack, _AsyncGeneratorContextManager
 from typing import Any, TYPE_CHECKING
+from urllib.parse import urlsplit
 
 import httpx
 import mcp.types
@@ -192,8 +193,11 @@ class MCPClient(BaseModel):
         """Create an HTTP MCP client (SSE or streamable HTTP)."""
         config = self.mcp_config
 
-        # Determine transport from URL
-        if config.url.endswith("/sse") or config.url.endswith("/messages/"):
+        # Determine transport from the URL path only. Query strings are
+        # commonly used to carry MCP credentials and must not affect the
+        # transport choice.
+        path = urlsplit(config.url).path
+        if path.endswith("/sse") or path.endswith("/messages/"):
             return sse_client(
                 url=config.url,
                 headers=config.headers,

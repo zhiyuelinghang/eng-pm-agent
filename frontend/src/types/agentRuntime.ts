@@ -63,7 +63,12 @@ export type AgentRuntimeMessage = {
   created_at: string
   finished_at?: string | null
   finished_reason?: string | null
-  usage?: { input_tokens: number; output_tokens: number } | null
+  usage?: {
+    input_tokens: number
+    output_tokens: number
+    cache_input_tokens?: number
+    cache_creation_input_tokens?: number
+  } | null
   error?: { type?: string; message?: string } | null
   model_names?: string[]
   platform_collaboration_status?: 'waiting' | 'continued' | null
@@ -484,9 +489,20 @@ function applyAgentRuntimeEventMutable(
       break
     }
     case 'MODEL_CALL_END':
-      message.usage = message.usage || { input_tokens: 0, output_tokens: 0 }
+      message.usage = message.usage || {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+      }
       message.usage.input_tokens += Number(event.input_tokens) || 0
       message.usage.output_tokens += Number(event.output_tokens) || 0
+      message.usage.cache_input_tokens =
+        (message.usage.cache_input_tokens || 0) +
+        (Number(event.cache_input_tokens) || 0)
+      message.usage.cache_creation_input_tokens =
+        (message.usage.cache_creation_input_tokens || 0) +
+        (Number(event.cache_creation_input_tokens) || 0)
       break
     case 'TEXT_BLOCK_START':
       message.content.push({

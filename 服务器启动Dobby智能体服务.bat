@@ -41,7 +41,7 @@ if not exist "%WEB_GATEWAY%" (
     exit /b 1
 )
 
-"%PYTHON_EXE%" -c "import agentscope; import aiosqlite, asyncpg, psycopg, pgvector, sqlalchemy, openpyxl, xlrd, docx, pptx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime; assert agentscope.__version__ == '2.0.6'" >nul
+"%PYTHON_EXE%" -c "import agentscope; import aiosqlite, asyncpg, psycopg, pgvector, sqlalchemy, openpyxl, xlrd, docx, pptx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime; assert agentscope.__version__ == '2.0.7'" >nul
 if errorlevel 1 (
     echo [错误] 随包携带的 AgentScope Python 依赖验证失败。
     pause

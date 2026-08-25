@@ -1,6 +1,6 @@
-# AgentScope Python 2.0.6 发布版本及其服务、SQL 存储、知识库依赖。
+# AgentScope Python 2.0.7 发布版本及其服务、SQL 存储、知识库依赖。
 # 运行时向量存储已经统一到 PostgreSQL/pgvector。
-agentscope[rag,service,storage-sql]==2.0.6
+agentscope[rag,service,storage-sql]==2.0.7
 # 仅供 scripts/migrate_legacy_storage.py 读取旧本地 Qdrant 数据。
 qdrant-client>=1.13,<2.0
 

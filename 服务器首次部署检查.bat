@@ -76,7 +76,7 @@ if not errorlevel 1 (
 
 echo.
 echo [初始化] 正在验证随包携带的 Python 与 AgentScope 运行环境……
-"%PYTHON_EXE%" -c "import agentscope; import aiosqlite, asyncpg, alembic, psycopg, pgvector, sqlalchemy, pypdf, pandas, openpyxl, xlrd, docx, pptx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime; assert agentscope.__version__ == '2.0.6'"
+"%PYTHON_EXE%" -c "import agentscope; import aiosqlite, asyncpg, alembic, psycopg, pgvector, sqlalchemy, pypdf, pandas, openpyxl, xlrd, docx, pptx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime; assert agentscope.__version__ == '2.0.7'"
 if errorlevel 1 (
     echo [失败] AgentScope Python 环境验证失败。
     goto FAILED

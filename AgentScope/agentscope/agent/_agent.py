@@ -1485,14 +1485,15 @@ class Agent:
             )
 
         # Send the model call ended event with usage if available
+        usage = completed_response.usage
         yield ModelCallEndEvent(
             reply_id=self.state.reply_id,
-            input_tokens=completed_response.usage.input_tokens
-            if completed_response.usage
-            else 0,
-            output_tokens=completed_response.usage.output_tokens
-            if completed_response.usage
-            else 0,
+            input_tokens=usage.input_tokens if usage else 0,
+            output_tokens=usage.output_tokens if usage else 0,
+            cache_input_tokens=(usage.cache_input_tokens or 0) if usage else 0,
+            cache_creation_input_tokens=(
+                (usage.cache_creation_input_tokens or 0) if usage else 0
+            ),
             finished_reason=completed_response.finished_reason,
         )
 
@@ -1523,6 +1524,12 @@ class Agent:
                 Usage(
                     input_tokens=last_ctx.usage.input_tokens,
                     output_tokens=last_ctx.usage.output_tokens,
+                    cache_input_tokens=(
+                        last_ctx.usage.cache_input_tokens or 0
+                    ),
+                    cache_creation_input_tokens=(
+                        last_ctx.usage.cache_creation_input_tokens or 0
+                    ),
                 )
                 if last_ctx is not None and last_ctx.usage is not None
                 else None
@@ -3040,6 +3047,10 @@ class Agent:
             Usage(
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
+                cache_input_tokens=usage.cache_input_tokens or 0,
+                cache_creation_input_tokens=(
+                    usage.cache_creation_input_tokens or 0
+                ),
             )
             if usage is not None
             else None
@@ -3071,6 +3082,10 @@ class Agent:
             else:
                 tail.usage.input_tokens += msg_usage.input_tokens
                 tail.usage.output_tokens += msg_usage.output_tokens
+                tail.usage.cache_input_tokens += msg_usage.cache_input_tokens
+                tail.usage.cache_creation_input_tokens += (
+                    msg_usage.cache_creation_input_tokens
+                )
 
     def _get_last_msg(self) -> Msg | None:
         """Get the last message in the context that belongs to this agent."""
