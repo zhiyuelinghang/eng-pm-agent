@@ -7,6 +7,7 @@ set "AGENTSCOPE_PORT=18642"
 set "AGENTSCOPE_WEBUI_PORT=25173"
 set "PLATFORM_API_PORT=38430"
 set "PLATFORM_WEB_PORT=38429"
+set "DOBBY_REALTIME_PORT=38431"
 
 title Dobby 服务器一键启动
 
@@ -20,8 +21,21 @@ if not exist "%ROOT%服务器启动工程管理平台.bat" (
     goto FAILED
 )
 
+if not exist "%ROOT%start-centrifugo.bat" (
+    echo [失败] 缺少 start-centrifugo.bat。
+    goto FAILED
+)
+
 echo [Dobby] 正在停止旧服务和端口占用进程……
 if exist "%ROOT%一键停止全部服务.bat" call "%ROOT%一键停止全部服务.bat" /quiet
+
+echo.
+echo [Dobby] 正在启动项目群聊实时服务……
+call "%ROOT%start-centrifugo.bat"
+if errorlevel 1 goto FAILED
+set "CENTRIFUGO_ENABLED=true"
+call :WAIT_PORT %DOBBY_REALTIME_PORT% 30 "群聊实时服务"
+if errorlevel 1 goto FAILED
 
 echo.
 echo [Dobby] 正在启动 AgentScope API 与管理端……
@@ -46,6 +60,7 @@ echo [平台] http://服务器地址:%PLATFORM_WEB_PORT%/
 echo [平台后端] http://127.0.0.1:%PLATFORM_API_PORT%/
 echo [管理端] http://127.0.0.1:%AGENTSCOPE_WEBUI_PORT%/
 echo [AgentScope API] http://127.0.0.1:%AGENTSCOPE_PORT%/
+echo [群聊实时服务] ws://服务器地址:%DOBBY_REALTIME_PORT%/connection/websocket
 echo [运行环境] 仅使用项目便携 Python，不需要 Node.js。
 echo.
 echo 停止全部服务请运行 一键停止全部服务.bat。

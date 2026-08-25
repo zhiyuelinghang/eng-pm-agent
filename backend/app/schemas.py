@@ -339,6 +339,20 @@ class CollaborationMessageInput(BaseModel):
     content: str = Field(min_length=1)
 
 
+class ChatMessageInput(BaseModel):
+    content: str = Field(min_length=1, max_length=20000)
+    client_message_id: str | None = Field(default=None, min_length=8, max_length=64)
+    reply_to_id: int | None = Field(default=None, ge=1)
+    mention_all: bool = False
+    mentioned_user_ids: list[int] = Field(default_factory=list, max_length=50)
+    mentioned_agent_ids: list[str] = Field(default_factory=list, max_length=10)
+
+
+class ChatPrivateChannelInput(BaseModel):
+    title: str | None = Field(default=None, max_length=100)
+    participant_user_ids: list[int] = Field(min_length=1, max_length=50)
+
+
 class AgentConversationInput(BaseModel):
     agent_id: str | None = Field(default=None, max_length=64)
     conversation_type: str = Field(

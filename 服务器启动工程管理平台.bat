@@ -37,6 +37,15 @@ if not exist "%PYTHON_EXE%" (
 call :STOP_PORT 38430 "平台后端"
 call :STOP_PORT 38429 "平台前端"
 
+set "CENTRIFUGO_ENABLED=false"
+if exist "%ROOT%start-centrifugo.bat" (
+  call "%ROOT%start-centrifugo.bat"
+  if not errorlevel 1 set "CENTRIFUGO_ENABLED=true"
+)
+if "%CENTRIFUGO_ENABLED%"=="false" (
+  echo [警告] 群聊实时服务未启动；消息仍会保存，但不会实时广播。
+)
+
 echo [平台] 正在启动后端：http://127.0.0.1:38430
 start "Dobby Platform API" /b "%PYTHON_EXE%" -m uvicorn app.main:app --app-dir "%BACKEND_DIR%" --host 127.0.0.1 --port 38430
 

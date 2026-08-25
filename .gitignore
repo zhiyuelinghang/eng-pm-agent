@@ -9,6 +9,7 @@ frontend/dist/
 data/
 /scratch/
 /更新文件/
+/runtime/centrifugo/
 
 # 本地知识库问答验证资料及解析中间产物，不提交真实工程文档
 /docs/hybrid_auto/

@@ -21,19 +21,20 @@ taskkill /F /T /FI "WINDOWTITLE eq Dobby AgentScope API*" >nul 2>nul
 taskkill /F /T /FI "WINDOWTITLE eq Dobby Management Web*" >nul 2>nul
 taskkill /F /T /FI "WINDOWTITLE eq Eng PM Agent AI Workspace*" >nul 2>nul
 taskkill /F /T /FI "WINDOWTITLE eq Eng PM Agent API*" >nul 2>nul
+taskkill /F /T /FI "WINDOWTITLE eq Dobby Realtime*" >nul 2>nul
 
-for %%P in (38429 38430 18642 25173 23000) do call :KILL_PORT %%P
+for %%P in (38429 38430 38431 18642 25173 23000) do call :KILL_PORT %%P
 
 set "STOP_RETRY=0"
 
 :WAIT_PORTS_FREE
 set "PORTS_BUSY="
-for %%P in (38429 38430 18642 25173 23000) do call :CHECK_PORT %%P
+for %%P in (38429 38430 38431 18642 25173 23000) do call :CHECK_PORT %%P
 if not defined PORTS_BUSY goto STOPPED
 
 set /a STOP_RETRY+=1 >nul
 if !STOP_RETRY! GEQ 10 goto STOP_FAILED
-for %%P in (38429 38430 18642 25173 23000) do call :KILL_PORT %%P
+for %%P in (38429 38430 38431 18642 25173 23000) do call :KILL_PORT %%P
 ping 127.0.0.1 -n 2 >nul
 goto WAIT_PORTS_FREE
 

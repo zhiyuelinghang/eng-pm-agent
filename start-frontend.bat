@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 chcp 65001 >nul
 setlocal
 
@@ -50,6 +50,15 @@ echo.
 
 call :STOP_PORT 38430 "backend API"
 call :STOP_PORT 38429 "frontend development server"
+
+set "CENTRIFUGO_ENABLED=false"
+if exist "%ROOT%start-centrifugo.bat" (
+  call "%ROOT%start-centrifugo.bat"
+  if not errorlevel 1 set "CENTRIFUGO_ENABLED=true"
+)
+if "%CENTRIFUGO_ENABLED%"=="false" (
+  echo [警告] 群聊实时服务未启动；消息仍可保存，但其他浏览器需要刷新后才能看到。
+)
 
 echo Starting backend API on port 38430...
 echo Backend logs will be shown in this window.

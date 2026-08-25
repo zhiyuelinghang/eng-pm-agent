@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     Date,
@@ -20,6 +21,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -624,6 +626,295 @@ class CollaborationMessage(Base):
     content: Mapped[str] = mapped_column(Text)
     generated_task_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ChatChannel(TimestampMixin, Base):
+    """Platform-owned project chat channel; Centrifugo never owns this data."""
+
+    __tablename__ = "chat_channels"
+    __table_args__ = (
+        CheckConstraint(
+            "channel_type IN ('project', 'topic', 'private')",
+            name="ck_chat_channels_type",
+        ),
+        Index("ix_chat_channels_project_updated", "project_id", "updated_at"),
+        Index(
+            "uq_chat_channels_project_default",
+            "project_id",
+            unique=True,
+            sqlite_where=text("channel_type = 'project' AND archived_at IS NULL"),
+            postgresql_where=text("channel_type = 'project' AND archived_at IS NULL"),
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    title: Mapped[str] = mapped_column(String(300))
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    channel_type: Mapped[str] = mapped_column(
+        String(24),
+        default="topic",
+        server_default="topic",
+    )
+    last_message_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
+class ChatMessage(TimestampMixin, Base):
+    """One durable human, agent, or system message in a project channel."""
+
+    __tablename__ = "chat_messages"
+    __table_args__ = (
+        CheckConstraint(
+            "sender_type IN ('user', 'agent', 'system')",
+            name="ck_chat_messages_sender_type",
+        ),
+        CheckConstraint(
+            "message_type IN ('text', 'agent', 'system', 'task_draft', 'task_event')",
+            name="ck_chat_messages_message_type",
+        ),
+        CheckConstraint(
+            "(sender_type = 'user' AND sender_user_id IS NOT NULL AND sender_agent_id IS NULL) "
+            "OR (sender_type = 'agent' AND sender_user_id IS NULL AND sender_agent_id IS NOT NULL) "
+            "OR (sender_type = 'system' AND sender_user_id IS NULL)",
+            name="ck_chat_messages_sender_identity",
+        ),
+        UniqueConstraint(
+            "channel_id",
+            "client_message_id",
+            name="uq_chat_messages_client_message",
+        ),
+        Index("ix_chat_messages_channel_created", "channel_id", "created_at"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_channels.id", ondelete="CASCADE"),
+        index=True,
+    )
+    sender_type: Mapped[str] = mapped_column(String(16), default="user")
+    sender_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    sender_agent_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+        index=True,
+    )
+    message_type: Mapped[str] = mapped_column(
+        String(24),
+        default="text",
+        server_default="text",
+    )
+    content: Mapped[str] = mapped_column(Text)
+    client_message_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    reply_to_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    task_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(
+        "metadata",
+        JSON,
+        default=dict,
+    )
+    edited_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
+class ChatChannelMember(TimestampMixin, Base):
+    __tablename__ = "chat_channel_members"
+    __table_args__ = (
+        CheckConstraint(
+            "member_role IN ('owner', 'member')",
+            name="ck_chat_channel_members_role",
+        ),
+        UniqueConstraint(
+            "channel_id",
+            "user_id",
+            name="uq_chat_channel_member_user",
+        ),
+        Index("ix_chat_channel_members_user_active", "user_id", "left_at"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_channels.id", ondelete="CASCADE"),
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+    )
+    member_role: Mapped[str] = mapped_column(
+        String(16),
+        default="member",
+        server_default="member",
+    )
+    last_read_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    muted: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default=text("false"),
+    )
+    left_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
+class ChatMessageMention(Base):
+    __tablename__ = "chat_message_mentions"
+    __table_args__ = (
+        CheckConstraint(
+            "target_type IN ('user', 'agent')",
+            name="ck_chat_message_mentions_type",
+        ),
+        CheckConstraint(
+            "(target_type = 'user' AND target_user_id IS NOT NULL AND target_agent_id IS NULL) "
+            "OR (target_type = 'agent' AND target_user_id IS NULL AND target_agent_id IS NOT NULL)",
+            name="ck_chat_message_mentions_target",
+        ),
+        Index("ix_chat_message_mentions_message", "message_id"),
+        Index("ix_chat_message_mentions_user", "target_user_id"),
+        Index("ix_chat_message_mentions_agent", "target_agent_id"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="CASCADE"),
+    )
+    target_type: Mapped[str] = mapped_column(String(16))
+    target_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    target_agent_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+    display_name: Mapped[str] = mapped_column(String(200))
+
+
+class ChatMessageMentionReceipt(TimestampMixin, Base):
+    """Per-recipient first-view state for a user or all-members mention."""
+
+    __tablename__ = "chat_message_mention_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "message_id",
+            "user_id",
+            name="uq_chat_message_mention_receipts_message_user",
+        ),
+        Index(
+            "ix_chat_message_mention_receipts_user_seen",
+            "user_id",
+            "seen_at",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="CASCADE"),
+        index=True,
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+    )
+    seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+
+class ChatAgentThread(TimestampMixin, Base):
+    """One shared AgentScope session for an agent inside a chat channel."""
+
+    __tablename__ = "chat_agent_threads"
+    __table_args__ = (
+        UniqueConstraint(
+            "channel_id",
+            "agent_id",
+            name="uq_chat_agent_threads_channel_agent",
+        ),
+        Index("ix_chat_agent_threads_channel", "channel_id"),
+        Index("ix_chat_agent_threads_agent", "agent_id"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_channels.id", ondelete="CASCADE"),
+    )
+    agent_id: Mapped[str] = mapped_column(String(128))
+    agent_name: Mapped[str] = mapped_column(String(200))
+    agentscope_session_id: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+        unique=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default="creating",
+        server_default="creating",
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_source_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+
+class ChatRealtimeOutbox(Base):
+    """Centrifugo-compatible transactional outbox inside the platform schema."""
+
+    __tablename__ = "chat_realtime_outbox"
+    __table_args__ = (
+        Index("ix_chat_realtime_outbox_partition_id", "partition", "id"),
+    )
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer, "sqlite"),
+        primary_key=True,
+        autoincrement=True,
+    )
+    method: Mapped[str] = mapped_column(
+        Text,
+        default="publish",
+        server_default="publish",
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB, "postgresql"),
+    )
+    partition: Mapped[int] = mapped_column(
+        BigInteger,
+        default=0,
+        server_default="0",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
 
 
 class EngineeringKnowledgeConversation(TimestampMixin, Base):
