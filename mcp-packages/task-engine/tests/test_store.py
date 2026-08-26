@@ -9,6 +9,7 @@ import pytest
 from task_engine.domain.flow import complete_step, forward_step, instantiate
 from task_engine.domain.models import (
     Assignee,
+    CalendarMode,
     IntervalUnit,
     RunMode,
     Schedule,
@@ -93,6 +94,26 @@ class TestFlowRoundTrip:
         assert loaded.trigger.interval_value == 2
         assert loaded.trigger.interval_unit is IntervalUnit.WEEK
         assert loaded.trigger.max_fires == 10
+
+    def test_calendar_trigger_survives_without_leaking_into_host_scope(self, store):
+        trigger = Trigger(
+            run_mode=RunMode.CALENDAR,
+            first_at=T0,
+            calendar_mode=CalendarMode.WEEKLY,
+            calendar_weekdays=(1, 3, 5),
+            max_fires=12,
+        )
+        flow = make_flow(trigger=trigger)
+        store.save_flow(flow, T0)
+
+        loaded = store.get_flow(flow.id)
+
+        assert loaded is not None
+        assert loaded.trigger.run_mode is RunMode.CALENDAR
+        assert loaded.trigger.calendar_mode is CalendarMode.WEEKLY
+        assert loaded.trigger.calendar_weekdays == (1, 3, 5)
+        assert loaded.trigger.max_fires == 12
+        assert loaded.scope == {"project_id": "p1"}
 
     def test_watchers_and_tags_survive(self, store):
         flow = make_flow()

@@ -17,6 +17,7 @@ from ..domain.models import (
     Activity,
     ActivityKind,
     Assignee,
+    CalendarMode,
     IntervalUnit,
     RunMode,
     Schedule,
@@ -32,6 +33,7 @@ from ..domain.models import (
 
 
 _IDENTIFIER_PATTERN = re.compile(r"[a-z_][a-z0-9_]{0,62}")
+_TRIGGER_SCOPE_KEY = "__task_engine_trigger"
 
 
 def _parse(raw: datetime | str | None) -> datetime | None:
@@ -74,6 +76,19 @@ def _site_from_row(ref: str, name: str, code: str) -> Site | None:
     if not ref:
         return None
     return Site(ref=ref, name=name, code=code)
+
+
+def _flow_scope_to_row(flow: TaskFlow) -> dict[str, Any]:
+    """在不改表结构的前提下持久化新增触发字段。"""
+    scope = dict(flow.scope)
+    scope.pop(_TRIGGER_SCOPE_KEY, None)
+    if flow.trigger.is_calendar:
+        scope[_TRIGGER_SCOPE_KEY] = {
+            "calendar_mode": str(flow.trigger.calendar_mode),
+            "calendar_weekdays": list(flow.trigger.calendar_weekdays),
+            "calendar_day": flow.trigger.calendar_day,
+        }
+    return scope
 
 
 class PostgresStore:
@@ -121,6 +136,7 @@ class PostgresStore:
                 "instruction": spec.instruction,
                 "requires_attachment": spec.requires_attachment,
                 "optional": spec.optional,
+                "automated": spec.automated,
             }
             for spec in flow.steps
         ]
@@ -176,7 +192,7 @@ class PostgresStore:
                         [_assignee_to_row(item) for item in flow.watchers],
                     ),
                     "tags_json": _json_dump(list(flow.tags)),
-                    "scope_json": _json_dump(flow.scope),
+                    "scope_json": _json_dump(_flow_scope_to_row(flow)),
                     "site_ref": site_ref,
                     "site_name": site_name,
                     "site_code": site_code,
@@ -223,6 +239,8 @@ class PostgresStore:
         return [self._row_to_flow(row) for row in rows]
 
     def _row_to_flow(self, row: Mapping[str, Any]) -> TaskFlow:
+        scope = dict(_json_load(row["scope_json"], {}))
+        trigger_extension = scope.pop(_TRIGGER_SCOPE_KEY, {})
         steps = tuple(
             StepSpec(
                 name=item["name"],
@@ -232,6 +250,7 @@ class PostgresStore:
                 instruction=item["instruction"],
                 requires_attachment=item["requires_attachment"],
                 optional=item["optional"],
+                automated=bool(item.get("automated", False)),
             )
             for item in _json_load(row["steps_json"], [])
         )
@@ -243,6 +262,16 @@ class PostgresStore:
             timezone=row["timezone"],
             until=_parse(row["until_at"]),
             max_fires=row["max_fires"],
+            calendar_mode=(
+                CalendarMode(trigger_extension["calendar_mode"])
+                if trigger_extension.get("calendar_mode")
+                else None
+            ),
+            calendar_weekdays=tuple(
+                int(day)
+                for day in trigger_extension.get("calendar_weekdays", [])
+            ),
+            calendar_day=trigger_extension.get("calendar_day"),
         )
         watchers = tuple(
             assignee
@@ -263,7 +292,7 @@ class PostgresStore:
             tags=tuple(_json_load(row["tags_json"], [])),
             origin=row["origin"],
             origin_note=row["origin_note"],
-            scope=dict(_json_load(row["scope_json"], {})),
+            scope=scope,
         )
 
     # ---- 触发计划 ----

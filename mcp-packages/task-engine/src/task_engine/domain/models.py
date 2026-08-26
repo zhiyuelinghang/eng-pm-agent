@@ -22,15 +22,26 @@ class RunMode(StrEnum):
 
     ONCE = "once"            # 到点执行一次
     RECURRING = "recurring"  # 首次执行后按间隔重复
+    CALENDAR = "calendar"    # 按日历规则（工作日 / 星期 / 每月某日）重复
 
 
 class IntervalUnit(StrEnum):
     """重复间隔单位。"""
 
+    MINUTE = "minute"
     HOUR = "hour"
     DAY = "day"
     WEEK = "week"
     MONTH = "month"
+
+
+class CalendarMode(StrEnum):
+    """日历触发规则。"""
+
+    DAILY = "daily"
+    WEEKDAYS = "weekdays"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
 
 
 class StepState(StrEnum):
@@ -142,14 +153,32 @@ class Trigger:
     # RECURRING 的收敛条件，二者皆空表示无限重复
     until: datetime | None = None
     max_fires: int | None = None
+    calendar_mode: CalendarMode | None = None
+    calendar_weekdays: tuple[int, ...] = ()  # ISO weekday：1=周一，7=周日
+    calendar_day: int | None = None          # 每月第几日；月底自动夹取
 
     def __post_init__(self) -> None:
         if self.run_mode is RunMode.RECURRING and self.interval_value < 1:
             raise ValueError("重复间隔必须为正整数")
+        if self.run_mode is RunMode.CALENDAR:
+            if self.calendar_mode is None:
+                raise ValueError("日历触发必须指定日历规则")
+            if self.calendar_mode is CalendarMode.WEEKLY:
+                if not self.calendar_weekdays:
+                    raise ValueError("按星期触发至少需要选择一天")
+                if any(day < 1 or day > 7 for day in self.calendar_weekdays):
+                    raise ValueError("星期必须在 1 到 7 之间")
+            if self.calendar_mode is CalendarMode.MONTHLY:
+                if self.calendar_day is None or not 1 <= self.calendar_day <= 31:
+                    raise ValueError("每月触发日必须在 1 到 31 之间")
 
     @property
     def is_recurring(self) -> bool:
-        return self.run_mode is RunMode.RECURRING
+        return self.run_mode in (RunMode.RECURRING, RunMode.CALENDAR)
+
+    @property
+    def is_calendar(self) -> bool:
+        return self.run_mode is RunMode.CALENDAR
 
     def describe(self) -> str:
         """生成人类可读的触发说明，供 UI 直接展示。"""
@@ -158,12 +187,33 @@ class Trigger:
         stamp = self.first_at.strftime("%Y-%m-%d %H:%M")
         if not self.is_recurring:
             return f"{stamp} 执行一次"
-        unit_label = {"hour": "小时", "day": "天", "week": "周", "month": "个月"}[self.interval_unit]
         tail = ""
         if self.max_fires:
             tail = f"，共 {self.max_fires} 次"
         elif self.until:
             tail = f"，直到 {self.until.strftime('%Y-%m-%d')}"
+        if self.is_calendar:
+            mode = self.calendar_mode
+            if mode is CalendarMode.DAILY:
+                rule = "每天"
+            elif mode is CalendarMode.WEEKDAYS:
+                rule = "每个工作日"
+            elif mode is CalendarMode.WEEKLY:
+                labels = "、".join(
+                    ("周一", "周二", "周三", "周四", "周五", "周六", "周日")[day - 1]
+                    for day in sorted(set(self.calendar_weekdays))
+                )
+                rule = f"每周 {labels}"
+            else:
+                rule = f"每月 {self.calendar_day} 日"
+            return f"自 {stamp} 起，{rule} {self.first_at.strftime('%H:%M')} 执行{tail}"
+        unit_label = {
+            "minute": "分钟",
+            "hour": "小时",
+            "day": "天",
+            "week": "周",
+            "month": "个月",
+        }[self.interval_unit]
         return f"{stamp} 首次执行，之后每 {self.interval_value} {unit_label}执行一次{tail}"
 
 
@@ -186,6 +236,7 @@ class StepSpec:
     instruction: str = ""          # 给执行人的说明
     requires_attachment: bool = False
     optional: bool = False         # 可跳过
+    automated: bool = False        # 由宿主自动执行；具体动作配置仍由 scope 持有
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -228,8 +279,17 @@ class TaskFlow:
         return [
             (index, spec.name)
             for index, spec in enumerate(self.steps)
-            if spec.assignee is None
+            if not spec.automated and spec.assignee is None
         ]
+
+    @property
+    def execution_kind(self) -> str:
+        """宿主执行语义；默认保持原工程责任任务。"""
+        return str(self.scope.get("execution_kind") or "responsibility")
+
+    @property
+    def is_automation(self) -> bool:
+        return self.execution_kind == "automation"
 
     def require_dispatchable(self) -> None:
         """校验这个任务流是否可以布置成真实任务。
@@ -237,6 +297,16 @@ class TaskFlow:
         工程责任制要求每一项待办都能追到具体的人、具体的工点、具体的验收责任，
         所以布置前这三项必须齐备。模板阶段可以留空，布置阶段不行。
         """
+        if self.is_automation:
+            action = self.scope.get("action")
+            if not isinstance(action, dict) or not str(action.get("type") or "").strip():
+                raise ValueError("自动化任务未配置可执行动作")
+            return
+
+        manual_steps = [spec for spec in self.steps if not spec.automated]
+        if not manual_steps:
+            return
+
         missing = self.unassigned_steps()
         if missing:
             detail = "、".join(f"第 {i + 1} 个「{name}」" for i, name in missing)
@@ -337,6 +407,14 @@ class TaskInstance:
             if not step.is_settled:
                 return step
         return None
+
+    @property
+    def execution_kind(self) -> str:
+        return str(self.scope.get("execution_kind") or "responsibility")
+
+    @property
+    def is_automation(self) -> bool:
+        return self.execution_kind == "automation"
 
     @property
     def current_assignee(self) -> Assignee | None:

@@ -139,7 +139,7 @@ type ApiQualityMetric = {
 }
 type ApiPlatformMapping = { id: number; project_id: number; platform_name: string; source_field: PlatformFieldMapping['sourceField']; target_field: string; transform_rule?: string; required: boolean; enabled: boolean }
 type ApiLink = { id: number; project_id: number; wbs_item_id: number; risk_source_id: number; alert_days: number; notify_methods: string[]; basis?: string }
-type ApiTask = { id: number; project_id: number; title: string; task_type: Task['type']; risk_level: Task['riskLevel']; assignee_user_id?: number; confirmer_user_id?: number; due_at?: string; wbs_item_id?: number; risk_source_id?: number; trigger_reason?: string; required_materials: string[]; workflow_steps?: Task['workflowSteps']; status: string; created_at: string }
+type ApiTask = { id: number; project_id: number; title: string; task_type: Task['type']; risk_level: Task['riskLevel']; assignee_user_id?: number; confirmer_user_id?: number; due_at?: string; wbs_item_id?: number; risk_source_id?: number; trigger_reason?: string; required_materials: string[]; workflow_steps?: Task['workflowSteps']; status: string; created_at: string; updated_at?: string; closed_at?: string }
 type ApiDaily = { id: number; project_id: number; file_name: string; report_date?: string; content?: string; matched_wbs_id?: number; confidence: number; parse_status: string; status: DailyReport['status']; created_at: string }
 type ApiDraft = { id: number; project_id: number; risk_source_id: number; title: string; content: string; status: string; source_refs: string[]; missing_items: string[]; review_note?: string; created_at: string; updated_at: string }
 type ApiFill = { id: number; project_id: number; draft_id: number; platform_name: string; process_name: string; status: FillPackage['status']; fields: FillPackage['fields']; attachments: FillPackage['attachments']; created_at: string }
@@ -481,7 +481,7 @@ export const useAppStore = defineStore('app', () => {
     }
   }
   function mapPlatformMapping(row: ApiPlatformMapping): PlatformFieldMapping { return { id: id(row.id), projectId: id(row.project_id), platformName: row.platform_name, sourceField: row.source_field, targetField: row.target_field, transformRule: row.transform_rule, required: row.required, enabled: row.enabled } }
-  function mapTask(row: ApiTask): Task { return { id: id(row.id), projectId: id(row.project_id), title: row.title, type: row.task_type, riskLevel: row.risk_level, responsibleId: id(row.assignee_user_id), confirmatorId: id(row.confirmer_user_id), deadline: row.due_at || '', linkedWbsIds: row.wbs_item_id ? [id(row.wbs_item_id)] : [], linkedRiskId: row.risk_source_id ? id(row.risk_source_id) : undefined, triggerReason: row.trigger_reason || '', missingCount: row.required_materials?.length || 0, workflowSteps: (row.workflow_steps || []).map(step => ({ ...step, status: step.status || 'pending' })), status: uiTaskStatus(row.status), createdAt: row.created_at } }
+  function mapTask(row: ApiTask): Task { return { id: id(row.id), projectId: id(row.project_id), title: row.title, type: row.task_type, riskLevel: row.risk_level, responsibleId: id(row.assignee_user_id), confirmatorId: id(row.confirmer_user_id), deadline: row.due_at || '', linkedWbsIds: row.wbs_item_id ? [id(row.wbs_item_id)] : [], linkedRiskId: row.risk_source_id ? id(row.risk_source_id) : undefined, triggerReason: row.trigger_reason || '', missingCount: row.required_materials?.length || 0, workflowSteps: (row.workflow_steps || []).map(step => ({ ...step, status: step.status || 'pending' })), status: uiTaskStatus(row.status), createdAt: row.created_at, updatedAt: row.updated_at || row.created_at, closedAt: row.closed_at || '' } }
   function mapDaily(row: ApiDaily): DailyReport { return { id: id(row.id), projectId: id(row.project_id), fileName: row.file_name, fileType: '文件', date: row.report_date || '', constructionContent: row.content || '', currentProgress: 0, cumulativeProgress: 0, problems: '', tomorrowPlan: '', riskContent: '', monitorContent: '', matchedWbsId: row.matched_wbs_id ? id(row.matched_wbs_id) : undefined, confidence: row.confidence, parseStatus: (row.parse_status === 'parsed' ? 'done' : row.parse_status) as DailyReport['parseStatus'], status: row.status, createdAt: row.created_at } }
   function mapDraft(row: ApiDraft): RiskDraft { const risk = allRiskSources.value.find(item => item.id === id(row.risk_source_id)); const draftStatus = row.status === 'pending_review' ? 'reviewing' : row.status; return { id: id(row.id), projectId: id(row.project_id), riskId: id(row.risk_source_id), riskLevel: risk?.level || 'medium', title: row.title, content: row.content, hazardType: risk?.type || '风险上报', deadline: '', measures: '', responsibleId: risk?.responsibleId || '', missingItems: row.missing_items || [], sourceRefs: row.source_refs || [], attachments: [], status: draftStatus as RiskDraft['status'], reviewNote: row.review_note, createdAt: row.created_at, updatedAt: row.updated_at } }
   function mapFill(row: ApiFill): FillPackage { return { id: id(row.id), projectId: id(row.project_id), draftId: id(row.draft_id), platformName: row.platform_name, processName: row.process_name, status: row.status, deadline: '', fields: row.fields || [], attachments: row.attachments || [], createdAt: row.created_at } }
@@ -953,15 +953,23 @@ export const useAppStore = defineStore('app', () => {
     trigger_reason?: string
     required_materials?: string[]
     workflow_steps?: Task['workflowSteps']
-    run_mode?: 'single' | 'scheduled' | 'immediate' | 'once' | 'recurring'
+    action_type?: 'responsibility_task' | 'project_chat_message'
+    run_mode?: 'single' | 'scheduled' | 'immediate' | 'once' | 'recurring' | 'calendar'
     trigger_date?: string
     trigger_time?: string
     trigger_interval_value?: number
-    trigger_interval_unit?: 'hour' | 'day' | 'week' | 'month'
+    trigger_interval_unit?: 'minute' | 'hour' | 'day' | 'week' | 'month'
     trigger_end_mode?: 'never' | 'until' | 'count'
     trigger_until_date?: string
     trigger_max_fires?: number
+    trigger_calendar_mode?: 'daily' | 'weekdays' | 'weekly' | 'monthly'
+    trigger_weekdays?: number[]
+    trigger_day_of_month?: number
     cc?: string
+    target_channel_id?: number
+    mention_mode?: 'none' | 'all' | 'users'
+    mentioned_user_ids?: number[]
+    message_content?: string
   }) {
     await api.post(`/projects/${currentProjectId.value}/tasks`, {
       ...payload,
@@ -1361,7 +1369,7 @@ export const useAppStore = defineStore('app', () => {
   }
   async function reassignTask(taskId: string, assigneeUserId: string, note?: string) { await api.post(`/tasks/${taskId}/reassign`, { assignee_user_id: Number(assigneeUserId), note }); await loadProjectData() }
   async function addTaskNote(taskId: string, note: string) { await api.post(`/tasks/${taskId}/notes`, { note }) }
-  async function getTaskHistory(taskId: string) { const response = await api.get<ApiEnvelope<{ history: Array<{ id: number; from_status?: string; to_status: string; note?: string; created_at: string }> }>>(`/tasks/${taskId}`); return response.data.data.history }
+  async function getTaskHistory(taskId: string) { const response = await api.get<ApiEnvelope<{ history: Array<{ id: string | number; kind?: string; step_seq?: number | null; from_status?: string; to_status?: string; note?: string; created_at: string }> }>>(`/tasks/${taskId}`); return response.data.data.history }
   function memberWritePayload(member: MemberWriteInput) {
     return {
       username: member.username || undefined,

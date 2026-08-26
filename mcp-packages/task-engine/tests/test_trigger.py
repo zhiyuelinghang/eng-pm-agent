@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from task_engine.domain.models import IntervalUnit, RunMode, Trigger
+from task_engine.domain.models import CalendarMode, IntervalUnit, RunMode, Trigger
 from task_engine.domain.trigger import (
     add_interval,
     add_months,
@@ -51,6 +51,7 @@ class TestAddInterval:
     @pytest.mark.parametrize(
         ("unit", "value", "expected"),
         [
+            (IntervalUnit.MINUTE, 15, dt(2026, 3, 15, 9, 15)),
             (IntervalUnit.HOUR, 5, dt(2026, 3, 15, 14)),
             (IntervalUnit.DAY, 3, dt(2026, 3, 18)),
             (IntervalUnit.WEEK, 2, dt(2026, 3, 29)),
@@ -77,6 +78,60 @@ class TestNoMonthlyDrift:
         assert nth_fire_at(trigger, 2) == dt(2026, 3, 31)
         assert nth_fire_at(trigger, 3) == dt(2026, 4, 30)
         assert nth_fire_at(trigger, 4) == dt(2026, 5, 31)
+
+
+class TestCalendarTrigger:
+    def test_weekdays_skip_weekend(self):
+        trigger = Trigger(
+            run_mode=RunMode.CALENDAR,
+            first_at=dt(2026, 8, 21),  # 周五
+            calendar_mode=CalendarMode.WEEKDAYS,
+        )
+
+        assert nth_fire_at(trigger, 0) == dt(2026, 8, 21)
+        assert next_fire_after(trigger, after=dt(2026, 8, 21), fire_count=1) == dt(
+            2026,
+            8,
+            24,
+        )
+
+    def test_selected_weekdays_use_iso_weekday(self):
+        trigger = Trigger(
+            run_mode=RunMode.CALENDAR,
+            first_at=dt(2026, 8, 19),  # 周三，从下一次匹配日开始
+            calendar_mode=CalendarMode.WEEKLY,
+            calendar_weekdays=(2, 4),
+        )
+
+        assert nth_fire_at(trigger, 0) == dt(2026, 8, 20)
+        assert nth_fire_at(trigger, 1) == dt(2026, 8, 25)
+
+    def test_month_end_clamps_without_drift(self):
+        trigger = Trigger(
+            run_mode=RunMode.CALENDAR,
+            first_at=dt(2026, 1, 31),
+            calendar_mode=CalendarMode.MONTHLY,
+            calendar_day=31,
+        )
+
+        assert nth_fire_at(trigger, 0) == dt(2026, 1, 31)
+        assert nth_fire_at(trigger, 1) == dt(2026, 2, 28)
+        assert nth_fire_at(trigger, 2) == dt(2026, 3, 31)
+
+    def test_calendar_respects_max_fires(self):
+        trigger = Trigger(
+            run_mode=RunMode.CALENDAR,
+            first_at=dt(2026, 8, 21),
+            calendar_mode=CalendarMode.DAILY,
+            max_fires=2,
+        )
+
+        assert next_fire_after(trigger, after=dt(2026, 8, 21), fire_count=1) == dt(
+            2026,
+            8,
+            22,
+        )
+        assert next_fire_after(trigger, after=dt(2026, 8, 22), fire_count=2) is None
 
 
 class TestNextFireAfter:
@@ -141,6 +196,14 @@ class TestTriggerValidation:
     def test_recurring_rejects_non_positive_interval(self):
         with pytest.raises(ValueError, match="正整数"):
             Trigger(run_mode=RunMode.RECURRING, first_at=dt(2026, 3, 2), interval_value=0)
+
+    def test_weekly_calendar_requires_weekday(self):
+        with pytest.raises(ValueError, match="至少需要选择一天"):
+            Trigger(
+                run_mode=RunMode.CALENDAR,
+                first_at=dt(2026, 3, 2),
+                calendar_mode=CalendarMode.WEEKLY,
+            )
 
     def test_describe_once(self):
         trigger = Trigger(run_mode=RunMode.ONCE, first_at=dt(2026, 3, 15, 9, 0))

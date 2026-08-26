@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # 任务引擎：沿用平台 DATABASE_URL，仅使用独立 schema 隔离引擎表。
     task_engine_schema: str = "task_engine"
     task_engine_tz: str = "Asia/Shanghai"
+    task_engine_tick_interval_seconds: float = 5.0
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

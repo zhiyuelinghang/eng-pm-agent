@@ -9,7 +9,7 @@ import calendar
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from .models import IntervalUnit, Trigger
+from .models import CalendarMode, IntervalUnit, Trigger
 
 
 def add_months(moment: datetime, months: int) -> datetime:
@@ -31,6 +31,8 @@ def add_months(moment: datetime, months: int) -> datetime:
 def add_interval(moment: datetime, value: int, unit: IntervalUnit) -> datetime:
     """在给定时刻上加 value 个 unit。"""
     match unit:
+        case IntervalUnit.MINUTE:
+            return moment + timedelta(minutes=value)
         case IntervalUnit.HOUR:
             return moment + timedelta(hours=value)
         case IntervalUnit.DAY:
@@ -50,6 +52,15 @@ def nth_fire_at(trigger: Trigger, n: int) -> datetime | None:
     """
     if trigger.first_at is None:
         return None
+    if trigger.is_calendar:
+        candidate: datetime | None = None
+        boundary = trigger.first_at - timedelta(microseconds=1)
+        for _ in range(n + 1):
+            candidate = _next_calendar_fire(trigger, boundary)
+            if candidate is None:
+                return None
+            boundary = candidate
+        return candidate
     if n == 0:
         return trigger.first_at
     if not trigger.is_recurring:
@@ -77,12 +88,23 @@ def next_fire_after(
         return None
 
     if after is None:
+        if trigger.is_calendar:
+            return _within_bounds(
+                trigger,
+                _next_calendar_fire(
+                    trigger,
+                    trigger.first_at - timedelta(microseconds=1),
+                ),
+            )
         candidate = nth_fire_at(trigger, fire_count)
         return _within_bounds(trigger, candidate)
 
     # 一次性任务：触发过就结束
     if not trigger.is_recurring:
         return None if trigger.first_at <= after else trigger.first_at
+
+    if trigger.is_calendar:
+        return _within_bounds(trigger, _next_calendar_fire(trigger, after))
 
     # 重复任务：从 fire_count 往后找第一个晚于 after 的时刻。
     # 正常情况下一两步就能命中；补偿长时间停机时才会多走几步。
@@ -108,6 +130,39 @@ def _within_bounds(trigger: Trigger, candidate: datetime | None) -> datetime | N
     if trigger.until is not None and candidate > trigger.until:
         return None
     return candidate
+
+
+def _calendar_day_matches(trigger: Trigger, candidate: datetime) -> bool:
+    mode = trigger.calendar_mode
+    if mode is CalendarMode.DAILY:
+        return True
+    if mode is CalendarMode.WEEKDAYS:
+        return candidate.isoweekday() <= 5
+    if mode is CalendarMode.WEEKLY:
+        return candidate.isoweekday() in set(trigger.calendar_weekdays)
+    if mode is CalendarMode.MONTHLY:
+        expected = min(
+            trigger.calendar_day or 1,
+            calendar.monthrange(candidate.year, candidate.month)[1],
+        )
+        return candidate.day == expected
+    return False
+
+
+def _next_calendar_fire(trigger: Trigger, after: datetime) -> datetime | None:
+    """返回严格晚于 after 的下一次日历触发，且不早于 first_at。"""
+    if trigger.first_at is None:
+        return None
+    first = trigger.first_at
+    start_date = max(first.date(), after.date())
+    for offset in range(0, 3660):
+        day = start_date + timedelta(days=offset)
+        candidate = first.replace(year=day.year, month=day.month, day=day.day)
+        if candidate < first or candidate <= after:
+            continue
+        if _calendar_day_matches(trigger, candidate):
+            return candidate
+    raise RuntimeError("十年内未找到下一次日历触发，请检查规则")
 
 
 def due_dates_for_steps(

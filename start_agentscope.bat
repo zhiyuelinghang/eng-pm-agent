@@ -5,6 +5,8 @@ title AgentScope 2.x Service
 
 cd /d "%~dp0"
 
+set "ROOT=%~dp0"
+set "PROJECT_ROOT=%ROOT:~0,-1%"
 set "PYTHON_EXE=%~dp0python-3.13.14\python.exe"
 set "AGENTSCOPE_HOME=%~dp0AgentScope"
 set "AGENTSCOPE_CORE_HOME=%AGENTSCOPE_HOME%\agentscope"
@@ -12,6 +14,11 @@ set "RUNTIME_HOME=%~dp0data\agentscope"
 set "SQLITE_PATH=%RUNTIME_HOME%\agentscope.db"
 set "KNOWLEDGE_BLOB_HOME=%RUNTIME_HOME%\knowledge_blobs"
 set "WEBUI_HOME=%AGENTSCOPE_HOME%\agentscope-web-ui"
+set "PROCESS_CONTROL=%ROOT%scripts\dobby_process_control.ps1"
+set "POWERSHELL_EXE=powershell.exe"
+
+where pwsh.exe >nul 2>nul
+if not errorlevel 1 set "POWERSHELL_EXE=pwsh.exe"
 
 if not defined AGENTSCOPE_HOST set "AGENTSCOPE_HOST=127.0.0.1"
 if not defined AGENTSCOPE_PORT set "AGENTSCOPE_PORT=18642"
@@ -68,28 +75,19 @@ exit /b 1
 
 :START_RUNTIME
 
-echo [AgentScope] 正在检查并强制关闭占用启动端口的旧进程……
-taskkill /F /T /FI "WINDOWTITLE eq AgentScope API*" >nul 2>nul
-taskkill /F /T /FI "WINDOWTITLE eq AgentScope Web UI*" >nul 2>nul
-for %%P in (%AGENTSCOPE_PORT% %AGENTSCOPE_WEBUI_PORT% %AGENTSCOPE_WEBUI_HELPER_PORT%) do call :KILL_PORT %%P
-
-:WAIT_PORTS_FREE
-set "PORTS_BUSY="
-for %%P in (%AGENTSCOPE_PORT% %AGENTSCOPE_WEBUI_PORT% %AGENTSCOPE_WEBUI_HELPER_PORT%) do call :CHECK_PORT %%P
-if not defined PORTS_BUSY goto PORTS_READY
-
-if not defined PORT_KILL_RETRY set "PORT_KILL_RETRY=0"
-set /a PORT_KILL_RETRY+=1 >nul
-if %PORT_KILL_RETRY% GEQ 10 (
-    echo [错误] 已持续强制关闭占用进程 10 秒，但仍有启动端口被占用。
+if not exist "%PROCESS_CONTROL%" (
+    echo [错误] 缺少安全进程控制脚本：%PROCESS_CONTROL%
     pause
     exit /b 1
 )
-for %%P in (%AGENTSCOPE_PORT% %AGENTSCOPE_WEBUI_PORT% %AGENTSCOPE_WEBUI_HELPER_PORT%) do call :KILL_PORT %%P
-ping 127.0.0.1 -n 2 >nul
-goto WAIT_PORTS_FREE
 
-:PORTS_READY
+echo [AgentScope] 正在安全检查启动端口，仅停止身份已确认的旧 Dobby 服务……
+"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%PROCESS_CONTROL%" -Action StopPorts -ProjectRoot "%PROJECT_ROOT%" -Ports "%AGENTSCOPE_PORT%,%AGENTSCOPE_WEBUI_PORT%,%AGENTSCOPE_WEBUI_HELPER_PORT%"
+if errorlevel 1 (
+    echo [错误] AgentScope 启动端口存在无法安全处理的占用，已取消启动。
+    pause
+    exit /b 1
+)
 
 if not exist "%WEBUI_HOME%\node_modules\.pnpm" (
     echo [AgentScope] 首次运行，正在安装官方 Web UI 依赖……
@@ -125,22 +123,15 @@ echo [AgentScope] 正在启动后端热重载进程……
 start "AgentScope API" /D "%~dp0" "%PYTHON_EXE%" "%~dp0scripts\agentscope_dev_runner.py"
 
 echo [AgentScope] 正在启动官方 Web UI 热更新进程……
-start "AgentScope Web UI" /D "%WEBUI_HOME%" cmd.exe /k pnpm dev
+start "AgentScope Web UI" /D "%WEBUI_HOME%" cmd.exe /c pnpm dev
+
+echo [AgentScope] 正在登记本次启动的服务 PID……
+"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%PROCESS_CONTROL%" -Action RegisterPorts -ProjectRoot "%PROJECT_ROOT%" -Ports "%AGENTSCOPE_PORT%,%AGENTSCOPE_WEBUI_PORT%,%AGENTSCOPE_WEBUI_HELPER_PORT%" -WaitSeconds 60
+if errorlevel 1 (
+    echo [错误] AgentScope 服务 PID 登记失败。服务不会被模糊查杀，请检查启动窗口日志。
+    pause
+    exit /b 1
+)
 
 echo [AgentScope] 已分别启动后端和 Web UI；停止时请运行 stop_agentscope.bat。
-exit /b 0
-
-:KILL_PORT
-for /f "tokens=5" %%I in ('netstat -ano ^| findstr /R /C:":%~1 .*LISTENING"') do (
-    if not "%%I"=="0" (
-        echo [AgentScope] 端口 %~1 已被 PID=%%I 占用，正在强制关闭……
-        taskkill /F /T /PID %%I >nul 2>nul
-    )
-)
-exit /b 0
-
-:CHECK_PORT
-for /f "tokens=5" %%I in ('netstat -ano ^| findstr /R /C:":%~1 .*LISTENING"') do (
-    set "PORTS_BUSY=1"
-)
 exit /b 0

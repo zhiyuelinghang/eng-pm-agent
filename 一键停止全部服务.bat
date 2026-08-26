@@ -3,66 +3,54 @@ setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
 
 set "ROOT=%~dp0"
+set "PROJECT_ROOT=%ROOT:~0,-1%"
+set "PROCESS_CONTROL=%ROOT%scripts\dobby_process_control.ps1"
+set "POWERSHELL_EXE=powershell.exe"
 set "STOP_QUIET=0"
-if /I "%~1"=="/quiet" set "STOP_QUIET=1"
+set "STOP_DRY_RUN=0"
+for %%A in (%*) do (
+    if /I "%%~A"=="/quiet" set "STOP_QUIET=1"
+    if /I "%%~A"=="/dry-run" set "STOP_DRY_RUN=1"
+)
+set "CONTROL_MODE="
+if "!STOP_DRY_RUN!"=="1" set "CONTROL_MODE=-DryRun"
+
+where pwsh.exe >nul 2>nul
+if not errorlevel 1 set "POWERSHELL_EXE=pwsh.exe"
 
 title Dobby 一键停止全部服务
 
 if "!STOP_QUIET!"=="0" echo [Dobby] 正在停止全部服务……
 
-if exist "%ROOT%stop_agentscope.bat" (
-    call "%ROOT%stop_agentscope.bat" /quiet
+if not exist "%PROCESS_CONTROL%" (
+    echo [失败] 缺少安全进程控制脚本：%PROCESS_CONTROL%
+    if "!STOP_QUIET!"=="0" pause
+    exit /b 1
 )
 
-taskkill /F /T /FI "WINDOWTITLE eq Dobby 工程管理平台*" >nul 2>nul
-taskkill /F /T /FI "WINDOWTITLE eq Dobby Platform Server*" >nul 2>nul
-taskkill /F /T /FI "WINDOWTITLE eq Dobby Platform API*" >nul 2>nul
-taskkill /F /T /FI "WINDOWTITLE eq Dobby AgentScope API*" >nul 2>nul
-taskkill /F /T /FI "WINDOWTITLE eq Dobby Management Web*" >nul 2>nul
-taskkill /F /T /FI "WINDOWTITLE eq Eng PM Agent AI Workspace*" >nul 2>nul
-taskkill /F /T /FI "WINDOWTITLE eq Eng PM Agent API*" >nul 2>nul
-taskkill /F /T /FI "WINDOWTITLE eq Dobby Realtime*" >nul 2>nul
+if "!STOP_QUIET!"=="1" (
+    "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%PROCESS_CONTROL%" -Action StopPorts -ProjectRoot "%PROJECT_ROOT%" -Ports "38429,38430,38431,18642,25173,23000" -Quiet !CONTROL_MODE!
+) else (
+    "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%PROCESS_CONTROL%" -Action StopPorts -ProjectRoot "%PROJECT_ROOT%" -Ports "38429,38430,38431,18642,25173,23000" !CONTROL_MODE!
+)
+set "STOP_EXIT=!ERRORLEVEL!"
 
-for %%P in (38429 38430 38431 18642 25173 23000) do call :KILL_PORT %%P
+if not "!STOP_EXIT!"=="0" (
+    if "!STOP_EXIT!"=="2" (
+        echo [已保护] 检测到非 Dobby 进程占用服务端口，未结束该进程。
+    ) else (
+        echo [失败] Dobby 服务未能全部安全停止，请查看上方信息和 data\runtime\process-control.log。
+    )
+    if "!STOP_QUIET!"=="0" pause
+    exit /b !STOP_EXIT!
+)
 
-set "STOP_RETRY=0"
-
-:WAIT_PORTS_FREE
-set "PORTS_BUSY="
-for %%P in (38429 38430 38431 18642 25173 23000) do call :CHECK_PORT %%P
-if not defined PORTS_BUSY goto STOPPED
-
-set /a STOP_RETRY+=1 >nul
-if !STOP_RETRY! GEQ 10 goto STOP_FAILED
-for %%P in (38429 38430 38431 18642 25173 23000) do call :KILL_PORT %%P
-ping 127.0.0.1 -n 2 >nul
-goto WAIT_PORTS_FREE
-
-:STOPPED
 if "!STOP_QUIET!"=="0" (
-    echo [完成] Dobby 全部服务已停止，端口均已释放。
+    if "!STOP_DRY_RUN!"=="1" (
+        echo [完成] DryRun 安全检查完成，未结束任何进程。
+    ) else (
+        echo [完成] Dobby 全部服务已安全停止。
+    )
     pause
 )
-exit /b 0
-
-:STOP_FAILED
-echo [失败] 无法在 10 秒内释放全部服务端口。
-if "!STOP_QUIET!"=="0" pause
-exit /b 1
-
-:KILL_PORT
-for /f "tokens=5" %%I in (
-    'netstat -ano ^| findstr /R /C:":%~1 .*LISTENING"'
-) do (
-    if not "%%I"=="0" (
-        if "!STOP_QUIET!"=="0" echo [Dobby] 正在关闭端口 %~1 的进程 PID=%%I……
-        taskkill /F /T /PID %%I >nul 2>nul
-    )
-)
-exit /b 0
-
-:CHECK_PORT
-for /f "tokens=5" %%I in (
-    'netstat -ano ^| findstr /R /C:":%~1 .*LISTENING"'
-) do set "PORTS_BUSY=1"
 exit /b 0

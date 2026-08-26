@@ -240,6 +240,9 @@ class WbsRiskLinkInput(BaseModel):
 class TaskInput(BaseModel):
     title: str
     task_type: str
+    action_type: Literal["responsibility_task", "project_chat_message"] = (
+        "responsibility_task"
+    )
     risk_level: str = "low"
     assignee_user_id: int | None = None
     confirmer_user_id: int | None = None
@@ -250,22 +253,41 @@ class TaskInput(BaseModel):
     required_materials: list[str] = Field(default_factory=list)
     workflow_steps: list[dict[str, Any]] = Field(default_factory=list)
 
-    # 兼容旧前端的 single / scheduled；新界面使用语义更清楚的三种方式。
+    # 兼容旧前端的 single / scheduled；新界面提供立即、单次、固定间隔与日历规则。
     run_mode: Literal[
         "single",
         "scheduled",
         "immediate",
         "once",
         "recurring",
+        "calendar",
     ] = "immediate"
     trigger_date: str | None = None
     trigger_time: str = "09:00"
     trigger_interval_value: int = 1
-    trigger_interval_unit: Literal["hour", "day", "week", "month"] = "week"
+    trigger_interval_unit: Literal[
+        "minute",
+        "hour",
+        "day",
+        "week",
+        "month",
+    ] = "week"
     trigger_end_mode: Literal["never", "until", "count"] = "never"
     trigger_until_date: str | None = None
     trigger_max_fires: int | None = Field(default=None, ge=1, le=10000)
+    trigger_calendar_mode: Literal[
+        "daily",
+        "weekdays",
+        "weekly",
+        "monthly",
+    ] = "weekdays"
+    trigger_weekdays: list[int] = Field(default_factory=list)
+    trigger_day_of_month: int | None = Field(default=None, ge=1, le=31)
     cc: str | None = None
+    target_channel_id: int | None = None
+    mention_mode: Literal["none", "all", "users"] = "none"
+    mentioned_user_ids: list[int] = Field(default_factory=list)
+    message_content: str | None = Field(default=None, max_length=8000)
 
 
 class TaskFlowGenerateInput(BaseModel):

@@ -154,7 +154,7 @@ export interface WbsRiskLink {
 export interface Task {
   id: string
   title: string
-  type: 'risk_alert' | 'material_missing' | 'daily_confirm' | 'draft_review' | 'fill_platform'
+  type: 'risk_alert' | 'material_missing' | 'daily_confirm' | 'draft_review' | 'fill_platform' | 'automation'
   riskLevel: RiskLevel
   projectId: string
   linkedWbsIds: string[]
@@ -165,8 +165,10 @@ export interface Task {
   status: TaskStatus
   missingCount: number
   triggerReason: string
-  workflowSteps: Array<{ name: string; owner?: string; owner_user_id?: string; due_at?: string; order?: number; next_step?: number; status: 'pending' | 'processing' | 'completed' | 'blocked'; note?: string; material?: string; phase?: string; closure?: string; reopened?: boolean }>
+  workflowSteps: Array<{ name: string; node_type?: 'manual' | 'project_chat_message'; action?: { type: 'project_chat_message'; channel_id: number; sender_agent_id: string; sender_agent_name: string; mention_mode: 'none' | 'all' | 'users'; mentioned_user_ids: number[]; content: string }; owner?: string; owner_user_id?: string; due_at?: string; order?: number; next_step?: number; status: 'pending' | 'processing' | 'completed' | 'blocked'; note?: string; material?: string; phase?: string; closure?: string; reopened?: boolean }>
   createdAt: string
+  updatedAt?: string
+  closedAt?: string
 }
 
 export interface ProjectInformationRecord {

@@ -8,6 +8,12 @@ set "AGENTSCOPE_WEBUI_PORT=25173"
 set "PLATFORM_API_PORT=38430"
 set "PLATFORM_WEB_PORT=38429"
 set "DOBBY_REALTIME_PORT=38431"
+set "PROJECT_ROOT=%ROOT:~0,-1%"
+set "PROCESS_CONTROL=%ROOT%scripts\dobby_process_control.ps1"
+set "POWERSHELL_EXE=powershell.exe"
+
+where pwsh.exe >nul 2>nul
+if not errorlevel 1 set "POWERSHELL_EXE=pwsh.exe"
 
 title Dobby 服务器一键启动
 
@@ -27,7 +33,13 @@ if not exist "%ROOT%start-centrifugo.bat" (
 )
 
 echo [Dobby] 正在停止旧服务和端口占用进程……
-if exist "%ROOT%一键停止全部服务.bat" call "%ROOT%一键停止全部服务.bat" /quiet
+if exist "%ROOT%一键停止全部服务.bat" (
+    call "%ROOT%一键停止全部服务.bat" /quiet
+    if errorlevel 1 (
+        echo [失败] 旧服务未能安全停止；为保护服务器上的其他程序，本次启动已取消。
+        goto FAILED
+    )
+)
 
 echo.
 echo [Dobby] 正在启动项目群聊实时服务……
@@ -53,6 +65,12 @@ call :WAIT_PORT %PLATFORM_API_PORT% 60 "平台后端"
 if errorlevel 1 goto FAILED
 call :WAIT_PORT %PLATFORM_WEB_PORT% 60 "平台前端"
 if errorlevel 1 goto FAILED
+
+"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%PROCESS_CONTROL%" -Action RegisterPorts -ProjectRoot "%PROJECT_ROOT%" -Ports "%PLATFORM_WEB_PORT%,%PLATFORM_API_PORT%,%DOBBY_REALTIME_PORT%,%AGENTSCOPE_PORT%,%AGENTSCOPE_WEBUI_PORT%" -WaitSeconds 10 -Quiet
+if errorlevel 1 (
+    echo [失败] 服务已启动，但 PID 安全登记不完整；为避免后续误杀，本次启动标记为失败。
+    goto FAILED
+)
 
 echo.
 echo [完成] Dobby 服务器全部服务已启动。

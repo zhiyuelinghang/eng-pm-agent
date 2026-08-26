@@ -56,6 +56,11 @@ if not exist "%ROOT%scripts\dobby_web_gateway.py" (
     goto FAILED
 )
 
+if not exist "%ROOT%scripts\dobby_process_control.ps1" (
+    echo [失败] 缺少安全进程控制脚本。
+    goto FAILED
+)
+
 if not exist "%ROOT%.env" (
     if not exist "%ROOT%.env.example" (
         echo [失败] 缺少 .env 和 .env.example。

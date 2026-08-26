@@ -3,10 +3,16 @@ setlocal EnableExtensions
 chcp 65001 >nul
 
 set "ROOT=%~dp0"
+set "PROJECT_ROOT=%ROOT:~0,-1%"
 set "FRONTEND_DIST=%ROOT%frontend\dist"
 set "BACKEND_DIR=%ROOT%backend"
 set "WEB_GATEWAY=%ROOT%scripts\dobby_web_gateway.py"
 set "PYTHON_EXE=%ROOT%python-3.13.14\python.exe"
+set "PROCESS_CONTROL=%ROOT%scripts\dobby_process_control.ps1"
+set "POWERSHELL_EXE=powershell.exe"
+
+where pwsh.exe >nul 2>nul
+if not errorlevel 1 set "POWERSHELL_EXE=pwsh.exe"
 
 title Dobby 服务器工程管理平台
 
@@ -34,8 +40,19 @@ if not exist "%PYTHON_EXE%" (
     exit /b 1
 )
 
-call :STOP_PORT 38430 "平台后端"
-call :STOP_PORT 38429 "平台前端"
+if not exist "%PROCESS_CONTROL%" (
+    echo [错误] 缺少安全进程控制脚本：%PROCESS_CONTROL%
+    pause
+    exit /b 1
+)
+
+echo [平台] 正在安全检查启动端口，仅停止身份已确认的旧 Dobby 服务……
+"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%PROCESS_CONTROL%" -Action StopPorts -ProjectRoot "%PROJECT_ROOT%" -Ports "38430,38429"
+if errorlevel 1 (
+    echo [错误] 平台启动端口存在无法安全处理的占用，已取消启动。
+    pause
+    exit /b 1
+)
 
 set "CENTRIFUGO_ENABLED=false"
 if exist "%ROOT%start-centrifugo.bat" (
@@ -59,17 +76,9 @@ if errorlevel 1 (
 echo [平台] 正在启动预构建页面：http://0.0.0.0:38429
 echo [平台] 服务器无需 Node.js、npm 或 pnpm。
     echo [平台] 关闭本窗口会停止平台前端；完整停止请运行 一键停止全部服务.bat。
+start "Dobby Process Registrar" /b "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%PROCESS_CONTROL%" -Action RegisterPorts -ProjectRoot "%PROJECT_ROOT%" -Ports "38430,38429" -WaitSeconds 60 -Quiet
 "%PYTHON_EXE%" "%WEB_GATEWAY%" --mode platform
 exit /b %ERRORLEVEL%
-
-:STOP_PORT
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%~1 .*LISTENING"') do (
-    if not "%%P"=="0" (
-        echo [平台] 端口 %~1 被 PID=%%P 占用，正在关闭 %~2……
-        taskkill /F /T /PID %%P >nul 2>nul
-    )
-)
-exit /b 0
 
 :WAIT_PORT
 set "WAIT_PORT_NUMBER=%~1"

@@ -144,9 +144,15 @@ class TaskEngine:
         if flow.trigger.first_at is None:
             raise ValueError("触发计划必须设置首次执行时间")
 
+        next_fire_at = next_fire_after(
+            flow.trigger,
+            after=None,
+            fire_count=0,
+        )
         plan = Schedule(
             flow=flow,
-            next_fire_at=next_fire_after(flow.trigger, after=None, fire_count=0),
+            next_fire_at=next_fire_at,
+            active=next_fire_at is not None,
             created_at=moment,
             updated_at=moment,
         )

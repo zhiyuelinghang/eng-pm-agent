@@ -26,6 +26,12 @@
 .\一键停止全部服务.bat
 ```
 
+启停脚本会在 `data\runtime\dobby-service-pids.json` 登记本次启动的服务 PID。
+停止时同时校验端口、PID、启动时间、可执行文件和服务类型；如果端口属于其他程序，
+脚本只报告冲突，不会结束该进程。处理记录写入
+`data\runtime\process-control.log`。可执行 `一键停止全部服务.bat /dry-run`
+进行只读安全检查。
+
 ## Windows 服务器更新
 
 原有“前端更新”和“后端更新”两个压缩包不包含 AgentScope 核心、Dobby 管理端
@@ -58,7 +64,7 @@
 - `服务器一键启动.bat`：统一启动平台和 Dobby 智能体服务；
 - `服务器启动工程管理平台.bat`：仅启动工程管理平台；
 - `服务器启动Dobby智能体服务.bat`：仅启动智能体服务与管理端；
-- `一键停止全部服务.bat`：统一停止全部服务。
+- `一键停止全部服务.bat`：只停止通过身份校验的本项目服务。
 
 项目根目录中的 `start-all.bat`、`start-frontend.bat` 和
 `start_agentscope.bat` 是开发机热重载入口，不会放入服务器更新包。

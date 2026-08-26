@@ -12,6 +12,7 @@ import pytest
 
 from task_engine.domain.models import (
     Assignee,
+    CalendarMode,
     IntervalUnit,
     RunMode,
     Site,
@@ -95,6 +96,20 @@ class TestScheduleRegistration:
         reloaded = engine.get_schedule(plan.id)
         assert reloaded.active is False
         assert reloaded.next_fire_at is None
+
+    def test_calendar_without_occurrence_inside_end_bound_is_inactive(self, engine):
+        trigger = Trigger(
+            run_mode=RunMode.CALENDAR,
+            first_at=T0,
+            until=T0,
+            calendar_mode=CalendarMode.WEEKLY,
+            calendar_weekdays=(2,),
+        )
+
+        plan = engine.schedule(make_flow(), trigger=trigger, now=T0)
+
+        assert plan.active is False
+        assert plan.next_fire_at is None
 
 
 class TestTickFiring:

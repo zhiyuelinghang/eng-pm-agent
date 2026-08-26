@@ -1,16 +1,26 @@
 @echo off
 chcp 65001 >nul
-setlocal
+setlocal EnableExtensions
 
 set "ROOT=%~dp0"
+set "PROJECT_ROOT=%ROOT:~0,-1%"
 set "FRONTEND_DIR=%ROOT%frontend"
 set "BACKEND_DIR=%ROOT%backend"
 set "PYTHON_EXE=%ROOT%python-3.13.14\python.exe"
+set "PROCESS_CONTROL=%ROOT%scripts\dobby_process_control.ps1"
+set "POWERSHELL_EXE=powershell.exe"
 set "URL=http://127.0.0.1:38429/"
 set "API_URL=http://127.0.0.1:38430/health"
 set "OPEN_BROWSER=1"
+set "NO_PAUSE=0"
 
-if /I "%~1"=="--no-browser" set "OPEN_BROWSER=0"
+for %%A in (%*) do (
+  if /I "%%~A"=="--no-browser" set "OPEN_BROWSER=0"
+  if /I "%%~A"=="--no-pause" set "NO_PAUSE=1"
+)
+
+where pwsh.exe >nul 2>nul
+if not errorlevel 1 set "POWERSHELL_EXE=pwsh.exe"
 
 title Eng PM Agent AI Workspace
 
@@ -36,6 +46,13 @@ if not exist "%PYTHON_EXE%" (
   exit /b 1
 )
 
+if not exist "%PROCESS_CONTROL%" (
+  echo Safe process control script was not found:
+  echo %PROCESS_CONTROL%
+  if "%NO_PAUSE%"=="0" pause
+  exit /b 1
+)
+
 where npm.cmd >nul 2>nul
 if errorlevel 1 (
   echo npm.cmd was not found. Please install Node.js first.
@@ -48,8 +65,13 @@ echo API: %API_URL%
 echo Web: %URL%
 echo.
 
-call :STOP_PORT 38430 "backend API"
-call :STOP_PORT 38429 "frontend development server"
+echo Safely checking ports 38430 and 38429. Only verified Dobby processes may be stopped...
+"%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%PROCESS_CONTROL%" -Action StopPorts -ProjectRoot "%PROJECT_ROOT%" -Ports "38430,38429"
+if errorlevel 1 (
+  echo Startup cancelled because a port is occupied by a process that cannot be verified as Dobby.
+  if "%NO_PAUSE%"=="0" pause
+  exit /b 1
+)
 
 set "CENTRIFUGO_ENABLED=false"
 if exist "%ROOT%start-centrifugo.bat" (
@@ -87,6 +109,7 @@ echo Starting frontend development server on port 38429...
 echo Keep this window open to view frontend and API logs.
 echo Press Ctrl+C to stop the services, or close this window to terminate them.
 echo.
+start "Dobby Process Registrar" /b "%POWERSHELL_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%PROCESS_CONTROL%" -Action RegisterPorts -ProjectRoot "%PROJECT_ROOT%" -Ports "38430,38429" -WaitSeconds 60 -Quiet
 call npm.cmd run dev
 
 set "FRONTEND_EXIT_CODE=%ERRORLEVEL%"
@@ -96,24 +119,8 @@ if not "%FRONTEND_EXIT_CODE%"=="0" (
 ) else (
   echo Frontend service has stopped.
 )
-echo Press any key to close this window.
-pause
+if "%NO_PAUSE%"=="0" (
+  echo Press any key to close this window.
+  pause
+)
 exit /b %FRONTEND_EXIT_CODE%
-
-:STOP_PORT
-set "PORT=%~1"
-set "SERVICE_NAME=%~2"
-set "PORT_PID="
-
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr /r /c:":%PORT% .*LISTENING"') do (
-  set "PORT_PID=%%P"
-  echo Port %PORT% is occupied by process %%P. Stopping %SERVICE_NAME%...
-  taskkill /PID %%P /T /F >nul 2>nul
-)
-
-if defined PORT_PID (
-  timeout /t 1 /nobreak >nul
-) else (
-  echo Port %PORT% is available.
-)
-exit /b 0

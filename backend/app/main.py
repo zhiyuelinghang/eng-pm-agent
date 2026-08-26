@@ -20,6 +20,10 @@ from .models import (Attachment, DailyReport, DocumentFolder, DocumentFolderItem
 from .security import hash_password
 from .schema_migrations import upgrade_database_schema
 from .task_engine_gateway import get_engine
+from .task_action_gateway import (
+    current_task_action,
+    execute_pending_automation_tasks,
+)
 from .wecom_notification_gateway import (
     deliver_due_notifications,
     enqueue_task_notification,
@@ -27,7 +31,6 @@ from .wecom_notification_gateway import (
 
 
 logger = logging.getLogger(__name__)
-TICK_INTERVAL_SECONDS = 300
 NOTIFICATION_INTERVAL_SECONDS = 5
 
 
@@ -39,7 +42,7 @@ def _record_tick_notifications(report, task_engine) -> None:
             if not outcome.ok or not outcome.task_id:
                 continue
             task = task_engine.get_task(outcome.task_id)
-            if task is not None:
+            if task is not None and current_task_action(task) is None:
                 enqueue_task_notification(
                     db,
                     task,
@@ -54,8 +57,12 @@ def _record_tick_notifications(report, task_engine) -> None:
 
 
 async def _tick_loop() -> None:
-    """每 5 分钟触发到期计划并主动扫描逾期任务。"""
+    """高频推进到期计划，并执行宿主自动化动作。"""
     task_engine = get_engine()
+    tick_interval = max(
+        1.0,
+        float(get_settings().task_engine_tick_interval_seconds),
+    )
     while True:
         try:
             report = await asyncio.to_thread(task_engine.tick)
@@ -73,9 +80,45 @@ async def _tick_loop() -> None:
                     failure.schedule_id,
                     failure.error,
                 )
+            with SessionLocal() as action_db:
+                action_results = await asyncio.to_thread(
+                    execute_pending_automation_tasks,
+                    action_db,
+                    task_engine,
+                )
+                for result in action_results:
+                    if not result.ok:
+                        continue
+                    task = task_engine.get_task(result.task_id)
+                    if (
+                        task is None
+                        or current_task_action(task) is not None
+                        or str(task.state) in {"done", "cancelled"}
+                    ):
+                        continue
+                    enqueue_task_notification(
+                        action_db,
+                        task,
+                        (
+                            "task_review"
+                            if str(task.state) == "review"
+                            else "step_activated"
+                        ),
+                        dedupe_suffix=f"automation:{result.task_id}:{result.message_id}",
+                    )
+                action_db.commit()
+            for result in action_results:
+                if result.ok:
+                    logger.info("任务自动化：%s", result.detail)
+                else:
+                    logger.warning(
+                        "任务自动化 %s 执行失败：%s",
+                        result.task_id,
+                        result.detail,
+                    )
         except Exception:
             logger.exception("任务引擎 tick 失败")
-        await asyncio.sleep(TICK_INTERVAL_SECONDS)
+        await asyncio.sleep(tick_interval)
 
 
 async def _notification_loop() -> None:

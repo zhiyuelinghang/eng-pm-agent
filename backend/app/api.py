@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from task_engine.domain.flow import TransitionError
 from task_engine.domain.models import Assignee
 from task_engine.engine import TaskEngine
+from task_engine.serialize import schedule_json
 
 from .agentscope_client import (
     AgentScopeClient,
@@ -74,11 +75,16 @@ from .task_engine_gateway import (
     PRIORITY_TO_RISK,
     _to_int,
     build_flow,
+    build_project_chat_generation_draft,
     dispatch_platform_task,
     get_engine,
     get_generator,
     to_api_history,
     to_api_task,
+)
+from .task_action_gateway import (
+    current_task_action,
+    execute_ready_automation_chain,
 )
 from .wecom_notification_gateway import (
     WeComDeliveryError,
@@ -3872,7 +3878,20 @@ def generate_task_flow(
 ) -> dict[str, Any]:
     """通过引擎生成可由现有前端直接编辑的任务流。"""
     project = project_or_404(db, project_id)
-    engine, generator = get_engine(), get_generator()
+    engine = get_engine()
+
+    # 群聊消息属于 Dobby 平台动作，不属于通用任务引擎的工程模板语义。
+    # 先由宿主适配层生成真实动作节点，也避免模型不可用时降级成 4 个通用工程节点。
+    action_draft = build_project_chat_generation_draft(
+        db,
+        project_id,
+        payload.requirement,
+        now=engine.now(),
+    )
+    if action_draft is not None:
+        return ok(action_draft, "群聊消息任务流已生成")
+
+    generator = get_generator()
 
     rows = db.execute(
         select(ProjectMember, User)
@@ -3977,11 +3996,16 @@ def create_task(
     project_or_404(db, project_id)
     engine = get_engine()
     try:
-        flow = build_flow(db, project_id, payload)
+        flow = build_flow(
+            db,
+            project_id,
+            payload,
+            actor_user_id=user.id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    if payload.run_mode in {"once", "recurring", "scheduled"}:
+    if payload.run_mode in {"once", "recurring", "scheduled", "calendar"}:
         try:
             flow.require_dispatchable()
             plan = engine.schedule(flow)
@@ -4020,7 +4044,21 @@ def create_task(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    enqueue_task_notification(db, task, "task_created")
+    if current_task_action(task) is not None:
+        executions = execute_ready_automation_chain(db, engine, task)
+        failed = next((item for item in executions if not item.ok), None)
+        if failed is not None:
+            raise HTTPException(
+                status_code=502,
+                detail=f"自动化动作执行失败：{failed.detail}",
+            )
+        task = engine.get_task(task.id) or task
+    if str(task.state) not in {"done", "cancelled"}:
+        enqueue_task_notification(
+            db,
+            task,
+            "task_review" if str(task.state) == "review" else "task_created",
+        )
     audit(
         db,
         user,
@@ -4032,6 +4070,72 @@ def create_task(
     )
     db.commit()
     return ok(to_api_task(task), "任务已创建")
+
+
+@router.get("/projects/{project_id}/task-schedules")
+def list_task_schedules(
+    project_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    project_or_404(db, project_id)
+    rows = [
+        schedule_json(plan)
+        for plan in get_engine().list_schedules()
+        if int(plan.flow.scope.get("project_id") or 0) == project_id
+    ]
+    return ok(rows)
+
+
+@router.post("/task-schedules/{schedule_id}/pause")
+def pause_task_schedule(
+    schedule_id: str,
+    paused: bool = True,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    plan = get_engine().get_schedule(schedule_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="执行计划不存在")
+    project_id = int(plan.flow.scope.get("project_id") or 0)
+    project_or_404(db, project_id)
+    updated = get_engine().pause_schedule(schedule_id, paused=paused)
+    audit(
+        db,
+        user,
+        "暂停执行计划" if paused else "恢复执行计划",
+        f"执行计划「{plan.flow.title}」",
+        project_id,
+        "task_schedule",
+        0,
+    )
+    db.commit()
+    return ok(schedule_json(updated), "执行计划已暂停" if paused else "执行计划已恢复")
+
+
+@router.delete("/task-schedules/{schedule_id}")
+def cancel_task_schedule(
+    schedule_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    plan = get_engine().get_schedule(schedule_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="执行计划不存在")
+    project_id = int(plan.flow.scope.get("project_id") or 0)
+    project_or_404(db, project_id)
+    get_engine().cancel_schedule(schedule_id)
+    audit(
+        db,
+        user,
+        "取消执行计划",
+        f"执行计划「{plan.flow.title}」",
+        project_id,
+        "task_schedule",
+        0,
+    )
+    db.commit()
+    return ok({"schedule_id": schedule_id}, "执行计划已取消")
 
 
 @router.get("/tasks/{task_id}")
@@ -4154,7 +4258,15 @@ def update_task_step(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     if payload.status == "completed":
-        event_type = "task_review" if task.state == "review" else "step_activated"
+        execute_ready_automation_chain(db, engine, task)
+        task = engine.get_task(task.id) or task
+        event_type = (
+            "task_review"
+            if str(task.state) == "review"
+            else "step_blocked"
+            if str(task.state) == "blocked"
+            else "step_activated"
+        )
     elif payload.status == "blocked":
         event_type = "step_blocked"
     else:

@@ -25,6 +25,8 @@ call :REQUIRE_FILE "scripts\agentscope_dev_app.py"
 if errorlevel 1 goto FAILED
 call :REQUIRE_FILE "scripts\dobby_web_gateway.py"
 if errorlevel 1 goto FAILED
+call :REQUIRE_FILE "scripts\dobby_process_control.ps1"
+if errorlevel 1 goto FAILED
 call :REQUIRE_FILE "mcp-packages\task-engine\src\task_engine\__init__.py"
 if errorlevel 1 goto FAILED
 call :REQUIRE_FILE "python-3.13.14\python.exe"
