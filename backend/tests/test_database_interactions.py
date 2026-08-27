@@ -1,13 +1,15 @@
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from backend.app.agent_context_gateway import (
+    ProjectCatalogueSelectionInput,
     ProjectWeKnoraBindingInput,
     list_weknora_project_bindings,
     resolve_tool_context,
+    start_weknora_catalogue_sync,
     update_weknora_project_binding,
 )
 from backend.app.database_interactions import (
@@ -33,6 +35,8 @@ from backend.app.models import (
     DatabaseInteraction,
     DatabaseInteractionAgentAssignment,
     DatabaseInteractionTablePolicy,
+    EngineeringDocumentSyncState,
+    EngineeringDocumentNode,
     OperationLog,
     Project,
     ProjectInitializationDraft,
@@ -168,9 +172,48 @@ def test_project_weknora_robot_binding_uses_existing_projects(
     assert db.get(ProjectSettings, first.id).weknora_agent_id == (
         "robot-project-001"
     )
+    sync_state = db.get(EngineeringDocumentSyncState, first.id)
+    assert sync_state is None
+    assert updated["catalogue_sync"]["status"] == "uninitialized"
+
+    background_tasks = BackgroundTasks()
+    started = start_weknora_catalogue_sync(
+        first.id,
+        ProjectCatalogueSelectionInput(knowledge_base_ids=["kb-1", "kb-2"]),
+        background_tasks,
+        db=db,
+    )["data"]
+    assert started["catalogue_sync"]["status"] == "pending"
+    assert started["catalogue_sync"]["knowledge_base_ids"] == ["kb-1", "kb-2"]
+    assert db.get(EngineeringDocumentSyncState, first.id).status == "pending"
+    assert len(background_tasks.tasks) == 1
     listed = list_weknora_project_bindings(db=db)["data"]
     assert listed[0]["weknora_agent_id"] == "robot-project-001"
     assert listed[1]["weknora_agent_id"] is None
+
+    db.add(
+        EngineeringDocumentNode(
+            project_id=first.id,
+            node_type="knowledge_base",
+            node_key="a" * 64,
+            knowledge_base_id="old-base",
+            external_id="old-base",
+            name="旧机器人目录",
+        ),
+    )
+    db.commit()
+    rebound = update_weknora_project_binding(
+        first.id,
+        ProjectWeKnoraBindingInput(weknora_agent_id="robot-project-002"),
+        db=db,
+    )["data"]
+    assert rebound["catalogue_sync"]["status"] == "uninitialized"
+    assert db.get(EngineeringDocumentSyncState, first.id) is None
+    assert db.scalar(
+        select(EngineeringDocumentNode).where(
+            EngineeringDocumentNode.project_id == first.id,
+        ),
+    ) is None
 
     cleared = update_weknora_project_binding(
         first.id,
@@ -178,6 +221,7 @@ def test_project_weknora_robot_binding_uses_existing_projects(
         db=db,
     )["data"]
     assert cleared["weknora_agent_id"] is None
+    assert db.get(EngineeringDocumentSyncState, first.id) is None
 
 
 def test_legacy_code_bindings_are_converted_to_editable_table_interactions(

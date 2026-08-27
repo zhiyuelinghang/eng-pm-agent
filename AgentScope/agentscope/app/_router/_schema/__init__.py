@@ -54,6 +54,8 @@ from ._agent import (
     WeKnoraProjectBindingItem,
     ListWeKnoraProjectBindingsResponse,
     UpdateWeKnoraProjectBindingRequest,
+    WeKnoraCatalogueSelectionRequest,
+    WeKnoraCatalogueDiffResponse,
     UpdatePlatformSettingsRequest,
 )
 from ._credential import (
@@ -144,6 +146,8 @@ __all__ = [
     "WeKnoraProjectBindingItem",
     "ListWeKnoraProjectBindingsResponse",
     "UpdateWeKnoraProjectBindingRequest",
+    "WeKnoraCatalogueSelectionRequest",
+    "WeKnoraCatalogueDiffResponse",
     "UpdatePlatformSettingsRequest",
     "ListSchedulesResponse",
     # Chat

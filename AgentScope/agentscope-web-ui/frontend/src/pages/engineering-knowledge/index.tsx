@@ -3,6 +3,7 @@ import {
 	Bot,
 	Building2,
 	CheckCircle2,
+	ChevronDown,
 	ChevronLeft,
 	ChevronRight,
 	Database,
@@ -39,11 +40,13 @@ import type {
 	WeKnoraKnowledgeBase,
 	WeKnoraKnowledgeItem,
 	WeKnoraProjectBinding,
+	WeKnoraCatalogueDiffResponse,
 	WeKnoraSearchReference,
 } from '@/api';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
 	Dialog,
 	DialogContent,
@@ -66,6 +69,7 @@ import {
 	InputGroupInput,
 } from '@/components/ui/input-group';
 import { Label } from '@/components/ui/label';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
 	Select,
 	SelectContent,
@@ -205,6 +209,8 @@ export function EngineeringKnowledgePage() {
 	const [knowledgeBasesLoading, setKnowledgeBasesLoading] = useState(false);
 	const [knowledgeBasesError, setKnowledgeBasesError] = useState('');
 	const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState('');
+	const [selectedSyncKnowledgeBaseIds, setSelectedSyncKnowledgeBaseIds] =
+		useState<string[]>([]);
 	const [knowledge, setKnowledge] = useState<WeKnoraKnowledgeItem[]>([]);
 	const [knowledgeTotal, setKnowledgeTotal] = useState(0);
 	const [knowledgeLoading, setKnowledgeLoading] = useState(false);
@@ -236,8 +242,16 @@ export function EngineeringKnowledgePage() {
 	const [projectBindingsLoading, setProjectBindingsLoading] = useState(false);
 	const [projectBindingsError, setProjectBindingsError] = useState('');
 	const [savingProjectId, setSavingProjectId] = useState<number | null>(null);
+	const [syncingProjectId, setSyncingProjectId] = useState<number | null>(null);
+	const [diffCheckingProjectId, setDiffCheckingProjectId] = useState<number | null>(null);
+	const [projectCatalogueDiffs, setProjectCatalogueDiffs] = useState<Record<number, WeKnoraCatalogueDiffResponse>>({});
+	const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
+	const catalogueSyncPollGenerationRef = useRef(0);
+	const knowledgeBasesRequestIdRef = useRef(0);
 	const knowledgeRequestIdRef = useRef(0);
 	const folderTreeRequestIdRef = useRef(0);
+	const selectedProject =
+		projectBindings.find((item) => item.project_id === selectedProjectId) ?? null;
 
 	const loadKnowledge = useCallback(
 		async (
@@ -319,12 +333,18 @@ export function EngineeringKnowledgePage() {
 	);
 
 	const loadKnowledgeBases = useCallback(
-		async (preferredId?: string) => {
+		async (weknoraAgentId: string, preferredId?: string) => {
+			const requestId = ++knowledgeBasesRequestIdRef.current;
 			setKnowledgeBasesLoading(true);
 			setKnowledgeBasesError('');
 			try {
-				const response = await agentApi.listWeKnoraKnowledgeBases();
+				const response = await agentApi.listWeKnoraKnowledgeBases(weknoraAgentId);
+				if (requestId !== knowledgeBasesRequestIdRef.current) return;
 				setKnowledgeBases(response.knowledge_bases);
+				const availableIds = new Set(response.knowledge_bases.map((item) => item.id));
+				setSelectedSyncKnowledgeBaseIds((current) =>
+					current.filter((item) => availableIds.has(item)),
+				);
 				const nextId =
 					response.knowledge_bases.find(
 						(item) => item.id === preferredId,
@@ -340,7 +360,9 @@ export function EngineeringKnowledgePage() {
 					setFolderTree(null);
 				}
 			} catch (error) {
+				if (requestId !== knowledgeBasesRequestIdRef.current) return;
 				setKnowledgeBases([]);
+				setSelectedKnowledgeBaseId('');
 				setKnowledge([]);
 				setKnowledgeTotal(0);
 				setFolderTree(null);
@@ -350,7 +372,9 @@ export function EngineeringKnowledgePage() {
 						: 'Unable to load knowledge bases',
 				);
 			} finally {
-				setKnowledgeBasesLoading(false);
+				if (requestId === knowledgeBasesRequestIdRef.current) {
+					setKnowledgeBasesLoading(false);
+				}
 			}
 		},
 		[loadKnowledgeBaseContent],
@@ -370,6 +394,16 @@ export function EngineeringKnowledgePage() {
 					]),
 				),
 			);
+			setSelectedProjectId((current) => {
+				if (response.projects.some((item) => item.project_id === current)) {
+					return current;
+				}
+				return (
+					response.projects.find((item) => item.weknora_agent_id)?.project_id ??
+					response.projects[0]?.project_id ??
+					null
+				);
+			});
 		} catch (error) {
 			setProjectBindings([]);
 			setProjectBindingsError(
@@ -395,7 +429,6 @@ export function EngineeringKnowledgePage() {
 				setApiKey(value.api_key_configured ? SAVED_API_KEY_MASK : '');
 				setSavedApiKey(null);
 				setShowApiKey(false);
-				if (value.api_key_configured) void loadKnowledgeBases();
 			})
 			.catch(() => undefined)
 			.finally(() => {
@@ -404,7 +437,7 @@ export function EngineeringKnowledgePage() {
 		return () => {
 			active = false;
 		};
-	}, [loadKnowledgeBases]);
+	}, []);
 
 	useEffect(() => {
 		void loadProjectBindings();
@@ -426,6 +459,35 @@ export function EngineeringKnowledgePage() {
 			authHeader.trim() &&
 			(connectionConfigured || Boolean(apiKey)),
 	);
+
+	useEffect(() => {
+		catalogueSyncPollGenerationRef.current += 1;
+		knowledgeBasesRequestIdRef.current += 1;
+		knowledgeRequestIdRef.current += 1;
+		folderTreeRequestIdRef.current += 1;
+		setProjectCatalogueDiffs({});
+		setKnowledgeBasesLoading(false);
+		setKnowledgeBasesError('');
+		setKnowledgeBases([]);
+		setSelectedKnowledgeBaseId('');
+		setKnowledgeError('');
+		setKnowledge([]);
+		setKnowledgeTotal(0);
+		setFolderTreeError('');
+		setFolderTree(null);
+		const agentId = selectedProject?.weknora_agent_id?.trim() ?? '';
+		const mirroredIds = selectedProject?.catalogue_sync.knowledge_base_ids ?? [];
+		setSelectedSyncKnowledgeBaseIds(mirroredIds);
+		if (!connectionConfigured || !agentId) return;
+		void loadKnowledgeBases(agentId, mirroredIds[0]);
+		// Do not depend on catalogue_sync here: polling updates that object while a
+		// manual selection is being synchronized and must not reset the checklist.
+	}, [
+		connectionConfigured,
+		loadKnowledgeBases,
+		selectedProjectId,
+		selectedProject?.weknora_agent_id,
+	]);
 	const connectionPayload = (): UpdateWeKnoraConnectionRequest => ({
 		base_url: baseUrl.trim(),
 		api_prefix: apiPrefix.trim(),
@@ -473,7 +535,12 @@ export function EngineeringKnowledgePage() {
 			setShowApiKey(false);
 			setLastTestMessage('');
 			toast.success(t('engineeringKnowledge.connection.saved'));
-			await loadKnowledgeBases(selectedKnowledgeBaseId || undefined);
+			if (selectedProject?.weknora_agent_id) {
+				await loadKnowledgeBases(
+					selectedProject.weknora_agent_id,
+					selectedKnowledgeBaseId || undefined,
+				);
+			}
 		} finally {
 			setSavingConnection(false);
 		}
@@ -514,6 +581,122 @@ export function EngineeringKnowledgePage() {
 			setSavingProjectId(null);
 		}
 	};
+
+	const pollProjectCatalogueSync = async (projectId: number, generation: number) => {
+		for (let attempt = 0; attempt < 120; attempt += 1) {
+			await new Promise((resolve) => window.setTimeout(resolve, 1500));
+			if (catalogueSyncPollGenerationRef.current !== generation) return;
+			const response = await agentApi.listWeKnoraProjectBindings();
+			if (catalogueSyncPollGenerationRef.current !== generation) return;
+			setProjectBindings(response.projects);
+			const project = response.projects.find((item) => item.project_id === projectId);
+			if (!project || !['pending', 'syncing'].includes(project.catalogue_sync.status)) {
+				setSyncingProjectId(null);
+				if (project?.catalogue_sync.status === 'ready') {
+					setSelectedSyncKnowledgeBaseIds(project.catalogue_sync.knowledge_base_ids ?? []);
+					toast.success(t('engineeringKnowledge.knowledge.syncCompleted'));
+				} else if (project?.catalogue_sync.status === 'error') {
+					toast.error(project.catalogue_sync.last_error || t('engineeringKnowledge.knowledge.syncFailed'));
+				}
+				return;
+			}
+		}
+		setSyncingProjectId(null);
+		toast.error(t('engineeringKnowledge.knowledge.syncStatusTimeout'));
+	};
+
+	const startProjectCatalogueSync = async (project: WeKnoraProjectBinding) => {
+		if (selectedSyncKnowledgeBaseIds.length === 0) {
+			toast.error(t('engineeringKnowledge.knowledge.selectAtLeastOne'));
+			return;
+		}
+		setSyncingProjectId(project.project_id);
+		try {
+			const updated = await agentApi.startWeKnoraProjectCatalogueSync(
+				project.project_id,
+				{ knowledge_base_ids: selectedSyncKnowledgeBaseIds },
+			);
+			setProjectBindings((current) => current.map((item) => (
+				item.project_id === updated.project_id ? updated : item
+			)));
+			setProjectCatalogueDiffs((current) => {
+				const next = { ...current };
+				delete next[project.project_id];
+				return next;
+			});
+			toast.success(t('engineeringKnowledge.knowledge.syncStarted'));
+			const generation = catalogueSyncPollGenerationRef.current + 1;
+			catalogueSyncPollGenerationRef.current = generation;
+			void pollProjectCatalogueSync(project.project_id, generation).catch((error) => {
+				if (catalogueSyncPollGenerationRef.current !== generation) return;
+				setSyncingProjectId(null);
+				toast.error(error instanceof Error ? error.message : t('engineeringKnowledge.knowledge.syncFailed'));
+			});
+		} catch (error) {
+			setSyncingProjectId(null);
+			toast.error(error instanceof Error ? error.message : t('engineeringKnowledge.knowledge.syncFailed'));
+		}
+	};
+
+	const checkProjectCatalogueDiff = async (project: WeKnoraProjectBinding) => {
+		if (selectedSyncKnowledgeBaseIds.length === 0) {
+			toast.error(t('engineeringKnowledge.knowledge.selectAtLeastOne'));
+			return;
+		}
+		setDiffCheckingProjectId(project.project_id);
+		try {
+			const result = await agentApi.checkWeKnoraProjectCatalogueDiff(
+				project.project_id,
+				{ knowledge_base_ids: selectedSyncKnowledgeBaseIds },
+			);
+			setProjectCatalogueDiffs((current) => ({ ...current, [project.project_id]: result }));
+			toast.success(result.matches
+				? t('engineeringKnowledge.knowledge.diffMatched')
+				: t('engineeringKnowledge.knowledge.diffFound', {
+					added: result.added_count,
+					changed: result.changed_count,
+					removed: result.removed_count,
+				}));
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : t('engineeringKnowledge.knowledge.diffFailed'));
+		} finally {
+			setDiffCheckingProjectId(null);
+		}
+	};
+
+	const selectProjectForKnowledge = (projectId: number) => {
+		const project = projectBindings.find((item) => item.project_id === projectId);
+		setSelectedSyncKnowledgeBaseIds(project?.catalogue_sync.knowledge_base_ids ?? []);
+		setSelectedProjectId(projectId);
+	};
+
+	const toggleSyncKnowledgeBase = (knowledgeBaseId: string, checked: boolean) => {
+		setSelectedSyncKnowledgeBaseIds((current) =>
+			checked
+				? Array.from(new Set([...current, knowledgeBaseId]))
+				: current.filter((item) => item !== knowledgeBaseId),
+		);
+		setProjectCatalogueDiffs((current) => {
+			if (!selectedProjectId || !current[selectedProjectId]) return current;
+			const next = { ...current };
+			delete next[selectedProjectId];
+			return next;
+		});
+	};
+
+	const replaceSyncKnowledgeBases = (knowledgeBaseIds: string[]) => {
+		setSelectedSyncKnowledgeBaseIds(knowledgeBaseIds);
+		setProjectCatalogueDiffs((current) => {
+			if (!selectedProjectId || !current[selectedProjectId]) return current;
+			const next = { ...current };
+			delete next[selectedProjectId];
+			return next;
+		});
+	};
+
+	useEffect(() => () => {
+		catalogueSyncPollGenerationRef.current += 1;
+	}, []);
 
 	const runKnowledgeSearch = async () => {
 		const query = searchQuery.trim();
@@ -685,6 +868,35 @@ export function EngineeringKnowledgePage() {
 		window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
 	};
 
+	const selectedProjectSync = selectedProject?.catalogue_sync ?? null;
+	const selectedKnowledgeBase = knowledgeBases.find(
+		(item) => item.id === selectedKnowledgeBaseId,
+	) ?? null;
+	const selectedProjectMirroredBaseIds = selectedProjectSync?.knowledge_base_ids ?? [];
+	const selectedScopeKey = [...selectedSyncKnowledgeBaseIds].sort().join('\u0000');
+	const mirroredScopeKey = [...selectedProjectMirroredBaseIds].sort().join('\u0000');
+	const syncScopeChanged = selectedScopeKey !== mirroredScopeKey;
+	const selectedProjectCatalogueBusy = Boolean(
+		selectedProject &&
+			(syncingProjectId === selectedProject.project_id ||
+				selectedProjectSync?.status === 'pending' ||
+				selectedProjectSync?.status === 'syncing'),
+	);
+	const selectedProjectDiff = selectedProject
+		? projectCatalogueDiffs[selectedProject.project_id]
+		: undefined;
+	const selectedProjectSyncLabel = !selectedProjectSync
+		? t('engineeringKnowledge.knowledge.syncUninitialized')
+		: selectedProjectSync.status === 'ready'
+			? t('engineeringKnowledge.knowledge.syncReady')
+			: selectedProjectSync.status === 'syncing'
+				? t('engineeringKnowledge.knowledge.syncing')
+				: selectedProjectSync.status === 'pending'
+					? t('engineeringKnowledge.knowledge.syncPending')
+					: selectedProjectSync.status === 'error'
+						? t('engineeringKnowledge.knowledge.syncError')
+						: t('engineeringKnowledge.knowledge.syncUninitialized');
+
 	const sectionItems = [
 		{
 			key: 'knowledge' as const,
@@ -826,6 +1038,54 @@ export function EngineeringKnowledgePage() {
 					<section className="flex min-h-0 flex-1 flex-col">
 						{activeSection === 'knowledge' && (
 							<div className="flex min-h-0 flex-1 flex-col">
+								{connectionConfigured && (
+									<section className="shrink-0 border-b bg-muted/10 px-4 py-3 sm:px-5">
+										<div className="grid gap-3 lg:grid-cols-[minmax(240px,1fr)_minmax(220px,1fr)_auto] lg:items-end">
+											<label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+												{t('engineeringKnowledge.knowledge.projectLabel')}
+												<Select
+													value={selectedProjectId ? String(selectedProjectId) : ''}
+													disabled={projectBindingsLoading || projectBindings.length === 0}
+													onValueChange={(value) => selectProjectForKnowledge(Number(value))}
+												>
+													<SelectTrigger className="h-9 bg-background text-foreground">
+														<SelectValue placeholder={t('engineeringKnowledge.knowledge.selectProject')} />
+													</SelectTrigger>
+													<SelectContent>
+														{projectBindings.map((project) => (
+															<SelectItem key={project.project_id} value={String(project.project_id)}>
+																{project.project_name}
+																{project.weknora_agent_id ? '' : ` · ${t('engineeringKnowledge.assignments.unbound')}`}
+															</SelectItem>
+														))}
+													</SelectContent>
+												</Select>
+											</label>
+											<div className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+												<span>{t('engineeringKnowledge.knowledge.boundRobot')}</span>
+												<div className="flex h-9 min-w-0 items-center gap-2 rounded-md border bg-background px-3 text-sm text-foreground">
+													<Bot className="size-4 shrink-0 text-primary" />
+													<span className="truncate font-mono text-xs" title={selectedProject?.weknora_agent_id ?? ''}>
+														{selectedProject?.weknora_agent_id || t('engineeringKnowledge.knowledge.robotUnbound')}
+													</span>
+												</div>
+											</div>
+											<Button
+												variant="outline"
+												disabled={!selectedProject?.weknora_agent_id || knowledgeBasesLoading}
+												onClick={() => {
+													if (selectedProject?.weknora_agent_id) {
+														void loadKnowledgeBases(selectedProject.weknora_agent_id, selectedKnowledgeBaseId || undefined);
+													}
+												}}
+											>
+												<RefreshCw className={knowledgeBasesLoading ? 'animate-spin' : ''} />
+												{t('engineeringKnowledge.knowledge.loadBases')}
+											</Button>
+										</div>
+
+									</section>
+								)}
 								<div className="min-h-0 flex-1 overflow-hidden p-4 sm:p-5">
 									{!connectionConfigured ? (
 										<Empty className="rounded-xl border border-dashed py-14">
@@ -843,6 +1103,26 @@ export function EngineeringKnowledgePage() {
 											<Button onClick={() => setActiveSection('connection')}>
 												<Link2 />
 												{t('engineeringKnowledge.knowledge.connectAction')}
+											</Button>
+										</Empty>
+									) : !selectedProject ? (
+										<Empty className="rounded-xl border border-dashed py-14">
+											<EmptyHeader>
+												<EmptyMedia variant="icon"><Building2 /></EmptyMedia>
+												<EmptyTitle>{t('engineeringKnowledge.knowledge.selectProjectTitle')}</EmptyTitle>
+												<EmptyDescription>{t('engineeringKnowledge.knowledge.selectProjectDescription')}</EmptyDescription>
+											</EmptyHeader>
+										</Empty>
+									) : !selectedProject.weknora_agent_id ? (
+										<Empty className="rounded-xl border border-dashed py-14">
+											<EmptyHeader>
+												<EmptyMedia variant="icon"><Bot /></EmptyMedia>
+												<EmptyTitle>{t('engineeringKnowledge.knowledge.robotUnboundTitle')}</EmptyTitle>
+												<EmptyDescription>{t('engineeringKnowledge.knowledge.robotUnboundDescription')}</EmptyDescription>
+											</EmptyHeader>
+											<Button onClick={() => setActiveSection('assignments')}>
+												<Bot />
+												{t('engineeringKnowledge.knowledge.openAssignments')}
 											</Button>
 										</Empty>
 									) : knowledgeBasesLoading && knowledgeBases.length === 0 ? (
@@ -867,9 +1147,13 @@ export function EngineeringKnowledgePage() {
 											</AlertTitle>
 											<AlertDescription className="space-y-3">
 												<p>{knowledgeBasesError}</p>
-												<Button
-													variant="outline"
-													onClick={() => void loadKnowledgeBases()}
+														<Button
+															variant="outline"
+															onClick={() => {
+																if (selectedProject.weknora_agent_id) {
+																	void loadKnowledgeBases(selectedProject.weknora_agent_id);
+																}
+															}}
 												>
 													<RefreshCw />
 													{t('engineeringKnowledge.knowledge.retry')}
@@ -907,38 +1191,105 @@ export function EngineeringKnowledgePage() {
 															</Badge>
 														</div>
 														</div>
-														<div className="flex flex-wrap items-center justify-end gap-2">
-															<Select
-																value={selectedKnowledgeBaseId}
-																disabled={knowledgeBases.length === 0}
-																onValueChange={(knowledgeBaseId) => {
-																	setSelectedKnowledgeBaseId(knowledgeBaseId);
-																	void loadKnowledgeBaseContent(knowledgeBaseId);
-																}}
-															>
-																<SelectTrigger
-																	aria-label={t('engineeringKnowledge.knowledge.switchBase')}
-																	className="h-9 w-52 bg-background"
-																>
-																	<SelectValue placeholder={t('engineeringKnowledge.knowledge.currentBase')} />
-																</SelectTrigger>
-																<SelectContent>
-																	{knowledgeBases.map((knowledgeBase) => (
-																		<SelectItem key={knowledgeBase.id} value={knowledgeBase.id}>
-																			{knowledgeBase.name || knowledgeBase.id}
-																		</SelectItem>
-																	))}
-																</SelectContent>
-															</Select>
+												<div className="flex flex-wrap items-center justify-end gap-2">
+													<Popover>
+														<PopoverTrigger asChild>
 															<Button
 																variant="outline"
-																disabled={!connectionConfigured || knowledgeBasesLoading}
-																onClick={() =>
-																	void loadKnowledgeBases(selectedKnowledgeBaseId || undefined)
-																}
+																className="h-9 min-w-52 max-w-72 justify-between bg-background px-3"
+																disabled={knowledgeBases.length === 0}
+																aria-label={t('engineeringKnowledge.knowledge.browseBase')}
 															>
-																<RefreshCw className={knowledgeBasesLoading ? 'animate-spin' : ''} />
-																{t('engineeringKnowledge.knowledge.refresh')}
+																<span className="flex min-w-0 items-center gap-2">
+																	<Database className="size-4 shrink-0 text-primary" />
+																	<span className="truncate">
+																		{selectedKnowledgeBase?.name || selectedKnowledgeBase?.id || t('engineeringKnowledge.knowledge.chooseBrowseBase')}
+																	</span>
+																</span>
+																<span className="ml-2 flex shrink-0 items-center gap-1.5">
+																	<span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
+																		{selectedSyncKnowledgeBaseIds.length}/{knowledgeBases.length}
+																	</span>
+																	<ChevronDown className="size-4 text-muted-foreground" />
+																</span>
+															</Button>
+														</PopoverTrigger>
+														<PopoverContent align="end" className="w-80 p-0">
+															<div className="flex items-center justify-between gap-3 border-b px-3 py-2.5">
+																<div className="min-w-0">
+																	<p className="truncate text-sm font-semibold">{t('engineeringKnowledge.knowledge.chooseBases')}</p>
+																	<p className="text-xs text-muted-foreground">{t('engineeringKnowledge.knowledge.availableBaseCount', { count: knowledgeBases.length })}</p>
+																</div>
+																<div className="flex shrink-0 items-center gap-1">
+																	<Button type="button" variant="ghost" size="sm" onClick={() => replaceSyncKnowledgeBases(knowledgeBases.map((item) => item.id))}>
+																		{t('engineeringKnowledge.knowledge.selectAll')}
+																	</Button>
+																	<Button type="button" variant="ghost" size="sm" onClick={() => replaceSyncKnowledgeBases([])}>
+																		{t('engineeringKnowledge.knowledge.clearSelection')}
+																	</Button>
+																</div>
+															</div>
+															<div className="max-h-72 overflow-y-auto p-1.5">
+																{knowledgeBases.map((knowledgeBase) => {
+																	const active = knowledgeBase.id === selectedKnowledgeBaseId;
+																	return (
+																		<div
+																			key={knowledgeBase.id}
+																			className={`flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors ${active ? 'bg-primary/5' : 'hover:bg-muted/60'}`}
+																		>
+																			<Checkbox
+																				checked={selectedSyncKnowledgeBaseIds.includes(knowledgeBase.id)}
+																				onCheckedChange={(checked) => toggleSyncKnowledgeBase(knowledgeBase.id, checked === true)}
+																				aria-label={`${t('engineeringKnowledge.knowledge.chooseBases')}: ${knowledgeBase.name || knowledgeBase.id}`}
+																			/>
+																			<button
+																				type="button"
+																				className="min-w-0 flex-1 py-1 text-left"
+																				onClick={() => {
+																					setSelectedKnowledgeBaseId(knowledgeBase.id);
+																					void loadKnowledgeBaseContent(knowledgeBase.id);
+																				}}
+																			>
+																				<span className="block truncate text-sm font-medium" title={knowledgeBase.name || knowledgeBase.id}>{knowledgeBase.name || knowledgeBase.id}</span>
+																				<span className="mt-0.5 block truncate font-mono text-[11px] text-muted-foreground" title={knowledgeBase.id}>{knowledgeBase.id}</span>
+																			</button>
+																			{active && <Eye className="size-4 shrink-0 text-primary" />}
+																		</div>
+																	);
+																})}
+															</div>
+														</PopoverContent>
+													</Popover>
+													<Badge variant={selectedProjectSync?.status === 'error' ? 'destructive' : 'secondary'} className="h-9 px-3">
+														{selectedProjectCatalogueBusy && <Loader2 className="mr-1 size-3.5 animate-spin" />}
+														{selectedProjectSyncLabel}
+													</Badge>
+													<Button
+														variant="outline"
+														disabled={selectedSyncKnowledgeBaseIds.length === 0 || selectedProjectCatalogueBusy || diffCheckingProjectId === selectedProject.project_id}
+														onClick={() => void checkProjectCatalogueDiff(selectedProject)}
+													>
+														{diffCheckingProjectId === selectedProject.project_id && <Loader2 className="animate-spin" />}
+														{t('engineeringKnowledge.knowledge.checkDiff')}
+													</Button>
+													<Button
+														disabled={selectedSyncKnowledgeBaseIds.length === 0 || selectedProjectCatalogueBusy || diffCheckingProjectId === selectedProject.project_id}
+														onClick={() => void startProjectCatalogueSync(selectedProject)}
+													>
+														{selectedProjectCatalogueBusy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+														{selectedProjectSync?.status === 'uninitialized'
+															? t('engineeringKnowledge.knowledge.initializeSelected')
+															: syncScopeChanged
+																? t('engineeringKnowledge.knowledge.applyScope')
+																: t('engineeringKnowledge.knowledge.resyncSelected')}
+													</Button>
+														<Button
+																	variant="outline"
+																	disabled={!selectedKnowledgeBaseId || knowledgeLoading || folderTreeLoading}
+																	onClick={() => void refreshDocumentView()}
+																>
+																	<RefreshCw className={knowledgeLoading || folderTreeLoading ? 'animate-spin' : ''} />
+																	{t('engineeringKnowledge.knowledge.refreshCurrent')}
 															</Button>
 															<Button
 																variant="outline"
@@ -963,10 +1314,17 @@ export function EngineeringKnowledgePage() {
 																	const file = event.target.files?.[0];
 																	if (file) void uploadKnowledge(file);
 																}}
-															/>
-														</div>
-													</div>
-													<div className="mt-3 flex flex-wrap items-center gap-2">
+													/>
+												</div>
+											</div>
+											{selectedProjectDiff && (
+												<p className={`mt-2 text-right text-xs ${selectedProjectDiff.matches ? 'text-emerald-700' : 'text-amber-700'}`}>
+													{selectedProjectDiff.matches
+														? t('engineeringKnowledge.knowledge.diffMatched')
+														: t('engineeringKnowledge.knowledge.diffFound', { added: selectedProjectDiff.added_count, changed: selectedProjectDiff.changed_count, removed: selectedProjectDiff.removed_count })}
+												</p>
+											)}
+											<div className="mt-3 flex flex-wrap items-center gap-2">
 														<p className="min-w-0 flex-1 text-sm text-muted-foreground">
 															{t('engineeringKnowledge.knowledge.documentsHint')}
 														</p>
@@ -1430,11 +1788,14 @@ export function EngineeringKnowledgePage() {
 												</Button>
 											</div>
 											<div className="divide-y">
-												{projectBindings.map((project) => {
-													const draft = projectBindingDrafts[project.project_id] ?? '';
-													const saved = project.weknora_agent_id ?? '';
-													const saving = savingProjectId === project.project_id;
-													return (
+													{projectBindings.map((project) => {
+														const draft = projectBindingDrafts[project.project_id] ?? '';
+														const saved = project.weknora_agent_id ?? '';
+														const saving = savingProjectId === project.project_id;
+														const bindingDirty = draft.trim() !== saved;
+														const sync = project.catalogue_sync ?? { status: 'uninitialized' as const, revision: 0, last_error: null };
+														const catalogueBusy = sync.status === 'pending' || sync.status === 'syncing';
+												return (
 														<div key={project.project_id} className="grid gap-3 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,1fr)_auto] lg:items-end">
 															<div className="min-w-0">
 																<div className="flex items-center gap-2">
@@ -1444,7 +1805,9 @@ export function EngineeringKnowledgePage() {
 																		{saved ? t('engineeringKnowledge.assignments.bound') : t('engineeringKnowledge.assignments.unbound')}
 																	</Badge>
 																</div>
-																<p className="mt-1 text-xs text-muted-foreground">ID: {project.project_id}</p>
+																<p className="mt-1 text-xs text-muted-foreground">
+																	ID: {project.project_id}
+																</p>
 															</div>
 															<label className="grid gap-2 text-sm font-medium">
 																{t('engineeringKnowledge.assignments.robotId')}
@@ -1455,13 +1818,15 @@ export function EngineeringKnowledgePage() {
 																	disabled={saving}
 																/>
 															</label>
-															<Button
-																disabled={saving || draft.trim() === saved || (!connectionConfigured && Boolean(draft.trim()))}
-																onClick={() => void saveProjectBinding(project)}
-															>
-																{saving ? <Loader2 className="animate-spin" /> : <Save />}
-																{t('engineeringKnowledge.assignments.save')}
-															</Button>
+																	<div className="flex flex-wrap justify-end gap-2">
+																		<Button
+																				disabled={saving || !bindingDirty || catalogueBusy || (!connectionConfigured && Boolean(draft.trim()))}
+																			onClick={() => void saveProjectBinding(project)}
+																		>
+																			{saving ? <Loader2 className="animate-spin" /> : <Save />}
+																			{t('engineeringKnowledge.assignments.save')}
+																		</Button>
+																	</div>
 														</div>
 													);
 												})}

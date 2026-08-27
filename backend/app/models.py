@@ -217,6 +217,184 @@ class ProjectSettings(TimestampMixin, Base):
     )
 
 
+class EngineeringDocumentSyncState(TimestampMixin, Base):
+    """One project's local WeKnora catalogue synchronization state."""
+
+    __tablename__ = "engineering_document_sync_states"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'syncing', 'ready', 'error')",
+            name="ck_engineering_document_sync_status",
+        ),
+        CheckConstraint(
+            "access_mode IN ('project', 'restricted')",
+            name="ck_engineering_document_access_mode",
+        ),
+    )
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    weknora_agent_id: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        default="pending",
+        server_default="pending",
+    )
+    access_mode: Mapped[str] = mapped_column(
+        String(20),
+        default="project",
+        server_default="project",
+    )
+    revision: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+    )
+    last_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class EngineeringDocumentNode(TimestampMixin, Base):
+    """Locally authoritative directory and file metadata mirrored from WeKnora."""
+
+    __tablename__ = "engineering_document_nodes"
+    __table_args__ = (
+        CheckConstraint(
+            "node_type IN ('knowledge_base', 'folder', 'file')",
+            name="ck_engineering_document_node_type",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "node_key",
+            name="uq_engineering_document_project_node_key",
+        ),
+        Index(
+            "ix_engineering_document_project_base_type",
+            "project_id",
+            "knowledge_base_id",
+            "node_type",
+        ),
+        Index(
+            "ix_engineering_document_project_external",
+            "project_id",
+            "external_id",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("engineering_document_nodes.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    node_type: Mapped[str] = mapped_column(String(24))
+    node_key: Mapped[str] = mapped_column(String(64))
+    knowledge_base_id: Mapped[str] = mapped_column(String(128))
+    external_id: Mapped[str | None] = mapped_column(
+        String(256),
+        nullable=True,
+    )
+    name: Mapped[str] = mapped_column(String(512))
+    folder_path: Mapped[str] = mapped_column(Text, default="", server_default="")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    file_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    file_size: Mapped[int] = mapped_column(
+        BigInteger,
+        default=0,
+        server_default="0",
+    )
+    source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    channel: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    parse_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    enable_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    document_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+    )
+    total_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+    )
+    external_created_at: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    external_updated_at: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+    processed_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    extra_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    sync_revision: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        index=True,
+    )
+
+
+class EngineeringDocumentPermission(TimestampMixin, Base):
+    """Allow-only user or project-position grant on one catalogue node."""
+
+    __tablename__ = "engineering_document_permissions"
+    __table_args__ = (
+        CheckConstraint(
+            "subject_type IN ('user', 'position')",
+            name="ck_engineering_document_permission_subject",
+        ),
+        UniqueConstraint(
+            "project_id",
+            "node_id",
+            "subject_type",
+            "subject_id",
+            name="uq_engineering_document_permission_subject_node",
+        ),
+        Index(
+            "ix_engineering_document_permission_subject",
+            "project_id",
+            "subject_type",
+            "subject_id",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    node_id: Mapped[int] = mapped_column(
+        ForeignKey("engineering_document_nodes.id", ondelete="CASCADE"),
+        index=True,
+    )
+    subject_type: Mapped[str] = mapped_column(String(20))
+    subject_id: Mapped[int] = mapped_column(Integer)
+    can_read: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    can_create: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    can_update: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    can_delete: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    can_manage: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    inherit_to_children: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    granted_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+
 class ProjectMember(TimestampMixin, Base):
     __tablename__ = "project_members"
     __table_args__ = (

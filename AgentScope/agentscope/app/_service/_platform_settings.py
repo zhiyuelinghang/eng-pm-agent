@@ -47,3 +47,20 @@ async def get_project_initializer_agent_id(
     if settings is None:
         return None
     return getattr(settings.data, "project_initializer_agent_id", None)
+
+
+async def get_task_assistant_agent_id(
+    storage: StorageBase,
+    user_id: str,
+) -> str | None:
+    """Return the platform-wide agent assigned as the Task Assistant."""
+    getter = getattr(storage, "get_platform_settings", None)
+    if getter is None:
+        return None
+    try:
+        settings = await getter(user_id)
+    except NotImplementedError:
+        settings = None
+    if settings is None:
+        return None
+    return getattr(settings.data, "task_assistant_agent_id", None)

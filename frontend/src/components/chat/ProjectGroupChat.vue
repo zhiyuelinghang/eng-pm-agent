@@ -210,10 +210,6 @@
               >
                 <n-icon :size="16"><At /></n-icon>
               </button>
-              <div class="composer-hint">
-                <span>Enter 发送 · Shift + Enter 换行</span>
-                <span>普通消息不调用 AI，只有明确 @ 智能体才会参与</span>
-              </div>
             </div>
             <button class="send-message" type="submit" :disabled="!canSend">
               <n-icon :size="17"><Send /></n-icon>
@@ -1279,7 +1275,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 19rem minmax(32rem, 1fr) 23rem;
   gap: 0.55rem;
-  height: calc(100dvh - var(--header-height) - 1.5rem);
+  height: calc(100dvh - var(--header-height, 56px) - 36px);
   min-height: 38rem;
   overflow: hidden;
   color: var(--chat-ink);
@@ -1782,7 +1778,6 @@ onBeforeUnmount(() => {
 }
 .mention-trigger:hover:not(:disabled) { border-color: rgba(11, 117, 110, 0.35); background: #e6f3ef; }
 .mention-trigger:disabled { opacity: 0.5; cursor: not-allowed; }
-.composer-hint { display: flex; gap: 0.85rem; color: #718287; font-size: 12px; }
 .send-message {
   display: inline-flex;
   align-items: center;
@@ -1990,7 +1985,6 @@ onBeforeUnmount(() => {
   .chat-heading h1 { font-size: 16px; }
   .connection-state span { display: none; }
   .connection-state { min-width: 2.2rem; justify-content: center; padding-inline: 0.55rem; }
-  .composer-hint { display: none; }
   .mention-menu { right: 0.35rem; left: 0.35rem; width: auto; }
   .message-composer { padding-inline: 0.65rem; }
   .private-chat-dialog { width: min(40rem, calc(100vw - 1rem)); }

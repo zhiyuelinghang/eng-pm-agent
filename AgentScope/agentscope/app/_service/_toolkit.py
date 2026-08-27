@@ -214,6 +214,7 @@ time or interval"
         from ._platform_settings import (
             get_global_main_agent_id,
             get_project_initializer_agent_id,
+            get_task_assistant_agent_id,
         )
 
         global_main_agent_id = await get_global_main_agent_id(
@@ -224,9 +225,16 @@ time or interval"
         project_initializer_agent_id = (
             await get_project_initializer_agent_id(storage, user_id)
         )
+        task_assistant_agent_id = await get_task_assistant_agent_id(
+            storage,
+            user_id,
+        )
         caller_is_global_main = global_main_agent_id == agent_record.id
         tools.append(TeamCreate(**team_tool_kwargs))
-        if agent_record.id != project_initializer_agent_id:
+        if agent_record.id not in {
+            project_initializer_agent_id,
+            task_assistant_agent_id,
+        }:
             tools.append(
                 AgentCreate(
                     **team_tool_kwargs,

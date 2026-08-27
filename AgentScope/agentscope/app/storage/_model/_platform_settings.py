@@ -346,19 +346,19 @@ class PlatformSettingsData(BaseModel):
             "write formal project data directly."
         ),
     )
+    task_assistant_agent_id: str | None = Field(
+        default=None,
+        description=(
+            "The hidden built-in agent assigned to the fixed platform "
+            "responsibility named Task Assistant. The engineering platform "
+            "never exposes the selected agent's own display name."
+        ),
+    )
     project_initializer_validation_mcp: PlatformMCPVersionBinding | None = Field(
         default=None,
         description=(
             "The exact managed MCP package version used by the required "
             "project-initialization validation step."
-        ),
-    )
-    engineering_document_agent_id: str | None = Field(
-        default=None,
-        description=(
-            "The dedicated agent selected for engineering document "
-            "management. This stores assignment intent only; runtime "
-            "WeKnora retrieval is enabled separately."
         ),
     )
     weknora_connection: WeKnoraConnectionConfig | None = Field(

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 import hmac
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
 import httpx
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -19,8 +19,17 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .db import get_db
+from .engineering_document_catalog import (
+    clear_document_catalogue,
+    compare_document_catalogue,
+    local_catalogue_knowledge_base_ids,
+    mark_catalogue_pending,
+    sync_document_catalogue_in_background,
+    sync_state_view,
+)
 from .models import (
     AgentConversation,
+    EngineeringDocumentSyncState,
     OperationLog,
     Project,
     ProjectMember,
@@ -68,6 +77,12 @@ class ProjectWeKnoraBindingInput(BaseModel):
     weknora_agent_id: str | None = Field(default=None, max_length=128)
 
 
+class ProjectCatalogueSelectionInput(BaseModel):
+    """Knowledge bases explicitly selected for one project's local mirror."""
+
+    knowledge_base_ids: list[str] = Field(min_length=1, max_length=50)
+
+
 class WeComRelayInput(BaseModel):
     """A message body whose destination is resolved from the bound session."""
 
@@ -76,6 +91,21 @@ class WeComRelayInput(BaseModel):
 
 def ok(data: Any, message: str = "ok") -> dict[str, Any]:
     return {"success": True, "data": data, "message": message}
+
+
+def _selected_knowledge_base_ids(
+    payload: ProjectCatalogueSelectionInput,
+) -> tuple[str, ...]:
+    selected = tuple(
+        dict.fromkeys(
+            item.strip()
+            for item in payload.knowledge_base_ids
+            if item.strip()
+        ),
+    )
+    if not selected:
+        raise HTTPException(status_code=422, detail="请至少选择一个需要同步的知识库")
+    return selected
 
 
 def require_service_token(
@@ -227,6 +257,13 @@ def list_weknora_project_bindings(
                     if settings is not None and settings.updated_at is not None
                     else None
                 ),
+                "catalogue_sync": sync_state_view(
+                    db.get(EngineeringDocumentSyncState, project.id),
+                    knowledge_base_ids=local_catalogue_knowledge_base_ids(
+                        db,
+                        project.id,
+                    ),
+                ),
             }
             for project, settings in rows
         ],
@@ -251,11 +288,16 @@ def update_weknora_project_binding(
     if row is None:
         row = ProjectSettings(project_id=project_id)
         db.add(row)
-    row.weknora_agent_id = (
+    previous_agent_id = (row.weknora_agent_id or "").strip()
+    next_agent_id = (
         (payload.weknora_agent_id or "").strip() or None
     )
+    row.weknora_agent_id = next_agent_id
+    if previous_agent_id != next_agent_id:
+        clear_document_catalogue(db, project_id)
     db.commit()
     db.refresh(row)
+    state_row = db.get(EngineeringDocumentSyncState, project_id)
     return ok(
         {
             "project_id": project.id,
@@ -264,6 +306,90 @@ def update_weknora_project_binding(
             "updated_at": (
                 row.updated_at.isoformat() if row.updated_at is not None else None
             ),
+            "catalogue_sync": sync_state_view(
+                state_row,
+                knowledge_base_ids=local_catalogue_knowledge_base_ids(
+                    db,
+                    project.id,
+                ),
+            ),
         },
         "项目知识库机器人绑定已保存",
+    )
+
+
+def _project_binding_agent_id(db: Session, project_id: int) -> tuple[Project, str]:
+    project = db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    settings = db.get(ProjectSettings, project_id)
+    agent_id = (settings.weknora_agent_id or "").strip() if settings else ""
+    if not agent_id:
+        raise HTTPException(status_code=409, detail="项目尚未绑定 WeKnora 机器人")
+    return project, agent_id
+
+
+@router.post(
+    "/weknora-project-bindings/{project_id}/catalogue-sync",
+    dependencies=[Depends(require_service_token)],
+)
+def start_weknora_catalogue_sync(
+    project_id: int,
+    payload: ProjectCatalogueSelectionInput,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Start an explicit initialization or resynchronization from management."""
+
+    project, agent_id = _project_binding_agent_id(db, project_id)
+    knowledge_base_ids = _selected_knowledge_base_ids(payload)
+    state_row = mark_catalogue_pending(db, project_id, agent_id)
+    db.commit()
+    db.refresh(state_row)
+    background_tasks.add_task(
+        sync_document_catalogue_in_background,
+        project_id,
+        agent_id,
+        knowledge_base_ids,
+    )
+    return ok(
+        {
+            "project_id": project.id,
+            "project_name": project.name,
+            "weknora_agent_id": agent_id,
+            "updated_at": None,
+            "catalogue_sync": sync_state_view(
+                state_row,
+                knowledge_base_ids=knowledge_base_ids,
+            ),
+        },
+        "工程资料目录同步已由管理端启动",
+    )
+
+
+@router.post(
+    "/weknora-project-bindings/{project_id}/catalogue-diff",
+    dependencies=[Depends(require_service_token)],
+)
+def check_weknora_catalogue_diff(
+    project_id: int,
+    payload: ProjectCatalogueSelectionInput,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Compare source and mirror only; never update the local catalogue."""
+
+    project, agent_id = _project_binding_agent_id(db, project_id)
+    result = compare_document_catalogue(
+        db,
+        project_id,
+        agent_id,
+        knowledge_base_ids=_selected_knowledge_base_ids(payload),
+    )
+    return ok(
+        {
+            "project_id": project.id,
+            "project_name": project.name,
+            **result,
+        },
+        "工程资料目录差异校验完成",
     )

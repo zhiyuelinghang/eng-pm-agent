@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Request / response schemas for the agent router."""
 from datetime import datetime
+from typing import Literal
 import warnings
 
 from pydantic import BaseModel, Field
@@ -156,6 +157,7 @@ class PlatformAgentCatalogResponse(BaseModel):
 
     global_main: PlatformAgentCatalogItem | None = None
     project_initializer: PlatformAgentCatalogItem | None = None
+    task_assistant: PlatformAgentCatalogItem | None = None
     initialization_workers: list[PlatformAgentCatalogItem] = Field(
         default_factory=list,
     )
@@ -176,17 +178,15 @@ class PlatformSettingsResponse(BaseModel):
         default=None,
         description="The hidden agent used for project initialization.",
     )
+    task_assistant_agent_id: str | None = Field(
+        default=None,
+        description="The hidden agent assigned to the Task Assistant role.",
+    )
     project_initializer_validation_mcp: PlatformMCPVersionBinding | None = Field(
         default=None,
         description=(
             "The exact MCP package version used for required project "
             "initialization validation."
-        ),
-    )
-    engineering_document_agent_id: str | None = Field(
-        default=None,
-        description=(
-            "The dedicated agent used by engineering document management."
         ),
     )
 
@@ -455,6 +455,24 @@ class StopWeKnoraAgentSessionResponse(BaseModel):
     message: str
 
 
+class WeKnoraCatalogueSyncState(BaseModel):
+    """Engineering platform's local WeKnora metadata mirror state."""
+
+    status: Literal[
+        "uninitialized",
+        "pending",
+        "syncing",
+        "ready",
+        "error",
+    ] = "uninitialized"
+    access_mode: Literal["project", "restricted"] = "project"
+    revision: int = 0
+    knowledge_base_ids: list[str] = Field(default_factory=list)
+    last_started_at: str | None = None
+    last_completed_at: str | None = None
+    last_error: str | None = None
+
+
 class WeKnoraProjectBindingItem(BaseModel):
     """One existing engineering project and its assigned WeKnora robot."""
 
@@ -462,6 +480,9 @@ class WeKnoraProjectBindingItem(BaseModel):
     project_name: str
     weknora_agent_id: str | None = None
     updated_at: str | None = None
+    catalogue_sync: WeKnoraCatalogueSyncState = Field(
+        default_factory=WeKnoraCatalogueSyncState,
+    )
 
 
 class ListWeKnoraProjectBindingsResponse(BaseModel):
@@ -475,6 +496,40 @@ class UpdateWeKnoraProjectBindingRequest(BaseModel):
     """Assign or clear a WeKnora robot for one existing project."""
 
     weknora_agent_id: str | None = Field(default=None, max_length=128)
+
+
+class WeKnoraCatalogueSelectionRequest(BaseModel):
+    """Knowledge bases explicitly selected for one project catalogue."""
+
+    knowledge_base_ids: list[str] = Field(min_length=1, max_length=50)
+
+
+class WeKnoraCatalogueDiffItem(BaseModel):
+    """One source/local catalogue difference."""
+
+    node_key: str
+    node_type: str
+    knowledge_base_id: str
+    name: str
+    folder_path: str
+    changed_fields: list[str] = Field(default_factory=list)
+
+
+class WeKnoraCatalogueDiffResponse(BaseModel):
+    """Read-only comparison result returned by the engineering platform."""
+
+    project_id: int
+    project_name: str
+    matches: bool
+    remote_node_count: int
+    local_node_count: int
+    added_count: int
+    changed_count: int
+    removed_count: int
+    added: list[WeKnoraCatalogueDiffItem] = Field(default_factory=list)
+    changed: list[WeKnoraCatalogueDiffItem] = Field(default_factory=list)
+    removed: list[WeKnoraCatalogueDiffItem] = Field(default_factory=list)
+    truncated: bool = False
 
 
 class UpdatePlatformSettingsRequest(BaseModel):
@@ -493,19 +548,19 @@ class UpdatePlatformSettingsRequest(BaseModel):
             "project-initialization conversations."
         ),
     )
+    task_assistant_agent_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "ID of an enabled agent with a fixed chat model to use for the "
+            "platform Task Assistant responsibility."
+        ),
+    )
     project_initializer_validation_mcp: PlatformMCPVersionBinding | None = Field(
         default=None,
         description=(
             "Exact managed MCP version used by project initialization "
             "validation."
-        ),
-    )
-    engineering_document_agent_id: str | None = Field(
-        default=None,
-        min_length=1,
-        description=(
-            "ID of an enabled agent with a fixed chat model to use for "
-            "engineering document management."
         ),
     )
 

@@ -136,7 +136,7 @@ def _create_storage() -> StorageBase:
         return AsyncSQLAlchemyStorage(
             async_url,
             create_tables=False,
-            auto_migrate=True,
+            auto_migrate=False,
             schema=os.getenv(
                 "AGENTSCOPE_DATABASE_SCHEMA",
                 "agentscope",
@@ -148,7 +148,7 @@ def _create_storage() -> StorageBase:
         return AsyncSQLAlchemyStorage(
             sqlite_url,
             create_tables=False,
-            auto_migrate=True,
+            auto_migrate=False,
         )
 
     if mode == "memory":

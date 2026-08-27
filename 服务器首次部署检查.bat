@@ -15,7 +15,7 @@ for %%A in (%*) do (
 
 title Dobby 服务器首次部署检查
 
-echo [初始化] 正在检查服务器部署文件……
+echo [检查] 正在检查服务器部署文件……
 
 if not exist "%PYTHON_EXE%" (
     echo [失败] 未找到项目内嵌 Python：
@@ -68,7 +68,7 @@ if not exist "%ROOT%.env" (
     )
     copy /Y "%ROOT%.env.example" "%ROOT%.env" >nul
     echo [需要配置] 已根据 .env.example 创建服务器 .env。
-    echo 请先填写数据库、JWT 和 AgentScope 鉴权配置，再重新运行本脚本。
+    echo 请先完成 .env 配置，再重新运行本脚本。
     goto CONFIG_REQUIRED
 )
 
@@ -80,52 +80,43 @@ if not errorlevel 1 (
 )
 
 echo.
-echo [初始化] 正在验证随包携带的 Python 与 AgentScope 运行环境……
+echo [检查] 正在验证随包携带的 Python 与 AgentScope 运行环境……
 "%PYTHON_EXE%" -c "import agentscope; import aiosqlite, asyncpg, alembic, psycopg, pgvector, sqlalchemy, pypdf, pandas, openpyxl, xlrd, docx, pptx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime; assert agentscope.__version__ == '2.0.7'"
 if errorlevel 1 (
     echo [失败] AgentScope Python 环境验证失败。
     goto FAILED
 )
-echo [初始化] AgentScope Python 环境验证通过。
-
-echo [初始化] 正在建立 PostgreSQL、pgvector 和 Alembic 基线……
-"%PYTHON_EXE%" "%ROOT%scripts\bootstrap_postgres.py" --expected-database projectcopilot --upgrade
-if errorlevel 1 (
-    echo [失败] PostgreSQL 初始化失败，请检查 DATABASE_URL 和 pgvector 安装。
-    goto FAILED
-)
-echo [初始化] PostgreSQL、pgvector 和 Alembic 基线验证通过。
+echo [检查] AgentScope Python 环境验证通过。
 
 "%PYTHON_EXE%" -c "import sys; sys.path.insert(0, r'%PROJECT_ROOT%'); from scripts.agentscope_dev_app import app; assert app is not None"
 if errorlevel 1 (
     echo [失败] Dobby 服务配置验证失败，请检查根目录 .env。
     goto FAILED
 )
-echo [初始化] Dobby 服务配置验证通过。
+echo [检查] Dobby 服务配置验证通过。
 
 "%PYTHON_EXE%" -c "import sys; sys.path.insert(0, r'%PROJECT_ROOT%'); from scripts.dobby_web_gateway import create_gateway; create_gateway('platform'); create_gateway('agentscope')"
 if errorlevel 1 (
     echo [失败] 预构建页面或 Python Web 网关验证失败。
     goto FAILED
 )
-echo [初始化] 平台前端与 Dobby 管理端验证通过。
+echo [检查] 平台前端与 Dobby 管理端验证通过。
 
 echo.
-echo [完成] 服务器首次初始化完成。
+echo [完成] 服务器程序首次部署检查完成。
 echo [完成] 本脚本没有安装任何依赖，服务器不需要 Node.js、npm 或 pnpm。
-echo [下一步] 旧版数据可执行 scripts\migrate_legacy_storage.py --expected-database projectcopilot --apply --replace。
-echo [下一步] 新部署或迁移完成后，直接运行 服务器一键启动.bat。
+echo [下一步] 可运行 服务器一键启动.bat。
 goto FINISH
 
 :CONFIG_REQUIRED
 echo.
-echo 初始化尚未执行，完成 .env 配置后请重新运行。
+echo 部署检查尚未完成，完成 .env 配置后请重新运行。
 if "%NO_PAUSE%"=="0" pause
 exit /b 2
 
 :FAILED
 echo.
-echo 服务器首次初始化失败。
+echo 服务器程序首次部署检查失败。
 if "%NO_PAUSE%"=="0" pause
 exit /b 1
 

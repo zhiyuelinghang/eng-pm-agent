@@ -4,7 +4,7 @@ import {
 	Crown,
 	Download,
 	FileSearch,
-	FolderKanban,
+	ListTodo,
 	Loader2,
 	PackageCheck,
 	ShieldCheck,
@@ -37,14 +37,12 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAgents } from '@/hooks/useAgents';
 import { useTranslation } from '@/i18n/useI18n';
 
-type AssignmentKey = 'main' | 'initializer' | 'engineeringDocuments';
+type AssignmentKey = 'main' | 'initializer' | 'taskAssistant';
 
 const validationVersionKey = (binding: PlatformMCPVersionBinding) =>
 	`${binding.package_id}@${binding.version}`;
 
-const bindingFromVersion = (
-	version: ManagedMCPVersion,
-): PlatformMCPVersionBinding => ({
+const bindingFromVersion = (version: ManagedMCPVersion): PlatformMCPVersionBinding => ({
 	package_id: version.package_id,
 	version: version.version,
 });
@@ -67,21 +65,18 @@ export function PlatformSettingsPage() {
 	const [validationSelectedKey, setValidationSelectedKey] = useState('');
 	const [uploadingValidation, setUploadingValidation] = useState(false);
 	const [downloadingValidation, setDownloadingValidation] = useState(false);
-	const [validationDeleteTarget, setValidationDeleteTarget] =
-		useState<ManagedMCPVersion | null>(null);
+	const [validationDeleteTarget, setValidationDeleteTarget] = useState<ManagedMCPVersion | null>(
+		null,
+	);
 	const validationUploadRef = useRef<HTMLInputElement>(null);
-	const [activeAssignment, setActiveAssignment] =
-		useState<AssignmentKey>('main');
+	const [activeAssignment, setActiveAssignment] = useState<AssignmentKey>('main');
 	const [mainSelectedId, setMainSelectedId] = useState<string>('');
-	const [initializerSelectedId, setInitializerSelectedId] =
-		useState<string>('');
-	const [engineeringDocumentSelectedId, setEngineeringDocumentSelectedId] =
-		useState<string>('');
+	const [initializerSelectedId, setInitializerSelectedId] = useState<string>('');
+	const [taskAssistantSelectedId, setTaskAssistantSelectedId] = useState<string>('');
 	const [loading, setLoading] = useState(true);
 	const [savingMain, setSavingMain] = useState(false);
 	const [savingInitializer, setSavingInitializer] = useState(false);
-	const [savingEngineeringDocument, setSavingEngineeringDocument] =
-		useState(false);
+	const [savingTaskAssistant, setSavingTaskAssistant] = useState(false);
 
 	useEffect(() => {
 		let active = true;
@@ -95,9 +90,7 @@ export function PlatformSettingsPage() {
 				setValidationConfig(validation);
 				setMainSelectedId(value.global_main_agent_id ?? '');
 				setInitializerSelectedId(value.project_initializer_agent_id ?? '');
-				setEngineeringDocumentSelectedId(
-					value.engineering_document_agent_id ?? '',
-				);
+				setTaskAssistantSelectedId(value.task_assistant_agent_id ?? '');
 				const selectedBinding =
 					value.project_initializer_validation_mcp ?? validation.current;
 				setValidationSelectedKey(
@@ -126,46 +119,39 @@ export function PlatformSettingsPage() {
 				.filter(isMainCandidate)
 				.sort(
 					(a, b) =>
-						a.data.platform_config.sort_order -
-							b.data.platform_config.sort_order ||
+						a.data.platform_config.sort_order - b.data.platform_config.sort_order ||
 						a.data.name.localeCompare(b.data.name),
 				),
 		[agents],
 	);
 	const mainCandidates = candidates.filter(
-		(agent) => agent.id !== initializerSelectedId,
+		(agent) => agent.id !== initializerSelectedId && agent.id !== taskAssistantSelectedId,
 	);
 	const initializerCandidates = candidates.filter(
-		(agent) => agent.id !== mainSelectedId,
+		(agent) => agent.id !== mainSelectedId && agent.id !== taskAssistantSelectedId,
 	);
-	const selectedAgent =
-		agents.find((agent) => agent.id === mainSelectedId) ?? null;
-	const selectedInitializer =
-		agents.find((agent) => agent.id === initializerSelectedId) ?? null;
-	const selectedEngineeringDocument =
-		agents.find((agent) => agent.id === engineeringDocumentSelectedId) ?? null;
+	const taskAssistantCandidates = candidates.filter(
+		(agent) => agent.id !== mainSelectedId && agent.id !== initializerSelectedId,
+	);
+	const selectedAgent = agents.find((agent) => agent.id === mainSelectedId) ?? null;
+	const selectedInitializer = agents.find((agent) => agent.id === initializerSelectedId) ?? null;
+	const selectedTaskAssistant =
+		agents.find((agent) => agent.id === taskAssistantSelectedId) ?? null;
 	const currentAgent =
 		agents.find((agent) => agent.id === settings?.global_main_agent_id) ?? null;
 	const currentInitializer =
-		agents.find(
-			(agent) => agent.id === settings?.project_initializer_agent_id,
-		) ?? null;
-	const currentEngineeringDocument =
-		agents.find(
-			(agent) => agent.id === settings?.engineering_document_agent_id,
-		) ?? null;
-	const selectedIsValid =
-		selectedAgent !== null && isMainCandidate(selectedAgent);
+		agents.find((agent) => agent.id === settings?.project_initializer_agent_id) ?? null;
+	const currentTaskAssistant =
+		agents.find((agent) => agent.id === settings?.task_assistant_agent_id) ?? null;
+	const selectedIsValid = selectedAgent !== null && isMainCandidate(selectedAgent);
 	const initializerAgentIsValid =
 		selectedInitializer !== null && isMainCandidate(selectedInitializer);
-	const engineeringDocumentIsValid =
-		selectedEngineeringDocument !== null &&
-		isMainCandidate(selectedEngineeringDocument);
+	const taskAssistantIsValid =
+		selectedTaskAssistant !== null && isMainCandidate(selectedTaskAssistant);
 	const selectedValidationVersion =
 		validationConfig?.versions.find(
 			(version) =>
-				validationVersionKey(bindingFromVersion(version)) ===
-				validationSelectedKey,
+				validationVersionKey(bindingFromVersion(version)) === validationSelectedKey,
 		) ?? null;
 	const currentValidationVersion =
 		validationConfig?.versions.find((version) => {
@@ -173,26 +159,21 @@ export function PlatformSettingsPage() {
 			return (
 				current !== null &&
 				current !== undefined &&
-				validationVersionKey(bindingFromVersion(version)) ===
-					validationVersionKey(current)
+				validationVersionKey(bindingFromVersion(version)) === validationVersionKey(current)
 			);
 		}) ?? null;
-	const initializerIsValid =
-		initializerAgentIsValid && selectedValidationVersion !== null;
-	const mainUnchanged =
-		mainSelectedId === (settings?.global_main_agent_id ?? '');
+	const initializerIsValid = initializerAgentIsValid && selectedValidationVersion !== null;
+	const mainUnchanged = mainSelectedId === (settings?.global_main_agent_id ?? '');
 	const validationUnchanged =
 		validationSelectedKey ===
 		(settings?.project_initializer_validation_mcp
 			? validationVersionKey(settings.project_initializer_validation_mcp)
 			: '');
 	const initializerUnchanged =
-		initializerSelectedId ===
-			(settings?.project_initializer_agent_id ?? '') &&
+		initializerSelectedId === (settings?.project_initializer_agent_id ?? '') &&
 		validationUnchanged;
-	const engineeringDocumentUnchanged =
-		engineeringDocumentSelectedId ===
-		(settings?.engineering_document_agent_id ?? '');
+	const taskAssistantUnchanged =
+		taskAssistantSelectedId === (settings?.task_assistant_agent_id ?? '');
 
 	const saveMain = async () => {
 		if (!mainSelectedId || !selectedIsValid) return;
@@ -210,19 +191,12 @@ export function PlatformSettingsPage() {
 	};
 
 	const saveInitializer = async () => {
-		if (
-			!initializerSelectedId ||
-			!initializerIsValid ||
-			!selectedValidationVersion
-		)
-			return;
+		if (!initializerSelectedId || !initializerIsValid || !selectedValidationVersion) return;
 		setSavingInitializer(true);
 		try {
 			const updated = await agentApi.updatePlatformSettings({
 				project_initializer_agent_id: initializerSelectedId,
-				project_initializer_validation_mcp: bindingFromVersion(
-					selectedValidationVersion,
-				),
+				project_initializer_validation_mcp: bindingFromVersion(selectedValidationVersion),
 			});
 			setSettings(updated);
 			await refreshValidationConfig();
@@ -233,31 +207,28 @@ export function PlatformSettingsPage() {
 		}
 	};
 
-	const saveEngineeringDocument = async () => {
-		if (!engineeringDocumentSelectedId || !engineeringDocumentIsValid) return;
-		setSavingEngineeringDocument(true);
+	const saveTaskAssistant = async () => {
+		if (!taskAssistantSelectedId || !taskAssistantIsValid) return;
+		setSavingTaskAssistant(true);
 		try {
 			const updated = await agentApi.updatePlatformSettings({
-				engineering_document_agent_id: engineeringDocumentSelectedId,
+				task_assistant_agent_id: taskAssistantSelectedId,
 			});
 			setSettings(updated);
 			await refetch();
-			toast.success(t('platform-settings.engineeringDocuments.saved'));
+			toast.success(t('platform-settings.taskAssistant.saved'));
 		} finally {
-			setSavingEngineeringDocument(false);
+			setSavingTaskAssistant(false);
 		}
 	};
 
 	const uploadValidationVersion = async (file: File) => {
 		setUploadingValidation(true);
 		try {
-			const uploaded =
-				await mcpRegistryApi.uploadInitializationValidationVersion(file);
+			const uploaded = await mcpRegistryApi.uploadInitializationValidationVersion(file);
 			await refreshValidationConfig();
 			if (!validationSelectedKey) {
-				setValidationSelectedKey(
-					validationVersionKey(bindingFromVersion(uploaded)),
-				);
+				setValidationSelectedKey(validationVersionKey(bindingFromVersion(uploaded)));
 			}
 			toast.success(t('platform-settings.initializer.validation.uploaded'));
 		} catch (error) {
@@ -287,9 +258,7 @@ export function PlatformSettingsPage() {
 
 	const deleteValidationVersion = async () => {
 		if (!validationDeleteTarget) return;
-		const targetKey = validationVersionKey(
-			bindingFromVersion(validationDeleteTarget),
-		);
+		const targetKey = validationVersionKey(bindingFromVersion(validationDeleteTarget));
 		await mcpRegistryApi.deleteInitializationValidationVersion(
 			validationDeleteTarget.package_id,
 			validationDeleteTarget.version,
@@ -297,11 +266,8 @@ export function PlatformSettingsPage() {
 		const next = await refreshValidationConfig();
 		if (validationSelectedKey === targetKey) {
 			const fallback =
-				next.current ??
-				(next.versions[0] ? bindingFromVersion(next.versions[0]) : null);
-			setValidationSelectedKey(
-				fallback ? validationVersionKey(fallback) : '',
-			);
+				next.current ?? (next.versions[0] ? bindingFromVersion(next.versions[0]) : null);
+			setValidationSelectedKey(fallback ? validationVersionKey(fallback) : '');
 		}
 		toast.success(t('platform-settings.initializer.validation.deleted'));
 	};
@@ -309,63 +275,63 @@ export function PlatformSettingsPage() {
 	const busy = loading || agentsLoading;
 	const isMain = activeAssignment === 'main';
 	const isInitializer = activeAssignment === 'initializer';
+	const isTaskAssistant = activeAssignment === 'taskAssistant';
 	const activeAgent = isMain
 		? selectedAgent
 		: isInitializer
 			? selectedInitializer
-			: selectedEngineeringDocument;
+			: selectedTaskAssistant;
 	const activeCandidates = isMain
 		? mainCandidates
 		: isInitializer
 			? initializerCandidates
-			: candidates;
+			: taskAssistantCandidates;
 	const activeSelectedId = isMain
 		? mainSelectedId
 		: isInitializer
 			? initializerSelectedId
-			: engineeringDocumentSelectedId;
+			: taskAssistantSelectedId;
 	const activeValid = isMain
 		? selectedIsValid
 		: isInitializer
 			? initializerIsValid
-			: engineeringDocumentIsValid;
+			: taskAssistantIsValid;
 	const activeUnchanged = isMain
 		? mainUnchanged
 		: isInitializer
 			? initializerUnchanged
-			: engineeringDocumentUnchanged;
+			: taskAssistantUnchanged;
 	const activeSaving = isMain
 		? savingMain
 		: isInitializer
 			? savingInitializer
-			: savingEngineeringDocument;
+			: savingTaskAssistant;
 	const activeCurrent = isMain
 		? currentAgent
 		: isInitializer
 			? currentInitializer
-			: currentEngineeringDocument;
-	const activeCurrentInvalid =
-		activeCurrent !== null && !isMainCandidate(activeCurrent);
+			: currentTaskAssistant;
+	const activeCurrentInvalid = activeCurrent !== null && !isMainCandidate(activeCurrent);
 	const activePrefix = isMain
 		? 'platform-settings.main'
 		: isInitializer
 			? 'platform-settings.initializer'
-			: 'platform-settings.engineeringDocuments';
-	const ActiveIcon = isMain ? Bot : isInitializer ? FileSearch : FolderKanban;
+			: 'platform-settings.taskAssistant';
+	const ActiveIcon = isMain ? Bot : isInitializer ? FileSearch : ListTodo;
 	const handleAgentSelection = (agentId: string) => {
 		if (isMain) {
 			setMainSelectedId(agentId);
 		} else if (isInitializer) {
 			setInitializerSelectedId(agentId);
 		} else {
-			setEngineeringDocumentSelectedId(agentId);
+			setTaskAssistantSelectedId(agentId);
 		}
 	};
 	const saveActiveAssignment = isMain
 		? saveMain
 		: isInitializer
 			? saveInitializer
-			: saveEngineeringDocument;
+			: saveTaskAssistant;
 	const selectedValidationIsCurrent = Boolean(
 		selectedValidationVersion &&
 		settings?.project_initializer_validation_mcp &&
@@ -396,12 +362,12 @@ export function PlatformSettingsPage() {
 			isDirty: !initializerUnchanged,
 		},
 		{
-			key: 'engineeringDocuments' as const,
-			icon: FolderKanban,
-			title: t('platform-settings.engineeringDocuments.title'),
-			agent: selectedEngineeringDocument,
-			isValid: engineeringDocumentIsValid,
-			isDirty: !engineeringDocumentUnchanged,
+			key: 'taskAssistant' as const,
+			icon: ListTodo,
+			title: t('platform-settings.taskAssistant.title'),
+			agent: selectedTaskAssistant,
+			isValid: taskAssistantIsValid,
+			isDirty: !taskAssistantUnchanged,
 		},
 	];
 
@@ -411,9 +377,7 @@ export function PlatformSettingsPage() {
 				<div>
 					<div className="flex items-center gap-2">
 						<Crown className="size-5 text-primary" />
-						<h1 className="text-lg font-semibold">
-							{t('platform-settings.title')}
-						</h1>
+						<h1 className="text-lg font-semibold">{t('platform-settings.title')}</h1>
 					</div>
 					<p className="mt-1 text-xs text-muted-foreground">
 						{t('platform-settings.description')}
@@ -478,19 +442,27 @@ export function PlatformSettingsPage() {
 												</div>
 												<p className="mt-1 truncate text-xs text-muted-foreground">
 													{item.agent?.data.name ??
-														t('platform-settings.assignments.unassigned')}
+														t(
+															'platform-settings.assignments.unassigned',
+														)}
 												</p>
 												<div className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
 													<span
 														className={`size-1.5 rounded-full ${
-															item.isValid ? 'bg-emerald-500' : 'bg-muted-foreground/40'
+															item.isValid
+																? 'bg-emerald-500'
+																: 'bg-muted-foreground/40'
 														}`}
 													/>
 													{item.isDirty
 														? t('platform-settings.assignments.pending')
 														: item.isValid
-															? t('platform-settings.assignments.assigned')
-															: t('platform-settings.assignments.unassigned')}
+															? t(
+																	'platform-settings.assignments.assigned',
+																)
+															: t(
+																	'platform-settings.assignments.unassigned',
+																)}
 												</div>
 											</div>
 										</div>
@@ -549,7 +521,9 @@ export function PlatformSettingsPage() {
 												id={`${activeAssignment}-agent`}
 												className="w-full"
 											>
-												<SelectValue placeholder={t(`${activePrefix}.placeholder`)} />
+												<SelectValue
+													placeholder={t(`${activePrefix}.placeholder`)}
+												/>
 											</SelectTrigger>
 											<SelectContent>
 												{activeCandidates.map((agent) => (
@@ -573,40 +547,62 @@ export function PlatformSettingsPage() {
 													</div>
 													<div className="min-w-0">
 														<div className="flex flex-wrap items-center gap-2">
-															<h3 className="font-semibold">{activeAgent.data.name}</h3>
+															<h3 className="font-semibold">
+																{activeAgent.data.name}
+															</h3>
 															<Badge variant="secondary">
 																{isMain
-																	? activeAgent.data.platform_config.category
+																	? activeAgent.data
+																			.platform_config
+																			.category
 																	: isInitializer
-																		? t('platform-settings.initializer.internal')
-																			: t(
-																				'platform-settings.engineeringDocuments.roleBadge',
-																			)}
+																		? t(
+																				'platform-settings.initializer.internal',
+																			)
+																		: isTaskAssistant
+																			? t(
+																					'platform-settings.taskAssistant.roleBadge',
+																				)
+																			: null}
 															</Badge>
 														</div>
 														<p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-															{activeAgent.data.platform_config.description ||
-																activeAgent.data.invite_config.invite_description ||
-																t('platform-settings.main.noDescription')}
+															{activeAgent.data.platform_config
+																.description ||
+																activeAgent.data.invite_config
+																	.invite_description ||
+																t(
+																	'platform-settings.main.noDescription',
+																)}
 														</p>
 													</div>
 												</div>
 												{activeValid && (
-													<Badge variant="outline" className="gap-1.5 bg-background">
+													<Badge
+														variant="outline"
+														className="gap-1.5 bg-background"
+													>
 														<span className="size-1.5 rounded-full bg-emerald-500" />
-														{t('platform-settings.assignments.available')}
+														{t(
+															'platform-settings.assignments.available',
+														)}
 													</Badge>
 												)}
 											</div>
 
-											<dl className={`mt-5 grid gap-3 ${isMain ? 'sm:grid-cols-2' : ''}`}>
+											<dl
+												className={`mt-5 grid gap-3 ${isMain ? 'sm:grid-cols-2' : ''}`}
+											>
 												<div className="rounded-lg bg-background px-3.5 py-3 ring-1 ring-border/70">
 													<dt className="text-xs text-muted-foreground">
 														{t('platform-settings.main.model')}
 													</dt>
 													<dd className="mt-1 font-mono text-sm font-medium">
-														{activeAgent.data.model_policy.chat_model_config?.model ??
-															t('platform-settings.main.notConfigured')}
+														{activeAgent.data.model_policy
+															.chat_model_config?.model ??
+															t(
+																'platform-settings.main.notConfigured',
+															)}
 													</dd>
 												</div>
 												{isMain && (
@@ -615,7 +611,10 @@ export function PlatformSettingsPage() {
 															{t('platform-settings.main.permission')}
 														</dt>
 														<dd className="mt-1 font-mono text-sm font-medium">
-															{activeAgent.data.platform_config.permission_mode}
+															{
+																activeAgent.data.platform_config
+																	.permission_mode
+															}
 														</dd>
 													</div>
 												)}
@@ -627,10 +626,12 @@ export function PlatformSettingsPage() {
 												<ShieldCheck />
 											) : isInitializer ? (
 												<FileSearch />
-											) : (
-												<FolderKanban />
-											)}
-											<AlertTitle>{t(`${activePrefix}.unconfiguredTitle`)}</AlertTitle>
+											) : isTaskAssistant ? (
+												<ListTodo />
+											) : null}
+											<AlertTitle>
+												{t(`${activePrefix}.unconfiguredTitle`)}
+											</AlertTitle>
 											<AlertDescription>
 												{activeCandidates.length === 0
 													? t(`${activePrefix}.noCandidates`)
@@ -649,14 +650,20 @@ export function PlatformSettingsPage() {
 													<div className="min-w-0">
 														<div className="flex flex-wrap items-center gap-2">
 															<h3 className="font-semibold">
-																{t('platform-settings.initializer.validation.title')}
+																{t(
+																	'platform-settings.initializer.validation.title',
+																)}
 															</h3>
 															<Badge variant="secondary">
-																{t('platform-settings.initializer.validation.required')}
+																{t(
+																	'platform-settings.initializer.validation.required',
+																)}
 															</Badge>
 														</div>
 														<p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-															{t('platform-settings.initializer.validation.description')}
+															{t(
+																'platform-settings.initializer.validation.description',
+															)}
 														</p>
 													</div>
 												</div>
@@ -667,21 +674,26 @@ export function PlatformSettingsPage() {
 													className="hidden"
 													onChange={(event) => {
 														const file = event.target.files?.[0];
-														if (file) void uploadValidationVersion(file);
+														if (file)
+															void uploadValidationVersion(file);
 													}}
 												/>
 												<Button
 													variant="outline"
 													size="sm"
 													disabled={uploadingValidation}
-													onClick={() => validationUploadRef.current?.click()}
+													onClick={() =>
+														validationUploadRef.current?.click()
+													}
 												>
 													{uploadingValidation ? (
 														<Loader2 className="animate-spin" />
 													) : (
 														<Upload />
 													)}
-													{t('platform-settings.initializer.validation.upload')}
+													{t(
+														'platform-settings.initializer.validation.upload',
+													)}
 												</Button>
 											</div>
 
@@ -690,14 +702,18 @@ export function PlatformSettingsPage() {
 													className="text-sm font-medium"
 													htmlFor="initialization-validation-version"
 												>
-													{t('platform-settings.initializer.validation.selector')}
+													{t(
+														'platform-settings.initializer.validation.selector',
+													)}
 												</label>
 												<div className="flex min-w-0 items-center gap-2">
 													<div className="min-w-0 flex-1">
 														<Select
 															value={validationSelectedKey}
 															onValueChange={setValidationSelectedKey}
-															disabled={!validationConfig?.versions.length}
+															disabled={
+																!validationConfig?.versions.length
+															}
 														>
 															<SelectTrigger
 																id="initialization-validation-version"
@@ -710,17 +726,29 @@ export function PlatformSettingsPage() {
 																/>
 															</SelectTrigger>
 															<SelectContent>
-																{validationConfig?.versions.map((version) => {
-																	const binding = bindingFromVersion(version);
-																	return (
-																		<SelectItem
-																			key={validationVersionKey(binding)}
-																			value={validationVersionKey(binding)}
-																		>
-																			{version.display_name} · v{version.version}
-																		</SelectItem>
-																	);
-																})}
+																{validationConfig?.versions.map(
+																	(version) => {
+																		const binding =
+																			bindingFromVersion(
+																				version,
+																			);
+																		return (
+																			<SelectItem
+																				key={validationVersionKey(
+																					binding,
+																				)}
+																				value={validationVersionKey(
+																					binding,
+																				)}
+																			>
+																				{
+																					version.display_name
+																				}{' '}
+																				· v{version.version}
+																			</SelectItem>
+																		);
+																	},
+																)}
 															</SelectContent>
 														</Select>
 													</div>
@@ -729,15 +757,22 @@ export function PlatformSettingsPage() {
 															variant="outline"
 															size="sm"
 															className="whitespace-nowrap"
-															disabled={!selectedValidationVersion || downloadingValidation}
-															onClick={() => void downloadValidationVersion()}
+															disabled={
+																!selectedValidationVersion ||
+																downloadingValidation
+															}
+															onClick={() =>
+																void downloadValidationVersion()
+															}
 														>
 															{downloadingValidation ? (
 																<Loader2 className="animate-spin" />
 															) : (
 																<Download />
 															)}
-															{t('platform-settings.initializer.validation.download')}
+															{t(
+																'platform-settings.initializer.validation.download',
+															)}
 														</Button>
 														<Button
 															variant="outline"
@@ -747,29 +782,37 @@ export function PlatformSettingsPage() {
 															title={
 																selectedValidationIsCurrent
 																	? t(
-																		'platform-settings.initializer.validation.deleteCurrentHint',
-																	)
+																			'platform-settings.initializer.validation.deleteCurrentHint',
+																		)
 																	: selectedValidationVersion?.active_instances
 																		? t(
-																			'platform-settings.initializer.validation.deleteRunningHint',
+																				'platform-settings.initializer.validation.deleteRunningHint',
 																			)
 																		: undefined
 															}
 															onClick={() =>
-																setValidationDeleteTarget(selectedValidationVersion)
+																setValidationDeleteTarget(
+																	selectedValidationVersion,
+																)
 															}
 														>
 															<Trash2 />
-															{t('platform-settings.initializer.validation.delete')}
+															{t(
+																'platform-settings.initializer.validation.delete',
+															)}
 														</Button>
 													</div>
 												</div>
 												<p className="text-xs leading-relaxed text-muted-foreground">
-													{t('platform-settings.initializer.validation.current')}{' '}
+													{t(
+														'platform-settings.initializer.validation.current',
+													)}{' '}
 													<span className="font-medium text-foreground">
 														{currentValidationVersion
 															? `${currentValidationVersion.display_name} · v${currentValidationVersion.version}`
-															: t('platform-settings.initializer.validation.unconfigured')}
+															: t(
+																	'platform-settings.initializer.validation.unconfigured',
+																)}
 													</span>
 												</p>
 											</div>
@@ -778,8 +821,12 @@ export function PlatformSettingsPage() {
 
 									{activeCurrentInvalid && (
 										<Alert variant="destructive">
-											<AlertTitle>{t(`${activePrefix}.invalidCurrentTitle`)}</AlertTitle>
-											<AlertDescription>{t(`${activePrefix}.invalidCurrent`)}</AlertDescription>
+											<AlertTitle>
+												{t(`${activePrefix}.invalidCurrentTitle`)}
+											</AlertTitle>
+											<AlertDescription>
+												{t(`${activePrefix}.invalidCurrent`)}
+											</AlertDescription>
 										</Alert>
 									)}
 								</div>
@@ -796,9 +843,7 @@ export function PlatformSettingsPage() {
 								className="shrink-0"
 							>
 								{activeSaving && <Loader2 className="animate-spin" />}
-								{activeSaving
-									? t('common.saving')
-									: t(`${activePrefix}.save`)}
+								{activeSaving ? t('common.saving') : t(`${activePrefix}.save`)}
 							</Button>
 						</footer>
 					</section>
@@ -813,9 +858,7 @@ export function PlatformSettingsPage() {
 				title={t('platform-settings.initializer.validation.deleteTitle', {
 					version: validationDeleteTarget?.version ?? '',
 				})}
-				description={t(
-					'platform-settings.initializer.validation.deleteDescription',
-				)}
+				description={t('platform-settings.initializer.validation.deleteDescription')}
 				confirmLabel={t('common.delete')}
 				onConfirm={deleteValidationVersion}
 			/>

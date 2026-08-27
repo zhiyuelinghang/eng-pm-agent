@@ -242,8 +242,8 @@ export interface AgentListResponse {
 export interface PlatformSettings {
 	global_main_agent_id: string | null;
 	project_initializer_agent_id: string | null;
+	task_assistant_agent_id: string | null;
 	project_initializer_validation_mcp: PlatformMCPVersionBinding | null;
-	engineering_document_agent_id: string | null;
 }
 
 export interface PlatformMCPVersionBinding {
@@ -254,8 +254,8 @@ export interface PlatformMCPVersionBinding {
 export interface UpdatePlatformSettingsRequest {
 	global_main_agent_id?: string;
 	project_initializer_agent_id?: string | null;
+	task_assistant_agent_id?: string | null;
 	project_initializer_validation_mcp?: PlatformMCPVersionBinding | null;
-	engineering_document_agent_id?: string | null;
 }
 
 export interface MemorySettings {
@@ -503,6 +503,15 @@ export interface WeKnoraProjectBinding {
 	project_name: string;
 	weknora_agent_id: string | null;
 	updated_at: string | null;
+	catalogue_sync: {
+		status: 'uninitialized' | 'pending' | 'syncing' | 'ready' | 'error';
+		access_mode: 'project' | 'restricted';
+		revision: number;
+		knowledge_base_ids: string[];
+		last_started_at: string | null;
+		last_completed_at: string | null;
+		last_error: string | null;
+	};
 }
 
 export interface WeKnoraProjectBindingListResponse {
@@ -512,6 +521,34 @@ export interface WeKnoraProjectBindingListResponse {
 
 export interface UpdateWeKnoraProjectBindingRequest {
 	weknora_agent_id: string | null;
+}
+
+export interface WeKnoraCatalogueSelectionRequest {
+	knowledge_base_ids: string[];
+}
+
+export interface WeKnoraCatalogueDiffItem {
+	node_key: string;
+	node_type: string;
+	knowledge_base_id: string;
+	name: string;
+	folder_path: string;
+	changed_fields: string[];
+}
+
+export interface WeKnoraCatalogueDiffResponse {
+	project_id: number;
+	project_name: string;
+	matches: boolean;
+	remote_node_count: number;
+	local_node_count: number;
+	added_count: number;
+	changed_count: number;
+	removed_count: number;
+	added: WeKnoraCatalogueDiffItem[];
+	changed: WeKnoraCatalogueDiffItem[];
+	removed: WeKnoraCatalogueDiffItem[];
+	truncated: boolean;
 }
 
 /**

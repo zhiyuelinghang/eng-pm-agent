@@ -13,12 +13,11 @@ from .chat_api import router as chat_router
 from .database_interaction_router import router as database_interaction_router
 from .database_interactions import bootstrap_declarative_catalog
 from .config import get_settings
-from .db import Base, SessionLocal, engine
+from .db import SessionLocal
 from .models import (Attachment, DailyReport, DocumentFolder, DocumentFolderItem, Project, ProjectChange,
                      ProjectInformationRecord, ProjectMember, ProjectMemberPosition, ProjectPosition, ProjectStatusSnapshot, QualityMetric, RiskSource,
                      User, WbsItem, WbsRiskLink)
 from .security import hash_password
-from .schema_migrations import upgrade_database_schema
 from .task_engine_gateway import get_engine
 from .task_action_gateway import (
     current_task_action,
@@ -437,11 +436,6 @@ def seed_prototype_project() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    upgrade_database_schema(
-        engine,
-        Base.metadata,
-        schema=settings.database_schema,
-    )
     with SessionLocal() as db:
         bootstrap_declarative_catalog(db)
     seed_admin()

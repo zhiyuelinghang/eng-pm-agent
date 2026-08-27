@@ -16,6 +16,7 @@ from .agentscope_client import AgentScopeGatewayError
 from .api import (
     _agentscope_client,
     _build_agent_project_context,
+    _public_task_assistant_catalog_item,
     get_current_user,
     ok,
     project_for_user_or_403,
@@ -495,6 +496,7 @@ def _persist_chat_agent_reply(
     *,
     content: str,
     metadata: dict[str, Any],
+    is_task_assistant: bool = False,
     failed: bool = False,
 ) -> ChatMessage:
     row = ChatMessage(
@@ -503,7 +505,7 @@ def _persist_chat_agent_reply(
         sender_agent_id=thread.agent_id,
         message_type=(
             "task_draft"
-            if thread.agent_name == "任务智能体" and not failed
+            if is_task_assistant and not failed
             else "agent"
         ),
         content=content,
@@ -547,17 +549,28 @@ def _invoke_one_chat_agent(message_id: int, agent_id: str) -> None:
             )
             try:
                 catalog = client.get_catalog()
-                selected_agent = next(
-                    (
-                        item
-                        for item in catalog.get("business_agents", [])
-                        if str(item.get("id")) == agent_id
-                    ),
-                    None,
+                task_assistant = _public_task_assistant_catalog_item(
+                    catalog.get("task_assistant"),
+                )
+                is_task_assistant = bool(
+                    task_assistant
+                    and str(task_assistant.get("id")) == agent_id
+                )
+                selected_agent = (
+                    task_assistant
+                    if is_task_assistant
+                    else next(
+                        (
+                            item
+                            for item in catalog.get("business_agents", [])
+                            if str(item.get("id")) == agent_id
+                        ),
+                        None,
+                    )
                 )
                 if selected_agent is None:
                     raise AgentScopeGatewayError(
-                        "该业务智能体未发布、已停用或不存在。",
+                        "该智能体职责未分配、已停用或不存在。",
                         status_code=404,
                     )
                 if thread is None:
@@ -646,6 +659,7 @@ def _invoke_one_chat_agent(message_id: int, agent_id: str) -> None:
                     thread,
                     content=reply.content or "智能体已完成处理，但未返回文本内容。",
                     metadata=_agent_reply_runtime_metadata(source, thread, reply),
+                    is_task_assistant=is_task_assistant,
                 )
                 db.commit()
             except Exception as exc:
@@ -1032,11 +1046,16 @@ def _validate_mentioned_agents(agent_ids: list[str]) -> list[dict[str, Any]]:
         for item in catalog.get("business_agents", [])
         if item.get("id")
     }
+    task_assistant = _public_task_assistant_catalog_item(
+        catalog.get("task_assistant"),
+    )
+    if task_assistant and task_assistant.get("id"):
+        agents_by_id[str(task_assistant["id"])] = task_assistant
     missing = [agent_id for agent_id in unique_ids if agent_id not in agents_by_id]
     if missing:
         raise HTTPException(
             status_code=422,
-            detail="只能提及当前已启用并发布的业务智能体",
+            detail="只能提及当前已启用的任务助手或已发布业务智能体",
         )
     return [agents_by_id[agent_id] for agent_id in unique_ids]
 

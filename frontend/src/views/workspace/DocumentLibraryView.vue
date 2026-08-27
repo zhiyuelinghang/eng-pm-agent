@@ -50,35 +50,35 @@
               <n-icon :size="18"><Search /></n-icon>
               <input
                 v-model.trim="documentSearchKeyword"
-                :disabled="!canManageDocuments || documentSearching"
+                :disabled="!canReadDocuments || documentSearching"
                 placeholder="搜索文件名或资料内容"
               >
             </label>
-            <button type="submit" :disabled="!canManageDocuments || documentSearching">
+            <button type="submit" :disabled="!canReadDocuments || documentSearching">
               {{ documentSearching ? '正在搜索…' : '搜索' }}
             </button>
           </form>
 
           <div class="file-toolbar-actions">
-            <button type="button" class="secondary-action" :disabled="!canManageDocuments || folderCreating || folderUpdating || folderDeleting || documentUploading || Boolean(documentMovingId) || Boolean(documentDeletingId)" @click="openFolderModal">
+            <button type="button" class="secondary-action" :disabled="!canCreateDocuments || folderCreating || folderUpdating || folderDeleting || documentUploading || Boolean(documentMovingId) || Boolean(documentDeletingId)" @click="openFolderModal">
               <n-icon :size="16"><FolderPlus /></n-icon>
               新建目录
             </button>
             <button
               type="button"
               class="secondary-action"
-              :disabled="!activeFolder || activeFolder.isKnowledgeBase || folderUpdating || folderDeleting || folderCreating || documentUploading || Boolean(documentMovingId) || Boolean(documentDeletingId)"
+              :disabled="!canUpdateActiveFolder || !activeFolder || activeFolder.isKnowledgeBase || folderUpdating || folderDeleting || folderCreating || documentUploading || Boolean(documentMovingId) || Boolean(documentDeletingId)"
               :title="activeFolder && !activeFolder.isKnowledgeBase ? '移动或重命名选中目录' : '请先在左侧选择一个普通目录'"
               @click="openFolderUpdateModal"
             >
               <n-icon :size="16"><Pencil /></n-icon>
               移动/重命名
             </button>
-            <button v-if="activeFolder && !activeFolder.isKnowledgeBase" type="button" class="secondary-action is-danger" :disabled="knowledgeChatBusy || folderDeleting || folderUpdating || folderCreating || documentUploading || Boolean(documentMovingId) || Boolean(documentDeletingId)" @click="confirmDeleteFolder">
+            <button v-if="activeFolder && !activeFolder.isKnowledgeBase" type="button" class="secondary-action is-danger" :disabled="!canDeleteActiveFolder || knowledgeChatBusy || folderDeleting || folderUpdating || folderCreating || documentUploading || Boolean(documentMovingId) || Boolean(documentDeletingId)" @click="confirmDeleteFolder">
               <n-icon :size="16"><Trash /></n-icon>
               {{ folderDeleting ? '正在删除…' : '删除目录' }}
             </button>
-            <button type="button" class="primary-action" :disabled="!canManageDocuments || documentUploading || folderCreating || folderUpdating || folderDeleting || Boolean(documentMovingId) || Boolean(documentDeletingId)" @click="openUploadModal">
+            <button type="button" class="primary-action" :disabled="!canCreateDocuments || documentUploading || folderCreating || folderUpdating || folderDeleting || Boolean(documentMovingId) || Boolean(documentDeletingId)" @click="openUploadModal">
               <n-icon :size="16"><Paperclip /></n-icon>
               上传资料
             </button>
@@ -151,7 +151,7 @@
                     <span class="library-loading-stack" aria-hidden="true"><i></i><i></i><i></i></span>
                     <span class="library-loading-text">
                       <strong>正在加载工程资料</strong>
-                      <span>正在从 WeKnora 获取当前目录内容</span>
+                      <span>正在读取当前目录文件</span>
                     </span>
                   </div>
                 </section>
@@ -191,8 +191,18 @@
                     <span class="document-file-actions">
                       <button
                         type="button"
+                        class="is-info"
+                        title="查看文件信息"
+                        :aria-label="`查看 ${file.fileName} 的文件信息`"
+                        @click.stop="openDocumentInfo(file)"
+                        @keydown.stop
+                      >
+                        <n-icon :size="16"><InfoCircle /></n-icon>
+                      </button>
+                      <button
+                        type="button"
                         class="is-move"
-                        :disabled="!canManageDocuments || folderUpdating || folderDeleting || Boolean(documentMovingId) || Boolean(documentDeletingId)"
+                        :disabled="!allowsCapability(file.capabilities, 'can_update') || folderUpdating || folderDeleting || Boolean(documentMovingId) || Boolean(documentDeletingId)"
                         :title="documentMovingId === file.id ? '正在移动' : '移动文件'"
                         :aria-label="documentMovingId === file.id ? `正在移动 ${file.fileName}` : `移动 ${file.fileName}`"
                         @click.stop="openDocumentMoveModal(file)"
@@ -214,7 +224,7 @@
                       <button
                         type="button"
                         class="is-delete"
-                        :disabled="knowledgeChatBusy || !canManageDocuments || folderUpdating || Boolean(documentMovingId) || Boolean(documentDeletingId)"
+                        :disabled="knowledgeChatBusy || !allowsCapability(file.capabilities, 'can_delete') || folderUpdating || Boolean(documentMovingId) || Boolean(documentDeletingId)"
                         :title="documentDeletingId === file.id ? '正在删除' : '删除文件'"
                         :aria-label="documentDeletingId === file.id ? `正在删除 ${file.fileName}` : `删除 ${file.fileName}`"
                         @click.stop="confirmDeleteDocument(file)"
@@ -229,8 +239,8 @@
                 <section v-else class="document-empty">
                   <n-icon :size="30"><FileText /></n-icon>
                   <strong>{{ isSearchActive ? '没有找到相关资料' : '当前目录还没有资料' }}</strong>
-                  <p>{{ isSearchActive ? '可以换一种关键词，或返回当前目录。' : '上传后资料将由 WeKnora 解析并出现在当前目录。' }}</p>
-                  <button v-if="!isSearchActive" type="button" @click="openUploadModal">上传资料</button>
+                  <p v-if="isSearchActive">可以换一种关键词，或返回当前目录。</p>
+                  <button v-if="!isSearchActive && canCreateDocuments" type="button" @click="openUploadModal">上传资料</button>
                 </section>
               </div>
             </div>
@@ -247,14 +257,62 @@
             {{ knowledgeWorkspaceLoading ? '正在重试…' : '重新加载' }}
           </button>
         </section>
+        <section v-else-if="catalogueUninitialized" class="knowledge-workspace-error">
+          <span class="knowledge-workspace-robot is-idle"><n-icon :size="32"><Robot /></n-icon></span>
+          <strong>工程资料尚未初始化</strong>
+          <p>当前项目的工程资料尚未准备好，请联系管理员。</p>
+        </section>
         <section v-else class="knowledge-workspace-loading">
           <span class="knowledge-workspace-robot"><n-icon :size="32"><Robot /></n-icon></span>
           <strong>正在准备工程知识库</strong>
-          <p>{{ knowledgeWorkspaceLoading ? '正在读取知识库和目录数据…' : '正在恢复最近对话…' }}</p>
+          <p>{{ knowledgeWorkspaceStatusText }}</p>
           <span class="knowledge-loading-dots" aria-hidden="true"><i></i><i></i><i></i></span>
         </section>
       </div>
     </section>
+
+    <div v-if="documentInfoOpen && documentInfoSource" class="library-modal-backdrop" @click.self="closeDocumentInfo">
+      <section class="library-modal document-info-modal" role="dialog" aria-modal="true" aria-labelledby="document-info-title">
+        <div class="library-modal-head">
+          <div><span>资料详情</span><h2 id="document-info-title">文件信息</h2></div>
+          <button type="button" class="modal-close" @click="closeDocumentInfo">关闭</button>
+        </div>
+
+        <section class="document-info-overview">
+          <span class="document-info-icon" aria-hidden="true"><DocumentTypeIcon :kind="documentIconKind(documentInfoSource)" /></span>
+          <div>
+            <strong>{{ documentInfoSource.fileName }}</strong>
+            <span>{{ documentKnowledgeBaseLabel(documentInfoSource) }}<template v-if="documentInfoSource.folderPath"> / {{ documentInfoSource.folderPath }}</template></span>
+          </div>
+          <em>{{ parseStatusLabel(documentInfoSource.parseStatus) }}</em>
+        </section>
+
+        <dl class="document-info-grid">
+          <div><dt>文件格式</dt><dd>{{ fileExtension(documentInfoSource.fileName) }}</dd></div>
+          <div><dt>文件大小</dt><dd>{{ remoteFileSizeLabel(documentInfoSource.fileSize) }}</dd></div>
+          <div><dt>上传时间</dt><dd>{{ formatDate(documentInfoSource.createdAt) }}</dd></div>
+          <div><dt>解析完成时间</dt><dd>{{ formatDate(documentInfoSource.processedAt || '') }}</dd></div>
+        </dl>
+
+        <section class="document-info-summary">
+          <strong>内容简介</strong>
+          <p>{{ documentInfoSource.snippet || '暂无内容简介。' }}</p>
+        </section>
+
+        <div class="document-info-identity">
+          <span>文件标识</span>
+          <code>{{ documentInfoSource.id }}</code>
+        </div>
+
+        <div class="upload-actions">
+          <button type="button" class="modal-secondary" @click="closeDocumentInfo">关闭</button>
+          <button type="button" class="modal-primary" :disabled="knowledgeChatBusy" @click="openDocumentConversationFromInfo">
+            <n-icon :size="16"><MessageCircle /></n-icon>
+            围绕此文件提问
+          </button>
+        </div>
+      </section>
+    </div>
 
     <div v-if="folderModalOpen" class="library-modal-backdrop" @click.self="closeFolderModal">
       <section class="library-modal" role="dialog" aria-modal="true" aria-labelledby="folder-create-title">
@@ -384,14 +442,10 @@
     <div v-if="uploadModalOpen" class="library-modal-backdrop" @click.self="closeUploadModal">
       <section class="library-modal upload-modal" role="dialog" aria-modal="true" aria-labelledby="upload-title">
         <div class="library-modal-head">
-          <div><span>WeKnora 资料接收</span><h2 id="upload-title">上传工程资料</h2></div>
+          <div><span>资料上传</span><h2 id="upload-title">上传工程资料</h2></div>
           <button type="button" class="modal-close" :disabled="documentUploading" @click="closeUploadModal">关闭</button>
         </div>
         <form class="upload-form" @submit.prevent="uploadDocuments">
-          <div class="upload-weknora-note">
-            <n-icon :size="19"><DatabaseImport /></n-icon>
-            <div><strong>文件将直接提交 WeKnora</strong><span>上传完成后由 WeKnora 解析；页面只展示服务实际返回的状态和资料信息。</span></div>
-          </div>
           <div class="upload-target-field">
             <span>目标目录</span>
             <n-tree-select
@@ -405,7 +459,7 @@
               show-line
               show-path
               separator=" / "
-              placeholder="搜索或选择 WeKnora 知识库、目标目录"
+              placeholder="搜索或选择知识库、目标目录"
               aria-label="选择资料上传目标目录"
             >
               <template #action>
@@ -427,12 +481,12 @@
               <button type="button" :disabled="documentUploading" :aria-label="'移除 ' + file.name" @click="removePendingUpload(index)">移除</button>
             </li>
           </ul>
-          <div v-else class="upload-queue-empty"><n-icon :size="26"><FileText /></n-icon><strong>选择要上传的工程资料</strong><span>支持一次选择多个文件，提交后由 WeKnora 解析。</span></div>
+          <div v-else class="upload-queue-empty"><n-icon :size="26"><FileText /></n-icon><strong>选择要上传的工程资料</strong><span>支持一次选择多个文件。</span></div>
           <div class="upload-actions">
             <button type="button" class="modal-secondary" :disabled="documentUploading" @click="closeUploadModal">取消</button>
             <button type="submit" class="modal-primary" :disabled="documentUploading || !pendingUploadFiles.length || !uploadTargetAvailable">
-              <n-icon :size="16"><DatabaseImport /></n-icon>
-              {{ documentUploading ? '正在上传…' : '上传到 WeKnora' }}
+              <n-icon :size="16"><Paperclip /></n-icon>
+              {{ documentUploading ? '正在上传…' : '开始上传' }}
             </button>
           </div>
         </form>
@@ -442,17 +496,17 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, nextTick, ref, watch } from 'vue'
+import { computed, h, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useDialog, useMessage, NIcon, NTreeSelect, type TreeSelectOption } from 'naive-ui'
 import {
   ArrowsLeftRight,
   ChevronDown,
   ChevronRight,
   Database,
-  DatabaseImport,
   FileText,
   Folder,
   FolderPlus,
+  InfoCircle,
   MessageCircle,
   Paperclip,
   Pencil,
@@ -463,7 +517,12 @@ import {
 } from '@vicons/tabler'
 import DocumentTypeIcon from '@/components/business/DocumentTypeIcon.vue'
 import ProjectKnowledgeChat from '@/components/business/ProjectKnowledgeChat.vue'
-import { useAppStore, type AttachmentRecord, type DocumentFolderRecord } from '@/stores/app'
+import {
+  useAppStore,
+  type AttachmentRecord,
+  type DocumentFolderRecord,
+  type EngineeringDocumentCapabilities,
+} from '@/stores/app'
 
 type FolderTreeDisplayNode = {
   id: string
@@ -486,11 +545,14 @@ const knowledgeChatReady = ref(false)
 const knowledgeWorkspaceLoading = ref(false)
 const knowledgeWorkspaceReady = ref(false)
 const knowledgeWorkspaceError = ref('')
+let catalogueSyncPollTimer: number | undefined
 const fileWorkspaceInitialized = ref(false)
 const activeFolderId = ref('')
 const expandedFolderIds = ref<string[]>([])
 const initialDirectoryExpansionApplied = ref(false)
 const selectedFileId = ref('')
+const documentInfoOpen = ref(false)
+const documentInfoSource = ref<AttachmentRecord>()
 const documentUploading = ref(false)
 const folderModalOpen = ref(false)
 const folderCreating = ref(false)
@@ -518,10 +580,25 @@ const isSearchActive = ref(false)
 const documentRefreshing = ref(false)
 const locatingReferenceId = ref('')
 
-const canManageDocuments = computed(() => Boolean(store.currentProjectId))
+function allowsCapability(capabilities: EngineeringDocumentCapabilities | undefined, capability: keyof EngineeringDocumentCapabilities) {
+  return capabilities ? capabilities[capability] || capabilities.can_manage : true
+}
+const canReadDocuments = computed(() => Boolean(store.currentProjectId) && (
+  store.weknoraKnowledgeBases.some(base => allowsCapability(base.capabilities, 'can_read'))
+  || store.documentFolders.length > 0
+))
+const canCreateDocuments = computed(() => Boolean(store.currentProjectId) && store.documentFolders.some(folder => allowsCapability(folder.capabilities, 'can_create')))
 const knowledgeWorkspaceBlocked = computed(() => Boolean(store.currentProjectId) && (
   !knowledgeWorkspaceReady.value || !knowledgeChatReady.value
 ))
+const catalogueUninitialized = computed(() => store.engineeringDocumentSync?.status === 'uninitialized')
+const knowledgeWorkspaceStatusText = computed(() => {
+  const status = store.engineeringDocumentSync?.status
+  if (status === 'pending') return '工程资料正在准备，请稍候…'
+  if (status === 'syncing') return '工程资料正在更新，请稍候…'
+  if (knowledgeWorkspaceLoading.value) return '正在读取工程资料…'
+  return '正在恢复最近对话…'
+})
 const totalDocumentCount = computed(() => {
   const knowledgeBaseFolders = store.documentFolders.filter(folder => folder.isKnowledgeBase)
   if (knowledgeBaseFolders.length) {
@@ -568,12 +645,15 @@ const folderTreeOptions = computed<TreeSelectOption[]>(() => {
       key: folder.id,
       label: folder.name,
       isKnowledgeBase: Boolean(folder.isKnowledgeBase),
+      disabled: !allowsCapability(folder.capabilities, 'can_create'),
       children: children.length ? children.map(createOption) : undefined,
     }
   }
   return (folderChildren.value.get(undefined) || []).map(createOption)
 })
 const activeFolder = computed(() => store.documentFolders.find(folder => folder.id === activeFolderId.value))
+const canUpdateActiveFolder = computed(() => Boolean(activeFolder.value) && allowsCapability(activeFolder.value?.capabilities, 'can_update'))
+const canDeleteActiveFolder = computed(() => Boolean(activeFolder.value) && allowsCapability(activeFolder.value?.capabilities, 'can_delete'))
 const folderUpdateSource = computed(() => store.documentFolders.find(folder => folder.id === folderUpdateSourceId.value))
 const folderUpdateTreeOptions = computed<TreeSelectOption[]>(() => {
   const source = folderUpdateSource.value
@@ -626,6 +706,7 @@ watch(() => store.documentFolders, folders => {
 }, { immediate: true })
 
 watch(() => store.currentProjectId, async projectId => {
+  stopCatalogueSyncPolling()
   activeWorkspaceTab.value = 'chat'
   chatFocusDocumentId.value = ''
   knowledgeChatBusy.value = false
@@ -648,6 +729,8 @@ watch(() => store.currentProjectId, async projectId => {
   uploadModalOpen.value = false
   uploadFolderId.value = ''
   pendingUploadFiles.value = []
+  documentInfoOpen.value = false
+  documentInfoSource.value = undefined
   documentMoveModalOpen.value = false
   documentMovingId.value = ''
   documentMoveSource.value = undefined
@@ -668,15 +751,60 @@ async function initializeKnowledgeWorkspace(projectId: string, force = false) {
   knowledgeWorkspaceError.value = ''
   try {
     await store.loadEngineeringDocuments(projectId, force)
-    if (projectId === store.currentProjectId) knowledgeWorkspaceReady.value = true
+    if (projectId !== store.currentProjectId) return
+    const syncStatus = store.engineeringDocumentSync?.status
+    if (syncStatus === 'uninitialized') return
+    if (syncStatus === 'pending' || syncStatus === 'syncing') {
+      scheduleCatalogueSyncPolling(projectId)
+      return
+    }
+    if (syncStatus === 'error' && !store.weknoraKnowledgeBases.length) {
+      knowledgeWorkspaceError.value = store.engineeringDocumentSync?.last_error || '工程资料准备失败，请联系管理员。'
+      return
+    }
+    knowledgeWorkspaceReady.value = true
   } catch (error: any) {
     if (projectId === store.currentProjectId) {
-      knowledgeWorkspaceError.value = error.response?.data?.detail || error.message || 'WeKnora 工程资料加载失败。'
+      knowledgeWorkspaceError.value = error.response?.data?.detail || error.message || '平台工程资料加载失败。'
     }
   } finally {
     if (projectId === store.currentProjectId) knowledgeWorkspaceLoading.value = false
   }
 }
+
+function stopCatalogueSyncPolling() {
+  if (catalogueSyncPollTimer !== undefined) window.clearTimeout(catalogueSyncPollTimer)
+  catalogueSyncPollTimer = undefined
+}
+
+function scheduleCatalogueSyncPolling(projectId: string) {
+  stopCatalogueSyncPolling()
+  catalogueSyncPollTimer = window.setTimeout(async () => {
+    catalogueSyncPollTimer = undefined
+    if (projectId !== store.currentProjectId) return
+    try {
+      await store.loadEngineeringDocuments(projectId, true)
+      if (projectId !== store.currentProjectId) return
+      const status = store.engineeringDocumentSync?.status
+      if (status === 'pending' || status === 'syncing') {
+        scheduleCatalogueSyncPolling(projectId)
+        return
+      }
+      if (status === 'error' && !store.weknoraKnowledgeBases.length) {
+        knowledgeWorkspaceError.value = store.engineeringDocumentSync?.last_error || '工程资料准备失败，请联系管理员。'
+        return
+      }
+      knowledgeWorkspaceError.value = ''
+      knowledgeWorkspaceReady.value = true
+    } catch (error: any) {
+      if (projectId === store.currentProjectId) {
+        knowledgeWorkspaceError.value = error.response?.data?.detail || error.message || '工程资料状态读取失败。'
+      }
+    }
+  }, 1500)
+}
+
+onUnmounted(stopCatalogueSyncPolling)
 
 function retryKnowledgeWorkspace() {
   const projectId = store.currentProjectId
@@ -724,6 +852,7 @@ function folderOptionsForKnowledgeBase(knowledgeBaseId: string, excludedIds = ne
       key: folder.id,
       label: folder.name,
       isKnowledgeBase: Boolean(folder.isKnowledgeBase),
+      disabled: !allowsCapability(folder.capabilities, 'can_create'),
       children: children.length ? children : undefined,
     }
   }
@@ -749,7 +878,7 @@ async function selectFolder(folderId: string, force = false) {
     await store.loadEngineeringDocumentFolder(folderId, force)
     fileWorkspaceInitialized.value = true
   } catch (error: any) {
-    message.error(error.response?.data?.detail || error.message || 'WeKnora 目录资料加载失败。')
+    message.error(error.response?.data?.detail || error.message || '工程资料加载失败。')
   }
 }
 async function refreshDocumentLibrary() {
@@ -770,7 +899,7 @@ async function refreshDocumentLibrary() {
       || store.documentFolders.find(folder => folder.isKnowledgeBase)
     if (restoredFolder) await selectFolder(restoredFolder.id)
     if (restoreSearch) await searchDocuments()
-    message.success('知识库已刷新')
+    message.success('工程资料已刷新')
   } catch (error: any) {
     message.error(error.response?.data?.detail || error.message || '知识库刷新失败。')
   } finally {
@@ -779,6 +908,24 @@ async function refreshDocumentLibrary() {
 }
 function selectDocument(file: AttachmentRecord) {
   selectedFileId.value = file.id
+}
+
+function openDocumentInfo(file: AttachmentRecord) {
+  selectedFileId.value = file.id
+  documentInfoSource.value = file
+  documentInfoOpen.value = true
+}
+
+function closeDocumentInfo() {
+  documentInfoOpen.value = false
+  documentInfoSource.value = undefined
+}
+
+function openDocumentConversationFromInfo() {
+  const file = documentInfoSource.value
+  if (!file) return
+  closeDocumentInfo()
+  openDocumentConversation(file)
 }
 
 type KnowledgeReferenceLocation = {
@@ -894,13 +1041,13 @@ function restoreFolderExpansion(projectId: string) {
   }
 }
 function openFolderModal() {
-  if (!canManageDocuments.value) {
-    message.warning('请先在工程配置中创建并选择一个项目。')
+  if (!canCreateDocuments.value) {
+    message.warning('当前账号没有可新建目录的位置。')
     return
   }
-  const preferredFolder = store.documentFolders.find(folder => folder.id === activeFolderId.value)
-    || store.documentFolders.find(folder => folder.isKnowledgeBase)
-    || store.documentFolders[0]
+  const preferredFolder = store.documentFolders.find(folder => folder.id === activeFolderId.value && allowsCapability(folder.capabilities, 'can_create'))
+    || store.documentFolders.find(folder => folder.isKnowledgeBase && allowsCapability(folder.capabilities, 'can_create'))
+    || store.documentFolders.find(folder => allowsCapability(folder.capabilities, 'can_create'))
   resumeUploadAfterFolderModal.value = false
   newFolderParentId.value = preferredFolder?.id || ''
   newFolderName.value = ''
@@ -908,10 +1055,10 @@ function openFolderModal() {
 }
 function openFolderModalFromUpload() {
   if (documentUploading.value) return
-  const preferredFolder = store.documentFolders.find(folder => folder.id === uploadFolderId.value)
-    || store.documentFolders.find(folder => folder.id === activeFolderId.value)
-    || store.documentFolders.find(folder => folder.isKnowledgeBase)
-    || store.documentFolders[0]
+  const preferredFolder = store.documentFolders.find(folder => folder.id === uploadFolderId.value && allowsCapability(folder.capabilities, 'can_create'))
+    || store.documentFolders.find(folder => folder.id === activeFolderId.value && allowsCapability(folder.capabilities, 'can_create'))
+    || store.documentFolders.find(folder => folder.isKnowledgeBase && allowsCapability(folder.capabilities, 'can_create'))
+    || store.documentFolders.find(folder => allowsCapability(folder.capabilities, 'can_create'))
   resumeUploadAfterFolderModal.value = true
   newFolderParentId.value = preferredFolder?.id || ''
   newFolderName.value = ''
@@ -1064,7 +1211,7 @@ function confirmDeleteDocument(file: AttachmentRecord) {
   }
   dialog.warning({
     title: '删除文件',
-    content: `确认永久删除“${file.fileName}”吗？文件将从 WeKnora 中移除，删除后无法恢复。`,
+    content: `确认永久删除“${file.fileName}”吗？删除后无法恢复。`,
     positiveText: '删除',
     negativeText: '取消',
     positiveButtonProps: { type: 'error' },
@@ -1167,13 +1314,13 @@ async function deleteFolder(folder: DocumentFolderRecord) {
   }
 }
 function openUploadModal() {
-  if (!canManageDocuments.value) {
-    message.warning('请先在工程配置中创建并选择一个项目。')
+  if (!canCreateDocuments.value) {
+    message.warning('当前账号没有可上传资料的位置。')
     return
   }
-  const preferredFolder = store.documentFolders.find(folder => folder.id === activeFolderId.value)
-    || store.documentFolders.find(folder => folder.isKnowledgeBase)
-    || store.documentFolders[0]
+  const preferredFolder = store.documentFolders.find(folder => folder.id === activeFolderId.value && allowsCapability(folder.capabilities, 'can_create'))
+    || store.documentFolders.find(folder => folder.isKnowledgeBase && allowsCapability(folder.capabilities, 'can_create'))
+    || store.documentFolders.find(folder => allowsCapability(folder.capabilities, 'can_create'))
   uploadFolderId.value = preferredFolder?.id || ''
   pendingUploadFiles.value = []
   uploadModalOpen.value = true
@@ -1194,6 +1341,11 @@ function formatDate(value: string) {
 }
 function remoteFileSizeLabel(bytes: number) {
   return bytes > 0 ? formatFileSize(bytes) : '未提供'
+}
+function documentKnowledgeBaseLabel(file: AttachmentRecord) {
+  return store.weknoraKnowledgeBases.find(item => item.id === file.knowledgeBaseId)?.name
+    || file.knowledgeBaseId
+    || '未知知识库'
 }
 function documentIconKind(file: AttachmentRecord) {
   const extension = fileExtension(file.fileName).toLowerCase()
@@ -1270,7 +1422,7 @@ async function uploadDocuments() {
 
     if (uploadError) {
       pendingUploadFiles.value = files.slice(completed)
-      const detail = uploadError.response?.data?.detail || uploadError.message || '资料上传失败，请检查 WeKnora 服务连接。'
+      const detail = uploadError.response?.data?.detail || uploadError.message || '资料上传失败，请检查服务连接。'
       const refreshSuffix = refreshError ? '；同时列表刷新失败：' + refreshError : ''
       message.error(completed ? '已提交 ' + completed + ' 份，其余资料上传失败：' + detail + refreshSuffix : detail)
     } else {
@@ -1280,9 +1432,9 @@ async function uploadDocuments() {
       uploadModalOpen.value = false
       uploadFolderId.value = ''
       if (refreshError) {
-        message.warning('已提交 ' + completed + ' 份资料至 WeKnora，但列表刷新失败：' + refreshError)
+        message.warning('已上传 ' + completed + ' 份资料，但列表刷新失败：' + refreshError)
       } else {
-        message.success('已提交 ' + completed + ' 份资料至 WeKnora')
+        message.success('已上传 ' + completed + ' 份资料')
       }
     }
   } finally {
@@ -1378,6 +1530,12 @@ function clearSearch() {
   color: #a24a38;
   border-color: #e2beb6;
   background: #fff4f1;
+  box-shadow: none;
+  animation: none;
+}
+.knowledge-workspace-robot.is-idle {
+  color: #176b62;
+  background: #eef8f5;
   box-shadow: none;
   animation: none;
 }
@@ -1519,6 +1677,7 @@ function clearSearch() {
 }
 .file-search button { border: 0; color: #fff; background: #173f3e; }
 .file-toolbar-actions { display: flex; align-items: center; gap: 7px; }
+.file-toolbar-actions .is-spinning { animation: folder-refresh-spin .78s linear infinite; }
 .primary-action { border: 1px solid #d45f1f; color: #fff; background: #d45f1f; box-shadow: 0 5px 12px rgba(212, 95, 31, .16); }
 .secondary-action { border: 1px solid #b9cdc8; color: #315e58; background: #fff; }
 .secondary-action.is-danger { border-color: #e3b9b4; color: #b44735; background: #fff9f8; }
@@ -1622,7 +1781,7 @@ button:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
 .document-file-row {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(220px, 1fr) 148px 82px 76px 100px;
+  grid-template-columns: minmax(220px, 1fr) 148px 82px 76px 132px;
   align-items: center;
   column-gap: 10px;
   box-sizing: border-box;
@@ -1696,6 +1855,7 @@ button:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
   cursor: pointer;
   transition: border-color .15s ease, color .15s ease, background .15s ease;
 }
+.document-file-actions button.is-info:not(:disabled):hover,
 .document-file-actions button.is-chat:not(:disabled):hover { border-color: #a9cbc4; color: #0f7067; background: #eff7f5; }
 .document-file-actions button.is-move:not(:disabled):hover { border-color: #c4b587; color: #8a6417; background: #fff9e9; }
 .document-file-actions button.is-delete { color: #a65346; }
@@ -1709,8 +1869,25 @@ button:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
 .library-modal-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px; background: rgba(15, 32, 35, .44); backdrop-filter: blur(3px); }
 .library-modal { width: min(100%, 470px); max-height: calc(100dvh - 48px); overflow: auto; padding: 20px; border: 1px solid rgba(28, 56, 57, .18); border-radius: 12px; background: #fff; box-shadow: 0 22px 56px rgba(15, 39, 42, .26); }
 .library-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 13px; }.library-modal-head > div { display: flex; min-width: 0; align-items: baseline; gap: 9px; }.library-modal-head span { color: #0f766e; font-size: 12px; font-weight: 850; letter-spacing: .04em; }.library-modal-head h2 { margin: 0; color: #173235; font-size: 17px; }.modal-close,.modal-secondary,.modal-primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 6px; padding: 8px 12px; font: inherit; font-size: 12px; font-weight: 780; cursor: pointer; }.modal-close,.modal-secondary { border: 1px solid #cad8d4; color: #536e69; background: #fff; }.modal-primary { border: 0; color: #fff; background: #d45f1f; }
-.upload-modal { display: flex; width: min(100%, 650px); height: min(610px, calc(100dvh - 48px)); flex-direction: column; overflow: hidden; }.upload-modal > .library-modal-head { flex: 0 0 auto; }.upload-form { display: grid; flex: 1 1 auto; min-height: 0; grid-template-rows: auto auto auto minmax(0, 1fr) auto; gap: 12px; }
-.upload-weknora-note { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; padding: 10px; border: 1px solid #bdd8d1; border-radius: 7px; color: #0f766e; background: #eaf5f1; }.upload-weknora-note > div { display: grid; gap: 3px; }.upload-weknora-note strong { color: #174b45; font-size: 12px; }.upload-weknora-note span { color: #5e7772; font-size: 12px; line-height: 1.45; }
+.document-info-modal { width: min(100%, 680px); }
+.document-info-overview { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; border-bottom: 1px solid #e2eae7; padding: 3px 0 16px; }
+.document-info-icon { display: grid; width: 46px; height: 50px; place-items: center; border-radius: 9px; background: #edf5f2; }
+.document-info-icon > img { width: 34px; height: 34px; }
+.document-info-overview > div { display: grid; min-width: 0; gap: 5px; }
+.document-info-overview strong { overflow-wrap: anywhere; color: #183b36; font-size: 14px; line-height: 1.45; }
+.document-info-overview div span { color: #6f837e; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.document-info-overview em { border-radius: 999px; padding: 5px 9px; color: #137563; background: #e7f4ef; font-size: 11px; font-style: normal; font-weight: 780; white-space: nowrap; }
+.document-info-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; border-bottom: 1px solid #e2eae7; padding: 8px 0; }
+.document-info-grid > div { display: grid; min-width: 0; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; padding: 8px 10px 8px 0; }
+.document-info-grid dt { color: #778a85; font-size: 12px; }
+.document-info-grid dd { min-width: 0; margin: 0; overflow: hidden; color: #294b45; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.document-info-summary { display: grid; gap: 7px; padding: 14px 0; }
+.document-info-summary strong { color: #284b45; font-size: 12px; }
+.document-info-summary p { max-height: 150px; margin: 0; overflow: auto; border: 1px solid #dde7e4; border-radius: 7px; padding: 10px 11px; color: #536d68; background: #f8faf9; font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
+.document-info-identity { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; border-radius: 7px; padding: 8px 10px; color: #71847f; background: #f4f7f6; font-size: 11px; }
+.document-info-identity code { overflow: hidden; color: #405e58; font: inherit; text-overflow: ellipsis; white-space: nowrap; }
+.document-info-modal > .upload-actions { padding-top: 15px; }
+.upload-modal { display: flex; width: min(100%, 650px); height: min(610px, calc(100dvh - 48px)); flex-direction: column; overflow: hidden; }.upload-modal > .library-modal-head { flex: 0 0 auto; }.upload-form { display: grid; flex: 1 1 auto; min-height: 0; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; }
 .upload-target-field { display: grid; gap: 6px; color: #566f6a; font-size: 12px; font-weight: 750; }
 .upload-target-field :deep(.n-base-selection) { --n-border: 1px solid #cad8d4 !important; --n-border-active: 1px solid #4d8d84 !important; --n-border-focus: 1px solid #4d8d84 !important; --n-border-hover: 1px solid #7eaaa1 !important; --n-box-shadow-active: 0 0 0 2px rgba(15, 118, 110, .12) !important; --n-box-shadow-focus: 0 0 0 2px rgba(15, 118, 110, .12) !important; --n-color: #f9fbfa !important; --n-height: 40px !important; --n-border-radius: 6px !important; }
 .upload-target-field :deep(.n-base-selection-label) { font-size: 12px; font-weight: 700; }
@@ -1769,7 +1946,7 @@ select:focus-visible { outline: 2px solid rgba(15, 118, 110, .45); outline-offse
 @media (max-width: 1180px) {
   .dobby-workspace { --folder-rail-width: 220px; }
   .document-file-list-head,
-  .document-file-row { grid-template-columns: minmax(180px, 1fr) 142px 70px 66px 96px; column-gap: 8px; }
+  .document-file-row { grid-template-columns: minmax(180px, 1fr) 142px 70px 66px 132px; column-gap: 8px; }
 }
 @media (max-width: 960px) {
   .dobby-workspace { --folder-rail-width: 210px; }
@@ -1777,7 +1954,7 @@ select:focus-visible { outline: 2px solid rgba(15, 118, 110, .45); outline-offse
   .file-search { width: max-content; }
   .file-toolbar-actions { justify-content: flex-end; }
   .document-file-list-head,
-  .document-file-row { grid-template-columns: minmax(170px, 1fr) 142px 64px 96px; }
+  .document-file-row { grid-template-columns: minmax(170px, 1fr) 142px 64px 132px; }
   .document-file-list-head > span:nth-child(3),
   .document-file-row > .document-file-type { display: none; }
 }
@@ -1792,11 +1969,14 @@ select:focus-visible { outline: 2px solid rgba(15, 118, 110, .45); outline-offse
   .folder-rail { min-height: 280px; max-height: 360px; border-right: 0; border-bottom: 1px solid #e0e8e5; }
   .document-queue { min-height: 560px; }
   .document-file-list-head,
-  .document-file-row { grid-template-columns: minmax(150px, 1fr) 80px 96px; }
+  .document-file-row { grid-template-columns: minmax(150px, 1fr) 80px 132px; }
   .document-file-list-head > span:nth-child(2),
   .document-file-row > .document-file-date { display: none; }
   .library-modal-backdrop { padding: 10px; }
   .library-modal { max-height: calc(100dvh - 20px); padding: 15px; }
+  .document-info-overview { grid-template-columns: auto minmax(0, 1fr); }
+  .document-info-overview em { grid-column: 2; justify-self: start; }
+  .document-info-grid { grid-template-columns: 1fr; }
   .upload-modal { height: calc(100dvh - 20px); }
 }
 </style>

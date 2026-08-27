@@ -110,6 +110,22 @@ class EngineeringDocumentMoveInput(BaseModel):
     folder_path: str = Field(default="", max_length=4096)
 
 
+class EngineeringDocumentAccessModeInput(BaseModel):
+    access_mode: Literal["project", "restricted"]
+
+
+class EngineeringDocumentPermissionInput(BaseModel):
+    node_id: int = Field(gt=0)
+    subject_type: Literal["user", "position"]
+    subject_id: int = Field(gt=0)
+    can_read: bool = True
+    can_create: bool = False
+    can_update: bool = False
+    can_delete: bool = False
+    can_manage: bool = False
+    inherit_to_children: bool = True
+
+
 class EngineeringDocumentAskInput(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
     knowledge_base_ids: list[str] = Field(default_factory=list, max_length=50)

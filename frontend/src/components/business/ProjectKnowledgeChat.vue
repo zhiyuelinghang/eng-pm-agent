@@ -82,7 +82,7 @@
             <button type="button" class="knowledge-scope-all" :class="{ selected: !pendingScopeItems.length }" @click="selectProjectScope">
               <span class="knowledge-scope-checkbox" :class="{ checked: !pendingScopeItems.length }" role="checkbox" :aria-checked="!pendingScopeItems.length"></span>
               <span class="knowledge-scope-node-icon"><n-icon :size="17"><Database /></n-icon></span>
-              <span><strong>全部项目资料</strong><small>当前项目绑定机器人可读取的全部知识库</small></span>
+              <span><strong>全部项目资料</strong><small>当前项目的全部可用资料</small></span>
             </button>
             <div class="knowledge-scope-tree" role="tree">
               <div
@@ -149,7 +149,6 @@
         <section v-else-if="!activeMessages.length" class="knowledge-chat-empty">
           <span class="knowledge-chat-empty-icon"><n-icon :size="26"><Robot /></n-icon></span>
           <strong>从项目资料中查找答案</strong>
-          <p>默认检索本项目绑定机器人可读取的全部 WeKnora 知识库，也可以从知识库管理进入单文件问答。</p>
         </section>
 
         <template v-else>
@@ -327,7 +326,7 @@ const answering = ref(false)
 const stopping = ref(false)
 const stopRequested = ref(false)
 const answerSessionId = ref('')
-const streamStatus = ref('正在连接 WeKnora…')
+const streamStatus = ref('正在准备回答…')
 const streamingMessage = ref<KnowledgeChatMessage | null>(null)
 const streamingRawReferences = ref<Array<Record<string, unknown>>>([])
 const loadingHistory = ref(false)
@@ -1045,7 +1044,7 @@ async function sendQuestion() {
   stopping.value = false
   stopRequested.value = false
   answerSessionId.value = conversation?.sessionId || ''
-  streamStatus.value = '正在连接 WeKnora…'
+  streamStatus.value = '正在准备回答…'
   streamingRawReferences.value = []
   streamingMessage.value = createChatMessage('assistant', '', [])
   try {
@@ -1172,7 +1171,7 @@ async function sendQuestion() {
         ? answerContent + (stopRequested.value ? '\n\n（回答已终止）' : '')
         : stopRequested.value
           ? '回答已终止。'
-          : 'WeKnora 未返回可展示的回答。',
+          : '暂时没有可展示的回答。',
       streamingRawReferences.value,
     )
   } catch (error: any) {
@@ -1206,7 +1205,7 @@ async function sendQuestion() {
     activeStreamController = null
     streamingMessage.value = null
     streamingRawReferences.value = []
-    streamStatus.value = '正在连接 WeKnora…'
+    streamStatus.value = '正在准备回答…'
     void scrollToBottom()
   }
 }

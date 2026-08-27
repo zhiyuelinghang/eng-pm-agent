@@ -145,10 +145,12 @@ type ApiDraft = { id: number; project_id: number; risk_source_id: number; title:
 type ApiFill = { id: number; project_id: number; draft_id: number; platform_name: string; process_name: string; status: FillPackage['status']; fields: FillPackage['fields']; attachments: FillPackage['attachments']; created_at: string }
 type ApiLog = { id: number; created_at: string; action: string; detail: string; operator_id?: number }
 type ApiProjectSettings = { project_id: number; main_dir?: string; archive_dir?: string; temp_dir?: string; failed_dir?: string; backup_dir?: string; scan_interval?: number; enabled?: boolean; reminder_rules?: Array<{ id?: string; level: RemindRule['level']; days: number; enabled: boolean; frequency?: string }>; weknora_agent_id?: string | null }
-type ApiWeKnoraKnowledgeBase = { id: string; name: string; description?: string; created_at?: string | null; updated_at?: string | null }
-type ApiWeKnoraWorkspace = { project_id: number; project_name: string; weknora_configured: boolean; weknora_agent_id: string; knowledge_bases: ApiWeKnoraKnowledgeBase[]; total: number }
-type ApiWeKnoraFolder = { path: string; name: string; document_count?: number; total_count?: number; children?: ApiWeKnoraFolder[] }
-type ApiWeKnoraFolderTree = { root_document_count?: number; total_document_count?: number; folders?: ApiWeKnoraFolder[] }
+export type EngineeringDocumentCapabilities = { can_read: boolean; can_create: boolean; can_update: boolean; can_delete: boolean; can_manage: boolean }
+export type EngineeringDocumentSyncState = { status: 'uninitialized' | 'pending' | 'syncing' | 'ready' | 'error'; access_mode: 'project' | 'restricted'; revision: number; last_started_at?: string | null; last_completed_at?: string | null; last_error?: string | null }
+type ApiWeKnoraKnowledgeBase = { id: string; name: string; description?: string; created_at?: string | null; updated_at?: string | null; capabilities?: EngineeringDocumentCapabilities }
+type ApiWeKnoraWorkspace = { project_id: number; project_name: string; weknora_configured: boolean; weknora_agent_id: string; knowledge_bases: ApiWeKnoraKnowledgeBase[]; total: number; sync?: EngineeringDocumentSyncState }
+type ApiWeKnoraFolder = { path: string; name: string; document_count?: number; total_count?: number; children?: ApiWeKnoraFolder[]; capabilities?: EngineeringDocumentCapabilities }
+type ApiWeKnoraFolderTree = { root_document_count?: number; total_document_count?: number; folders?: ApiWeKnoraFolder[]; capabilities?: EngineeringDocumentCapabilities }
 type ApiWeKnoraKnowledge = {
   id: string
   knowledge_base_id?: string | null
@@ -164,7 +166,9 @@ type ApiWeKnoraKnowledge = {
   parse_status?: string
   enable_status?: string
   created_at?: string | null
+  updated_at?: string | null
   processed_at?: string | null
+  capabilities?: EngineeringDocumentCapabilities
 }
 type ApiWeKnoraKnowledgePage = { knowledge: ApiWeKnoraKnowledge[]; total: number; page: number; page_size: number }
 type ApiWeKnoraSearchReference = {
@@ -218,7 +222,7 @@ type ProjectDashboard = { progress_rate: number; progress_status?: string; plann
 type ProjectChangeRecord = { id: number; category: string; title: string; content: string; status: string; source_refs: string[]; created_at: string }
 type ApiInformationRecord = { id: number; project_id: number; source_type: string; source_name: string; author?: string; recorded_at: string; status: string; confidence: string; content: string; source_refs: string[] }
 type NotificationRecord = { id: number; notification_type: string; title: string; content: string; priority: string; is_read: boolean; created_at: string }
-export type WeKnoraKnowledgeBaseRecord = { id: string; name: string; description: string; createdAt?: string; updatedAt?: string }
+export type WeKnoraKnowledgeBaseRecord = { id: string; name: string; description: string; createdAt?: string; updatedAt?: string; capabilities?: EngineeringDocumentCapabilities }
 export type AttachmentRecord = {
   id: string
   projectId: string
@@ -235,8 +239,11 @@ export type AttachmentRecord = {
   parseStatus?: string
   enableStatus?: string
   source?: string
+  channel?: string
+  updatedAt?: string
   processedAt?: string
   searchScore?: number
+  capabilities?: EngineeringDocumentCapabilities
 }
 export type DocumentFolderRecord = {
   id: string
@@ -249,6 +256,33 @@ export type DocumentFolderRecord = {
   isKnowledgeBase?: boolean
   documentCount?: number
   totalCount?: number
+  capabilities?: EngineeringDocumentCapabilities
+}
+export type EngineeringDocumentAccessNode = {
+  id: number
+  parent_id?: number | null
+  node_type: 'knowledge_base' | 'folder' | 'file'
+  knowledge_base_id: string
+  external_id?: string | null
+  name: string
+  folder_path: string
+}
+export type EngineeringDocumentPermissionRecord = EngineeringDocumentCapabilities & {
+  id: number
+  node_id: number
+  subject_type: 'user' | 'position'
+  subject_id: number
+  inherit_to_children: boolean
+}
+export type EngineeringDocumentAccessConfiguration = {
+  access_mode: 'project' | 'restricted'
+  sync: EngineeringDocumentSyncState
+  nodes: EngineeringDocumentAccessNode[]
+  subjects: {
+    users: Array<{ id: number; name: string; username: string }>
+    positions: Array<{ id: number; name: string }>
+  }
+  permissions: EngineeringDocumentPermissionRecord[]
 }
 export type ProjectConfigScope = { members: Member[]; wbsItems: WbsItem[]; riskSources: RiskSource[]; qualityMetrics: QualityMetric[]; platformMappings: PlatformFieldMapping[]; dirConfig: DirConfig; remindRules: RemindRule[] }
 type WbsWriteInput = {
@@ -334,6 +368,7 @@ export const useAppStore = defineStore('app', () => {
   const attachments = ref<AttachmentRecord[]>([])
   const documentFolders = ref<DocumentFolderRecord[]>([])
   const weknoraKnowledgeBases = ref<WeKnoraKnowledgeBaseRecord[]>([])
+  const engineeringDocumentSync = ref<EngineeringDocumentSyncState | null>(null)
   const engineeringDocumentsLoading = ref(false)
   const engineeringDocumentFolderLoading = ref(false)
   const engineeringDocumentsError = ref('')
@@ -518,8 +553,11 @@ export const useAppStore = defineStore('app', () => {
       folderPath,
       parseStatus: row.parse_status || '',
       enableStatus: row.enable_status || '',
-      source: row.source || row.channel || '',
+      source: row.source || '',
+      channel: row.channel || '',
+      updatedAt: row.updated_at || undefined,
       processedAt: row.processed_at || undefined,
+      capabilities: row.capabilities,
     }
   }
   function mapInformationRecord(row: ApiInformationRecord): ProjectInformationRecord { return { id: id(row.id), projectId: id(row.project_id), sourceType: row.source_type, sourceName: row.source_name, author: row.author || '', recordedAt: row.recorded_at, status: row.status, confidence: row.confidence, content: row.content, sourceRefs: row.source_refs || [] } }
@@ -555,6 +593,7 @@ export const useAppStore = defineStore('app', () => {
       attachments.value = []
       documentFolders.value = []
       weknoraKnowledgeBases.value = []
+      engineeringDocumentSync.value = null
       engineeringDocumentsProjectId = ''
       clearEngineeringDocumentFolderCache()
       return
@@ -578,12 +617,13 @@ export const useAppStore = defineStore('app', () => {
         description: item.description || '',
         createdAt: item.created_at || undefined,
         updatedAt: item.updated_at || undefined,
+        capabilities: item.capabilities,
       }))
+      const syncState = workspace.sync || null
       const nextFolders: DocumentFolderRecord[] = []
 
-      // The current WeKnora deployment can return transient non-JSON gateway
-      // pages under burst traffic. Load each tree in order so opening one page
-      // does not fan out into several simultaneous upstream requests.
+      // These endpoints now read the platform-owned PostgreSQL catalogue. Keep
+      // sequential assembly so a large hierarchy does not block rendering.
       for (const knowledgeBase of knowledgeBases) {
         const treeResponse = await api.get<ApiEnvelope<ApiWeKnoraFolderTree>>(`/projects/${projectId}/engineering-documents/knowledge-bases/${encodeURIComponent(knowledgeBase.id)}/folders`)
         const tree = treeResponse.data.data
@@ -600,6 +640,7 @@ export const useAppStore = defineStore('app', () => {
           isKnowledgeBase: true,
           documentCount: tree.root_document_count || 0,
           totalCount: tree.total_document_count || 0,
+          capabilities: tree.capabilities || knowledgeBase.capabilities,
         }
         folderMap.set(root.id, root)
 
@@ -628,6 +669,7 @@ export const useAppStore = defineStore('app', () => {
               path: currentPath,
               documentCount: 0,
               totalCount: 0,
+              capabilities: undefined,
             }
             folderMap.set(folderId, current)
             parentId = folderId
@@ -641,6 +683,7 @@ export const useAppStore = defineStore('app', () => {
             folder.name = node.name || folder.name
             folder.documentCount = node.document_count || 0
             folder.totalCount = node.total_count || 0
+            folder.capabilities = node.capabilities
             appendTree(node.children || [])
           }
         }
@@ -650,6 +693,7 @@ export const useAppStore = defineStore('app', () => {
 
       if (projectId !== currentProjectId.value || generation !== engineeringDocumentsGeneration) return
       weknoraKnowledgeBases.value = knowledgeBases
+      engineeringDocumentSync.value = syncState
       documentFolders.value = nextFolders.sort((left, right) => {
         if (left.isKnowledgeBase !== right.isKnowledgeBase) return left.isKnowledgeBase ? -1 : 1
         return left.name.localeCompare(right.name, 'zh-CN', { numeric: true })
@@ -665,9 +709,10 @@ export const useAppStore = defineStore('app', () => {
         attachments.value = []
         documentFolders.value = []
         weknoraKnowledgeBases.value = []
+        engineeringDocumentSync.value = null
         engineeringDocumentsProjectId = ''
         clearEngineeringDocumentFolderCache()
-        engineeringDocumentsError.value = error.response?.data?.detail || error.message || 'WeKnora 工程资料加载失败。'
+        engineeringDocumentsError.value = error.response?.data?.detail || error.message || '平台工程资料加载失败。'
       }
       throw error
     } finally {
@@ -748,7 +793,7 @@ export const useAppStore = defineStore('app', () => {
       return await request
     } catch (error: any) {
       if (projectId === currentProjectId.value && generation === engineeringDocumentsGeneration) {
-        engineeringDocumentsError.value = error.response?.data?.detail || error.message || 'WeKnora 目录资料加载失败。'
+        engineeringDocumentsError.value = error.response?.data?.detail || error.message || '平台目录资料加载失败。'
       }
       throw error
     } finally {
@@ -805,6 +850,7 @@ export const useAppStore = defineStore('app', () => {
       attachments.value = []
       documentFolders.value = []
       weknoraKnowledgeBases.value = []
+      engineeringDocumentSync.value = null
       engineeringDocumentsProjectId = ''
       clearEngineeringDocumentFolderCache()
       engineeringDocumentsError.value = '当前项目尚未绑定 WeKnora 机器人。'
@@ -892,6 +938,7 @@ export const useAppStore = defineStore('app', () => {
     attachments.value = []
     documentFolders.value = []
     weknoraKnowledgeBases.value = []
+    engineeringDocumentSync.value = null
     engineeringDocumentsProjectId = ''
     engineeringDocumentsError.value = ''
     clearEngineeringDocumentFolderCache()
@@ -980,6 +1027,39 @@ export const useAppStore = defineStore('app', () => {
     })
     await loadProjectData()
   }
+  async function loadEngineeringDocumentAccess(projectId = currentProjectId.value) {
+    if (!projectId) throw new Error('请先选择项目。')
+    const response = await api.get<ApiEnvelope<EngineeringDocumentAccessConfiguration>>(
+      `/projects/${projectId}/engineering-documents/access`,
+    )
+    return response.data.data
+  }
+  async function updateEngineeringDocumentAccessMode(
+    accessMode: 'project' | 'restricted',
+    projectId = currentProjectId.value,
+  ) {
+    if (!projectId) throw new Error('请先选择项目。')
+    await api.put(`/projects/${projectId}/engineering-documents/access-mode`, {
+      access_mode: accessMode,
+    })
+    await loadEngineeringDocuments(projectId, true)
+  }
+  async function saveEngineeringDocumentPermission(
+    payload: Omit<EngineeringDocumentPermissionRecord, 'id'>,
+    projectId = currentProjectId.value,
+  ) {
+    if (!projectId) throw new Error('请先选择项目。')
+    await api.put(`/projects/${projectId}/engineering-documents/permissions`, payload)
+    await loadEngineeringDocuments(projectId, true)
+  }
+  async function deleteEngineeringDocumentPermission(
+    permissionId: number,
+    projectId = currentProjectId.value,
+  ) {
+    if (!projectId) throw new Error('请先选择项目。')
+    await api.delete(`/projects/${projectId}/engineering-documents/permissions/${permissionId}`)
+    await loadEngineeringDocuments(projectId, true)
+  }
   async function uploadAttachment(file: File, _category = '自动归类', folderId?: string) {
     if (!currentProjectId.value) throw new Error('请先选择项目。')
     if (!weknoraKnowledgeBases.value.length) await loadEngineeringDocuments(currentProjectId.value, true)
@@ -1020,17 +1100,12 @@ export const useAppStore = defineStore('app', () => {
       knowledge_base_id: parent.knowledgeBaseId,
       folder_path: folderPath,
     })
-    let created: DocumentFolderRecord | undefined
-    for (const delay of [0, 250, 750]) {
-      if (delay) await new Promise(resolve => setTimeout(resolve, delay))
-      await loadEngineeringDocuments(projectId, true)
-      created = documentFolders.value.find(folder => (
-        folder.knowledgeBaseId === parent.knowledgeBaseId
-        && normalizeWeKnoraFolderPath(folder.path) === folderPath
-      ))
-      if (created) break
-    }
-    if (!created) throw new Error('目录已提交创建，但 WeKnora 尚未返回该目录，请稍后刷新。')
+    await loadEngineeringDocuments(projectId, true)
+    const created = documentFolders.value.find(folder => (
+      folder.knowledgeBaseId === parent.knowledgeBaseId
+      && normalizeWeKnoraFolderPath(folder.path) === folderPath
+    ))
+    if (!created) throw new Error('目录已创建，但平台目录数据未能刷新。')
     return created
   }
   async function updateDocumentFolder(
@@ -1074,17 +1149,12 @@ export const useAppStore = defineStore('app', () => {
       target_path: targetPath,
     })
 
-    let updated: DocumentFolderRecord | undefined
-    for (const delay of [0, 250, 750]) {
-      if (delay) await new Promise(resolve => setTimeout(resolve, delay))
-      await loadEngineeringDocuments(projectId, true)
-      updated = documentFolders.value.find(item => (
-        item.knowledgeBaseId === folder.knowledgeBaseId
-        && normalizeWeKnoraFolderPath(item.path) === targetPath
-      ))
-      if (updated) break
-    }
-    if (!updated) throw new Error('目录已提交更新，但 WeKnora 尚未返回新路径，请稍后刷新。')
+    await loadEngineeringDocuments(projectId, true)
+    const updated = documentFolders.value.find(item => (
+      item.knowledgeBaseId === folder.knowledgeBaseId
+      && normalizeWeKnoraFolderPath(item.path) === targetPath
+    ))
+    if (!updated) throw new Error('目录已更新，但平台目录数据未能刷新。')
     return updated
   }
   async function moveEngineeringDocuments(
@@ -1135,18 +1205,13 @@ export const useAppStore = defineStore('app', () => {
       },
       timeout: 0,
     })
-    let stillExists = true
-    for (const delay of [0, 250, 750, 1500]) {
-      if (delay) await new Promise(resolve => setTimeout(resolve, delay))
-      await loadEngineeringDocuments(projectId, true)
-      stillExists = documentFolders.value.some(item => (
-        item.knowledgeBaseId === folder.knowledgeBaseId
-        && normalizeWeKnoraFolderPath(item.path) === folderPath
-      ))
-      if (!stillExists) break
-    }
+    await loadEngineeringDocuments(projectId, true)
+    const stillExists = documentFolders.value.some(item => (
+      item.knowledgeBaseId === folder.knowledgeBaseId
+      && normalizeWeKnoraFolderPath(item.path) === folderPath
+    ))
     if (stillExists) {
-      throw new Error('WeKnora 尚未移除该目录，请稍后刷新后重试。')
+      throw new Error('目录已删除，但平台目录数据未能刷新。')
     }
     return { parentId: folder.parentId }
   }
@@ -1405,5 +1470,5 @@ export const useAppStore = defineStore('app', () => {
   async function removeWbsRiskLink(linkId: string) { await api.delete(`/wbs-risk-links/${linkId}`); await loadProjectData() }
   function addLog(log: OperationLog) { if (!currentProjectId.value) return; void api.post(`/projects/${currentProjectId.value}/operation-logs`, { action: log.action, detail: log.detail }).then(() => loadProjectData()) }
 
-  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, weknoraKnowledgeBases, engineeringDocumentsLoading, engineeringDocumentFolderLoading, engineeringDocumentsError, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, updateProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, uploadAttachment, updateAttachmentCategory, createDocumentFolder, updateDocumentFolder, deleteDocumentFolder, moveEngineeringDocuments, getEngineeringDocument, deleteEngineeringDocument, searchDocuments, createEngineeringDocumentSession, stopEngineeringDocumentAnswer, askEngineeringDocuments, loadEngineeringKnowledgeConversations, createEngineeringKnowledgeConversation, loadEngineeringKnowledgeMessages, updateEngineeringKnowledgeConversation, appendEngineeringKnowledgeMessage, deleteEngineeringKnowledgeConversation, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, loadEngineeringDocuments, loadEngineeringDocumentFolder, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
+  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, weknoraKnowledgeBases, engineeringDocumentSync, engineeringDocumentsLoading, engineeringDocumentFolderLoading, engineeringDocumentsError, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, updateProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, loadEngineeringDocumentAccess, updateEngineeringDocumentAccessMode, saveEngineeringDocumentPermission, deleteEngineeringDocumentPermission, uploadAttachment, updateAttachmentCategory, createDocumentFolder, updateDocumentFolder, deleteDocumentFolder, moveEngineeringDocuments, getEngineeringDocument, deleteEngineeringDocument, searchDocuments, createEngineeringDocumentSession, stopEngineeringDocumentAnswer, askEngineeringDocuments, loadEngineeringKnowledgeConversations, createEngineeringKnowledgeConversation, loadEngineeringKnowledgeMessages, updateEngineeringKnowledgeConversation, appendEngineeringKnowledgeMessage, deleteEngineeringKnowledgeConversation, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, loadEngineeringDocuments, loadEngineeringDocumentFolder, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
 })

@@ -123,9 +123,13 @@ export async function listProjectChatParticipants(projectId: string) {
 
 export async function listProjectChatAgents() {
   const response = await api.get<ApiEnvelope<{
+    task_assistant: ProjectChatAgent | null
     business_agents: ProjectChatAgent[]
   }>>('/agents/catalog')
-  return response.data.data.business_agents
+  const { task_assistant: taskAssistant, business_agents: businessAgents } = response.data.data
+  return [taskAssistant, ...businessAgents]
+    .filter((agent): agent is ProjectChatAgent => Boolean(agent))
+    .filter((agent, index, agents) => agents.findIndex(item => item.id === agent.id) === index)
 }
 
 export async function createPrivateProjectChatChannel(

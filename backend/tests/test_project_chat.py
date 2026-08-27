@@ -298,17 +298,17 @@ def test_mention_attention_is_claimed_independently_for_each_recipient(
     ] == []
 
 
-def test_published_agent_mention_invokes_agent_and_writes_reply(
+def test_assigned_task_assistant_uses_fixed_identity_and_writes_task_draft(
     db: Session,
 ) -> None:
     project, member, _, _ = _project_with_members(db)
     channel_id = list_project_chat_channels(project.id, db, member)["data"][0]["id"]
     selected_agent = {
         "id": "task-agent-test",
-        "name": "任务智能体",
-        "description": "测试任务智能体",
+        "name": "可替换的底层解析智能体",
+        "description": "管理中心可见的真实名称",
         "enabled": True,
-        "published": True,
+        "published": False,
         "model_ready": True,
         "permission_mode": "auto",
         "knowledge_config": None,
@@ -316,7 +316,10 @@ def test_published_agent_mention_invokes_agent_and_writes_reply(
 
     class FakeAgentScopeClient:
         def get_catalog(self):
-            return {"business_agents": [selected_agent]}
+            return {
+                "task_assistant": selected_agent,
+                "business_agents": [],
+            }
 
         def create_session(self, **_):
             return "chat-agent-session-test"
@@ -351,7 +354,7 @@ def test_published_agent_mention_invokes_agent_and_writes_reply(
         created = create_chat_message(
             channel_id,
             ChatMessageInput(
-                content="@任务智能体 根据上面的讨论生成任务草案。",
+                content="@任务助手 根据上面的讨论生成任务草案。",
                 client_message_id="chat-agent-mention-0001",
                 mentioned_agent_ids=[selected_agent["id"]],
             ),
@@ -368,7 +371,7 @@ def test_published_agent_mention_invokes_agent_and_writes_reply(
     )
     assert mention is not None
     assert mention.target_agent_id == selected_agent["id"]
-    assert mention.display_name == selected_agent["name"]
+    assert mention.display_name == "任务助手"
     thread = db.scalar(select(ChatAgentThread))
     assert thread is not None
     assert thread.agentscope_session_id == "chat-agent-session-test"
@@ -381,7 +384,7 @@ def test_published_agent_mention_invokes_agent_and_writes_reply(
     assert reply.message_type == "task_draft"
     assert reply.reply_to_id == created["id"]
     assert reply.content == "已生成任务草案，请确认后再布置。"
-    assert reply.metadata_json["agent_name"] == "任务智能体"
+    assert reply.metadata_json["agent_name"] == "任务助手"
     assert reply.metadata_json["runtime_status"] == "completed"
 
 

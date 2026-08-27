@@ -81,6 +81,8 @@ from ._schema import (
     StopWeKnoraAgentSessionResponse,
     ListWeKnoraProjectBindingsResponse,
     UpdateWeKnoraProjectBindingRequest,
+    WeKnoraCatalogueSelectionRequest,
+    WeKnoraCatalogueDiffResponse,
     WeKnoraProjectBindingItem,
     UpdatePlatformSettingsRequest,
     UpdateAgentRequest,
@@ -561,6 +563,7 @@ async def _request_dobby_project_bindings(
     *,
     method: str = "GET",
     json_body: dict | None = None,
+    timeout_seconds: float = 20.0,
 ) -> object:
     """Read or update project bindings through the trusted service API."""
 
@@ -580,7 +583,7 @@ async def _request_dobby_project_bindings(
     try:
         async with httpx.AsyncClient(
             follow_redirects=False,
-            timeout=httpx.Timeout(20.0),
+            timeout=httpx.Timeout(timeout_seconds),
         ) as client:
             response = await client.request(
                 method,
@@ -2202,6 +2205,19 @@ async def _synchronise_project_initializer_role(
     await storage.upsert_agent(global_config_id, updated)
 
 
+async def _synchronise_task_assistant_role(
+    storage: StorageBase,
+    global_config_id: str,
+    selected_agent_id: str | None,
+) -> None:
+    """Keep the selected Task Assistant hidden like the initializer."""
+    await _synchronise_project_initializer_role(
+        storage,
+        global_config_id,
+        selected_agent_id,
+    )
+
+
 async def _load_platform_settings(
     storage: StorageBase,
     global_config_id: str,
@@ -2218,6 +2234,11 @@ async def _load_platform_settings(
             storage,
             global_config_id,
             existing.data.project_initializer_agent_id,
+        )
+        await _synchronise_task_assistant_role(
+            storage,
+            global_config_id,
+            existing.data.task_assistant_agent_id,
         )
         return existing
 
@@ -2256,6 +2277,11 @@ async def _load_platform_settings(
         storage,
         global_config_id,
         data.project_initializer_agent_id,
+    )
+    await _synchronise_task_assistant_role(
+        storage,
+        global_config_id,
+        data.task_assistant_agent_id,
     )
     return settings
 
@@ -2512,6 +2538,7 @@ async def get_platform_agent_catalog(
     settings = await _load_platform_settings(storage, user_id)
     selected_id = settings.data.global_main_agent_id
     initializer_id = settings.data.project_initializer_agent_id
+    task_assistant_id = settings.data.task_assistant_agent_id
     entries = await access.list_resource(user_id, ResourceKind.AGENT)
     items = [_catalog_item(entry) for entry in entries]
     selected_item = next(
@@ -2540,12 +2567,28 @@ async def get_platform_agent_catalog(
         initializer_item = initializer_item.model_copy(
             update={"role": "system_internal", "published": False},
         )
+    task_assistant_item = next(
+        (
+            item
+            for item in items
+            if item.id == task_assistant_id
+            and item.id != selected_id
+            and item.id != initializer_id
+            and item.enabled
+        ),
+        None,
+    )
+    if task_assistant_item is not None:
+        task_assistant_item = task_assistant_item.model_copy(
+            update={"role": "system_internal", "published": False},
+        )
     business_agents = sorted(
         (
             item
             for item in items
             if item.id != selected_id
             and item.id != initializer_id
+            and item.id != task_assistant_id
             and item.role == "business"
             and item.enabled
             and item.published
@@ -2557,6 +2600,7 @@ async def get_platform_agent_catalog(
             item
             for item in items
             if item.id != initializer_id
+            and item.id != task_assistant_id
             and item.role == "system_internal"
             and item.enabled
             and item.initialization_role in {
@@ -2573,6 +2617,7 @@ async def get_platform_agent_catalog(
     return PlatformAgentCatalogResponse(
         global_main=selected_item,
         project_initializer=initializer_item,
+        task_assistant=task_assistant_item,
         initialization_workers=initialization_workers,
         business_agents=business_agents,
         total=len(business_agents),
@@ -2602,11 +2647,9 @@ async def get_platform_settings(
         project_initializer_agent_id=(
             settings.data.project_initializer_agent_id
         ),
+        task_assistant_agent_id=settings.data.task_assistant_agent_id,
         project_initializer_validation_mcp=(
             settings.data.project_initializer_validation_mcp
-        ),
-        engineering_document_agent_id=(
-            settings.data.engineering_document_agent_id
         ),
     )
 
@@ -2895,6 +2938,55 @@ async def update_weknora_project_binding(
             detail="工程管理业务后端返回的绑定结果结构无效。",
         )
     return WeKnoraProjectBindingItem.model_validate(data)
+
+
+@agent_router.post(
+    "/platform/weknora/project-bindings/{project_id}/catalogue-sync",
+    response_model=WeKnoraProjectBindingItem,
+    summary="Explicitly initialize or resynchronize a project catalogue",
+)
+async def start_weknora_project_catalogue_sync(
+    project_id: int,
+    body: WeKnoraCatalogueSelectionRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> WeKnoraProjectBindingItem:
+    del user_id
+    data = await _request_dobby_project_bindings(
+        f"/{project_id}/catalogue-sync",
+        method="POST",
+        json_body=body.model_dump(),
+    )
+    if not isinstance(data, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="工程管理业务后端返回的同步状态结构无效。",
+        )
+    return WeKnoraProjectBindingItem.model_validate(data)
+
+
+@agent_router.post(
+    "/platform/weknora/project-bindings/{project_id}/catalogue-diff",
+    response_model=WeKnoraCatalogueDiffResponse,
+    summary="Compare a project catalogue without updating it",
+)
+async def check_weknora_project_catalogue_diff(
+    project_id: int,
+    body: WeKnoraCatalogueSelectionRequest,
+    user_id: str = Depends(get_current_user_id),
+) -> WeKnoraCatalogueDiffResponse:
+    del user_id
+    data = await _request_dobby_project_bindings(
+        f"/{project_id}/catalogue-diff",
+        method="POST",
+        json_body=body.model_dump(),
+        timeout_seconds=120.0,
+    )
+    if not isinstance(data, dict):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="工程管理业务后端返回的目录差异结构无效。",
+        )
+    return WeKnoraCatalogueDiffResponse.model_validate(data)
 
 
 @agent_router.get(
@@ -4043,10 +4135,8 @@ async def update_platform_settings(
     project_initializer_agent_id = (
         current.data.project_initializer_agent_id
     )
+    task_assistant_agent_id = current.data.task_assistant_agent_id
     validation_mcp = current.data.project_initializer_validation_mcp
-    engineering_document_agent_id = (
-        current.data.engineering_document_agent_id
-    )
     previous_validation_mcp = validation_mcp
 
     async def validate_candidate(
@@ -4092,6 +4182,13 @@ async def update_platform_settings(
                 "project initializer",
             )
         project_initializer_agent_id = body.project_initializer_agent_id
+    if "task_assistant_agent_id" in body.model_fields_set:
+        if body.task_assistant_agent_id is not None:
+            await validate_candidate(
+                body.task_assistant_agent_id,
+                "task assistant",
+            )
+        task_assistant_agent_id = body.task_assistant_agent_id
     if "project_initializer_validation_mcp" in body.model_fields_set:
         requested_binding = body.project_initializer_validation_mcp
         if requested_binding is not None:
@@ -4113,13 +4210,6 @@ async def update_platform_settings(
                     ),
                 )
         validation_mcp = requested_binding
-    if "engineering_document_agent_id" in body.model_fields_set:
-        if body.engineering_document_agent_id is not None:
-            await validate_candidate(
-                body.engineering_document_agent_id,
-                "engineering document manager",
-            )
-        engineering_document_agent_id = body.engineering_document_agent_id
     if (
         global_main_agent_id is not None
         and global_main_agent_id == project_initializer_agent_id
@@ -4129,6 +4219,18 @@ async def update_platform_settings(
             detail=(
                 "The platform main agent and project initializer must be "
                 "different agents."
+            ),
+        )
+    if (
+        task_assistant_agent_id is not None
+        and task_assistant_agent_id
+        in {global_main_agent_id, project_initializer_agent_id}
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "The Task Assistant must use a different agent from the "
+                "platform main agent and project initializer."
             ),
         )
     if project_initializer_agent_id is not None and validation_mcp is None:
@@ -4157,10 +4259,8 @@ async def update_platform_settings(
             update={
                 "global_main_agent_id": global_main_agent_id,
                 "project_initializer_agent_id": project_initializer_agent_id,
+                "task_assistant_agent_id": task_assistant_agent_id,
                 "project_initializer_validation_mcp": validation_mcp,
-                "engineering_document_agent_id": (
-                    engineering_document_agent_id
-                ),
             },
         ),
     )
@@ -4182,16 +4282,19 @@ async def update_platform_settings(
         user_id,
         settings.data.project_initializer_agent_id,
     )
+    await _synchronise_task_assistant_role(
+        storage,
+        user_id,
+        settings.data.task_assistant_agent_id,
+    )
     return PlatformSettingsResponse(
         global_main_agent_id=settings.data.global_main_agent_id,
         project_initializer_agent_id=(
             settings.data.project_initializer_agent_id
         ),
+        task_assistant_agent_id=settings.data.task_assistant_agent_id,
         project_initializer_validation_mcp=(
             settings.data.project_initializer_validation_mcp
-        ),
-        engineering_document_agent_id=(
-            settings.data.engineering_document_agent_id
         ),
     )
 

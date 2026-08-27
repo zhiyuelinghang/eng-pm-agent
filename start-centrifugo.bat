@@ -4,7 +4,6 @@ chcp 65001 >nul
 
 set "ROOT=%~dp0"
 set "PYTHON_EXE=%ROOT%python-3.13.14\python.exe"
-set "ALEMBIC_EXE=%ROOT%python-3.13.14\Scripts\alembic.exe"
 set "DOBBY_REALTIME_EXE=%ROOT%runtime\centrifugo\centrifugo.exe"
 set "DOBBY_REALTIME_CONFIG=%ROOT%runtime\centrifugo\config.json"
 set "DOBBY_REALTIME_PORT=38431"
@@ -21,11 +20,6 @@ if not exist "%PYTHON_EXE%" (
     echo [失败] 缺少项目便携 Python：%PYTHON_EXE%
     exit /b 1
 )
-if not exist "%ALEMBIC_EXE%" (
-    echo [失败] 项目便携 Python 中缺少 Alembic：%ALEMBIC_EXE%
-    exit /b 1
-)
-
 netstat -ano | findstr /R /C:":%DOBBY_REALTIME_PORT% .*LISTENING" >nul 2>nul
 if not errorlevel 1 (
     echo [就绪] 群聊实时服务已监听端口 %DOBBY_REALTIME_PORT%。
@@ -33,12 +27,6 @@ if not errorlevel 1 (
 )
 
 pushd "%ROOT%"
-"%ALEMBIC_EXE%" -c "%ROOT%backend\alembic.ini" upgrade head
-if errorlevel 1 (
-    popd
-    echo [失败] 无法升级项目群聊数据库结构。
-    exit /b 1
-)
 "%PYTHON_EXE%" -c "import sys; sys.path.insert(0, r'%ROOT%.'); from backend.scripts.generate_centrifugo_config import main; main()"
 if errorlevel 1 (
     popd

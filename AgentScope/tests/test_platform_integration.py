@@ -40,12 +40,14 @@ from agentscope.app._router._agent import (
     list_weknora_knowledge_bases as _list_weknora_knowledge_bases_endpoint,
     proxy_weknora_resource,
     reveal_weknora_api_key,
+    start_weknora_project_catalogue_sync,
     stop_weknora_agent_session,
     stream_weknora_agent,
     test_weknora_connection as _test_weknora_connection_endpoint,
     upload_weknora_knowledge as _upload_weknora_knowledge_endpoint,
     update_platform_settings,
     update_weknora_project_binding,
+    check_weknora_project_catalogue_diff,
     update_weknora_connection,
 )
 from agentscope.app._router._schema import (
@@ -58,6 +60,7 @@ from agentscope.app._router._schema import (
     UpdateMessageMetadataRequest,
     UpdatePlatformSettingsRequest,
     UpdateWeKnoraProjectBindingRequest,
+    WeKnoraCatalogueSelectionRequest,
     TestWeKnoraConnectionRequest as WeKnoraConnectionTestRequest,
     UpdateWeKnoraConnectionRequest,
     UpdateSessionRequest,
@@ -221,6 +224,11 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                 fixed_model=True,
                 initialization_role="wbs",
             ),
+            _record(
+                "task-assistant-agent",
+                "Internal Task Parser",
+                fixed_model=True,
+            ),
         ]
         access = SimpleNamespace(
             list_resource=AsyncMock(
@@ -228,12 +236,18 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             ),
         )
         storage = SimpleNamespace(
-            get_agent=AsyncMock(return_value=records[-1]),
+            get_agent=AsyncMock(
+                side_effect=lambda _user_id, agent_id: next(
+                    (record for record in records if record.id == agent_id),
+                    None,
+                ),
+            ),
             get_platform_settings=AsyncMock(
                 return_value=PlatformSettingsRecord(
                     user_id=USER_ID,
                     data=PlatformSettingsData(
                         global_main_agent_id="main",
+                        task_assistant_agent_id="task-assistant-agent",
                     ),
                 ),
             ),
@@ -249,6 +263,9 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(catalog.global_main.id, "main")
         self.assertTrue(catalog.global_main.model_ready)
+        self.assertEqual(catalog.task_assistant.id, "task-assistant-agent")
+        self.assertEqual(catalog.task_assistant.name, "Internal Task Parser")
+        self.assertFalse(catalog.task_assistant.published)
         self.assertEqual(
             [item.id for item in catalog.initialization_workers],
             ["wbs-worker"],
@@ -258,6 +275,47 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             ["first", "later"],
         )
         self.assertEqual(catalog.total, 2)
+
+    async def test_platform_settings_assigns_hidden_task_assistant(
+        self,
+    ) -> None:
+        task_assistant = _record(
+            "task-assistant",
+            "Replaceable Task Parser",
+            fixed_model=True,
+        )
+        storage = SimpleNamespace(
+            get_agent=AsyncMock(return_value=task_assistant),
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(user_id=USER_ID),
+            ),
+            list_agents=AsyncMock(return_value=[task_assistant]),
+            upsert_agent=AsyncMock(return_value=task_assistant.id),
+        )
+
+        async def save_settings(_user_id, data):
+            return PlatformSettingsRecord(user_id=USER_ID, data=data)
+
+        storage.upsert_platform_settings = AsyncMock(side_effect=save_settings)
+
+        response = await update_platform_settings(
+            body=UpdatePlatformSettingsRequest(
+                task_assistant_agent_id=task_assistant.id,
+            ),
+            user_id=USER_ID,
+            storage=storage,
+            manager=SimpleNamespace(list_records=AsyncMock(return_value=[])),
+        )
+
+        self.assertEqual(response.task_assistant_agent_id, task_assistant.id)
+        saved = storage.upsert_platform_settings.await_args.args[1]
+        self.assertEqual(saved.task_assistant_agent_id, task_assistant.id)
+        hidden = storage.upsert_agent.await_args.args[1]
+        self.assertEqual(hidden.id, task_assistant.id)
+        self.assertEqual(hidden.data.name, "Replaceable Task Parser")
+        self.assertEqual(hidden.data.platform_config.role, "system_internal")
+        self.assertFalse(hidden.data.platform_config.published)
+        self.assertEqual(hidden.data.call_config.scope, "selected")
 
     async def test_platform_settings_pointer_selects_exactly_one_main(
         self,
@@ -321,86 +379,6 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             "global_main",
         )
         self.assertEqual(updated["selected"].data.call_config.scope, "all")
-
-    async def test_platform_settings_persists_engineering_document_agent(
-        self,
-    ) -> None:
-        engineering = _record(
-            "engineering-documents",
-            "Engineering Documents",
-            fixed_model=True,
-        )
-        connection = WeKnoraConnectionConfig(
-            base_url="https://weknora.example.com",
-            api_key="preserved-secret",
-        )
-        storage = SimpleNamespace(
-            get_agent=AsyncMock(return_value=engineering),
-            get_platform_settings=AsyncMock(
-                return_value=PlatformSettingsRecord(
-                    user_id=USER_ID,
-                    data=PlatformSettingsData(
-                        weknora_connection=connection,
-                    ),
-                ),
-            ),
-            list_agents=AsyncMock(return_value=[engineering]),
-            upsert_agent=AsyncMock(return_value="agent"),
-        )
-
-        async def save_settings(_user_id, data):
-            return PlatformSettingsRecord(user_id=USER_ID, data=data)
-
-        storage.upsert_platform_settings = AsyncMock(side_effect=save_settings)
-
-        response = await update_platform_settings(
-            body=UpdatePlatformSettingsRequest(
-                engineering_document_agent_id=engineering.id,
-            ),
-            user_id=USER_ID,
-            storage=storage,
-            manager=SimpleNamespace(list_records=AsyncMock(return_value=[])),
-        )
-
-        self.assertEqual(response.engineering_document_agent_id, engineering.id)
-        saved = storage.upsert_platform_settings.await_args.args[1]
-        self.assertEqual(saved.engineering_document_agent_id, engineering.id)
-        self.assertEqual(
-            saved.weknora_connection.api_key.get_secret_value(),
-            "preserved-secret",
-        )
-
-    async def test_engineering_document_agent_rejects_disabled_agent(
-        self,
-    ) -> None:
-        disabled = _record(
-            "engineering-disabled",
-            "Engineering Disabled",
-            enabled=False,
-            fixed_model=True,
-        )
-        storage = SimpleNamespace(
-            get_agent=AsyncMock(return_value=disabled),
-            get_platform_settings=AsyncMock(
-                return_value=PlatformSettingsRecord(user_id=USER_ID),
-            ),
-            list_agents=AsyncMock(return_value=[disabled]),
-            upsert_agent=AsyncMock(return_value="agent"),
-        )
-
-        with self.assertRaises(HTTPException) as context:
-            await update_platform_settings(
-                body=UpdatePlatformSettingsRequest(
-                    engineering_document_agent_id=disabled.id,
-                ),
-                user_id=USER_ID,
-                storage=storage,
-                manager=SimpleNamespace(
-                    list_records=AsyncMock(return_value=[]),
-                ),
-            )
-
-        self.assertEqual(context.exception.status_code, 422)
 
     async def test_weknora_connection_is_configurable_and_secret_free(
         self,
@@ -717,6 +695,73 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             "/7",
             method="PUT",
             json_body={"weknora_agent_id": "robot-007"},
+        )
+
+    async def test_project_catalogue_actions_forward_all_selected_bases(
+        self,
+    ) -> None:
+        selection = WeKnoraCatalogueSelectionRequest(
+            knowledge_base_ids=["kb-1", "kb-2"],
+        )
+        sync_payload = {
+            "project_id": 7,
+            "project_name": "滨江项目",
+            "weknora_agent_id": "robot-007",
+            "updated_at": None,
+            "catalogue_sync": {
+                "status": "pending",
+                "knowledge_base_ids": ["kb-1", "kb-2"],
+            },
+        }
+        diff_payload = {
+            "project_id": 7,
+            "project_name": "滨江项目",
+            "matches": True,
+            "remote_node_count": 20,
+            "local_node_count": 20,
+            "added_count": 0,
+            "changed_count": 0,
+            "removed_count": 0,
+            "added": [],
+            "changed": [],
+            "removed": [],
+            "truncated": False,
+        }
+        request = AsyncMock(side_effect=[sync_payload, diff_payload])
+        with patch(
+            "agentscope.app._router._agent._request_dobby_project_bindings",
+            new=request,
+        ):
+            sync_result = await start_weknora_project_catalogue_sync(
+                project_id=7,
+                body=selection,
+                user_id=USER_ID,
+            )
+            diff_result = await check_weknora_project_catalogue_diff(
+                project_id=7,
+                body=selection,
+                user_id=USER_ID,
+            )
+
+        self.assertEqual(
+            sync_result.catalogue_sync.knowledge_base_ids,
+            ["kb-1", "kb-2"],
+        )
+        self.assertTrue(diff_result.matches)
+        self.assertEqual(
+            request.await_args_list[0].kwargs,
+            {
+                "method": "POST",
+                "json_body": {"knowledge_base_ids": ["kb-1", "kb-2"]},
+            },
+        )
+        self.assertEqual(
+            request.await_args_list[1].kwargs,
+            {
+                "method": "POST",
+                "json_body": {"knowledge_base_ids": ["kb-1", "kb-2"]},
+                "timeout_seconds": 120.0,
+            },
         )
 
     async def test_weknora_api_key_is_revealed_only_by_explicit_endpoint(
@@ -2788,6 +2833,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                 USER_ID,
                 PlatformSettingsData(
                     global_main_agent_id="main",
+                    task_assistant_agent_id="task-assistant",
                     project_initializer_validation_mcp=(
                         PlatformMCPVersionBinding(
                             package_id="validation-rules",
@@ -2805,6 +2851,10 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         self.assertIsNotNone(loaded)
         self.assertEqual(loaded.id, saved.id)
         self.assertEqual(loaded.data.global_main_agent_id, "main")
+        self.assertEqual(
+            loaded.data.task_assistant_agent_id,
+            "task-assistant",
+        )
         self.assertEqual(
             loaded.data.project_initializer_validation_mcp,
             PlatformMCPVersionBinding(

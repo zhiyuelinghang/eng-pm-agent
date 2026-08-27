@@ -163,9 +163,9 @@ class AgentScopeClientTest(TestCase):
             {"params": {"weknora_agent_id": "robot-1"}},
         )
 
-    def test_project_knowledge_detail_is_returned_without_mutation(self) -> None:
+    def test_project_knowledge_detail_is_returned_from_local_catalogue(self) -> None:
         agentscope = Mock()
-        agentscope.get_weknora_knowledge.return_value = {
+        local_result = {
             "id": "document-1",
             "knowledge_base_id": "kb-1",
             "folder_path": "方案/附件",
@@ -176,8 +176,12 @@ class AgentScopeClientTest(TestCase):
         with (
             patch("backend.app.api.project_for_user_or_403"),
             patch(
-                "backend.app.api._project_weknora_agent_id",
+                "backend.app.api._ready_project_weknora_agent_id",
                 return_value="robot-1",
+            ),
+            patch(
+                "backend.app.api.local_file_view",
+                return_value=(Mock(), local_result),
             ),
             patch("backend.app.api._agentscope_client", return_value=agentscope),
         ):
@@ -189,10 +193,7 @@ class AgentScopeClientTest(TestCase):
             )
 
         self.assertEqual(response["data"]["folder_path"], "方案/附件")
-        agentscope.get_weknora_knowledge.assert_called_once_with(
-            "robot-1",
-            "document-1",
-        )
+        agentscope.get_weknora_knowledge.assert_not_called()
 
     def test_project_weknora_reference_urls_are_project_authorized(self) -> None:
         event = _project_weknora_reference_urls(

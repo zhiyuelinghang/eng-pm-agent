@@ -25,6 +25,8 @@ import type {
 	UpdateWeKnoraProjectBindingRequest,
 	WeKnoraProjectBinding,
 	WeKnoraProjectBindingListResponse,
+	WeKnoraCatalogueSelectionRequest,
+	WeKnoraCatalogueDiffResponse,
 	UpdateAgentRequest,
 } from './types';
 
@@ -74,9 +76,10 @@ export const agentApi = {
 			body,
 		),
 
-	listWeKnoraKnowledgeBases: () =>
+	listWeKnoraKnowledgeBases: (weknoraAgentId?: string) =>
 		client.get<WeKnoraKnowledgeBaseListResponse>(
 			'/agent/platform/weknora/knowledge-bases',
+			weknoraAgentId ? { weknora_agent_id: weknoraAgentId } : undefined,
 		),
 
 	listWeKnoraKnowledge: (
@@ -174,6 +177,24 @@ export const agentApi = {
 	) =>
 		client.put<WeKnoraProjectBinding>(
 			`/agent/platform/weknora/project-bindings/${projectId}`,
+			body,
+		),
+
+	startWeKnoraProjectCatalogueSync: (
+		projectId: number,
+		body: WeKnoraCatalogueSelectionRequest,
+	) =>
+		client.post<WeKnoraProjectBinding>(
+			`/agent/platform/weknora/project-bindings/${projectId}/catalogue-sync`,
+			body,
+		),
+
+	checkWeKnoraProjectCatalogueDiff: (
+		projectId: number,
+		body: WeKnoraCatalogueSelectionRequest,
+	) =>
+		client.post<WeKnoraCatalogueDiffResponse>(
+			`/agent/platform/weknora/project-bindings/${projectId}/catalogue-diff`,
 			body,
 		),
 };
