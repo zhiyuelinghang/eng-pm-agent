@@ -139,6 +139,38 @@ class TaskInput(BaseModel):
     required_materials: list[str] = Field(default_factory=list)
     workflow_steps: list[dict[str, Any]] = Field(default_factory=list)
 
+    # 兼容旧前端的 single / scheduled；新界面提供立即、单次、固定间隔与日历规则。
+    run_mode: Literal[
+        "single",
+        "scheduled",
+        "immediate",
+        "once",
+        "recurring",
+        "calendar",
+    ] = "immediate"
+    trigger_date: str | None = None
+    trigger_time: str = "09:00"
+    trigger_interval_value: int = 1
+    trigger_interval_unit: Literal[
+        "minute",
+        "hour",
+        "day",
+        "week",
+        "month",
+    ] = "week"
+    trigger_end_mode: Literal["never", "until", "count"] = "never"
+    trigger_until_date: str | None = None
+    trigger_max_fires: int | None = Field(default=None, ge=1, le=10000)
+    trigger_calendar_mode: Literal[
+        "daily",
+        "weekdays",
+        "weekly",
+        "monthly",
+    ] = "weekdays"
+    trigger_weekdays: list[int] = Field(default_factory=list)
+    trigger_day_of_month: int | None = Field(default=None, ge=1, le=31)
+    cc: str | None = None
+
 
 class TaskFlowGenerateInput(BaseModel):
     requirement: str = Field(min_length=4, max_length=4000)
@@ -153,6 +185,7 @@ class TaskTransitionInput(BaseModel):
 class TaskStepUpdate(BaseModel):
     status: str = "completed"
     note: str | None = None
+    attachments: list[str] = Field(default_factory=list)
 
 
 class TaskReassignInput(BaseModel):

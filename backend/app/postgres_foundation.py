@@ -60,6 +60,17 @@ def bootstrap_postgres_foundation(
                 {"extensions": list(safe_extensions)},
             )
         }
+        installed = {
+            str(row[0])
+            for row in connection.execute(
+                text(
+                    "SELECT extname FROM pg_extension "
+                    "WHERE extname = ANY(:extensions)",
+                ),
+                {"extensions": list(safe_extensions)},
+            )
+        }
+        available.update(installed)
         missing = sorted(set(safe_extensions) - available)
         if missing:
             raise RuntimeError(

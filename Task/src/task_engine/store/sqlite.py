@@ -19,6 +19,7 @@ from ..domain.models import (
     Activity,
     ActivityKind,
     Assignee,
+    CalendarMode,
     IntervalUnit,
     RunMode,
     Schedule,
@@ -33,6 +34,7 @@ from ..domain.models import (
 )
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
+_TRIGGER_SCOPE_KEY = "__task_engine_trigger"
 
 
 def _iso(moment: datetime | None) -> str | None:
@@ -67,6 +69,19 @@ def _site_from_row(ref: str, name: str, code: str) -> Site | None:
     return Site(ref=ref, name=name, code=code)
 
 
+def _flow_scope_to_row(flow: TaskFlow) -> dict[str, Any]:
+    """用 scope_json 保存新增触发字段，兼容原分支数据库结构。"""
+    scope = dict(flow.scope)
+    scope.pop(_TRIGGER_SCOPE_KEY, None)
+    if flow.trigger.is_calendar:
+        scope[_TRIGGER_SCOPE_KEY] = {
+            "calendar_mode": str(flow.trigger.calendar_mode),
+            "calendar_weekdays": list(flow.trigger.calendar_weekdays),
+            "calendar_day": flow.trigger.calendar_day,
+        }
+    return scope
+
+
 class Store:
     """任务引擎的持久层。
 
@@ -77,7 +92,7 @@ class Store:
 
     def __init__(self, path: str | Path = "task_engine.db") -> None:
         self.path = str(path)
-        self._conn = sqlite3.connect(self.path)
+        self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._init_schema()
@@ -117,6 +132,7 @@ class Store:
                 "instruction": spec.instruction,
                 "requires_attachment": spec.requires_attachment,
                 "optional": spec.optional,
+                "automated": spec.automated,
             }
             for spec in flow.steps
         ]
@@ -149,7 +165,7 @@ class Store:
                 json.dumps(steps, ensure_ascii=False),
                 json.dumps([_assignee_to_row(w) for w in flow.watchers], ensure_ascii=False),
                 json.dumps(list(flow.tags), ensure_ascii=False),
-                json.dumps(flow.scope, ensure_ascii=False),
+                json.dumps(_flow_scope_to_row(flow), ensure_ascii=False),
                 *_site_to_row(flow.site),
                 *_assignee_to_row(flow.confirmer),
                 str(trigger.run_mode), _iso(trigger.first_at),
@@ -177,6 +193,8 @@ class Store:
         return [self._row_to_flow(row) for row in rows]
 
     def _row_to_flow(self, row: sqlite3.Row) -> TaskFlow:
+        scope = json.loads(row["scope_json"])
+        trigger_extension = scope.pop(_TRIGGER_SCOPE_KEY, {})
         steps = tuple(
             StepSpec(
                 name=item["name"],
@@ -186,6 +204,7 @@ class Store:
                 instruction=item["instruction"],
                 requires_attachment=item["requires_attachment"],
                 optional=item["optional"],
+                automated=bool(item.get("automated", False)),
             )
             for item in json.loads(row["steps_json"])
         )
@@ -197,6 +216,16 @@ class Store:
             timezone=row["timezone"],
             until=_parse(row["until_at"]),
             max_fires=row["max_fires"],
+            calendar_mode=(
+                CalendarMode(trigger_extension["calendar_mode"])
+                if trigger_extension.get("calendar_mode")
+                else None
+            ),
+            calendar_weekdays=tuple(
+                int(day)
+                for day in trigger_extension.get("calendar_weekdays", [])
+            ),
+            calendar_day=trigger_extension.get("calendar_day"),
         )
         return TaskFlow(
             id=row["id"],
@@ -212,7 +241,7 @@ class Store:
             tags=tuple(json.loads(row["tags_json"])),
             origin=row["origin"],
             origin_note=row["origin_note"],
-            scope=json.loads(row["scope_json"]),
+            scope=scope,
         )
 
     # ---- 触发计划 ----

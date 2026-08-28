@@ -23,3 +23,8 @@ data/
 # 仅保留自研的微信采集 MCP
 !/hermes/my_mcp/
 /hermes/my_mcp/__pycache__/
+
+# 本机一次性脚本，不提交
+/安装PG18-pgvector.bat
+/删除旧版PostgreSQL17.9.bat
+*.tmp

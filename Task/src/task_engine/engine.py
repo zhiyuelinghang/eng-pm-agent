@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from .domain import flow as flow_ops
@@ -72,8 +73,15 @@ class TickReport:
 class TaskEngine:
     """任务引擎的服务门面。"""
 
-    def __init__(self, db_path: str | Path = "task_engine.db", *, timezone: str = DEFAULT_TZ) -> None:
-        self.store = Store(db_path)
+    def __init__(
+        self,
+        db_path: str | Path = "task_engine.db",
+        *,
+        timezone: str = DEFAULT_TZ,
+        store: Any | None = None,
+    ) -> None:
+        # 仅注入持久层；未传入时保持分支原 SQLite 行为与测试契约。
+        self.store = store if store is not None else Store(db_path)
         self.timezone = timezone
 
     def close(self) -> None:
@@ -136,9 +144,15 @@ class TaskEngine:
         if flow.trigger.first_at is None:
             raise ValueError("触发计划必须设置首次执行时间")
 
+        next_fire_at = next_fire_after(
+            flow.trigger,
+            after=None,
+            fire_count=0,
+        )
         plan = Schedule(
             flow=flow,
-            next_fire_at=next_fire_after(flow.trigger, after=None, fire_count=0),
+            next_fire_at=next_fire_at,
+            active=next_fire_at is not None,
             created_at=moment,
             updated_at=moment,
         )

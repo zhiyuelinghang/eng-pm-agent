@@ -80,6 +80,25 @@ def parse_trigger(requirement: str, *, now: datetime) -> Trigger:
     if default_at <= now:
         default_at += timedelta(days=1)
 
+    # 明确写出的时刻优先于默认 09:00。这里仍然只解析触发规则，
+    # “发送群聊消息”等平台动作由宿主适配层识别，避免污染通用引擎。
+    explicit_time = re.search(
+        r"(?:(今天|明天|后天)\s*)?([01]?\d|2[0-3])\s*[:：]\s*([0-5]\d)",
+        text,
+    )
+    if explicit_time:
+        day_label, raw_hour, raw_minute = explicit_time.groups()
+        day_offset = {"今天": 0, "明天": 1, "后天": 2}.get(day_label, 0)
+        default_at = now.replace(
+            hour=int(raw_hour),
+            minute=int(raw_minute),
+            second=0,
+            microsecond=0,
+        ) + timedelta(days=day_offset)
+        # 未写“今天/明天”时，把已经过去的时刻理解成下一次同一时刻。
+        if day_label is None and default_at <= now:
+            default_at += timedelta(days=1)
+
     # 「每周五」这类带星期几的表述
     weekday_match = re.search(r"每(?:周|星期|礼拜)([一二三四五六日天])", text)
     if weekday_match:
@@ -118,6 +137,14 @@ def parse_trigger(requirement: str, *, now: datetime) -> Trigger:
             interval_value=max(1, value),
             interval_unit=unit,
         )
+
+    # “定时单次”同时包含“定时”二字，必须先于下面的泛化周期判断，
+    # 否则会被错误降级成每周执行。
+    if any(
+        phrase in text
+        for phrase in ("定时单次", "单次执行", "只执行一次", "仅执行一次")
+    ):
+        return Trigger(run_mode=RunMode.ONCE, first_at=default_at)
 
     # 「定时」「周期」等泛化表述——默认按周
     if any(word in text for word in ("定期", "周期", "定时", "循环")):

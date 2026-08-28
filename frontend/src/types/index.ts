@@ -165,8 +165,10 @@ export interface Task {
   status: TaskStatus
   missingCount: number
   triggerReason: string
-  workflowSteps: Array<{ name: string; owner?: string; owner_user_id?: string; due_at?: string; order?: number; next_step?: number; status: 'pending' | 'processing' | 'completed' | 'blocked'; note?: string; material?: string; phase?: string; closure?: string }>
+  workflowSteps: Array<{ name: string; node_type?: 'manual' | 'project_chat_message'; action?: Record<string, unknown>; owner?: string; owner_user_id?: string; due_at?: string; order?: number; next_step?: number; status: 'pending' | 'processing' | 'completed' | 'blocked'; note?: string; attachments?: string[]; material?: string; phase?: string; closure?: string; reopened?: boolean }>
   createdAt: string
+  updatedAt?: string
+  closedAt?: string
 }
 
 export interface ProjectInformationRecord {

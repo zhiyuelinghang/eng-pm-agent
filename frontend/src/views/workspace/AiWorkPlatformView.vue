@@ -594,6 +594,7 @@
                 <h2>{{ selectedTaskMineWorkItem.title }}</h2>
                 <p>{{ selectedTaskMineWorkItem.owner }} · {{ selectedTaskMineWorkItem.role }} · {{ selectedTaskMineWorkItem.deadline }}</p>
               </div>
+              <button type="button" class="modal-primary" @click="openTaskDisposition(selectedTaskMineWorkItem.id)">处理任务</button>
             </header>
 
             <div ref="taskMineThreadViewport" class="home-work-ai-thread">
@@ -660,6 +661,37 @@
         </section>
       </main>
 
+      <main v-else-if="taskManagementTab === 'schedules'" class="task-schedule-view">
+        <form class="task-history-search task-schedule-search" @submit.prevent>
+          <label><span>计划名称</span><input v-model.trim="taskScheduleKeyword" placeholder="输入计划名称或触发规则"></label>
+          <label><span>计划状态</span><select v-model="taskScheduleStatus"><option value="all">全部状态</option><option value="active">生效中</option><option value="paused">已暂停</option><option value="ended">已结束</option><option value="cancelled">已取消</option></select></label>
+          <button type="button" @click="loadTaskSchedules"><n-icon :size="17"><Repeat /></n-icon>刷新</button>
+          <button type="button" class="task-schedule-create" @click="taskManagementTab = 'assign'"><n-icon :size="17"><Plus /></n-icon>布置任务</button>
+        </form>
+        <section class="task-history-results task-schedule-results">
+          <div class="task-history-table-head"><span>触发计划</span><span>状态</span><span>下次触发</span><span>已触发</span><span>操作</span></div>
+          <article v-for="schedule in filteredTaskSchedules" :key="schedule.id" :class="{ paused: schedule.paused, inactive: !schedule.active }">
+            <div class="task-schedule-main">
+              <strong>{{ schedule.title }}</strong>
+              <small>{{ schedule.trigger_description }}</small>
+              <small v-if="schedule.last_error" class="task-schedule-error">最近失败：{{ schedule.last_error }}</small>
+            </div>
+            <span class="task-schedule-status" :class="{ active: schedule.active && !schedule.paused, paused: schedule.paused, ended: !schedule.active }">{{ schedule.status }}</span>
+            <time>{{ schedule.next_fire_at ? formatDateTime(schedule.next_fire_at, 'end') : '—' }}</time>
+            <span>{{ schedule.fire_count }} 次</span>
+            <div class="task-schedule-actions">
+              <button v-if="schedule.active" type="button" @click="setTaskSchedulePaused(schedule, !schedule.paused)">{{ schedule.paused ? '恢复' : '暂停' }}</button>
+              <button v-if="schedule.active" type="button" class="danger" @click="confirmCancelTaskSchedule(schedule)">取消</button>
+              <span v-else>—</span>
+            </div>
+          </article>
+          <div v-if="!filteredTaskSchedules.length" class="task-history-no-result">
+            <strong>{{ taskSchedulesLoading ? '正在读取计划列表' : taskSchedules.length ? '没有匹配的计划' : '还没有计划' }}</strong>
+            <p>{{ taskSchedules.length ? '调整名称或状态后再试。' : '选择定时单次或固定间隔后，计划会显示在这里。' }}</p>
+          </div>
+        </section>
+      </main>
+
       <main v-else class="task-assign-view">
         <div class="task-flow-scroll" tabindex="0" aria-label="任务流编辑画布，可横向或纵向滚动">
           <section class="task-flow-modal task-flow-inline" aria-label="布置任务流">
@@ -673,6 +705,8 @@
                 <label class="form-field">执行方式<select v-model="taskCreateForm.run_mode"><option value="single">单次执行</option><option value="scheduled">定时执行</option></select></label>
                 <label class="form-field">{{ taskCreateForm.run_mode === 'single' ? '执行日期与时间' : '首次触发日期与时间' }}<input v-model="taskExecutionAt" type="datetime-local" required></label>
                 <label v-if="taskCreateForm.run_mode === 'scheduled'" class="form-field task-flow-interval-field">触发间隔<span><input v-model.number="taskCreateForm.trigger_interval_value" type="number" min="1" max="365" required><select v-model="taskCreateForm.trigger_interval_unit"><option value="hour">小时</option><option value="day">天</option><option value="week">周</option><option value="month">个月</option></select></span></label>
+                <label class="form-field">关联工点<select v-model="taskCreateForm.wbs_item_id" required><option value="">请选择工点</option><option v-for="item in store.wbsItems" :key="item.id" :value="item.id">{{ item.code }} {{ item.name }}</option></select></label>
+                <label class="form-field">确认人<select v-model="taskCreateForm.confirmer_user_id" required><option value="">请选择确认人</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }} · {{ member.title }}</option></select></label>
                 <label class="form-field task-flow-cc-field">抄送人<input v-model.trim="taskCreateForm.cc" placeholder="输入姓名，多个用逗号分隔"></label>
               </div>
             </section>
@@ -729,10 +763,10 @@
           <header><div><span>{{ taskTypeLabel(selectedTask.type) }} · {{ statusLabel(selectedTask.status) }}</span><h2 id="task-disposition-title">{{ selectedTask.title }}</h2><p>{{ taskCurrentOwnerName(selectedTask) }} · 截止 {{ taskCurrentStep(selectedTask)?.due_at || selectedTask.deadline }}</p></div><button type="button" aria-label="关闭任务处置" @click="closeTaskDisposition">关闭</button></header>
           <div class="task-disposition-body">
             <section class="task-disposition-ai"><span class="task-disposition-bot"><Robot :size="18" /></span><div><strong>Dobby 处置提示</strong><p>{{ selectedTaskConclusion }}</p><small>依据：{{ selectedTask.triggerReason }}</small></div></section>
-            <section class="task-disposition-flow"><div class="task-disposition-section-title"><span>任务流程</span><strong>{{ selectedTaskCompletedSteps }}/{{ selectedTask.workflowSteps.length || 1 }} 个节点已完成</strong></div><ol><li v-for="(step, index) in selectedTask.workflowSteps" :key="`${selectedTask.id}-dispose-${index}`" :class="step.status"><span>{{ index + 1 }}</span><div><strong>{{ step.name }}</strong><small>{{ step.owner || store.getMemberName(step.owner_user_id || '') || '待指定负责人' }} · {{ step.due_at || '未设置截止时间' }}</small></div><em>{{ taskStepLabel(step.status) }}</em><button v-if="selectedTask.status === 'processing' && step.status !== 'completed'" type="button" @click="store.updateTaskStep(selectedTask.id, index, 'completed')">完成节点</button></li></ol></section>
+            <section class="task-disposition-flow"><div class="task-disposition-section-title"><span>任务流程</span><strong>{{ selectedTaskCompletedSteps }}/{{ selectedTask.workflowSteps.length || 1 }} 个节点已完成</strong></div><ol><li v-for="(step, index) in selectedTask.workflowSteps" :key="`${selectedTask.id}-dispose-${index}`" :class="step.status"><span>{{ index + 1 }}</span><div><strong>{{ step.name }}</strong><small>{{ step.owner || store.getMemberName(step.owner_user_id || '') || '待指定负责人' }} · {{ step.due_at || '未设置截止时间' }}</small><p v-if="step.note" class="task-disposition-step-note">{{ step.note }}</p><div v-if="step.attachments?.length" class="task-disposition-step-files"><span v-for="att in step.attachments" :key="att" class="task-disposition-step-file"><img v-if="taskAttachmentPreviewUrls[att]" :src="taskAttachmentPreviewUrls[att]" :alt="taskAttachmentFileName(att) || att" /><button type="button" @click="downloadTaskAttachment(att)"><n-icon :size="14"><Paperclip /></n-icon>{{ taskAttachmentFileName(att) || att }}</button><p v-if="taskAttachmentPreviewText(att)" class="task-disposition-step-preview">{{ taskAttachmentPreviewText(att) }}</p></span></div></div><em>{{ taskStepLabel(step.status) }}</em><button v-if="selectedTask.status === 'processing' && step.status !== 'completed'" type="button" @click="openTaskDisposition(selectedTask.id)">完成节点</button></li></ol></section>
             <section class="task-disposition-form"><div class="task-disposition-section-title"><span>回复与材料</span><strong>结果将进入任务处理记录</strong></div><textarea v-model.trim="taskDispositionReply" rows="5" placeholder="回复 Dobby，例如：已完成复核，照片符合闭环要求"></textarea><label class="task-disposition-files"><input type="file" multiple @change="handleTaskDispositionFiles"><span><Paperclip :size="16" />选择文件或图片</span><small>{{ taskDispositionFiles.length ? `已选择 ${taskDispositionFiles.length} 个文件` : '支持提交本节点的证明材料' }}</small></label><label class="task-disposition-forward"><span>转交当前节点</span><select v-model="taskDispositionForwardId"><option value="">不转交</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }} · {{ member.title }}</option></select></label></section>
           </div>
-          <footer><button type="button" class="task-disposition-history" @click="openTaskHistory(selectedTask.id)">查看处理记录</button><router-link to="/ai">发起讨论</router-link><button type="button" class="task-disposition-submit" :disabled="taskDispositionSubmitting" @click="submitTaskDisposition">{{ taskDispositionSubmitting ? '正在提交…' : '回复并推进' }}</button></footer>
+          <footer><button type="button" class="task-disposition-history" @click="openTaskHistory(selectedTask.id)">查看处理记录</button><router-link to="/ai">发起讨论</router-link><button v-if="selectedTask.status === 'waiting_confirm'" type="button" class="task-disposition-history" :disabled="taskDispositionSubmitting" @click="rejectSelectedTask">退回重做</button><button v-if="selectedTask.status === 'waiting_confirm'" type="button" class="task-disposition-submit" :disabled="taskDispositionSubmitting" @click="acceptSelectedTask">{{ taskDispositionSubmitting ? '正在提交…' : '确认通过' }}</button><button type="button" class="task-disposition-submit" :disabled="taskDispositionSubmitting" @click="submitTaskDisposition">{{ taskDispositionSubmitting ? '正在提交…' : '回复并推进' }}</button></footer>
         </aside>
       </div>
       <div v-if="taskHistoryOpenId && selectedTaskHistoryTask" class="workflow-modal-backdrop" @click.self="closeTaskHistory">
@@ -751,7 +785,7 @@
             <ol v-else-if="(taskHistories[taskHistoryOpenId] || []).length" class="task-history-timeline">
               <li v-for="item in taskHistories[taskHistoryOpenId] || []" :key="item.id">
                 <i aria-hidden="true"></i>
-                <div><header><strong>{{ item.from_status ? `${statusLabel(item.from_status)} → ` : '' }}{{ statusLabel(item.to_status) }}</strong><time>{{ formatDateTime(item.created_at) }}</time></header><p>{{ item.note || '状态更新' }}</p></div>
+                <div><header><strong>{{ item.from_status ? `${statusLabel(item.from_status)} → ` : '' }}{{ statusLabel(item.to_status || '') }}</strong><time>{{ formatDateTime(item.created_at) }}</time></header><p>{{ item.note || '状态更新' }}</p></div>
               </li>
             </ol>
             <div v-else class="task-history-empty"><strong>暂无处理记录</strong><p>开始处理或更新任务状态后，系统会在这里自动留痕。</p></div>
@@ -982,7 +1016,7 @@ import { useRoute } from 'vue-router'
 import { NIcon, useMessage } from 'naive-ui'
 import {
   AdjustmentsHorizontal, At, CalendarEvent, ChartBar, ChevronDown, ChevronLeft, ChevronRight,
-  Dots, FileText, Folder, ListCheck, Notes, Paperclip, Pin, PlayerStop, Plus, Robot,
+  Clock, Dots, FileText, Folder, ListCheck, Notes, Paperclip, Pin, PlayerStop, Plus, Repeat, Robot,
   Search, Send, Settings, Table, User, UserPlus,
 } from '@vicons/tabler'
 import { useAppStore, type AttachmentRecord } from '@/stores/app'
@@ -1032,6 +1066,20 @@ type ApiAgentConversation = {
   updated_at: string
 }
 type TaskFlowStepDraft = { id: string; name: string; owner_user_id: string; due_at: string; material: string }
+type TaskSchedule = {
+  id: string
+  flow_id: string
+  title: string
+  status: string
+  active: boolean
+  paused: boolean
+  trigger_description: string
+  next_fire_at?: string | null
+  last_fire_at?: string | null
+  fire_count: number
+  last_error?: string
+  project_id?: number | null
+}
 type TriggerIntervalUnit = 'hour' | 'day' | 'week' | 'month'
 type GeneratedTaskFlow = {
   title: string
@@ -1320,7 +1368,55 @@ const homeWorkItems = computed(() => [
     icon: ListCheck,
   },
 ])
-const filteredHomeWorkItems = computed(() => homeWorkItems.value.filter(item => item.workflowStatus === homeStatus.value))
+const taskMineWorkItems = computed(() => store.tasks.map((task) => {
+  const status = task.status
+  const workflowStatus = status === 'overdue' ? 'overdue' as const : status === 'processing' ? 'processing' as const : 'pending' as const
+  const currentOwnerId = taskCurrentOwnerId(task)
+  const owner = store.getMemberName(String(currentOwnerId || task.responsibleId || '')) || '未分配'
+  const wbsName = task.linkedWbsIds.map(itemId => store.getWbsName(String(itemId))).filter(Boolean).join('、')
+  return {
+    id: task.id,
+    rank: 0,
+    workflowStatus,
+    category: 'generated',
+    label: statusLabel(status),
+    title: task.title,
+    reason: task.triggerReason || '任务已生成，请按流程推进并上传所需资料。',
+    tags: [taskTypeLabel(task.type), wbsName].filter(Boolean),
+    owner,
+    role: '责任人',
+    deadline: `截止 ${formatDateTime(task.deadline, 'end')}`,
+    action: '进入会话',
+    to: '/ai',
+    tone: status === 'overdue' ? 'danger' : status === 'processing' ? 'warning' : 'info',
+    icon: ListCheck,
+  }
+}))
+const realHomeWorkItems = computed(() => store.tasks.map((task, index) => {
+  const status = task.status
+  const workflowStatus = status === 'overdue' ? 'overdue' as const : status === 'processing' ? 'processing' as const : 'pending' as const
+  const currentOwnerId = taskCurrentOwnerId(task)
+  const owner = store.getMemberName(String(currentOwnerId || task.responsibleId || '')) || '未分配'
+  const wbsName = task.linkedWbsIds.map(itemId => store.getWbsName(String(itemId))).filter(Boolean).join('、')
+  return {
+    id: task.id,
+    rank: index + 1,
+    workflowStatus,
+    category: 'generated',
+    label: statusLabel(status),
+    title: task.title,
+    reason: task.triggerReason || '任务已生成，请按流程推进并上传所需资料。',
+    tags: [taskTypeLabel(task.type), wbsName].filter(Boolean),
+    owner,
+    role: '责任人',
+    deadline: `截止 ${formatDateTime(task.deadline, 'end')}`,
+    action: '进入会话',
+    to: '/ai',
+    tone: status === 'overdue' ? 'danger' : status === 'processing' ? 'warning' : 'info',
+    icon: ListCheck,
+  }
+}))
+const filteredHomeWorkItems = computed(() => realHomeWorkItems.value.filter(item => item.workflowStatus === homeStatus.value))
 const homePageCount = computed(() =>
   Math.max(1, Math.ceil(filteredHomeWorkItems.value.length / homePageSize))
 )
@@ -1329,7 +1425,7 @@ const pagedHomeWorkItems = computed(() => {
   return filteredHomeWorkItems.value.slice(start, start + homePageSize)
 })
 const selectedHomeWorkItem = computed(() =>
-  homeWorkItems.value.find(item => item.id === selectedHomeWorkItemId.value)
+  realHomeWorkItems.value.find(item => item.id === selectedHomeWorkItemId.value)
   ?? pagedHomeWorkItems.value[0]
   ?? null
 )
@@ -1368,9 +1464,9 @@ const homePageRangeText = computed(() => {
   return `第 ${start}-${end} 项，共 ${total} 项`
 })
 const homeStatusTabs = computed(() => [
-  { key: 'pending' as const, label: '待处理', count: homeWorkItems.value.filter(item => item.workflowStatus === 'pending').length },
-  { key: 'overdue' as const, label: '已逾期', count: homeWorkItems.value.filter(item => item.workflowStatus === 'overdue').length },
-  { key: 'processing' as const, label: '执行中', count: homeWorkItems.value.filter(item => item.workflowStatus === 'processing').length },
+  { key: 'pending' as const, label: '待处理', count: realHomeWorkItems.value.filter(item => item.workflowStatus === 'pending').length },
+  { key: 'overdue' as const, label: '已逾期', count: realHomeWorkItems.value.filter(item => item.workflowStatus === 'overdue').length },
+  { key: 'processing' as const, label: '执行中', count: realHomeWorkItems.value.filter(item => item.workflowStatus === 'processing').length },
 ])
 function clampHomePageIndex() {
   homePageIndex.value = Math.min(homePageIndex.value, homePageCount.value - 1)
@@ -2159,10 +2255,10 @@ async function startNewSession() {
   homeQuickStreamingTrace.value = null
 }
 
-type TaskManagementTab = 'mine' | 'history' | 'assign'
+type TaskManagementTab = 'mine' | 'history' | 'schedules' | 'assign'
 
 const taskManagementTab = ref<TaskManagementTab>('mine')
-const taskMineStatus = ref<WorkQueueStatus>('pending')
+const taskMineStatus = ref<WorkQueueStatus>('processing')
 const taskMinePageIndex = ref(0)
 const taskMinePageSize = 5
 const selectedTaskMineWorkItemId = ref('home-1')
@@ -2173,6 +2269,7 @@ const taskMineUploading = ref(false)
 const taskMineThreads = ref<Record<string, ChatMessage[]>>({})
 const selectedTaskId = ref('')
 const taskDispositionOpen = ref(false)
+const taskAttachmentPreviewUrls = ref<Record<string, string>>({})
 const taskDispositionReply = ref('')
 const taskDispositionForwardId = ref('')
 const taskDispositionFiles = ref<File[]>([])
@@ -2185,8 +2282,12 @@ const selectedInformationRecordId = ref('')
 const informationRevision = ref('')
 const selectedInformationRecord = computed(() => (store.informationRecords || []).find(item => item.id === selectedInformationRecordId.value))
 const taskHistoryOpenId = ref('')
-const taskHistories = ref<Record<string, Array<{ id: number; from_status?: string; to_status: string; note?: string; created_at: string }>>>({})
+const taskHistories = ref<Record<string, Array<{ id: string | number; kind?: string; step_seq?: number | null; from_status?: string; to_status?: string; note?: string; created_at: string }>>>({})
 const taskHistoryLoading = ref(false)
+const taskSchedules = ref<TaskSchedule[]>([])
+const taskSchedulesLoading = ref(false)
+const taskScheduleKeyword = ref('')
+const taskScheduleStatus = ref<'all' | 'active' | 'paused' | 'ended' | 'cancelled'>('all')
 const selectedTaskHistoryTask = computed(() => store.tasks.find(task => task.id === taskHistoryOpenId.value))
 const taskCreateMode = ref<'dobby' | 'template'>('dobby')
 const taskFlowRequirement = ref('')
@@ -2197,7 +2298,7 @@ const taskTemplateType = ref<(typeof taskTemplateOptions)[number]>('隐患整改
 const taskTemplateTopic = ref('整改现场隐患并完成复核闭环')
 const selectedTaskFlowStepIndex = ref(0)
 const taskFlowExamples = ['每周核查基坑监测数据并完成复核归档', '发现临边防护缺失后发起整改并闭环', '补齐日报缺失资料并由资料员复核']
-const taskCreateForm = ref({ title: taskTemplateTopic.value, task_type: 'risk_alert' as Task['type'], run_mode: 'single' as 'single' | 'scheduled', trigger_date: todayDateString(), trigger_time: '09:00', trigger_interval_value: 1, trigger_interval_unit: 'week' as TriggerIntervalUnit, cc: '项目经理' })
+const taskCreateForm = ref({ title: taskTemplateTopic.value, task_type: 'risk_alert' as Task['type'], run_mode: 'single' as 'single' | 'scheduled', trigger_date: todayDateString(), trigger_time: '09:00', trigger_interval_value: 1, trigger_interval_unit: 'week' as TriggerIntervalUnit, cc: '项目经理', wbs_item_id: '', confirmer_user_id: '' })
 const taskExecutionAt = computed({
   get: () => `${taskCreateForm.value.trigger_date}T${taskCreateForm.value.trigger_time}`,
   set: (value: string) => {
@@ -2238,11 +2339,11 @@ function taskCurrentOwnerName(task: Task) {
 }
 
 const taskMineStatusTabs = computed(() => [
-  { key: 'pending' as const, label: '待处理', count: homeWorkItems.value.filter(item => item.workflowStatus === 'pending').length },
-  { key: 'overdue' as const, label: '已逾期', count: homeWorkItems.value.filter(item => item.workflowStatus === 'overdue').length },
-  { key: 'processing' as const, label: '执行中', count: homeWorkItems.value.filter(item => item.workflowStatus === 'processing').length },
+  { key: 'pending' as const, label: '待处理', count: taskMineWorkItems.value.filter(item => item.workflowStatus === 'pending').length },
+  { key: 'overdue' as const, label: '已逾期', count: taskMineWorkItems.value.filter(item => item.workflowStatus === 'overdue').length },
+  { key: 'processing' as const, label: '执行中', count: taskMineWorkItems.value.filter(item => item.workflowStatus === 'processing').length },
 ])
-const filteredTaskMineWorkItems = computed(() => homeWorkItems.value.filter(item => item.workflowStatus === taskMineStatus.value))
+const filteredTaskMineWorkItems = computed(() => taskMineWorkItems.value.filter(item => item.workflowStatus === taskMineStatus.value))
 const taskMinePageCount = computed(() => Math.max(1, Math.ceil(filteredTaskMineWorkItems.value.length / taskMinePageSize)))
 const pagedTaskMineWorkItems = computed(() => {
   const start = taskMinePageIndex.value * taskMinePageSize
@@ -2268,9 +2369,62 @@ const filteredHistoryTasks = computed(() => closedTasks.value.filter(task => {
   const date = (task.deadline || task.createdAt).slice(0, 10)
   return searchMatched && (!taskHistoryStart.value || date >= taskHistoryStart.value) && (!taskHistoryEnd.value || date <= taskHistoryEnd.value)
 }))
+const filteredTaskSchedules = computed(() => {
+  const keyword = taskScheduleKeyword.value.toLowerCase()
+  const state = taskScheduleStatus.value
+  return taskSchedules.value.filter(schedule => {
+    const searchMatched = !keyword || `${schedule.title} ${schedule.trigger_description}`.toLowerCase().includes(keyword)
+    const scheduleState = schedule.active
+      ? schedule.paused ? 'paused' : 'active'
+      : schedule.fire_count > 0 ? 'ended' : 'cancelled'
+    return searchMatched && (state === 'all' || state === scheduleState)
+  })
+})
+async function loadTaskSchedules() {
+  if (!store.currentProjectId) {
+    taskSchedules.value = []
+    return
+  }
+  taskSchedulesLoading.value = true
+  try {
+    const response = await api.get<ApiEnvelope<TaskSchedule[]>>(
+      `/projects/${store.currentProjectId}/task-schedules`,
+    )
+    taskSchedules.value = response.data.data
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '计划列表加载失败。')
+  } finally {
+    taskSchedulesLoading.value = false
+  }
+}
+async function setTaskSchedulePaused(schedule: TaskSchedule, paused: boolean) {
+  try {
+    await api.post(`/task-schedules/${schedule.id}/pause`, null, {
+      params: { paused },
+    })
+    message.success(paused ? '执行计划已暂停。' : '执行计划已恢复。')
+    await loadTaskSchedules()
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '执行计划状态更新失败。')
+  }
+}
+async function cancelTaskSchedule(schedule: TaskSchedule) {
+  try {
+    await api.delete(`/task-schedules/${schedule.id}`)
+    message.success('执行计划已取消。')
+    await loadTaskSchedules()
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '执行计划取消失败。')
+  }
+}
+function confirmCancelTaskSchedule(schedule: TaskSchedule) {
+  if (!window.confirm(`确认取消执行计划“${schedule.title}”吗？取消后不会再次触发。`)) return
+  void cancelTaskSchedule(schedule)
+}
 const taskManagementTabs = computed(() => [
-  { key: 'mine' as const, label: '我的任务', hint: '处理当前责任节点', count: homeWorkItems.value.length, icon: ListCheck },
+  { key: 'mine' as const, label: '我的任务', hint: '处理当前责任节点', count: taskMineWorkItems.value.length, icon: ListCheck },
   { key: 'history' as const, label: '历史任务', hint: '查询闭环与流转记录', count: closedTasks.value.length, icon: Notes },
+  { key: 'schedules' as const, label: '执行计划', hint: '单次与周期触发规则', count: taskSchedules.value.length, icon: Clock },
   { key: 'assign' as const, label: '布置任务', hint: '模板或语言生成流程', count: 'AI', icon: Plus },
 ])
 const selectedTaskConclusion = computed(() => {
@@ -2367,6 +2521,19 @@ watch(selectedTaskMineWorkItemId, () => {
   taskMineFiles.value = []
 })
 
+watch(taskManagementTab, tab => {
+  if (tab === 'schedules') void loadTaskSchedules()
+})
+
+watch(section, currentSection => {
+  if (currentSection === 'tasks') void loadTaskSchedules()
+})
+
+watch(() => store.currentProjectId, () => {
+  taskSchedules.value = []
+  if (section.value === 'tasks') void loadTaskSchedules()
+})
+
 function openTaskDisposition(taskId: string) {
   selectedTaskId.value = taskId
   taskDispositionReply.value = ''
@@ -2398,10 +2565,19 @@ async function submitTaskDisposition() {
       await store.reassignTask(task.id, taskDispositionForwardId.value, taskDispositionReply.value || '转交当前任务节点')
       dispositionRecorded = true
     }
-    if (task.status === 'pending' || task.status === 'overdue') {
+    const currentStepIndex = task.workflowSteps.findIndex(step => step.status !== 'completed')
+    const attachmentNames = taskDispositionFiles.value.map(file => file.name)
+    if (currentStepIndex >= 0 && (task.status === 'processing' || task.status === 'overdue' || task.status === 'pending') && (taskDispositionReply.value || taskDispositionFiles.value.length)) {
+      await store.updateTaskStep(task.id, currentStepIndex, 'completed', taskDispositionReply.value || '完成任务节点', attachmentNames)
+      dispositionRecorded = true
+    } else if (currentStepIndex >= 0 && task.status === 'need_more_info' && (taskDispositionReply.value || taskDispositionFiles.value.length)) {
+      await store.updateTaskStep(task.id, currentStepIndex, 'processing', taskDispositionReply.value || '已补充材料，继续处理')
+      dispositionRecorded = true
+    }
+    if (!dispositionRecorded && (task.status === 'pending' || task.status === 'overdue')) {
       await store.updateTaskStatus(task.id, 'processing', taskDispositionReply.value || '开始处理任务')
       dispositionRecorded = true
-    } else if (task.status === 'need_more_info' && (taskDispositionReply.value || taskDispositionFiles.value.length)) {
+    } else if (!dispositionRecorded && task.status === 'need_more_info' && (taskDispositionReply.value || taskDispositionFiles.value.length)) {
       await store.updateTaskStatus(task.id, 'processing', taskDispositionReply.value || '已补充材料，继续处理')
       dispositionRecorded = true
     }
@@ -2412,6 +2588,64 @@ async function submitTaskDisposition() {
     message.error(error.response?.data?.detail || '任务处置提交失败，请稍后重试。')
   } finally {
     taskDispositionSubmitting.value = false
+  }
+}
+
+async function acceptSelectedTask() {
+  const task = selectedTask.value
+  if (!task) return
+  taskDispositionSubmitting.value = true
+  try {
+    await store.updateTaskStatus(task.id, 'done', taskDispositionReply.value || '确认通过')
+    message.success('任务已通过验收。')
+    closeTaskDisposition()
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '验收提交失败，请稍后重试。')
+  } finally {
+    taskDispositionSubmitting.value = false
+  }
+}
+
+async function rejectSelectedTask() {
+  const task = selectedTask.value
+  if (!task) return
+  taskDispositionSubmitting.value = true
+  try {
+    await store.updateTaskStatus(task.id, 'processing', taskDispositionReply.value || '退回重做')
+    message.success('任务已退回重做。')
+    closeTaskDisposition()
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '退回提交失败，请稍后重试。')
+  } finally {
+    taskDispositionSubmitting.value = false
+  }
+}
+
+function taskAttachmentRecord(att: string) {
+  return store.attachments.find(item => item.fileName === att)
+}
+
+function taskAttachmentFileName(att: string) {
+  return taskAttachmentRecord(att)?.fileName || att
+}
+
+function taskAttachmentPreviewText(att: string) {
+  const record = taskAttachmentRecord(att)
+  if (!record) return ''
+  if (record.contentType.toLowerCase().startsWith('image/')) return ''
+  return record.contentPreview || ''
+}
+
+async function downloadTaskAttachment(att: string) {
+  const record = taskAttachmentRecord(att)
+  if (!record) {
+    message.warning('未找到对应附件记录。')
+    return
+  }
+  try {
+    await store.downloadAttachment(record.id, record.fileName)
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '附件下载失败，请稍后重试。')
   }
 }
 
@@ -2503,6 +2737,14 @@ function generateTemplateTaskFlow() {
 function applyGeneratedTaskFlow(flow: GeneratedTaskFlow) {
   taskCreateForm.value.title = flow.title
   taskCreateForm.value.task_type = flow.task_type
+  taskCreateForm.value.run_mode = flow.run_mode === 'scheduled' ? 'scheduled' : 'single'
+  taskCreateForm.value.trigger_date = flow.trigger_date
+  taskCreateForm.value.trigger_time = flow.trigger_time
+  taskCreateForm.value.trigger_interval_value = flow.trigger_interval_value
+  taskCreateForm.value.trigger_interval_unit = flow.trigger_interval_unit
+  taskCreateForm.value.cc = flow.cc
+  taskCreateForm.value.wbs_item_id = flow.wbs_item_id ? String(flow.wbs_item_id) : ''
+  taskCreateForm.value.confirmer_user_id = flow.confirmer_user_id ? String(flow.confirmer_user_id) : ''
   taskFlowSteps.value = flow.steps.map((step, index) => ({ id: `generated-${Date.now()}-${index}`, name: step.name, owner_user_id: step.owner_user_id ? String(step.owner_user_id) : '', due_at: step.due_at?.slice(0, 10) || todayDateString(index + 1), material: step.material || '' }))
   selectedTaskFlowStepIndex.value = 0
   taskFlowGenerationNote.value = flow.generation_note
@@ -2549,7 +2791,7 @@ function resetTaskFlowCreator() {
   taskFlowGenerationNote.value = ''
   taskTemplateType.value = '隐患整改'
   taskTemplateTopic.value = '整改现场隐患并完成复核闭环'
-  taskCreateForm.value = { title: taskTemplateTopic.value, task_type: 'risk_alert', run_mode: 'single', trigger_date: todayDateString(), trigger_time: '09:00', trigger_interval_value: 1, trigger_interval_unit: 'week', cc: '项目经理' }
+  taskCreateForm.value = { title: taskTemplateTopic.value, task_type: 'risk_alert', run_mode: 'single', trigger_date: todayDateString(), trigger_time: '09:00', trigger_interval_value: 1, trigger_interval_unit: 'week', cc: '项目经理', wbs_item_id: '', confirmer_user_id: '' }
   taskFlowSteps.value = createTemplateFlowSteps('隐患整改')
   selectedTaskFlowStepIndex.value = 0
 }
@@ -2561,9 +2803,32 @@ async function createManualTask() {
   const workflow_steps = taskFlowSteps.value.map((step, index) => ({ name: step.name.trim(), owner: memberNameById(step.owner_user_id), owner_user_id: step.owner_user_id || undefined, due_at: step.due_at || undefined, material: step.material.trim(), order: index + 1, next_step: index < taskFlowSteps.value.length - 1 ? index + 2 : undefined, status: 'pending' as const })) as Task['workflowSteps']
   const triggerParts = [taskTriggerSummary.value, form.cc ? `抄送：${form.cc}` : ''].filter(Boolean)
   try {
-    await store.createTask({ title: form.title, task_type: form.task_type, risk_level: 'medium', assignee_user_id: taskFlowSteps.value[0]?.owner_user_id, due_at: taskFlowSteps.value[taskFlowSteps.value.length - 1]?.due_at, trigger_reason: triggerParts.join(' · '), required_materials: requiredMaterials, workflow_steps })
-    message.success('任务流已创建并进入我的任务。')
-    taskManagementTab.value = 'mine'
+    await store.createTask({
+      title: form.title,
+      task_type: form.task_type,
+      risk_level: 'medium',
+      assignee_user_id: taskFlowSteps.value[0]?.owner_user_id,
+      confirmer_user_id: form.confirmer_user_id || undefined,
+      wbs_item_id: form.wbs_item_id || undefined,
+      due_at: taskFlowSteps.value[taskFlowSteps.value.length - 1]?.due_at,
+      trigger_reason: triggerParts.join(' · '),
+      required_materials: requiredMaterials,
+      workflow_steps,
+      run_mode: form.run_mode === 'single' ? 'once' : 'recurring',
+      trigger_date: form.trigger_date,
+      trigger_time: form.trigger_time,
+      trigger_interval_value: form.trigger_interval_value,
+      trigger_interval_unit: form.trigger_interval_unit,
+      cc: form.cc || undefined,
+    })
+    if (form.run_mode === 'scheduled') {
+      taskManagementTab.value = 'schedules'
+      await loadTaskSchedules()
+      message.success('执行计划已登记。')
+    } else {
+      taskManagementTab.value = 'mine'
+      message.success('任务流已创建并进入我的任务。')
+    }
     resetTaskFlowCreator()
   } catch (error: any) {
     message.error(error.response?.data?.detail || '任务流创建失败，请检查填写内容后重试。')
@@ -5863,6 +6128,11 @@ function nowStr() {
 .task-disposition-flow li div { min-width: 0; }
 .task-disposition-flow li div strong { display: block; overflow: hidden; color: #35534f; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .task-disposition-flow li div small { display: block; overflow: hidden; margin-top: 3px; color: #85958f; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.task-disposition-step-files { display: grid; gap: 8px; margin-top: 8px; }
+.task-disposition-step-file { display: grid; gap: 6px; justify-items: start; }
+.task-disposition-step-file img { max-width: 220px; max-height: 160px; border: 1px solid #d8e4e1; border-radius: 6px; object-fit: contain; background: #f3f7f6; }
+.task-disposition-step-file button { display: inline-flex; align-items: center; gap: 5px; border: 1px solid #c9d8d4; border-radius: 5px; padding: 5px 9px; color: #0f766e; background: #fff; font: inherit; font-size: 12px; cursor: pointer; }
+.task-disposition-step-preview { max-width: 100%; margin: 0; max-height: 140px; overflow: auto; padding: 8px 10px; border: 1px solid #e1e9e7; border-radius: 6px; color: #4e6a64; background: #f7faf9; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
 .task-disposition-flow li em { color: #738983; font-size: 12px; font-style: normal; }
 .task-disposition-flow li button { border: 1px solid #c8d9d4; border-radius: 5px; padding: 5px 7px; color: #0f766e; background: #fff; font: inherit; font-size: 12px; cursor: pointer; }
 .task-disposition-form textarea { width: 100%; min-height: 92px; box-sizing: border-box; padding: 10px; border: 1px solid #cddbd7; border-radius: 6px; color: #294844; background: #fff; font: inherit; font-size: 12px; line-height: 1.6; resize: vertical; }
@@ -7206,4 +7476,30 @@ function nowStr() {
   .task-form-title,.task-form-workflow,.change-form-content,.draft-form-content { grid-column: auto; }
   .message-row { max-width: 100%; }
 }
+
+.task-schedule-view {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+}
+.task-schedule-search { grid-template-columns: minmax(320px, 1fr) 170px auto auto; }
+.task-schedule-search button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+.task-history-search .task-schedule-create { border-color: #0f766e; color: #fff; background: #0f766e; }
+.task-history-search .task-schedule-create:hover { background: #0c6861; }
+.task-schedule-results .task-history-table-head,
+.task-schedule-results > article { grid-template-columns: minmax(360px, 1.7fr) .5fr .75fr .45fr minmax(110px, .55fr); }
+.task-schedule-results > article.paused { background: #fffdf8; }
+.task-schedule-main { min-width: 0; }
+.task-schedule-main small { display: block; white-space: normal; overflow: visible; }
+.task-schedule-main .task-schedule-error { color: #a14f32; }
+.task-schedule-status { width: fit-content; border-radius: 4px; padding: 4px 6px; color: #697b77; background: #edf1f0; font-size: 12px; font-weight: 750; }
+.task-schedule-status.active { color: #0f766e; background: #e3f1ed; }
+.task-schedule-status.paused { color: #9a612b; background: #fff0df; }
+.task-schedule-status.ended { color: #647773; background: #edf1f0; }
+.task-schedule-results time { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.task-schedule-actions { display: flex; align-items: center; justify-content: flex-start; gap: 8px; }
+.task-schedule-actions button { border: 0; padding: 5px 0; color: #0f766e; background: transparent; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; }
+.task-schedule-actions button.danger { color: #b65337; }
+.task-schedule-actions > span { color: #9aa7a3; font-size: 12px; }
 </style>

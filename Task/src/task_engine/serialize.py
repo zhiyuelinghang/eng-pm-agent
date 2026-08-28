@@ -178,6 +178,13 @@ def flow_json(flow: TaskFlow) -> dict[str, Any]:
             "interval_unit": str(flow.trigger.interval_unit),
             "until": iso(flow.trigger.until),
             "max_fires": flow.trigger.max_fires,
+            "calendar_mode": (
+                str(flow.trigger.calendar_mode)
+                if flow.trigger.calendar_mode
+                else None
+            ),
+            "calendar_weekdays": list(flow.trigger.calendar_weekdays),
+            "calendar_day": flow.trigger.calendar_day,
             "description": flow.trigger.describe(),
         },
         "watchers": [assignee_json(w) for w in flow.watchers],
@@ -195,6 +202,7 @@ def flow_json(flow: TaskFlow) -> dict[str, Any]:
                 "instruction": spec.instruction,
                 "requires_attachment": spec.requires_attachment,
                 "optional": spec.optional,
+                "automated": spec.automated,
             }
             for index, spec in enumerate(flow.steps)
         ],
@@ -202,11 +210,22 @@ def flow_json(flow: TaskFlow) -> dict[str, Any]:
 
 
 def schedule_json(schedule: Schedule) -> dict[str, Any]:
-    status = "已停用"
+    status = "已结束" if schedule.fire_count > 0 else "已取消"
     if schedule.active and schedule.paused:
         status = "已暂停"
     elif schedule.active:
         status = "生效中"
+
+    scope = schedule.flow.scope or {}
+    step_actions = scope.get("step_actions") or {}
+    pure_automation = (
+        isinstance(step_actions, dict)
+        and bool(schedule.flow.steps)
+        and len(step_actions) == len(schedule.flow.steps)
+    )
+    action = scope.get("action")
+    if action is None and pure_automation and len(step_actions) == 1:
+        action = next(iter(step_actions.values()))
 
     return {
         "id": schedule.id,
@@ -221,4 +240,11 @@ def schedule_json(schedule: Schedule) -> dict[str, Any]:
         "fire_count": schedule.fire_count,
         "last_error": schedule.last_error,
         "step_count": len(schedule.flow.steps),
+        "execution_kind": (
+            "automation"
+            if schedule.flow.is_automation or pure_automation
+            else schedule.flow.execution_kind
+        ),
+        "action": action,
+        "project_id": scope.get("project_id"),
     }

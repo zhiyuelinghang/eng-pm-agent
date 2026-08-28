@@ -81,14 +81,44 @@ def tool_result(payload: dict[str, Any], *, is_error: bool = False) -> dict[str,
 
 class Server:
     def __init__(self) -> None:
-        db_path = os.getenv("TASK_ENGINE_DB", "task_engine.db")
         timezone = os.getenv("TASK_ENGINE_TZ", "Asia/Shanghai")
-        self.engine = TaskEngine(db_path, timezone=timezone)
+        database_url = os.getenv("TASK_ENGINE_DATABASE_URL", "").strip()
+        if database_url:
+            # 平台运行态与 FastAPI 共用同一 PostgreSQL schema。延迟导入让
+            # 引擎仓库原有的 SQLite 契约测试仍可独立运行，但平台清单不会
+            # 配置 TASK_ENGINE_DB，因此生产环境缺少 PostgreSQL 配置会直接失败。
+            from sqlalchemy import create_engine
+            from sqlalchemy.engine import make_url
+
+            from task_engine.store.postgres import PostgresStore
+
+            url = make_url(database_url)
+            if url.drivername == "postgresql":
+                url = url.set(drivername="postgresql+psycopg")
+            schema = os.getenv("TASK_ENGINE_SCHEMA", "task_engine").strip()
+            sql_engine = create_engine(url, pool_pre_ping=True)
+            self.engine = TaskEngine(
+                timezone=timezone,
+                store=PostgresStore(
+                    sql_engine,
+                    schema=schema,
+                    dispose_on_close=True,
+                ),
+            )
+            storage_label = f"PostgreSQL schema {schema}"
+        else:
+            db_path = os.getenv("TASK_ENGINE_DB", "").strip()
+            if not db_path:
+                raise RuntimeError(
+                    "缺少 TASK_ENGINE_DATABASE_URL；平台任务引擎不允许回退到 SQLite",
+                )
+            self.engine = TaskEngine(db_path, timezone=timezone)
+            storage_label = f"SQLite {db_path}（仅独立运行/测试）"
 
         config = LLMConfig.from_env()
         self.registry = ToolRegistry(self.engine, FlowGenerator(config))
 
-        log(f"数据库 {db_path}，时区 {timezone}")
+        log(f"数据库 {storage_label}，时区 {timezone}")
         log(f"任务流生成：{'模型 ' + config.model if config.enabled else '规则模板（未配置模型）'}")
 
     def handle(self, message: dict[str, Any]) -> dict[str, Any] | None:
@@ -151,14 +181,15 @@ class Server:
 
     def serve(self) -> None:
         log(f"就绪，暴露 {len(TOOLS)} 个工具")
-        for line in sys.stdin:
-            line = line.strip()
-            if not line:
+        # MCP stdio 固定使用 UTF-8，不能依赖 Windows 控制台的 GBK 默认编码。
+        for raw_line in sys.stdin.buffer:
+            raw_line = raw_line.strip()
+            if not raw_line:
                 continue
 
             try:
-                message = json.loads(line)
-            except json.JSONDecodeError as exc:
+                message = json.loads(raw_line.decode("utf-8-sig"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
                 _write(error(None, PARSE_ERROR, f"JSON 解析失败：{exc}"))
                 continue
 
@@ -180,8 +211,14 @@ class Server:
 
 
 def _write(payload: dict[str, Any]) -> None:
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
-    sys.stdout.flush()
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        default=str,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    sys.stdout.buffer.write(encoded + b"\n")
+    sys.stdout.buffer.flush()
 
 
 def main() -> int:

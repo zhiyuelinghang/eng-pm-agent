@@ -16,6 +16,7 @@ set "WEBUI_HOME=%AGENTSCOPE_HOME%\agentscope-web-ui"
 if not defined AGENTSCOPE_HOST set "AGENTSCOPE_HOST=127.0.0.1"
 if not defined AGENTSCOPE_PORT set "AGENTSCOPE_PORT=18642"
 if not defined AGENTSCOPE_STORAGE set "AGENTSCOPE_STORAGE=postgresql"
+if not defined AGENTSCOPE_USE_LOCAL_APP set "AGENTSCOPE_USE_LOCAL_APP=1"
 if not defined AGENTSCOPE_WEBUI_PORT set "AGENTSCOPE_WEBUI_PORT=25173"
 if not defined AGENTSCOPE_WEBUI_HELPER_PORT set "AGENTSCOPE_WEBUI_HELPER_PORT=23000"
 
@@ -25,7 +26,7 @@ if not exist "%AGENTSCOPE_CORE_HOME%\__init__.py" goto ERROR_CORE
 "%PYTHON_EXE%" -c "import agentscope; from agentscope.app.storage import AsyncSQLAlchemyStorage; assert agentscope.__version__ == '2.0.6'" >nul
 if errorlevel 1 goto ERROR_CORE_IMPORT
 
-"%PYTHON_EXE%" -c "import aiosqlite, asyncpg, alembic, psycopg, pgvector, sqlalchemy, pypdf, pandas, pptx, openpyxl, xlrd, docx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime, langgraph, graphiti_core, neo4j, sentence_transformers, torch, tiktoken, lightrag" >nul
+"%PYTHON_EXE%" -c "import aiosqlite, asyncpg, alembic, psycopg, pgvector, sqlalchemy, fastapi" >nul
 if errorlevel 1 goto ERROR_DEPENDENCIES
 if not exist "%WEBUI_HOME%\package.json" goto ERROR_WEBUI
 
@@ -114,7 +115,11 @@ echo [AgentScope] 存储模式：%AGENTSCOPE_STORAGE%
 echo [AgentScope] 运行数据：%RUNTIME_HOME%
 if /I "%AGENTSCOPE_STORAGE%"=="sqlite" echo [AgentScope] SQLite 元数据：%SQLITE_PATH%
 if /I "%AGENTSCOPE_STORAGE%"=="postgresql" echo [AgentScope] PostgreSQL schema：agentscope
-echo [AgentScope] 知识库向量：PostgreSQL schema knowledge
+if "%AGENTSCOPE_USE_LOCAL_APP%"=="1" (
+    echo [AgentScope] 知识库向量：本地开发模式未启用
+) else (
+    echo [AgentScope] 知识库向量：PostgreSQL schema knowledge
+)
 echo [AgentScope] 知识库文件：%KNOWLEDGE_BLOB_HOME%
 echo [AgentScope] 后端地址：http://%AGENTSCOPE_HOST%:%AGENTSCOPE_PORT%
 echo [AgentScope] API 文档：http://%AGENTSCOPE_HOST%:%AGENTSCOPE_PORT%/docs

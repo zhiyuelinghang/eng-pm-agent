@@ -356,6 +356,69 @@ class TestAccountabilityRequirements:
         with pytest.raises(ValueError, match="工点"):
             instantiate(flow, T0)
 
+    def test_host_automation_does_not_require_responsibility_fields(self):
+        flow = TaskFlow(
+            title="发送项目群提醒",
+            steps=(StepSpec(name="发送群聊消息", due_offset_days=0),),
+            category="automation",
+            scope={
+                "execution_kind": "automation",
+                "action": {
+                    "type": "project_chat_message",
+                    "content": "请全体成员提交日报",
+                },
+            },
+        )
+
+        task = instantiate(flow, T0)
+
+        assert task.is_automation is True
+        assert task.current_assignee is None
+        assert task.site is None
+        assert task.confirmer is None
+
+    def test_host_automation_requires_executable_action(self):
+        flow = TaskFlow(
+            title="缺少动作的自动化",
+            steps=(StepSpec(name="执行动作", due_offset_days=0),),
+            category="automation",
+            scope={"execution_kind": "automation"},
+        )
+
+        with pytest.raises(ValueError, match="未配置可执行动作"):
+            instantiate(flow, T0)
+
+    def test_automated_node_does_not_require_human_responsibility_fields(self):
+        flow = TaskFlow(
+            title="自动发送群聊消息",
+            steps=(StepSpec(name="发送提醒", automated=True),),
+        )
+
+        task = instantiate(flow, T0)
+
+        assert task.current_step is not None
+        assert task.current_step.assignee is None
+        assert task.site is None
+        assert task.confirmer is None
+
+    def test_mixed_flow_only_checks_manual_nodes(self):
+        flow = TaskFlow(
+            title="检查后自动提醒",
+            steps=(
+                StepSpec(name="现场检查", assignee=ZHANG),
+                StepSpec(name="发送提醒", automated=True),
+                StepSpec(name="复核", assignee=WANG),
+            ),
+            site=SITE,
+            confirmer=BOSS,
+        )
+
+        task = instantiate(flow, T0)
+
+        assert task.current_step is not None
+        assert task.current_step.name == "现场检查"
+        assert flow.unassigned_steps() == []
+
     def test_complete_flow_can_be_dispatched(self):
         task = instantiate(make_flow(), T0)
         assert task.site == SITE

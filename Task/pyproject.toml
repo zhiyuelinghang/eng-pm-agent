@@ -13,6 +13,8 @@ license = { text = "MIT" }
 # 领域层与存储层只用标准库。httpx 仅生成器与适配层需要。
 dependencies = [
     "httpx>=0.27",
+    "sqlalchemy>=2.0,<3.0",
+    "psycopg[binary]>=3.2,<4.0",
 ]
 
 [project.optional-dependencies]

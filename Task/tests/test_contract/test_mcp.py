@@ -27,6 +27,7 @@ class ServerSession:
             stderr=subprocess.PIPE,
             cwd=str(ROOT),
             text=True,
+            encoding="utf-8",
             bufsize=1,
             env={
                 "PATH": "/usr/bin:/bin",

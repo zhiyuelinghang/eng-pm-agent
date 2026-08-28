@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     dobby_agent_tool_token: str = ""
     agentscope_request_timeout_seconds: float = 150.0
     agentscope_poll_interval_seconds: float = 0.35
+    task_engine_schema: str = "task_engine"
+    task_engine_tz: str = "Asia/Shanghai"
+    task_engine_tick_interval_seconds: float = 5.0
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -1,5 +1,7 @@
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +18,10 @@ from .models import (Attachment, DailyReport, DocumentFolder, DocumentFolderItem
                      Task, User, WbsItem, WbsRiskLink)
 from .security import hash_password
 from .schema_migrations import upgrade_database_schema
+from .task_engine_gateway import get_engine
+
+
+logger = logging.getLogger(__name__)
 
 
 def seed_admin() -> None:
@@ -284,6 +290,23 @@ def seed_prototype_project() -> None:
         db.commit()
 
 
+async def _tick_loop() -> None:
+    """高频推进到期计划，并主动扫描逾期任务。"""
+    task_engine = get_engine()
+    tick_interval = max(
+        1.0,
+        float(get_settings().task_engine_tick_interval_seconds),
+    )
+    while True:
+        try:
+            report = await asyncio.to_thread(task_engine.tick)
+            if report.created_count or report.failed_count or report.overdue_task_ids:
+                logger.info("任务引擎：%s", report.describe())
+        except Exception:
+            logger.exception("任务引擎 tick 失败")
+        await asyncio.sleep(tick_interval)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     upgrade_database_schema(
@@ -294,7 +317,11 @@ async def lifespan(_: FastAPI):
     with SessionLocal() as db:
         bootstrap_declarative_catalog(db)
     seed_admin()
+    tick_task = asyncio.create_task(_tick_loop())
     yield
+    tick_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await tick_task
 
 
 settings = get_settings()

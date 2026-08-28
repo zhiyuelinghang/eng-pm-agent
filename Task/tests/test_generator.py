@@ -126,6 +126,11 @@ class TestParseTrigger:
         trigger = parse_trigger("发现临边防护缺失后发起整改", now=MONDAY)
         assert trigger.run_mode is RunMode.ONCE
 
+    def test_timed_single_with_explicit_clock(self):
+        trigger = parse_trigger("创建定时单次任务，今天16:52发送消息", now=MONDAY)
+        assert trigger.run_mode is RunMode.ONCE
+        assert trigger.first_at == MONDAY.replace(hour=16, minute=52)
+
     def test_first_at_always_future(self):
         for text in ["每周一巡检", "定期检查", "立即整改隐患"]:
             trigger = parse_trigger(text, now=MONDAY)

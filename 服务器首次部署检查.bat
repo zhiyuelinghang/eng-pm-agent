@@ -34,6 +34,12 @@ if not exist "%ROOT%backend\app\main.py" (
     goto FAILED
 )
 
+if not exist "%ROOT%Task\src\task_engine\__init__.py" (
+    echo [失败] 缺少任务引擎代码：
+    echo %ROOT%Task\src\task_engine
+    goto FAILED
+)
+
 if not exist "%ROOT%AgentScope\agentscope\__init__.py" (
     echo [失败] 缺少 AgentScope 核心代码。
     goto FAILED
@@ -104,6 +110,13 @@ if errorlevel 1 (
     goto FAILED
 )
 echo [初始化] 平台前端与 Dobby 管理端验证通过。
+
+"%PYTHON_EXE%" -c "import sys; sys.path.insert(0, r'%PROJECT_ROOT%\Task\src'); import task_engine; from task_engine.store.postgres import PostgresStore"
+if errorlevel 1 (
+    echo [失败] 任务引擎代码或 PostgreSQL 存储验证失败。
+    goto FAILED
+)
+echo [初始化] 任务引擎代码验证通过。
 
 echo.
 echo [完成] 服务器首次初始化完成。

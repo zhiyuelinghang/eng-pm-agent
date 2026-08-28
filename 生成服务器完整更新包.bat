@@ -25,6 +25,8 @@ call :REQUIRE_FILE "scripts\agentscope_dev_app.py"
 if errorlevel 1 goto FAILED
 call :REQUIRE_FILE "scripts\dobby_web_gateway.py"
 if errorlevel 1 goto FAILED
+call :REQUIRE_FILE "Task\src\task_engine\__init__.py"
+if errorlevel 1 goto FAILED
 call :REQUIRE_FILE "python-3.13.14\python.exe"
 if errorlevel 1 goto FAILED
 
@@ -71,10 +73,14 @@ call :COPY_CODE_DIR "AgentScope" "AgentScope"
 if errorlevel 1 goto FAILED
 call :COPY_CODE_DIR "scripts" "scripts"
 if errorlevel 1 goto FAILED
+call :COPY_CODE_DIR "Task" "Task"
+if errorlevel 1 goto FAILED
 
 mkdir "%UPDATE_TARGET%\python-3.13.14" >nul 2>nul
 copy /Y "%ROOT%python-3.13.14\python313._pth" "%UPDATE_TARGET%\python-3.13.14\python313._pth" >nul
 if errorlevel 1 goto COPY_FAILED
+call :ENSURE_PYTHON_PATH "%UPDATE_TARGET%\python-3.13.14\python313._pth" "..\Task\src"
+if errorlevel 1 goto FAILED
 
 for %%F in (
     ".env.example"
@@ -110,6 +116,8 @@ if !ROBOCOPY_EXIT! GEQ 8 (
     echo [失败] 复制便携 Python 运行时失败，Robocopy 退出码：!ROBOCOPY_EXIT!
     goto FAILED
 )
+call :ENSURE_PYTHON_PATH "%FIRST_TARGET%\python-3.13.14\python313._pth" "..\Task\src"
+if errorlevel 1 goto FAILED
 
 call :WRITE_VERSION "%FIRST_TARGET%\VERSION.txt" "首次部署包" "包含完整便携 Python 与 AgentScope 依赖"
 if errorlevel 1 goto FAILED

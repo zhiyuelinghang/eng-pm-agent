@@ -29,11 +29,20 @@ def _is_app_python(change: Change, path: str) -> bool:
 
 
 def _command() -> list[str]:
+    use_local = (
+        os.getenv("AGENTSCOPE_USE_LOCAL_APP", "").strip() == "1"
+        or os.getenv("AGENTSCOPE_STORAGE", "").strip().lower() == "sqlite"
+    )
+    app_module = (
+        "scripts.agentscope_local_app:app"
+        if use_local
+        else "scripts.agentscope_dev_app:app"
+    )
     return [
         sys.executable,
         "-m",
         "uvicorn",
-        "scripts.agentscope_dev_app:app",
+        app_module,
         "--app-dir",
         str(PROJECT_ROOT),
         "--host",

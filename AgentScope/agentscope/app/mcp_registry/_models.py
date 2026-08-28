@@ -11,6 +11,7 @@ _VERSION_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
 PROJECT_INITIALIZATION_VALIDATION_CAPABILITY = (
     "project_initialization_validation"
 )
+TASK_ENGINE_STORE_CAPABILITY = "dobby_task_engine_store"
 
 
 def utc_now() -> datetime:
@@ -55,6 +56,7 @@ class MCPPackageManifest(BaseModel):
     platform_capabilities: list[
         Literal[
             "dobby_database_interactions",
+            "dobby_task_engine_store",
             "project_initialization_validation",
         ]
     ] = Field(
@@ -99,6 +101,7 @@ class MCPPackageManifest(BaseModel):
         values: list[
             Literal[
                 "dobby_database_interactions",
+                "dobby_task_engine_store",
                 "project_initialization_validation",
             ]
         ],
