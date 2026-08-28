@@ -1255,9 +1255,22 @@ def authorized_qa_payload(
         readable &= requested_ids
     if not readable:
         raise HTTPException(status_code=403, detail="当前问答范围内没有可访问的工程资料。")
+    readable_bases = {
+        str(value)
+        for value in db.scalars(
+            select(EngineeringDocumentNode.knowledge_base_id).where(
+                EngineeringDocumentNode.project_id == project_id,
+                EngineeringDocumentNode.node_type == "file",
+                EngineeringDocumentNode.external_id.in_(readable),
+            ),
+        ).all()
+        if value
+    }
+    if not readable_bases:
+        raise HTTPException(status_code=409, detail="授权资料缺少对应的知识库信息。")
     return {
         **payload,
-        "knowledge_base_ids": [],
+        "knowledge_base_ids": sorted(readable_bases),
         "knowledge_ids": sorted(readable),
     }
 
@@ -1524,13 +1537,32 @@ def filter_search_result(
 def permission_configuration_view(
     db: Session,
     project_id: int,
+    *,
+    include_nodes: bool = True,
 ) -> dict[str, Any]:
     state_row = get_or_create_sync_state(db, project_id)
-    nodes = db.scalars(
-        select(EngineeringDocumentNode)
-        .where(EngineeringDocumentNode.project_id == project_id)
-        .order_by(EngineeringDocumentNode.knowledge_base_id, EngineeringDocumentNode.id),
-    ).all()
+    # The permission tree only needs hierarchy fields. Selecting the complete ORM
+    # entity would also transfer large descriptions and metadata for every file.
+    node_rows = (
+        db.execute(
+            select(
+                EngineeringDocumentNode.id,
+                EngineeringDocumentNode.parent_id,
+                EngineeringDocumentNode.node_type,
+                EngineeringDocumentNode.knowledge_base_id,
+                EngineeringDocumentNode.external_id,
+                EngineeringDocumentNode.name,
+                EngineeringDocumentNode.folder_path,
+            )
+            .where(EngineeringDocumentNode.project_id == project_id)
+            .order_by(
+                EngineeringDocumentNode.knowledge_base_id,
+                EngineeringDocumentNode.id,
+            ),
+        ).mappings().all()
+        if include_nodes
+        else []
+    )
     grants = db.scalars(
         select(EngineeringDocumentPermission)
         .where(EngineeringDocumentPermission.project_id == project_id)
@@ -1550,18 +1582,7 @@ def permission_configuration_view(
     return {
         "access_mode": state_row.access_mode,
         "sync": sync_state_view(state_row),
-        "nodes": [
-            {
-                "id": node.id,
-                "parent_id": node.parent_id,
-                "node_type": node.node_type,
-                "knowledge_base_id": node.knowledge_base_id,
-                "external_id": node.external_id,
-                "name": node.name,
-                "folder_path": node.folder_path,
-            }
-            for node in nodes
-        ],
+        "nodes": [dict(node) for node in node_rows],
         "subjects": {
             "users": [
                 {

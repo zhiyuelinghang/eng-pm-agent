@@ -13,6 +13,7 @@ from backend.app.engineering_document_catalog import (
     local_folder_tree_view,
     local_knowledge_page,
     local_workspace_view,
+    permission_configuration_view,
     set_catalogue_access_mode,
     sync_document_catalogue,
     update_local_folder_path,
@@ -369,7 +370,15 @@ def test_position_permission_is_inherited_and_qa_is_limited_to_readable_files(
     assert tree["root_document_count"] == 0
     assert tree["total_document_count"] == 2
     assert set(qa_payload["knowledge_ids"]) == {"doc-tech", "doc-drawing"}
-    assert qa_payload["knowledge_base_ids"] == []
+    assert qa_payload["knowledge_base_ids"] == ["kb-1"]
+    document_payload = authorized_qa_payload(
+        db,
+        project.id,
+        user,
+        {"query": "读取图纸", "knowledge_ids": ["doc-drawing"]},
+    )
+    assert document_payload["knowledge_base_ids"] == ["kb-1"]
+    assert document_payload["knowledge_ids"] == ["doc-drawing"]
     with pytest.raises(Exception) as exc_info:
         authorized_qa_payload(
             db,
@@ -378,6 +387,74 @@ def test_position_permission_is_inherited_and_qa_is_limited_to_readable_files(
             {"query": "读取根文件", "knowledge_ids": ["doc-root"]},
         )
     assert getattr(exc_info.value, "status_code", None) == 403
+
+
+def test_permission_configuration_exposes_project_positions_and_local_tree(
+    db: Session,
+) -> None:
+    project, user, member = _project_user(db)
+    sync_document_catalogue(db, project.id, "robot-1", FakeWeKnoraClient())
+    position = ProjectPosition(project_id=project.id, position_name="资料员")
+    db.add(position)
+    db.flush()
+    db.add(
+        ProjectMemberPosition(
+            project_id=project.id,
+            project_member_id=member.id,
+            position_id=position.id,
+            serial_no=1,
+            certificate_no="",
+            responsibility_description="管理项目资料",
+        ),
+    )
+    folder = db.scalar(
+        select(EngineeringDocumentNode).where(
+            EngineeringDocumentNode.project_id == project.id,
+            EngineeringDocumentNode.node_type == "folder",
+        ),
+    )
+    assert folder is not None
+    grant = upsert_catalogue_permission(
+        db,
+        project.id,
+        node_id=folder.id,
+        subject_type="position",
+        subject_id=position.id,
+        values={"can_read": True, "inherit_to_children": True},
+        granted_by_user_id=user.id,
+    )
+    db.commit()
+
+    configuration = permission_configuration_view(db, project.id)
+
+    assert configuration["access_mode"] == "project"
+    assert configuration["subjects"]["positions"] == [
+        {"id": position.id, "name": "资料员"},
+    ]
+    assert any(node["id"] == folder.id for node in configuration["nodes"])
+    assert configuration["permissions"] == [
+        {
+            "id": grant.id,
+            "node_id": folder.id,
+            "subject_type": "position",
+            "subject_id": position.id,
+            "can_read": True,
+            "can_create": False,
+            "can_update": False,
+            "can_delete": False,
+            "can_manage": False,
+            "inherit_to_children": True,
+        },
+    ]
+
+    summary = permission_configuration_view(
+        db,
+        project.id,
+        include_nodes=False,
+    )
+    assert summary["nodes"] == []
+    assert summary["subjects"] == configuration["subjects"]
+    assert summary["permissions"] == configuration["permissions"]
 
 
 def test_create_only_folder_remains_visible_for_navigation(db: Session) -> None:

@@ -1777,6 +1777,179 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             },
         )
 
+    async def test_weknora_document_scope_keeps_exact_file_allowlist(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        request = AsyncMock(
+            side_effect=[
+                {
+                    "success": True,
+                    "data": {
+                        "id": "knowledge-allowed",
+                        "knowledge_base_id": "kb-allowed",
+                        "file_name": "允许访问.pdf",
+                    },
+                },
+                {"success": True, "data": {"id": "session-scoped"}},
+            ],
+        )
+        sse = AsyncMock(
+            return_value=[
+                {"response_type": "answer", "content": "限定范围答案"},
+                {
+                    "response_type": "references",
+                    "knowledge_references": [
+                        {"knowledge_id": "knowledge-allowed"},
+                        {"knowledge_id": "knowledge-outside-scope"},
+                    ],
+                },
+                {"response_type": "complete"},
+            ],
+        )
+        enrichment = AsyncMock(
+            return_value=[
+                {
+                    "knowledge_id": "knowledge-allowed",
+                    "filename": "允许访问.pdf",
+                },
+                {
+                    "knowledge_id": "knowledge-outside-scope",
+                    "filename": "未授权.pdf",
+                },
+            ],
+        )
+
+        with (
+            patch(
+                "agentscope.app._router._agent._request_weknora_json",
+                new=request,
+            ),
+            patch(
+                "agentscope.app._router._agent._request_weknora_sse",
+                new=sse,
+            ),
+            patch(
+                "agentscope.app._router._agent._enrich_weknora_reference_items",
+                new=enrichment,
+            ),
+            patch(
+                "agentscope.app._router._agent._weknora_agent_knowledge_base_ids",
+                new=AsyncMock(
+                    return_value=["kb-allowed", "kb-not-allowed-by-platform"],
+                ),
+            ),
+        ):
+            response = await ask_weknora_agent(
+                body=AskWeKnoraAgentRequest(
+                    query="只读取授权文件",
+                    weknora_agent_id="project-robot-001",
+                    knowledge_ids=["knowledge-allowed"],
+                ),
+                user_id=USER_ID,
+                storage=storage,
+            )
+
+        self.assertEqual(response.answer, "限定范围答案")
+        self.assertEqual(
+            [item["knowledge_id"] for item in response.references],
+            ["knowledge-allowed"],
+        )
+        self.assertEqual(
+            request.await_args_list[0].args,
+            (connection, "/knowledge/knowledge-allowed"),
+        )
+        self.assertEqual(
+            sse.await_args.args,
+            (
+                connection,
+                "/knowledge-chat/session-scoped",
+                {
+                    "query": "只读取授权文件",
+                    "agent_enabled": False,
+                    "agent_id": "project-robot-001",
+                    "knowledge_base_ids": ["kb-allowed"],
+                    "knowledge_ids": ["knowledge-allowed"],
+                    "channel": "api",
+                },
+            ),
+        )
+
+    async def test_weknora_document_scope_rejects_mismatched_base(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        storage = SimpleNamespace(
+            get_platform_settings=AsyncMock(
+                return_value=PlatformSettingsRecord(
+                    user_id=USER_ID,
+                    data=PlatformSettingsData(
+                        weknora_connection=connection,
+                    ),
+                ),
+            ),
+            list_agents=AsyncMock(return_value=[]),
+            upsert_agent=AsyncMock(return_value="agent"),
+        )
+        request = AsyncMock(
+            return_value={
+                "success": True,
+                "data": {
+                    "id": "knowledge-allowed",
+                    "knowledge_base_id": "kb-allowed",
+                },
+            },
+        )
+        sse = AsyncMock()
+
+        with (
+            patch(
+                "agentscope.app._router._agent._request_weknora_json",
+                new=request,
+            ),
+            patch(
+                "agentscope.app._router._agent._request_weknora_sse",
+                new=sse,
+            ),
+            patch(
+                "agentscope.app._router._agent._weknora_agent_knowledge_base_ids",
+                new=AsyncMock(return_value=["kb-allowed", "kb-other"]),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as context:
+                await ask_weknora_agent(
+                    body=AskWeKnoraAgentRequest(
+                        query="读取文件",
+                        weknora_agent_id="project-robot-001",
+                        knowledge_base_ids=["kb-other"],
+                        knowledge_ids=["knowledge-allowed"],
+                        session_id="session-existing",
+                    ),
+                    user_id=USER_ID,
+                    storage=storage,
+                )
+
+        self.assertEqual(context.exception.status_code, 403)
+        sse.assert_not_awaited()
+
     async def test_weknora_agent_query_resolves_inline_kb_citations(
         self,
     ) -> None:
@@ -2232,6 +2405,84 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             upstream_calls[0][1]["params"],
             {"resource_urls": "public"},
         )
+
+    async def test_weknora_document_stream_uses_normal_rag_and_filters_refs(
+        self,
+    ) -> None:
+        connection = WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="saved-secret",
+        )
+        upstream_calls: list[tuple[tuple, dict]] = []
+
+        async def upstream(*args, **kwargs):
+            upstream_calls.append((args, kwargs))
+            yield {"response_type": "answer", "content": "限定答案"}
+            yield {
+                "response_type": "references",
+                "knowledge_references": [
+                    {"knowledge_id": "knowledge-allowed"},
+                    {"knowledge_id": "knowledge-outside-scope"},
+                ],
+            }
+            yield {"response_type": "complete"}
+
+        with (
+            patch(
+                "agentscope.app._router._agent._prepare_weknora_agent_query",
+                new=AsyncMock(
+                    return_value=(
+                        connection,
+                        "session-scoped",
+                        {
+                            "query": "问题",
+                            "knowledge_base_ids": ["kb-allowed"],
+                            "knowledge_ids": ["knowledge-allowed"],
+                        },
+                    ),
+                ),
+            ),
+            patch(
+                "agentscope.app._router._agent._stream_weknora_sse_events",
+                new=upstream,
+            ),
+            patch(
+                "agentscope.app._router._agent._enrich_weknora_reference_items",
+                new=AsyncMock(
+                    return_value=[
+                        {
+                            "knowledge_id": "knowledge-allowed",
+                            "filename": "允许访问.pdf",
+                        },
+                        {
+                            "knowledge_id": "knowledge-outside-scope",
+                            "filename": "未授权.pdf",
+                        },
+                    ],
+                ),
+            ),
+        ):
+            response = await stream_weknora_agent(
+                body=AskWeKnoraAgentRequest(
+                    query="问题",
+                    weknora_agent_id="robot-1",
+                ),
+                user_id=USER_ID,
+                storage=SimpleNamespace(),
+            )
+            chunks = [chunk async for chunk in response.body_iterator]
+
+        body = "".join(
+            chunk.decode() if isinstance(chunk, bytes) else chunk
+            for chunk in chunks
+        )
+        self.assertEqual(
+            upstream_calls[0][0][1],
+            "/knowledge-chat/session-scoped",
+        )
+        self.assertIn('"knowledge_id":"knowledge-allowed"', body)
+        self.assertNotIn("knowledge-outside-scope", body)
+        self.assertNotIn("未授权.pdf", body)
 
     async def test_weknora_stream_emits_references_for_inline_kb_tags(
         self,

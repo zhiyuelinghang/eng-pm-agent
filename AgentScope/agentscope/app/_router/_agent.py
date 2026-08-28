@@ -3833,9 +3833,14 @@ async def ask_weknora_agent(
         user_id=user_id,
         storage=storage,
     )
+    chat_route = (
+        "knowledge-chat"
+        if request_body.get("knowledge_ids")
+        else "agent-chat"
+    )
     events = await _request_weknora_sse(
         connection,
-        f"/agent-chat/{quote(session_id, safe='')}",
+        f"/{chat_route}/{quote(session_id, safe='')}",
         request_body,
         params={"resource_urls": "public"},
         session_id=session_id,
@@ -3895,6 +3900,17 @@ async def ask_weknora_agent(
         inline_references,
         tool_inline_references,
     )
+    scoped_knowledge_ids = {
+        _text(value)
+        for value in request_body.get("knowledge_ids", [])
+        if _text(value)
+    }
+    if scoped_knowledge_ids:
+        references = [
+            item
+            for item in references
+            if _text(item.get("knowledge_id")) in scoped_knowledge_ids
+        ]
     return AskWeKnoraAgentResponse(
         session_id=session_id,
         answer=answer,
@@ -3918,25 +3934,47 @@ async def _prepare_weknora_agent_query(
         body.weknora_agent_id,
     )
     assert allowed_ids is not None
-    knowledge_base_ids = list(dict.fromkeys(body.knowledge_base_ids))
+    knowledge_base_ids = list(
+        dict.fromkeys(
+            value
+            for value in (_text(item) for item in body.knowledge_base_ids)
+            if value
+        ),
+    )
+    knowledge_ids = list(
+        dict.fromkeys(
+            value
+            for value in (_text(item) for item in body.knowledge_ids)
+            if value
+        ),
+    )
+    document_base_ids: list[str] = []
+    for knowledge_id in knowledge_ids:
+        item = await _require_weknora_knowledge_access(
+            connection,
+            knowledge_id,
+            allowed_ids,
+        )
+        item_base_id = _text(item.knowledge_base_id)
+        if item_base_id not in document_base_ids:
+            document_base_ids.append(item_base_id)
     if not knowledge_base_ids:
-        knowledge_base_ids = allowed_ids
+        knowledge_base_ids = document_base_ids or allowed_ids
     for knowledge_base_id in knowledge_base_ids:
         _require_weknora_knowledge_base_access(
             knowledge_base_id,
             allowed_ids,
         )
+    for document_base_id in document_base_ids:
+        if document_base_id not in knowledge_base_ids:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="指定资料不属于本次问答允许访问的知识库。",
+            )
     if not knowledge_base_ids:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="WeKnora 中没有可用于对话的知识库。",
-        )
-    knowledge_ids = list(dict.fromkeys(body.knowledge_ids))
-    for knowledge_id in knowledge_ids:
-        await _require_weknora_knowledge_access(
-            connection,
-            knowledge_id,
-            allowed_ids,
         )
     session_id = body.session_id or ""
     if not session_id:
@@ -3950,7 +3988,10 @@ async def _prepare_weknora_agent_query(
         session_id,
         {
             "query": body.query,
-            "agent_enabled": True,
+            # A document-level allowlist must use normal RAG.  Agent mode can
+            # invoke wiki tools outside knowledge_ids even when the request
+            # carries an explicit file list.
+            "agent_enabled": not bool(knowledge_ids),
             "agent_id": body.weknora_agent_id,
             "knowledge_base_ids": knowledge_base_ids,
             "knowledge_ids": knowledge_ids,
@@ -3980,6 +4021,11 @@ async def stream_weknora_agent(
         user_id=user_id,
         storage=storage,
     )
+    chat_route = (
+        "knowledge-chat"
+        if request_body.get("knowledge_ids")
+        else "agent-chat"
+    )
 
     async def relay() -> AsyncIterator[str]:
         pending_references: list[dict] = []
@@ -4000,7 +4046,7 @@ async def stream_weknora_agent(
         try:
             async for raw_event in _stream_weknora_sse_events(
                 connection,
-                f"/agent-chat/{quote(session_id, safe='')}",
+                f"/{chat_route}/{quote(session_id, safe='')}",
                 request_body,
                 params={"resource_urls": "public"},
                 session_id=session_id,
@@ -4073,6 +4119,17 @@ async def stream_weknora_agent(
             inline_references,
             tool_inline_references,
         )
+        scoped_knowledge_ids = {
+            _text(value)
+            for value in request_body.get("knowledge_ids", [])
+            if _text(value)
+        }
+        if scoped_knowledge_ids:
+            enriched = [
+                item
+                for item in enriched
+                if _text(item.get("knowledge_id")) in scoped_knowledge_ids
+            ]
         if enriched:
             citation_event = dict(reference_event or {})
             citation_event.update(

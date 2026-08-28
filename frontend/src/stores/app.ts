@@ -1027,10 +1027,14 @@ export const useAppStore = defineStore('app', () => {
     })
     await loadProjectData()
   }
-  async function loadEngineeringDocumentAccess(projectId = currentProjectId.value) {
+  async function loadEngineeringDocumentAccess(
+    projectId = currentProjectId.value,
+    includeNodes = true,
+  ) {
     if (!projectId) throw new Error('请先选择项目。')
     const response = await api.get<ApiEnvelope<EngineeringDocumentAccessConfiguration>>(
       `/projects/${projectId}/engineering-documents/access`,
+      { params: { include_nodes: includeNodes } },
     )
     return response.data.data
   }
@@ -1042,7 +1046,6 @@ export const useAppStore = defineStore('app', () => {
     await api.put(`/projects/${projectId}/engineering-documents/access-mode`, {
       access_mode: accessMode,
     })
-    await loadEngineeringDocuments(projectId, true)
   }
   async function saveEngineeringDocumentPermission(
     payload: Omit<EngineeringDocumentPermissionRecord, 'id'>,
@@ -1050,7 +1053,6 @@ export const useAppStore = defineStore('app', () => {
   ) {
     if (!projectId) throw new Error('请先选择项目。')
     await api.put(`/projects/${projectId}/engineering-documents/permissions`, payload)
-    await loadEngineeringDocuments(projectId, true)
   }
   async function deleteEngineeringDocumentPermission(
     permissionId: number,
@@ -1058,7 +1060,6 @@ export const useAppStore = defineStore('app', () => {
   ) {
     if (!projectId) throw new Error('请先选择项目。')
     await api.delete(`/projects/${projectId}/engineering-documents/permissions/${permissionId}`)
-    await loadEngineeringDocuments(projectId, true)
   }
   async function uploadAttachment(file: File, _category = '自动归类', folderId?: string) {
     if (!currentProjectId.value) throw new Error('请先选择项目。')

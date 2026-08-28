@@ -584,8 +584,92 @@ def _engineering_knowledge_conversation_view(
 
 def _engineering_knowledge_message_view(
     message: EngineeringKnowledgeMessage,
+    allowed_knowledge_ids: set[str] | None = None,
 ) -> dict[str, Any]:
-    return serialize(message)
+    result = serialize(message)
+    if allowed_knowledge_ids is None or message.role != "assistant":
+        return result
+    references = result.get("references")
+    if not isinstance(references, list):
+        return result
+    authorized_references: list[dict[str, Any]] = []
+    contains_unauthorized_reference = False
+    for reference in references:
+        if not isinstance(reference, dict):
+            contains_unauthorized_reference = True
+            continue
+        knowledge_id = str(reference.get("knowledge_id") or "").strip()
+        if not knowledge_id or knowledge_id not in allowed_knowledge_ids:
+            contains_unauthorized_reference = True
+            continue
+        authorized_references.append(reference)
+    if contains_unauthorized_reference:
+        result["content"] = "该历史回答包含当前无权访问的资料，内容已隐藏。"
+        result["references"] = []
+        result["failed"] = True
+    else:
+        result["references"] = authorized_references
+    return result
+
+
+def _restricted_engineering_knowledge_ids(
+    db: Session,
+    project_id: int,
+    user: User,
+) -> set[str] | None:
+    state_row = db.get(EngineeringDocumentSyncState, project_id)
+    if (
+        user.role == "admin"
+        or state_row is None
+        or state_row.access_mode == "project"
+    ):
+        return None
+    return readable_external_ids(db, project_id, user)
+
+
+def _reset_unsafe_engineering_knowledge_session(
+    db: Session,
+    project_id: int,
+    user: User,
+    request_body: dict[str, Any],
+) -> dict[str, Any]:
+    """Discard a remote session whose stored answer crossed today's ACL."""
+
+    allowed_knowledge_ids = _restricted_engineering_knowledge_ids(
+        db,
+        project_id,
+        user,
+    )
+    session_id = str(request_body.get("session_id") or "").strip()
+    if allowed_knowledge_ids is None or not session_id:
+        return request_body
+    conversation = db.scalar(
+        select(EngineeringKnowledgeConversation).where(
+            EngineeringKnowledgeConversation.project_id == project_id,
+            EngineeringKnowledgeConversation.user_id == user.id,
+            EngineeringKnowledgeConversation.weknora_session_id == session_id,
+        ),
+    )
+    if conversation is None:
+        return request_body
+    references = db.scalars(
+        select(EngineeringKnowledgeMessage.references).where(
+            EngineeringKnowledgeMessage.conversation_id == conversation.id,
+            EngineeringKnowledgeMessage.role == "assistant",
+        ),
+    ).all()
+    for reference_group in references:
+        if not isinstance(reference_group, list):
+            continue
+        for reference in reference_group:
+            knowledge_id = (
+                str(reference.get("knowledge_id") or "").strip()
+                if isinstance(reference, dict)
+                else ""
+            )
+            if not knowledge_id or knowledge_id not in allowed_knowledge_ids:
+                return {**request_body, "session_id": None}
+    return request_body
 
 
 INITIALIZATION_FILE_SUFFIXES = {
@@ -4832,11 +4916,18 @@ def get_engineering_document_workspace(
 @router.get("/projects/{project_id}/engineering-documents/access")
 def get_engineering_document_access_configuration(
     project_id: int,
+    include_nodes: bool = Query(default=True),
     db: Session = Depends(get_db),
     user: User = Depends(require_admin),
 ) -> dict[str, Any]:
     project_for_user_or_403(db, project_id, user)
-    return ok(permission_configuration_view(db, project_id))
+    return ok(
+        permission_configuration_view(
+            db,
+            project_id,
+            include_nodes=include_nodes,
+        ),
+    )
 
 
 @router.put("/projects/{project_id}/engineering-documents/access-mode")
@@ -4857,7 +4948,7 @@ def update_engineering_document_access_mode(
         user,
         "调整工程资料权限模式",
         (
-            "启用按人员与角色授权"
+            "启用按岗位授权"
             if payload.access_mode == "restricted"
             else "恢复项目成员默认访问"
         ),
@@ -5720,7 +5811,20 @@ def list_engineering_knowledge_messages(
             EngineeringKnowledgeMessage.id,
         ),
     ).all()
-    return ok([_engineering_knowledge_message_view(row) for row in rows])
+    allowed_knowledge_ids = _restricted_engineering_knowledge_ids(
+        db,
+        project_id,
+        user,
+    )
+    return ok(
+        [
+            _engineering_knowledge_message_view(
+                row,
+                allowed_knowledge_ids,
+            )
+            for row in rows
+        ],
+    )
 
 
 @router.post(
@@ -5754,7 +5858,13 @@ def create_engineering_knowledge_message(
     conversation.updated_at = datetime.now(UTC)
     db.commit()
     db.refresh(row)
-    return ok(_engineering_knowledge_message_view(row), "知识库消息已保存")
+    return ok(
+        _engineering_knowledge_message_view(
+            row,
+            _restricted_engineering_knowledge_ids(db, project_id, user),
+        ),
+        "知识库消息已保存",
+    )
 
 
 @router.delete(
@@ -5808,6 +5918,12 @@ def ask_engineering_documents(
         project_id,
         user,
         payload.model_dump(exclude_none=True),
+    )
+    request_body = _reset_unsafe_engineering_knowledge_session(
+        db,
+        project_id,
+        user,
+        request_body,
     )
     try:
         result = _agentscope_client().ask_weknora_agent(
@@ -5869,10 +5985,16 @@ async def stream_engineering_document_answer(
         user,
         payload.model_dump(exclude_none=True),
     )
+    request_body = _reset_unsafe_engineering_knowledge_session(
+        db,
+        project_id,
+        user,
+        request_body,
+    )
     allowed_knowledge_ids = readable_external_ids(db, project_id, user)
 
     async def relay() -> AsyncIterator[str]:
-        session_id = payload.session_id or ""
+        session_id = str(request_body.get("session_id") or "")
         try:
             async with client.weknora_agent_stream(
                 agent_id,

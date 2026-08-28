@@ -160,7 +160,7 @@
           >
             <span v-if="chatMessage.role === 'assistant'" class="knowledge-message-avatar"><n-icon :size="17"><Robot /></n-icon></span>
             <div class="knowledge-message-card">
-              <div v-if="chatMessage.role === 'assistant'" class="knowledge-markdown" v-html="renderMarkdown(chatMessage.content)"></div>
+              <div v-if="chatMessage.role === 'assistant'" class="knowledge-markdown" v-html="renderMarkdown(chatMessage.content, chatMessage.references)"></div>
               <p v-else>{{ chatMessage.content }}</p>
               <KnowledgeReferenceList
                 v-if="chatMessage.references?.length && store.currentProjectId"
@@ -177,7 +177,7 @@
         <article v-if="answering" class="knowledge-chat-message is-assistant is-pending" :class="{ 'has-content': streamingMessage?.content }" role="status" aria-live="polite">
           <span class="knowledge-message-avatar"><n-icon :size="17"><Robot /></n-icon></span>
           <div class="knowledge-message-card">
-            <div v-if="streamingMessage?.content" class="knowledge-markdown" v-html="renderMarkdown(streamingMessage.content)"></div>
+            <div v-if="streamingMessage?.content" class="knowledge-markdown" v-html="renderMarkdown(streamingMessage.content, streamingMessage.references)"></div>
             <p v-else>{{ stopping ? '正在终止本次回答…' : streamStatus }}</p>
             <KnowledgeReferenceList
               v-if="streamingMessage?.references?.length && store.currentProjectId"
@@ -474,10 +474,7 @@ function mapConversation(record: EngineeringKnowledgeConversationRecord): Knowle
 }
 
 function mapMessage(record: EngineeringKnowledgeMessageRecord): KnowledgeChatMessage {
-  const references = mergeRawReferences(
-    inlineCitationReferences(record.content),
-    record.references || [],
-  )
+  const references = mergeRawReferences(record.references || [])
   return {
     id: String(record.id),
     role: record.role,
@@ -876,24 +873,6 @@ function citationAttribute(attributes: string, name: 'doc' | 'chunk_id' | 'kb_id
   return decodeCitationValue(match?.[1] || match?.[2] || '')
 }
 
-function inlineCitationReferences(content: string): Array<Record<string, unknown>> {
-  const references: Array<Record<string, unknown>> = []
-  const pattern = /<kb\b([^>]*)\/?>/gi
-  for (const match of content.matchAll(pattern)) {
-    const documentPath = citationAttribute(match[1] || '', 'doc').replace(/\\/g, '/')
-    const filename = documentPath.split('/').filter(Boolean).pop() || ''
-    if (!filename) continue
-    references.push({
-      chunk_id: citationAttribute(match[1] || '', 'chunk_id'),
-      knowledge_base_id: citationAttribute(match[1] || '', 'kb_id'),
-      knowledge_filename: filename,
-      filename,
-      title: filename,
-    })
-  }
-  return mergeRawReferences(references)
-}
-
 function rawReferenceFilename(item: Record<string, unknown>) {
   const nestedFile = item.file_info && typeof item.file_info === 'object'
     ? item.file_info as Record<string, unknown>
@@ -1117,18 +1096,12 @@ async function sendQuestion() {
           onAnswer: progress => {
             if (!streamingMessage.value) return
             streamingMessage.value.content = progress.answer
-            streamingRawReferences.value = mergeRawReferences(
-              inlineCitationReferences(progress.answer),
-              streamingRawReferences.value,
-            )
-            streamingMessage.value.references = normalizeReferences(streamingRawReferences.value)
             streamStatus.value = progress.done ? '回答已生成，正在整理引用…' : '正在生成回答…'
             void hydrateResourceHandles(progress.answer)
             void scrollToBottom()
           },
           onReferences: references => {
             streamingRawReferences.value = mergeRawReferences(
-              inlineCitationReferences(streamingMessage.value?.content || ''),
               streamingRawReferences.value,
               references,
             )
@@ -1159,10 +1132,7 @@ async function sendQuestion() {
     if (answer.sessionId && answer.sessionId !== conversation.sessionId) {
       await updateConversationSession(conversation, answer.sessionId)
     }
-    streamingRawReferences.value = mergeRawReferences(
-      inlineCitationReferences(answer.answer),
-      answer.references,
-    )
+    streamingRawReferences.value = mergeRawReferences(answer.references)
     if (streamingMessage.value) streamingMessage.value.references = normalizeReferences(streamingRawReferences.value)
     const answerContent = answer.answer.trim()
     await saveAssistantMessage(
@@ -1313,15 +1283,20 @@ function normalizeMarkdownImageAlt(value: string) {
     .slice(0, 120) || '知识库原图'
 }
 
-function renderMarkdown(content: string) {
+function renderMarkdown(content: string, references: KnowledgeReference[] = []) {
   const projectId = store.currentProjectId
   const inlineCitations: string[] = []
+  const allowedCitationFilenames = new Set(
+    references.flatMap(reference => [reference.fileName, reference.title || ''])
+      .map(value => value.trim().toLocaleLowerCase('zh-CN'))
+      .filter(Boolean),
+  )
   let resolved = content
     .replace(/<kb\b[^>]*$/i, '')
     .replace(/<kb\b([^>]*)\/?>/gi, (_original, attributes: string) => {
       const documentPath = citationAttribute(attributes, 'doc').replace(/\\/g, '/')
       const filename = documentPath.split('/').filter(Boolean).pop() || ''
-      if (!filename) return ''
+      if (!filename || !allowedCitationFilenames.has(filename.toLocaleLowerCase('zh-CN'))) return ''
       const token = `DOBBYKBREFERENCE${inlineCitations.length}TOKEN`
       inlineCitations.push(filename)
       return token

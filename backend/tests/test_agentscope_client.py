@@ -206,10 +206,20 @@ class AgentScopeClientTest(TestCase):
                         "filename": "方案.pdf",
                         "score": 0.91,
                     },
+                    {
+                        "knowledge_id": "document-blocked",
+                        "filename": "未授权.pdf",
+                    },
+                    {
+                        "knowledge_id": "",
+                        "filename": "缺少资料标识.pdf",
+                    },
                 ],
             },
+            {"document/1"},
         )
 
+        self.assertEqual(len(event["knowledge_references"]), 1)
         reference = event["knowledge_references"][0]
         self.assertEqual(reference["filename"], "方案.pdf")
         self.assertEqual(

@@ -312,8 +312,19 @@
           </aside>
 
           <section class="manual-config-list">
-            <header class="manual-list-head"><div><span>项目配置</span><h2>{{ activeManualSection.label }}</h2><p>{{ activeManualSection.description }}</p></div><div v-if="!['overview', 'wecom', 'feishu', 'dingtalk'].includes(manualSection)" class="manual-list-actions"><label class="manual-search"><n-icon :size="16"><Search /></n-icon><input v-model.trim="manualSearch" :placeholder="`搜索${activeManualSection.label}`"></label><button v-if="manualSection !== 'monitor'" type="button" class="primary" :disabled="submitting" @click="openManualEditor(manualSection)"><n-icon :size="16"><Plus /></n-icon>新建</button><button v-else type="button" class="primary" :disabled="submitting" @click="openManualEditor('monitor')"><n-icon :size="16"><Pencil /></n-icon>维护配置</button></div></header>
-            <div class="manual-table-wrap">
+            <div class="manual-table-wrap" :class="{ 'permission-table-wrap': manualSection === 'documentPermissions' }">
+              <div v-if="!['overview', 'documentPermissions', 'wecom', 'feishu', 'dingtalk'].includes(manualSection)" class="manual-list-actions manual-inline-actions">
+                <label class="manual-search">
+                  <n-icon :size="16"><Search /></n-icon>
+                  <input v-model.trim="manualSearch" :placeholder="`搜索${activeManualSection.label}`">
+                </label>
+                <button v-if="manualSection !== 'monitor'" type="button" class="primary" :disabled="submitting" @click="openManualEditor(manualSection)">
+                  <n-icon :size="16"><Plus /></n-icon>新建
+                </button>
+                <button v-else type="button" class="primary" :disabled="submitting" @click="openManualEditor('monitor')">
+                  <n-icon :size="16"><Pencil /></n-icon>维护配置
+                </button>
+              </div>
               <div v-if="configScopeLoading" class="manual-data-loading" aria-label="正在加载正式项目数据"><i></i><span></span><span></span><span></span></div>
 
               <section v-else-if="manualSection === 'overview'" class="project-base-info-panel">
@@ -379,6 +390,12 @@
                 </div>
                 <div v-else class="manual-empty"><n-icon :size="28"><Users /></n-icon><strong>{{ manualSearch ? '没有匹配的项目成员' : '还没有项目成员' }}</strong><p>{{ manualSearch ? '可尝试搜索姓名、账号、岗位或证书编号。' : '点击右上角“新建”，添加人员及其首个项目岗位。' }}</p></div>
               </section>
+
+              <ProjectDocumentPermissionPanel
+                v-else-if="manualSection === 'documentPermissions'"
+                :project-id="configProjectId"
+                :members="configScope.members"
+              />
 
               <section v-else-if="manualSection === 'wbs'" class="manual-data-panel wbs-browser">
                 <div class="wbs-browser-toolbar"><span v-if="manualSearch">找到 {{ visibleManualWbsRows.length }} 个相关节点，已保留上级路径</span><div><button type="button" @click="expandAllManualWbs">全部展开</button><button type="button" @click="collapseAllManualWbs">收起任务组</button></div></div>
@@ -1025,6 +1042,7 @@ import {
 } from '@/api/agentStream'
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
 import AgentRuntimeDock from '@/components/agent/AgentRuntimeDock.vue'
+import ProjectDocumentPermissionPanel from '@/components/admin/ProjectDocumentPermissionPanel.vue'
 import InitializationIssueBadges from '@/components/initialization/InitializationIssueBadges.vue'
 import { useAppStore, type ProjectBaseInfoInput, type ProjectConfigScope } from '@/stores/app'
 import type { DirConfig, Member, MemberPosition, PlatformFieldMapping, QualityMetric, RemindRule, RiskLevel, RiskSource, WbsItem } from '@/types'
@@ -1038,7 +1056,7 @@ import {
 } from '@/types/agentRuntime'
 
 type WorkspaceTab = 'agent' | 'manual'
-type ManualSection = 'overview' | 'members' | 'wbs' | 'quality' | 'risks' | 'mappings' | 'monitor' | ProjectConnectorKey
+type ManualSection = 'overview' | 'members' | 'documentPermissions' | 'wbs' | 'quality' | 'risks' | 'mappings' | 'monitor' | ProjectConnectorKey
 type ProjectBaseInfoForm = {
   name: string
   engineeringTypeDescription: string
@@ -1260,6 +1278,7 @@ const router = useRouter()
 const submitting = ref(false)
 const configScopeLoading = ref(false)
 const configProjectId = ref('')
+const isPlatformAdmin = computed(() => sessionStorage.getItem('user_role') === 'admin')
 const configProjectName = computed(() => store.projects.find(project => project.id === configProjectId.value)?.name || '当前项目')
 const projectRequiredNotice = computed(() => route.query.projectRequired === '1')
 const configScope = reactive<ProjectConfigScope>({ members: [], wbsItems: [], riskSources: [], qualityMetrics: [], platformMappings: [], dirConfig: { mainDir: '', archiveDir: '', tempDir: '', failedDir: '', backupDir: '', scanInterval: 30, enabled: false }, remindRules: [] })
@@ -1520,18 +1539,33 @@ const projectBaseInfoCompletedCount = computed(() => {
   ]
   return values.filter(value => value !== '' && value !== null && value !== undefined).length
 })
-const manualSections = computed(() => [
-  { key: 'overview' as const, label: '基础信息', description: '修改项目名称、工程概况、合同信息与参建单位。', count: `${projectBaseInfoCompletedCount.value}/11`, icon: ListDetails },
-  { key: 'members' as const, label: '项目成员', description: '维护成员账号、岗位与协作责任。', count: configScope.members.length, icon: Users },
-  { key: 'wbs' as const, label: 'WBS进度管理', description: '维护工序基线，供进度、日报和预警匹配。', count: configScope.wbsItems.length, icon: ListDetails },
-  { key: 'quality' as const, label: '质量指标', description: '维护验收要求、检查频次与关联工序。', count: configScope.qualityMetrics.length, icon: Shield },
-  { key: 'risks' as const, label: '风险源', description: '维护风险等级、控制要求和资料要求。', count: configScope.riskSources.length, icon: Shield },
-  { key: 'mappings' as const, label: '字段映射', description: '维护外部平台填报字段的映射规则。', count: configScope.platformMappings.length, icon: ArrowsLeftRight },
-  { key: 'monitor' as const, label: '监控与预警', description: '维护资料目录监控与风险预警提前量。', count: monitorRules.value.length + 1, icon: ListDetails },
-  { key: 'wecom' as const, label: '企业微信配置', description: '维护任务通知使用的项目群机器人。', count: projectConnectors[0].configured ? 1 : 0, icon: MessageCircle },
-  { key: 'feishu' as const, label: '飞书配置', description: '维护当前项目使用的飞书应用或项目群机器人。', count: projectConnectors[1].configured ? 1 : 0, icon: MessageCircle },
-  { key: 'dingtalk' as const, label: '钉钉配置', description: '维护当前项目使用的钉钉应用或项目群机器人。', count: projectConnectors[2].configured ? 1 : 0, icon: MessageCircle },
-])
+const projectPositionCount = computed(() => new Set(
+  configScope.members.flatMap(member => member.positions.map(position => position.positionId)),
+).size)
+const manualSections = computed(() => {
+  const sections = [
+    { key: 'overview' as ManualSection, label: '基础信息', description: '修改项目名称、工程概况、合同信息与参建单位。', count: `${projectBaseInfoCompletedCount.value}/11`, icon: ListDetails },
+    { key: 'members' as ManualSection, label: '项目成员', description: '维护成员账号、岗位与协作责任。', count: configScope.members.length, icon: Users },
+    { key: 'wbs' as ManualSection, label: 'WBS进度管理', description: '维护工序基线，供进度、日报和预警匹配。', count: configScope.wbsItems.length, icon: ListDetails },
+    { key: 'quality' as ManualSection, label: '质量指标', description: '维护验收要求、检查频次与关联工序。', count: configScope.qualityMetrics.length, icon: Shield },
+    { key: 'risks' as ManualSection, label: '风险源', description: '维护风险等级、控制要求和资料要求。', count: configScope.riskSources.length, icon: Shield },
+    { key: 'mappings' as ManualSection, label: '字段映射', description: '维护外部平台填报字段的映射规则。', count: configScope.platformMappings.length, icon: ArrowsLeftRight },
+    { key: 'monitor' as ManualSection, label: '监控与预警', description: '维护资料目录监控与风险预警提前量。', count: monitorRules.value.length + 1, icon: ListDetails },
+    { key: 'wecom' as ManualSection, label: '企业微信配置', description: '维护任务通知使用的项目群机器人。', count: projectConnectors[0].configured ? 1 : 0, icon: MessageCircle },
+    { key: 'feishu' as ManualSection, label: '飞书配置', description: '维护当前项目使用的飞书应用或项目群机器人。', count: projectConnectors[1].configured ? 1 : 0, icon: MessageCircle },
+    { key: 'dingtalk' as ManualSection, label: '钉钉配置', description: '维护当前项目使用的钉钉应用或项目群机器人。', count: projectConnectors[2].configured ? 1 : 0, icon: MessageCircle },
+  ]
+  if (isPlatformAdmin.value) {
+    sections.splice(2, 0, {
+      key: 'documentPermissions',
+      label: '资料权限',
+      description: '按项目岗位分配工程资料目录与文件的访问范围。',
+      count: projectPositionCount.value,
+      icon: ShieldLock,
+    })
+  }
+  return sections
+})
 const activeManualSection = computed(() => manualSections.value.find(item => item.key === manualSection.value) || manualSections.value[0])
 function matchesManualSearch(...values: Array<string | undefined>) { const keyword = manualSearch.value.trim().toLowerCase(); return !keyword || values.some(value => value?.toLowerCase().includes(keyword)) }
 const filteredMembers = computed(() => configScope.members.filter(item => matchesManualSearch(
@@ -1687,7 +1721,6 @@ const filteredRisks = computed(() => configScope.riskSources.filter(item => matc
   item.summary,
 )))
 const filteredMappings = computed(() => configScope.platformMappings.filter(item => matchesManualSearch(item.platformName, item.targetField, item.sourceField, item.transformRule)))
-const isPlatformAdmin = computed(() => sessionStorage.getItem('user_role') === 'admin')
 const draftHasErrors = computed(() => materialAgentDraft.value?.validation_issues.some(item => item.level === 'error') ?? false)
 const draftHasWarnings = computed(() => materialAgentDraft.value?.validation_issues.some(item => item.level === 'warning') ?? false)
 const initializationDraftErrorCount = computed(() => (
@@ -3997,7 +4030,10 @@ function formatTime(value: string) { return value ? new Date(value).toLocaleStri
 .manual-config-tree-head small { color:var(--text-muted); font-size: 12px; }
 .manual-config-tree button { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:8px; width:100%; border:0; border-radius:6px; padding:9px 8px; color:#4d6864; background:transparent; font:inherit; text-align:left; cursor:pointer; transition:background .16s ease,color .16s ease; }
 .manual-config-tree button:hover { background:#f0f7f5; color:#22594f; }.manual-config-tree button.active { color:#17564d; background:#e3f2ee; }.manual-config-tree button strong { overflow:hidden; font-size:12px; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }.manual-config-tree button em { min-width:18px; color:#78908b; font-size: 12px; font-style:normal; font-variant-numeric:tabular-nums; text-align:right; }.manual-config-tree button.active em { color:#2c7d70; }
-.manual-config-list { display:grid; min-width:0; min-height:0; grid-template-rows:auto minmax(0,1fr); }.manual-list-head { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:17px 19px 15px; border-bottom:1px solid var(--border-default); }.manual-list-head>div:first-child { min-width:0; }.manual-list-head span { display:block; margin-bottom:4px; color:#0f766e; font-size: 12px; font-weight:850; letter-spacing:.05em; }.manual-list-head h2 { margin:0; color:#1a3935; font-size:17px; line-height:1.35; }.manual-list-head p { max-width:62ch; margin:4px 0 0; color:var(--text-muted); font-size:12px; line-height:1.55; }.manual-list-actions { display:flex; flex:0 0 auto; align-items:center; gap:8px; }.manual-search { display:flex; align-items:center; width:228px; gap:7px; border:1px solid var(--border-emphasis); border-radius:6px; padding:0 9px; color:#718782; background:#fff; }.manual-search input { min-width:0; width:100%; border:0; outline:0; padding:8px 0; color:var(--text-primary); background:transparent; font:inherit; font-size:12px; }.manual-list-actions .primary { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }.manual-table-wrap { min-height:0; overflow:auto; background:#fff; }.manual-table { width:100%; min-width:720px; border-collapse:collapse; color:#3f5d58; font-size:12px; }.manual-table th { position:sticky; top:0; z-index:1; padding:11px 15px; border-bottom:1px solid var(--border-default); color:#647d78; background:#f7faf9; font-size: 12px; font-weight:800; text-align:left; white-space:nowrap; }.manual-table td { padding:13px 15px; border-bottom:1px solid var(--border-subtle); vertical-align:middle; line-height:1.45; }.manual-table tbody tr { transition:background .14s ease; }.manual-table tbody tr:hover { background:#f8fbfa; }.manual-table strong { color:#294842; font-weight:750; }.manual-table small { display:block; max-width:42ch; margin-top:3px; overflow:hidden; color:var(--text-muted); font-size: 12px; text-overflow:ellipsis; white-space:nowrap; }.row-action { border:0; padding:4px 0; color:#197163; background:transparent; font:inherit; font-size:12px; font-weight:750; cursor:pointer; white-space:nowrap; }.row-action:hover { color:#0e5b50; text-decoration:underline; }.status-dot { display:inline-block; width:7px; height:7px; margin-right:6px; border-radius:50%; background:#abb9b6; }.status-dot.in_progress { background:#129f88; }.status-dot.done { background:#2278a5; }.status-dot.delayed { background:#d76835; }.risk-level { display:inline-flex; align-items:center; border-radius:4px; padding:2px 6px; font-size: 12px; white-space:nowrap; }.risk-level.critical { color:#9c351d; background:#fcebe5; }.risk-level.high { color:#a85d1c; background:#fff1dc; }.risk-level.medium { color:#3e716b; background:#e8f4f0; }.risk-level.low { color:#617f79; background:#eff5f3; }.manual-empty { display:grid; min-height:260px; place-content:center; justify-items:center; gap:8px; padding:24px; color:#78908b; text-align:center; }.manual-empty strong { color:#3a5a55; font-size:14px; }.manual-empty p { margin:0; color:var(--text-muted); font-size:12px; }.manual-editor-modal { width:min(100%,680px); }.manual-editor-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px 16px; }.manual-editor-form label { display:grid; gap:6px; color:#4e6964; font-size:12px; font-weight:750; }.manual-editor-form input,.manual-editor-form select,.manual-editor-form textarea { min-width:0; border:1px solid var(--border-emphasis); border-radius:6px; padding:9px 10px; color:var(--text-primary); background:#fff; font:inherit; font-size:13px; }.manual-editor-form textarea { resize:vertical; }.manual-editor-form .full-span { grid-column:1 / -1; }.manual-editor-form .check-label { align-self:end; padding-bottom:0; font-weight:650; }.manual-rule-editor { display:grid; gap:10px; padding:12px; border:1px solid #e0ebe8; border-radius:8px; background:#f8fbfa; }.manual-rule-editor>div { display:flex; align-items:center; justify-content:space-between; gap:10px; }.manual-rule-editor strong,.manual-rule-editor small { display:block; }.manual-rule-editor strong { color:#31544f; font-size:12px; }.manual-rule-editor small { margin-top:3px; color:var(--text-muted); font-size: 12px; }.manual-rule-editor>div+div { justify-content:flex-start; }.manual-rule-editor select,.manual-rule-editor input { min-width:0; flex:1 1 0; padding:7px 8px; font-size:12px; }.manual-rule-editor .secondary-action { padding:7px 9px; }.manual-rule-editor ul { display:flex; flex-wrap:wrap; gap:7px; margin:0; padding:0; list-style:none; }.manual-rule-editor li { padding:4px 7px; border-radius:4px; color:#57746e; background:#eaf3f0; font-size: 12px; }.manual-editor-actions { display:flex; grid-column:1 / -1; justify-content:flex-end; gap:8px; padding-top:4px; }.manual-config-workspace button:focus-visible,.manual-table button:focus-visible,.manual-editor-form input:focus,.manual-editor-form select:focus,.manual-editor-form textarea:focus,.manual-search:focus-within { outline:2px solid rgba(15,118,110,.22); outline-offset:1px; }
+.manual-config-list { display:grid; min-width:0; min-height:0; grid-template-rows:auto minmax(0,1fr); }.manual-list-head { display:flex; align-items:center; justify-content:space-between; gap:18px; padding:17px 19px 15px; border-bottom:1px solid var(--border-default); }.manual-list-head>div:first-child { min-width:0; }.manual-list-head span { display:block; margin-bottom:4px; color:#0f766e; font-size: 12px; font-weight:850; letter-spacing:.05em; }.manual-list-head h2 { margin:0; color:#1a3935; font-size:17px; line-height:1.35; }.manual-list-head p { max-width:62ch; margin:4px 0 0; color:var(--text-muted); font-size:12px; line-height:1.55; }.manual-list-actions { display:flex; flex:0 0 auto; align-items:center; gap:8px; }.manual-search { display:flex; align-items:center; width:228px; gap:7px; border:1px solid var(--border-emphasis); border-radius:6px; padding:0 9px; color:#718782; background:#fff; }.manual-search input { min-width:0; width:100%; border:0; outline:0; padding:8px 0; color:var(--text-primary); background:transparent; font:inherit; font-size:12px; }.manual-list-actions .primary { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; }.manual-table-wrap { min-height:0; overflow:auto; background:#fff; }.manual-table-wrap.permission-table-wrap { overflow:hidden; }.manual-table { width:100%; min-width:720px; border-collapse:collapse; color:#3f5d58; font-size:12px; }.manual-table th { position:sticky; top:0; z-index:1; padding:11px 15px; border-bottom:1px solid var(--border-default); color:#647d78; background:#f7faf9; font-size: 12px; font-weight:800; text-align:left; white-space:nowrap; }.manual-table td { padding:13px 15px; border-bottom:1px solid var(--border-subtle); vertical-align:middle; line-height:1.45; }.manual-table tbody tr { transition:background .14s ease; }.manual-table tbody tr:hover { background:#f8fbfa; }.manual-table strong { color:#294842; font-weight:750; }.manual-table small { display:block; max-width:42ch; margin-top:3px; overflow:hidden; color:var(--text-muted); font-size: 12px; text-overflow:ellipsis; white-space:nowrap; }.row-action { border:0; padding:4px 0; color:#197163; background:transparent; font:inherit; font-size:12px; font-weight:750; cursor:pointer; white-space:nowrap; }.row-action:hover { color:#0e5b50; text-decoration:underline; }.status-dot { display:inline-block; width:7px; height:7px; margin-right:6px; border-radius:50%; background:#abb9b6; }.status-dot.in_progress { background:#129f88; }.status-dot.done { background:#2278a5; }.status-dot.delayed { background:#d76835; }.risk-level { display:inline-flex; align-items:center; border-radius:4px; padding:2px 6px; font-size: 12px; white-space:nowrap; }.risk-level.critical { color:#9c351d; background:#fcebe5; }.risk-level.high { color:#a85d1c; background:#fff1dc; }.risk-level.medium { color:#3e716b; background:#e8f4f0; }.risk-level.low { color:#617f79; background:#eff5f3; }.manual-empty { display:grid; min-height:260px; place-content:center; justify-items:center; gap:8px; padding:24px; color:#78908b; text-align:center; }.manual-empty strong { color:#3a5a55; font-size:14px; }.manual-empty p { margin:0; color:var(--text-muted); font-size:12px; }.manual-editor-modal { width:min(100%,680px); }.manual-editor-form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px 16px; }.manual-editor-form label { display:grid; gap:6px; color:#4e6964; font-size:12px; font-weight:750; }.manual-editor-form input,.manual-editor-form select,.manual-editor-form textarea { min-width:0; border:1px solid var(--border-emphasis); border-radius:6px; padding:9px 10px; color:var(--text-primary); background:#fff; font:inherit; font-size:13px; }.manual-editor-form textarea { resize:vertical; }.manual-editor-form .full-span { grid-column:1 / -1; }.manual-editor-form .check-label { align-self:end; padding-bottom:0; font-weight:650; }.manual-rule-editor { display:grid; gap:10px; padding:12px; border:1px solid #e0ebe8; border-radius:8px; background:#f8fbfa; }.manual-rule-editor>div { display:flex; align-items:center; justify-content:space-between; gap:10px; }.manual-rule-editor strong,.manual-rule-editor small { display:block; }.manual-rule-editor strong { color:#31544f; font-size:12px; }.manual-rule-editor small { margin-top:3px; color:var(--text-muted); font-size: 12px; }.manual-rule-editor>div+div { justify-content:flex-start; }.manual-rule-editor select,.manual-rule-editor input { min-width:0; flex:1 1 0; padding:7px 8px; font-size:12px; }.manual-rule-editor .secondary-action { padding:7px 9px; }.manual-rule-editor ul { display:flex; flex-wrap:wrap; gap:7px; margin:0; padding:0; list-style:none; }.manual-rule-editor li { padding:4px 7px; border-radius:4px; color:#57746e; background:#eaf3f0; font-size: 12px; }.manual-editor-actions { display:flex; grid-column:1 / -1; justify-content:flex-end; gap:8px; padding-top:4px; }.manual-config-workspace button:focus-visible,.manual-table button:focus-visible,.manual-editor-form input:focus,.manual-editor-form select:focus,.manual-editor-form textarea:focus,.manual-search:focus-within { outline:2px solid rgba(15,118,110,.22); outline-offset:1px; }
+.manual-config-list { grid-template-rows:minmax(0,1fr); }
+.manual-inline-actions { position:sticky; top:0; z-index:3; justify-content:flex-end; min-height:52px; padding:9px 12px; border-bottom:1px solid var(--border-default); background:#f8fbfa; }
+.manual-table-wrap.permission-table-wrap { display:flex; min-height:520px; }
 .manual-member-table { min-width:980px; }.manual-member-table th:nth-child(1) { width:170px; }.manual-member-table th:nth-child(2) { width:190px; }.manual-member-table th:nth-child(3) { width:260px; }.manual-member-table th:last-child { width:78px; }.manual-position-cell { display:grid; gap:7px; }.manual-position-item { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 10px; border:1px solid #e2ece9; border-radius:7px; background:#f7faf9; }.manual-position-item span { min-width:0; }.manual-position-item strong,.manual-position-item small { display:block; }.manual-responsibility { display:block; max-width:42ch; margin-bottom:7px; color:#58716c; font-size:12px; }.manual-responsibility:last-child { margin-bottom:0; }.manual-responsibility strong { margin-right:5px; }.manual-password-field { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px; }.manual-password-field button { border:1px solid var(--border-emphasis); border-radius:6px; padding:0 10px; color:#176f62; background:#f4faf8; font:inherit; font-size:12px; font-weight:750; cursor:pointer; }.manual-member-account-note { margin:0; border-left:3px solid #73b5aa; padding:9px 11px; color:#58736e; background:#f1f8f6; font-size:12px; line-height:1.65; }
 .manual-data-loading { display:grid; min-height:360px; place-content:center; justify-items:center; gap:9px; }
 .manual-data-loading i { width:30px; height:30px; border:3px solid #dce9e6; border-top-color:#218574; border-radius:50%; animation:setup-spin .8s linear infinite; }

@@ -701,7 +701,15 @@ const activeDocument = computed(() => {
 watch(() => store.documentFolders, folders => {
   if (initialDirectoryExpansionApplied.value || !folders.length) return
   const rootFolders = folders.filter(folder => !folder.parentId)
-  expandedFolderIds.value = [...new Set([...expandedFolderIds.value, ...rootFolders.map(folder => folder.id)])]
+  const rootFolderIds = new Set(rootFolders.map(folder => folder.id))
+  const firstLevelFolders = folders.filter(folder => (
+    Boolean(folder.parentId) && rootFolderIds.has(folder.parentId as string)
+  ))
+  expandedFolderIds.value = [...new Set([
+    ...expandedFolderIds.value,
+    ...rootFolders.map(folder => folder.id),
+    ...firstLevelFolders.map(folder => folder.id),
+  ])]
   initialDirectoryExpansionApplied.value = true
 }, { immediate: true })
 

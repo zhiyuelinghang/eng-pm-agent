@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine, event, select
@@ -5,6 +7,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 from backend.app.api import (
+    _engineering_knowledge_message_view,
+    _reset_unsafe_engineering_knowledge_session,
     create_engineering_knowledge_conversation,
     create_engineering_knowledge_message,
     delete_engineering_knowledge_conversation,
@@ -200,6 +204,55 @@ def test_engineering_knowledge_conversation_persists_folder_scope(
     assert created["knowledge_name"] == "安全生产保证计划"
     assert created["knowledge_base_id"] == "kb-001"
     assert created["folder_path"] == "01_合同图纸与方案/方案/安全生产保证计划"
+
+
+def test_unauthorized_historical_answer_is_hidden_and_session_is_reset(
+    db: Session,
+) -> None:
+    user = _admin(db, "unsafe-history")
+    project = Project(name="知识库历史权限测试项目")
+    db.add(project)
+    db.flush()
+    conversation = EngineeringKnowledgeConversation(
+        project_id=project.id,
+        user_id=user.id,
+        title="越权历史回答",
+        scope_type="project",
+        weknora_session_id="unsafe-session",
+    )
+    db.add(conversation)
+    db.flush()
+    message = EngineeringKnowledgeMessage(
+        conversation_id=conversation.id,
+        role="assistant",
+        content="包含不应继续展示的资料内容。",
+        references=[
+            {"knowledge_id": "allowed-document"},
+            {"knowledge_id": "blocked-document"},
+        ],
+    )
+    db.add(message)
+    db.commit()
+
+    view = _engineering_knowledge_message_view(
+        message,
+        {"allowed-document"},
+    )
+    assert view["content"] == "该历史回答包含当前无权访问的资料，内容已隐藏。"
+    assert view["references"] == []
+    assert view["failed"] is True
+
+    with patch(
+        "backend.app.api._restricted_engineering_knowledge_ids",
+        return_value={"allowed-document"},
+    ):
+        request_body = _reset_unsafe_engineering_knowledge_session(
+            db,
+            project.id,
+            user,
+            {"query": "继续提问", "session_id": "unsafe-session"},
+        )
+    assert request_body["session_id"] is None
 
 
 def test_engineering_knowledge_conversation_persists_multi_selection(
