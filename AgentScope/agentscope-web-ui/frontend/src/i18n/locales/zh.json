@@ -1109,15 +1109,7 @@
 		"emptyMcpServers": "配置中未找到 MCP 服务器。"
 	},
 	"dialog-mcp-delete": {
-		"entity": "MCP 服务器",
-		"skillEntity": "技能",
-		"skillDescription": "确定要将该技能从工作区中移除吗？"
-	},
-	"dialog-skill-add": {
-		"title": "添加技能",
-		"description": "输入技能目录的路径以添加到工作区。",
-		"pathLabel": "技能路径",
-		"pathPlaceholder": "/path/to/skill"
+		"entity": "MCP 服务器"
 	},
 	"schedule": {
 		"calendar": "日历",
@@ -1306,13 +1298,20 @@
 		},
 		"skill": {
 			"title": "技能",
-			"catalogTitle": "工作区技能",
+			"catalogTitle": "平台技能库",
 			"countSummary": "共 {{count}} 个",
-			"description": "通过可复用的执行说明，指导智能体按特定流程完成专业任务。",
-			"searchPlaceholder": "在工作区中搜索技能",
+			"description": "统一创建、上传和维护技能包，并将所需技能分配给当前智能体。",
+			"searchPlaceholder": "搜索技能名称、简介或版本",
 			"add": "添加技能",
+			"create": "创建技能",
+			"uploadPackage": "上传技能包",
+			"createTitle": "创建技能",
+			"createDescription": "填写技能元数据和 Markdown 执行说明，保存后即可分配给智能体。",
+			"createAction": "创建技能",
+			"namePlaceholder": "例如：工程风险复核",
+			"descriptionPlaceholder": "简要说明该技能的用途和适用场景",
 			"editTitle": "编辑技能",
-			"editDescription": "修改技能名称、简介和执行说明。",
+			"editDescription": "修改后会发布为新版本，已分配的智能体下次执行时自动使用。",
 			"descriptionLabel": "简介",
 			"markdownLabel": "执行说明（Markdown）",
 			"viewDetails": "查看技能 {{name}} 的详细信息",
@@ -1320,8 +1319,26 @@
 			"directory": "技能内容目录",
 			"instructions": "执行说明",
 			"noInstructions": "暂无执行说明。",
-			"emptyTitle": "暂无技能",
-			"emptyDescription": "添加技能为工作区配备能力。"
+			"emptyTitle": "平台技能库为空",
+			"emptyDescription": "在线创建纯 Markdown 技能，或上传包含 SKILL.md 的完整技能包。",
+			"packageSource": "技能包",
+			"editorSource": "在线创建",
+			"assets": "{{count}} 个附属文件",
+			"assignLabel": "将技能 {{name}} 分配给当前智能体",
+			"selectedSummary": "已选择 {{count}} 个技能",
+			"saveChanges": "保存分配",
+			"discard": "放弃更改",
+			"saved": "技能分配已保存",
+			"uploaded": "技能包已发布",
+			"updated": "技能新版本已发布",
+			"versionHistory": "版本记录",
+			"versionTitle": "技能版本记录",
+			"currentVersion": "当前版本",
+			"downloadVersion": "下载",
+			"noVersions": "暂无可用版本。",
+			"deleteTitle": "删除技能“{{name}}”",
+			"deleteDescription": "将删除该技能的全部历史版本；已分配给任一智能体时不能删除。",
+			"deleted": "技能已删除"
 		},
 		"tool": {
 			"title": "工具",

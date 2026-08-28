@@ -194,6 +194,13 @@ const ChatPageInner = () => {
 		},
 		[updateAgent],
 	);
+	const handleUpdateAgentSkillConfig = useCallback(
+		async (agentId: string, skillConfig: Parameters<typeof updateAgent>[1]['skill_config']) => {
+			if (!skillConfig) return;
+			await updateAgent(agentId, { skill_config: skillConfig }, { silent: true });
+		},
+		[updateAgent],
+	);
 
 	const handleDeleteSession = async (sessionId: string) => {
 		await removeSession(sessionId);
@@ -388,6 +395,7 @@ const ChatPageInner = () => {
 					agentsLoading={agentsLoading}
 					onUpdateAgentCallConfig={handleUpdateAgentCallConfig}
 					onUpdateAgentMCPConfig={handleUpdateAgentMCPConfig}
+					onUpdateAgentSkillConfig={handleUpdateAgentSkillConfig}
 					onTeamUpdated={refetchSessions}
 				/>
 			</div>

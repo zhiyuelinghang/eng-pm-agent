@@ -11,6 +11,7 @@ from ._schedule import schedule_router
 from ._session import session_router
 from ._model import model_router
 from ._mcp_registry import mcp_registry_router
+from ._skill_registry import skill_registry_router
 from ._memory_management import memory_management_router
 from ._platform_audit import platform_audit_router
 from ._tts_model import tts_model_router
@@ -21,6 +22,7 @@ __all__ = [
     "auth_router",
     "model_router",
     "mcp_registry_router",
+    "skill_registry_router",
     "memory_management_router",
     "platform_audit_router",
     "tts_model_router",

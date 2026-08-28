@@ -178,6 +178,26 @@ class AgentMCPConfig(BaseModel):
         )
 
 
+class AgentSkillConfig(BaseModel):
+    """Managed platform skills assigned to every session of an agent."""
+
+    allowed_skill_ids: list[str] = Field(
+        default_factory=list,
+        description="Managed skill package ids assigned to this agent.",
+        title="Assigned Skills",
+    )
+
+    @field_validator("allowed_skill_ids")
+    @classmethod
+    def _normalise_allowed_skill_ids(cls, values: list[str]) -> list[str]:
+        """Trim and de-duplicate package ids while preserving order."""
+        return list(
+            dict.fromkeys(
+                value.strip() for value in values if value.strip()
+            ),
+        )
+
+
 class AgentModelPolicy(BaseModel):
     """Controls whether an agent follows its session or pins a model.
 
@@ -407,6 +427,14 @@ class AgentData(BaseModel):
         description=(
             "Managed MCP assignment maintained by the chat sidebar. Hidden "
             "from the schema-driven dialog to avoid duplicate editors."
+        ),
+    )
+
+    skill_config: SkipJsonSchema[AgentSkillConfig] = Field(
+        default_factory=AgentSkillConfig,
+        description=(
+            "Managed skill assignment maintained by the chat sidebar. "
+            "Hidden from the schema-driven dialog to avoid duplicate editors."
         ),
     )
 

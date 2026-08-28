@@ -55,6 +55,11 @@ export interface AgentMCPConfig {
 	allowed_mcp_ids: string[];
 }
 
+export interface AgentSkillConfig {
+	/** Stable platform skill package ids assigned to every session of the agent. */
+	allowed_skill_ids: string[];
+}
+
 export type DatabaseTableOperation = 'read' | 'create' | 'update' | 'delete';
 export type DatabaseJoinType = 'left' | 'inner';
 export type DatabaseScopeType = 'project' | 'user' | 'global_admin';
@@ -194,6 +199,7 @@ export interface AgentData {
 	call_config: AgentCallConfig;
 	tool_config: AgentToolConfig;
 	mcp_config: AgentMCPConfig;
+	skill_config: AgentSkillConfig;
 }
 
 export interface AgentView extends RecordBase {
@@ -216,6 +222,7 @@ export interface CreateAgentRequest {
 	invite_config?: InviteConfig;
 	call_config?: AgentCallConfig;
 	mcp_config?: AgentMCPConfig;
+	skill_config?: AgentSkillConfig;
 }
 
 export interface CreateAgentResponse {
@@ -232,6 +239,7 @@ export interface UpdateAgentRequest {
 	invite_config?: InviteConfig;
 	call_config?: AgentCallConfig;
 	mcp_config?: AgentMCPConfig;
+	skill_config?: AgentSkillConfig;
 }
 
 export interface AgentListResponse {
@@ -1117,6 +1125,38 @@ export interface AddSkillRequest {
 }
 
 export interface UpdateSkillRequest {
+	name: string;
+	description: string;
+	markdown: string;
+}
+
+export type ManagedSkillSource = 'editor' | 'upload';
+
+export interface ManagedSkillPackage {
+	id: string;
+	version: number;
+	name: string;
+	description: string;
+	markdown: string;
+	source: ManagedSkillSource;
+	assigned: boolean;
+	asset_count: number;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface ManagedSkillVersion {
+	package_id: string;
+	version: number;
+	name: string;
+	description: string;
+	source: ManagedSkillSource;
+	asset_count: number;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface ManagedSkillInput {
 	name: string;
 	description: string;
 	markdown: string;

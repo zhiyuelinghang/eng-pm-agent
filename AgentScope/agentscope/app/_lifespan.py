@@ -46,6 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     message_bus = app.state.message_bus
     workspace_manager = app.state.workspace_manager
     mcp_registry_manager = app.state.mcp_registry_manager
+    skill_registry_manager = app.state.skill_registry_manager
     knowledge_base_manager = app.state.knowledge_base_manager
     blob_store = app.state.blob_store
     enable_index_worker = app.state.enable_index_worker
@@ -57,6 +58,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await stack.enter_async_context(workspace_manager)
         if mcp_registry_manager is not None:
             await stack.enter_async_context(mcp_registry_manager)
+        if skill_registry_manager is not None:
+            await stack.enter_async_context(skill_registry_manager)
         if knowledge_base_manager is not None:
             # ``KnowledgeBaseManagerBase.__aenter__`` enters the bound
             # vector store too, so a single context covers both.
@@ -117,6 +120,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             custom_agent_cls=app.state.custom_agent_cls,
             permission_review_service=permission_review_service,
             mcp_registry_manager=mcp_registry_manager,
+            skill_registry_manager=skill_registry_manager,
         )
         app.state.chat_service = chat_service
 

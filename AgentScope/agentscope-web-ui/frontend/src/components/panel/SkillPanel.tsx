@@ -1,109 +1,216 @@
-import { FileX, PlusCircle, Search, SearchX } from 'lucide-react';
-import { useState } from 'react';
+import {
+	CircleAlert,
+	FileArchive,
+	FileX,
+	Loader2,
+	PlusCircle,
+	RotateCcw,
+	Save,
+	Search,
+	SearchX,
+	Upload,
+} from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { toast } from 'sonner';
 
-import type { Skill, UpdateSkillRequest } from '@/api';
-import { AddSkillDialog } from '@/components/dialog/AddSkillDialog.tsx';
-import { DeleteDialog } from '@/components/dialog/DeleteDialog.tsx';
+import type {
+	AgentSkillConfig,
+	AgentView,
+	ManagedSkillInput,
+	ManagedSkillPackage,
+	ManagedSkillVersion,
+} from '@/api';
+import { CreateSkillDialog } from '@/components/dialog/CreateSkillDialog';
+import { DeleteDialog } from '@/components/dialog/DeleteDialog';
 import { EditSkillDialog } from '@/components/dialog/EditSkillDialog';
 import { SkillDetailDialog } from '@/components/dialog/SkillDetailDialog';
+import { SkillVersionsDialog } from '@/components/dialog/SkillVersionsDialog';
 import { PanelCatalogRow } from '@/components/panel/PanelCatalogRow';
 import { PanelEmpty } from '@/components/panel/PanelEmpty';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group';
-import { useTranslation } from '@/i18n/useI18n.ts';
-import { getSkillDisplayName } from '@/lib/skill-display';
+import { useTranslation } from '@/i18n/useI18n';
+import { formatApiErrorForAlert } from '@/lib/api-error';
 
 interface SkillPanelProps {
-	/** The skills equipped in the workspace. */
-	skills: Skill[];
-	/** Whether the skill list is still loading. */
+	agent: AgentView | null;
+	packages: ManagedSkillPackage[];
 	loading?: boolean;
-	/**
-	 * Add a skill to the workspace.
-	 *
-	 * @param skillPath - Path of the skill to add.
-	 */
-	onAdd: (skillPath: string) => Promise<void>;
-	/** Save editable SKILL.md fields. */
-	onUpdate: (currentName: string, input: UpdateSkillRequest) => Promise<void>;
-	/**
-	 * Remove a skill by name.
-	 *
-	 * @param name - The skill name to remove.
-	 */
-	onRemove: (name: string) => Promise<void>;
+	uploading?: boolean;
+	loadError?: Error | null;
+	onCreate: (input: ManagedSkillInput) => Promise<void>;
+	onUpdate: (packageId: string, input: ManagedSkillInput) => Promise<void>;
+	onUpload: (file: File) => Promise<void>;
+	onRemove: (packageId: string) => Promise<void>;
+	onListVersions: (packageId: string) => Promise<ManagedSkillVersion[]>;
+	onDownloadVersion: (packageId: string, version: number) => Promise<void>;
+	onSave: (agentId: string, config: AgentSkillConfig) => Promise<void>;
 }
 
-/**
- * Pure content body for the Skill dock panel: a search box, the list
- * of equipped skills, and add/edit/remove actions. Holds only local UI
- * state (search text and dialog targets); all data arrives via props so
- * it owns no data fetching.
- *
- * @param skills - The skills to list.
- * @param loading - Whether the list is loading.
- * @param onAdd - Add-skill callback.
- * @param onUpdate - Update-skill callback.
- * @param onRemove - Remove-skill callback.
- * @returns The skill panel body.
- */
+function assignedIds(agent: AgentView | null): string[] {
+	return [...(agent?.data.skill_config?.allowed_skill_ids ?? [])];
+}
+
+function sameIds(left: string[], right: string[]): boolean {
+	if (left.length !== right.length) return false;
+	const rightSet = new Set(right);
+	return left.every((id) => rightSet.has(id));
+}
+
+/** Platform skill catalogue, package maintenance, and agent assignment. */
 export function SkillPanel({
-	skills,
+	agent,
+	packages,
 	loading = false,
-	onAdd,
+	uploading = false,
+	loadError = null,
+	onCreate,
 	onUpdate,
+	onUpload,
 	onRemove,
+	onListVersions,
+	onDownloadVersion,
+	onSave,
 }: SkillPanelProps) {
 	const { t } = useTranslation();
+	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [search, setSearch] = useState('');
-	const [deleteOpen, setDeleteOpen] = useState(false);
-	const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-	const [detailTarget, setDetailTarget] = useState<Skill | null>(null);
-	const [editTarget, setEditTarget] = useState<Skill | null>(null);
+	const [draftIds, setDraftIds] = useState<string[]>(() => assignedIds(agent));
+	const [createOpen, setCreateOpen] = useState(false);
+	const [detailTarget, setDetailTarget] = useState<ManagedSkillPackage | null>(null);
+	const [editTarget, setEditTarget] = useState<ManagedSkillPackage | null>(null);
+	const [deleteTarget, setDeleteTarget] = useState<ManagedSkillPackage | null>(null);
+	const [versionTarget, setVersionTarget] = useState<ManagedSkillPackage | null>(null);
+	const [submitting, setSubmitting] = useState(false);
+	const [errorMsg, setErrorMsg] = useState('');
 
-	const normalizedSearch = search.trim().toLowerCase();
-	const filtered = normalizedSearch
-		? skills.filter((skill) =>
-				[getSkillDisplayName(skill), skill.name, skill.description].some((value) =>
-					value.toLowerCase().includes(normalizedSearch),
-				),
+	useEffect(() => {
+		setDraftIds(assignedIds(agent));
+		setErrorMsg('');
+	}, [agent]);
+
+	useEffect(() => {
+		if (loading) return;
+		const available = new Set(packages.map((item) => item.id));
+		setDraftIds((current) => current.filter((id) => available.has(id)));
+	}, [loading, packages]);
+
+	const persistedIds = useMemo(() => {
+		if (loading) return assignedIds(agent);
+		const available = new Set(packages.map((item) => item.id));
+		return assignedIds(agent).filter((id) => available.has(id));
+	}, [agent, loading, packages]);
+	const selectedSet = useMemo(() => new Set(draftIds), [draftIds]);
+	const isDirty = !sameIds(draftIds, persistedIds);
+	const query = search.trim().toLowerCase();
+	const filtered = query
+		? packages.filter((item) =>
+				[item.name, item.description, `v${item.version}`]
+					.join(' ')
+					.toLowerCase()
+					.includes(query),
 			)
-		: skills;
+		: packages;
+
+	const togglePackage = (packageId: string, checked: boolean) => {
+		if (!agent?.editable || submitting) return;
+		setErrorMsg('');
+		setDraftIds((current) =>
+			checked
+				? [...new Set([...current, packageId])]
+				: current.filter((id) => id !== packageId),
+		);
+	};
+
+	const handleUpload = async (file: File) => {
+		setErrorMsg('');
+		try {
+			await onUpload(file);
+			toast.success(t('panel.skill.uploaded'));
+		} catch (reason) {
+			setErrorMsg(formatApiErrorForAlert(reason));
+		} finally {
+			if (fileInputRef.current) fileInputRef.current.value = '';
+		}
+	};
+
+	const handleSave = async () => {
+		if (!agent?.editable || !isDirty) return;
+		setSubmitting(true);
+		setErrorMsg('');
+		try {
+			await onSave(agent.id, { allowed_skill_ids: draftIds });
+			toast.success(t('panel.skill.saved'));
+		} catch (reason) {
+			setErrorMsg(formatApiErrorForAlert(reason));
+		} finally {
+			setSubmitting(false);
+		}
+	};
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
+			<input
+				ref={fileInputRef}
+				type="file"
+				accept=".zip,.skill,application/zip"
+				className="hidden"
+				onChange={(event) => {
+					const file = event.target.files?.[0];
+					if (file) void handleUpload(file);
+				}}
+			/>
+
 			<div className="flex-none space-y-3 pb-3">
-				<div className="flex items-center justify-between gap-3">
+				<div className="flex flex-wrap items-center justify-between gap-2">
 					<div className="flex min-w-0 items-baseline gap-1.5">
 						<span className="truncate text-sm font-medium">
 							{t('panel.skill.catalogTitle')}
 						</span>
 						<span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-							{t('panel.skill.countSummary', { count: skills.length })}
+							{t('panel.skill.countSummary', { count: packages.length })}
 						</span>
 					</div>
-					<AddSkillDialog onAdd={onAdd}>
-						<Button size="xs">
+					<div className="flex items-center gap-2">
+						<Button size="xs" variant="outline" onClick={() => setCreateOpen(true)}>
 							<PlusCircle />
-							{t('panel.skill.add')}
+							{t('panel.skill.create')}
 						</Button>
-					</AddSkillDialog>
+						<Button
+							size="xs"
+							onClick={() => fileInputRef.current?.click()}
+							disabled={uploading}
+						>
+							{uploading ? <Loader2 className="animate-spin" /> : <Upload />}
+							{t('panel.skill.uploadPackage')}
+						</Button>
+					</div>
 				</div>
-			<InputGroup>
-				<InputGroupInput
-					placeholder={t('panel.skill.searchPlaceholder')}
-					value={search}
-					onChange={(e) => setSearch(e.target.value)}
-				/>
-				<InputGroupAddon align="inline-end">
-					<Search />
-				</InputGroupAddon>
-			</InputGroup>
+				<InputGroup>
+					<InputGroupInput
+						placeholder={t('panel.skill.searchPlaceholder')}
+						value={search}
+						onChange={(event) => setSearch(event.target.value)}
+					/>
+					<InputGroupAddon align="inline-end">
+						<Search />
+					</InputGroupAddon>
+				</InputGroup>
+				{loadError || errorMsg ? (
+					<Alert variant="destructive">
+						<CircleAlert />
+						<AlertDescription>
+							{errorMsg || formatApiErrorForAlert(loadError)}
+						</AlertDescription>
+					</Alert>
+				) : null}
 			</div>
 
 			{loading ? (
 				<div className="flex flex-1 items-center justify-center">
-					<p className="text-muted-foreground text-sm">{t('panel.loading')}</p>
+					<Loader2 className="size-5 animate-spin text-muted-foreground" />
 				</div>
 			) : filtered.length === 0 ? (
 				<PanelEmpty
@@ -118,58 +225,115 @@ export function SkillPanel({
 			) : (
 				<div className="min-h-0 flex-1 overflow-y-auto rounded-lg border bg-background">
 					<div className="divide-y">
-					{filtered.map((skill) => {
-						const displayName = getSkillDisplayName(skill);
-						return (
-							<PanelCatalogRow
-								key={skill.name}
-								title={displayName}
-								description={skill.description}
-								onOpen={() => setDetailTarget(skill)}
-								openLabel={t('panel.skill.viewDetails', { name: displayName })}
-							/>
-						);
-					})}
+						{filtered.map((item) => {
+							const checked = selectedSet.has(item.id);
+							return (
+								<PanelCatalogRow
+									key={item.id}
+									title={item.name}
+									description={item.description}
+									metadata={
+										<span className="flex items-center gap-2">
+											<FileArchive className="size-3.5" />
+											{item.source === 'upload'
+												? t('panel.skill.packageSource')
+												: t('panel.skill.editorSource')}
+											{item.asset_count > 0
+												? ` · ${t('panel.skill.assets', { count: item.asset_count })}`
+												: ''}
+										</span>
+									}
+									badge={<Badge variant="secondary">v{item.version}</Badge>}
+									selected={checked}
+									checkbox={{
+										checked,
+										disabled: !agent?.editable || submitting,
+										ariaLabel: t('panel.skill.assignLabel', { name: item.name }),
+										onChange: (value) => togglePackage(item.id, value),
+									}}
+									onOpen={() => setDetailTarget(item)}
+									openLabel={t('panel.skill.viewDetails', { name: item.name })}
+								/>
+							);
+						})}
 					</div>
 				</div>
 			)}
 
+			<div className="mt-3 flex min-h-9 flex-none items-center justify-between gap-3 border-t pt-3">
+				<span className="text-xs text-muted-foreground">
+					{t('panel.skill.selectedSummary', { count: draftIds.length })}
+				</span>
+				<div className="flex gap-2">
+					<Button
+						size="xs"
+						variant="ghost"
+						onClick={() => setDraftIds(persistedIds)}
+						disabled={!isDirty || submitting}
+					>
+						<RotateCcw />
+						{t('panel.skill.discard')}
+					</Button>
+					<Button size="xs" onClick={handleSave} disabled={!isDirty || submitting}>
+						{submitting ? <Loader2 className="animate-spin" /> : <Save />}
+						{t('panel.skill.saveChanges')}
+					</Button>
+				</div>
+			</div>
+
+			<CreateSkillDialog open={createOpen} onOpenChange={setCreateOpen} onCreate={onCreate} />
 			<SkillDetailDialog
 				open={detailTarget !== null}
 				onOpenChange={(open) => {
 					if (!open) setDetailTarget(null);
 				}}
 				skill={detailTarget}
+				version={detailTarget?.version}
+				onVersions={() => {
+					setVersionTarget(detailTarget);
+					setDetailTarget(null);
+				}}
 				onEdit={(skill) => {
 					setDetailTarget(null);
-					setEditTarget(skill);
+					setEditTarget(packages.find((item) => item.name === skill.name) ?? null);
 				}}
 				onDelete={(skill) => {
 					setDetailTarget(null);
-					setDeleteTarget(skill.name);
-					setDeleteOpen(true);
+					setDeleteTarget(packages.find((item) => item.name === skill.name) ?? null);
 				}}
 			/>
-
+			<SkillVersionsDialog
+				open={versionTarget !== null}
+				onOpenChange={(open) => {
+					if (!open) setVersionTarget(null);
+				}}
+				skill={versionTarget}
+				onLoad={onListVersions}
+				onDownload={onDownloadVersion}
+			/>
 			<EditSkillDialog
 				open={editTarget !== null}
 				onOpenChange={(open) => {
 					if (!open) setEditTarget(null);
 				}}
 				skill={editTarget}
-				onSave={onUpdate}
+				onSave={async (_currentName, input) => {
+					if (!editTarget) return;
+					await onUpdate(editTarget.id, input);
+					toast.success(t('panel.skill.updated'));
+				}}
 			/>
-
 			<DeleteDialog
-				open={deleteOpen}
-				onOpenChange={setDeleteOpen}
-				title={t('common.deleteTitle', {
-					entity: t('dialog-mcp-delete.skillEntity'),
-					name: deleteTarget ?? '',
-				})}
-				description={t('dialog-mcp-delete.skillDescription')}
+				open={deleteTarget !== null}
+				onOpenChange={(open) => {
+					if (!open) setDeleteTarget(null);
+				}}
+				title={t('panel.skill.deleteTitle', { name: deleteTarget?.name ?? '' })}
+				description={t('panel.skill.deleteDescription')}
 				onConfirm={async () => {
-					if (deleteTarget) await onRemove(deleteTarget);
+					if (!deleteTarget) return;
+					await onRemove(deleteTarget.id);
+					toast.success(t('panel.skill.deleted'));
 				}}
 			/>
 		</div>

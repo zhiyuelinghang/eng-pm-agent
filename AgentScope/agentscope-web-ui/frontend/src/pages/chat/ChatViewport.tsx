@@ -14,6 +14,7 @@ import { usePanelRef } from 'react-resizable-panels';
 import type {
 	AgentCallConfig,
 	AgentMCPConfig,
+	AgentSkillConfig,
 	AgentView,
 	ChatModelConfig,
 	PermissionMode,
@@ -50,6 +51,7 @@ import { useKnowledgeBases } from '@/hooks/useKnowledgeBases';
 import { useMcpRegistry } from '@/hooks/useMcpRegistry';
 import { useMessages } from '@/hooks/useMessages';
 import { useSessions } from '@/hooks/useSessions';
+import { useSkillRegistry } from '@/hooks/useSkillRegistry';
 import { useWorkspace } from '@/hooks/useWorkspace.ts';
 import { useTranslation } from '@/i18n/useI18n';
 
@@ -93,6 +95,8 @@ interface ChatViewportProps {
 	onUpdateAgentCallConfig: (agentId: string, config: AgentCallConfig) => Promise<void>;
 	/** Persist the current agent's global managed-MCP assignment. */
 	onUpdateAgentMCPConfig: (agentId: string, config: AgentMCPConfig) => Promise<void>;
+	/** Persist the current agent's global managed-skill assignment. */
+	onUpdateAgentSkillConfig: (agentId: string, config: AgentSkillConfig) => Promise<void>;
 	/**
 	 * Optional hook invoked when a team membership change arrives on
 	 * this viewport's SSE stream. The outer page owns the session list
@@ -129,6 +133,7 @@ export function ChatViewport({
 	agentsLoading = false,
 	onUpdateAgentCallConfig,
 	onUpdateAgentMCPConfig,
+	onUpdateAgentSkillConfig,
 	onTeamUpdated,
 }: ChatViewportProps) {
 	const { t } = useTranslation();
@@ -196,8 +201,7 @@ export function ChatViewport({
 			onTeamUpdated: handleTeamUpdated,
 			onStateUpdated: handleStateUpdated,
 		});
-	const { skills, skillsLoading, addSkill, updateSkill, removeSkill, tools, toolsLoading } =
-		useWorkspace(agentId, sessionId);
+	const { tools, toolsLoading } = useWorkspace(agentId, sessionId);
 	const {
 		packages: mcpPackages,
 		loading: mcpsLoading,
@@ -206,6 +210,18 @@ export function ChatViewport({
 		uploadPackage,
 		removePackage,
 	} = useMcpRegistry(agentId);
+	const {
+		packages: skillPackages,
+		loading: skillsLoading,
+		uploading: skillUploading,
+		error: skillError,
+		createPackage: createSkillPackage,
+		updatePackage: updateSkillPackage,
+		uploadPackage: uploadSkillPackage,
+		removePackage: removeSkillPackage,
+		listVersions: listSkillVersions,
+		downloadVersion: downloadSkillVersion,
+	} = useSkillRegistry(agentId);
 	const { knowledgeBases, loading: knowledgeBasesLoading } = useKnowledgeBases();
 	const { schema: kbMiddlewareSchema } = useKnowledgeBaseMiddlewareSchema();
 	const activeAgent = useMemo(
@@ -273,11 +289,18 @@ export function ChatViewport({
 				},
 				content: (
 					<SkillPanel
-						skills={skills}
+						agent={activeAgent}
+						packages={skillPackages}
 						loading={skillsLoading}
-						onAdd={addSkill}
-						onUpdate={updateSkill}
-						onRemove={removeSkill}
+						uploading={skillUploading}
+						loadError={skillError}
+						onCreate={createSkillPackage}
+						onUpdate={updateSkillPackage}
+						onUpload={uploadSkillPackage}
+						onRemove={removeSkillPackage}
+						onListVersions={listSkillVersions}
+						onDownloadVersion={downloadSkillVersion}
+						onSave={onUpdateAgentSkillConfig}
 					/>
 				),
 			},
@@ -357,11 +380,17 @@ export function ChatViewport({
 			uploadPackage,
 			removePackage,
 			onUpdateAgentMCPConfig,
-			skills,
+			skillPackages,
 			skillsLoading,
-			addSkill,
-			updateSkill,
-			removeSkill,
+			skillUploading,
+			skillError,
+			createSkillPackage,
+			updateSkillPackage,
+			uploadSkillPackage,
+			removeSkillPackage,
+			listSkillVersions,
+			downloadSkillVersion,
+			onUpdateAgentSkillConfig,
 			tools,
 			toolsLoading,
 			knowledgeBases,

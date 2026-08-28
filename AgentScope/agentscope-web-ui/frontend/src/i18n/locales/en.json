@@ -1109,15 +1109,7 @@
 		"emptyMcpServers": "No MCP servers found in configuration."
 	},
 	"dialog-mcp-delete": {
-		"entity": "MCP server",
-		"skillEntity": "skill",
-		"skillDescription": "Are you sure you want to remove this skill from the workspace?"
-	},
-	"dialog-skill-add": {
-		"title": "Add skill",
-		"description": "Enter the path to a skill directory to add it to the workspace.",
-		"pathLabel": "Skill path",
-		"pathPlaceholder": "/path/to/skill"
+		"entity": "MCP server"
 	},
 	"schedule": {
 		"calendar": "Calendar",
@@ -1306,13 +1298,20 @@
 		},
 		"skill": {
 			"title": "Skills",
-			"catalogTitle": "Workspace skills",
+			"catalogTitle": "Platform skill library",
 			"countSummary": "{{count}} total",
-			"description": "Guide the agent through specialist tasks with reusable workflows and instructions.",
-			"searchPlaceholder": "Search skills in the workspace",
+			"description": "Create, upload, version, and assign managed skill packages for this agent.",
+			"searchPlaceholder": "Search by name, summary, or version",
 			"add": "Add Skill",
+			"create": "Create skill",
+			"uploadPackage": "Upload package",
+			"createTitle": "Create skill",
+			"createDescription": "Write the skill metadata and Markdown instructions, then assign it to agents.",
+			"createAction": "Create skill",
+			"namePlaceholder": "e.g. Engineering risk review",
+			"descriptionPlaceholder": "Summarise when and why this skill should be used",
 			"editTitle": "Edit skill",
-			"editDescription": "Update the skill name, summary, and instructions.",
+			"editDescription": "Saving publishes a new version. Assigned agents use it on their next run.",
 			"descriptionLabel": "Summary",
 			"markdownLabel": "Instructions (Markdown)",
 			"viewDetails": "View details for {{name}}",
@@ -1320,8 +1319,26 @@
 			"directory": "Skill content directory",
 			"instructions": "Instructions",
 			"noInstructions": "No instructions provided.",
-			"emptyTitle": "No skills",
-			"emptyDescription": "Add a skill to equip the workspace."
+			"emptyTitle": "No platform skills",
+			"emptyDescription": "Create a Markdown skill online or upload a complete package containing SKILL.md.",
+			"packageSource": "Package upload",
+			"editorSource": "Created online",
+			"assets": "{{count}} assets",
+			"assignLabel": "Assign {{name}} to the current agent",
+			"selectedSummary": "{{count}} skills selected",
+			"saveChanges": "Save assignments",
+			"discard": "Discard",
+			"saved": "Skill assignments saved",
+			"uploaded": "Skill package published",
+			"updated": "New skill version published",
+			"versionHistory": "Version history",
+			"versionTitle": "Skill version history",
+			"currentVersion": "Current",
+			"downloadVersion": "Download",
+			"noVersions": "No versions are available.",
+			"deleteTitle": "Delete skill “{{name}}”",
+			"deleteDescription": "This deletes every retained version. A skill assigned to any agent cannot be deleted.",
+			"deleted": "Skill deleted"
 		},
 		"tool": {
 			"title": "Tools",

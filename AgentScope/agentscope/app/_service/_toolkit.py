@@ -11,6 +11,7 @@ from typing import Any, Literal
 from .._manager import BackgroundTaskManager, SchedulerManager
 from ..message_bus import MessageBus
 from ..mcp_registry import MCPRegistryManager
+from ..skill_registry import SkillRegistryManager
 from .._tool import (
     AgentCreate,
     AgentInvite,
@@ -63,6 +64,7 @@ async def get_toolkit(
     extra_factory: AgentToolFactory | None = None,
     sub_agent_templates: dict[str, SubAgentTemplate] | None = None,
     mcp_registry_manager: MCPRegistryManager | None = None,
+    skill_registry_manager: SkillRegistryManager | None = None,
 ) -> Toolkit:
     """Assemble the complete :class:`Toolkit` for one chat turn.
 
@@ -338,9 +340,24 @@ time or interval"
         client for client in workspace_mcps if client.name not in managed_names
     ] + managed_mcps
 
+    workspace_skills = await workspace.list_skills(agent_id=agent_record.id)
+    managed_skills = (
+        await skill_registry_manager.get_assigned_skills(
+            agent_record.data.skill_config.allowed_skill_ids,
+        )
+        if skill_registry_manager is not None
+        else []
+    )
+    managed_skill_names = {skill.name for skill in managed_skills}
+    resolved_skills = [
+        skill
+        for skill in workspace_skills
+        if skill.name not in managed_skill_names
+    ] + managed_skills
+
     return Toolkit(
         tools=tools,
-        skills_or_loaders=await workspace.list_skills(agent_id=agent_record.id),
+        skills_or_loaders=resolved_skills,
         mcps=resolved_mcps,
         tool_groups=tool_groups,
     )

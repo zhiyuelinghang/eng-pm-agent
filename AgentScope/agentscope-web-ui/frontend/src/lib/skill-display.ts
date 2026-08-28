@@ -14,7 +14,7 @@ export function cleanSkillHeading(value: string): string {
  * A skill's `name` is its stable technical identifier and must not be used as
  * the primary label when the document already provides a localized H1 title.
  */
-export function getSkillDisplayName(skill: Skill): string {
+export function getSkillDisplayName(skill: Pick<Skill, 'name' | 'markdown'>): string {
 	const heading = /^#\s+(.+?)\s*#*\s*$/m.exec(skill.markdown);
 	return heading ? cleanSkillHeading(heading[1]) || skill.name : skill.name;
 }

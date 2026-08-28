@@ -32,6 +32,7 @@ from .._team_lifecycle import (
 from .._team_messaging import deliver_team_message
 from ..message_bus import MessageBus, MessageBusKeys
 from ..mcp_registry import MCPRegistryManager
+from ..skill_registry import SkillRegistryManager
 from ..rag.knowledge_base_manager import KnowledgeBaseManagerBase
 from ..storage import StorageBase, AgentRecord, SessionRecord
 from .._manager import BackgroundTaskManager, SchedulerManager
@@ -113,6 +114,7 @@ class ChatService:
         extra_projectors: list[EventProjector] | None = None,
         permission_review_service: PermissionReviewService | None = None,
         mcp_registry_manager: MCPRegistryManager | None = None,
+        skill_registry_manager: SkillRegistryManager | None = None,
     ) -> None:
         """Initialize chat service.
 
@@ -189,6 +191,7 @@ class ChatService:
         self._agent_cls = custom_agent_cls or Agent
         self._permission_review_service = permission_review_service
         self._mcp_registry_manager = mcp_registry_manager
+        self._skill_registry_manager = skill_registry_manager
         self._attachment_pipeline = AttachmentPipeline()
         self._projection = SessionProjection(message_bus)
         self._projectors: list[EventProjector] = [
@@ -536,6 +539,7 @@ class ChatService:
             extra_factory=self._extra_agent_tools,
             sub_agent_templates=self._sub_agent_templates,
             mcp_registry_manager=self._mcp_registry_manager,
+            skill_registry_manager=self._skill_registry_manager,
         )
 
         # ----------------------------------------------------------------

@@ -18,6 +18,7 @@ from agentscope.app import AgentScopeAuthConfig, create_app
 from agentscope.app.access import DenyAllResourceAccessPolicy
 from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app.mcp_registry import MCPRegistryManager
+from agentscope.app.skill_registry import SkillRegistryManager
 from agentscope.app.memory import (
     DobbyMemoryMiddleware,
     apply_global_memory_settings,
@@ -96,6 +97,9 @@ KNOWLEDGE_BLOB_HOME = Path(
 ).resolve()
 MCP_REGISTRY_HOME = Path(
     os.getenv("AGENTSCOPE_MCP_REGISTRY_HOME", RUNTIME_HOME / "mcp_registry"),
+).resolve()
+SKILL_REGISTRY_HOME = Path(
+    os.getenv("AGENTSCOPE_SKILL_REGISTRY_HOME", RUNTIME_HOME / "skill_registry"),
 ).resolve()
 SQLITE_PATH = Path(
     os.getenv("AGENTSCOPE_SQLITE_PATH", RUNTIME_HOME / "agentscope.db"),
@@ -405,6 +409,7 @@ app = create_app(
         ),
         system_tool_package_ids={"attachment-parser"},
     ),
+    skill_registry_manager=SkillRegistryManager(root_dir=SKILL_REGISTRY_HOME),
     knowledge_base_manager=knowledge_base_manager,
     knowledge_parsers=[
         TextParser(),

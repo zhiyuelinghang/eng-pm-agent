@@ -1,9 +1,10 @@
-import { Pencil, Trash2 } from 'lucide-react';
+import { History, Pencil, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 import type { Skill } from '@/api';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
 	Dialog,
@@ -19,9 +20,11 @@ import { cleanSkillHeading, getSkillDisplayName } from '@/lib/skill-display';
 interface SkillDetailDialogProps {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
-	skill: Skill | null;
-	onEdit: (skill: Skill) => void;
-	onDelete: (skill: Skill) => void;
+	skill: Pick<Skill, 'name' | 'description' | 'markdown'> | null;
+	onEdit: (skill: Pick<Skill, 'name' | 'description' | 'markdown'>) => void;
+	onDelete: (skill: Pick<Skill, 'name' | 'description' | 'markdown'>) => void;
+	version?: number;
+	onVersions?: () => void;
 }
 
 interface SkillContentSection {
@@ -65,6 +68,8 @@ export function SkillDetailDialog({
 	skill,
 	onEdit,
 	onDelete,
+	version,
+	onVersions,
 }: SkillDetailDialogProps) {
 	const { t } = useTranslation();
 	const detailScrollRef = useRef<HTMLDivElement>(null);
@@ -119,7 +124,10 @@ export function SkillDetailDialog({
 						<DialogTitle className="text-xl leading-tight">
 							{getSkillDisplayName(skill)}
 						</DialogTitle>
-						<DialogDescription>{skill.name}</DialogDescription>
+						<DialogDescription className="flex items-center gap-2">
+							<span>{skill.name}</span>
+							{version ? <Badge variant="secondary">v{version}</Badge> : null}
+						</DialogDescription>
 					</DialogHeader>
 
 					<div className="grid min-h-0 grid-cols-1 md:grid-cols-[12rem_minmax(0,1fr)]">
@@ -203,10 +211,18 @@ export function SkillDetailDialog({
 					</div>
 
 					<DialogFooter className="m-0 rounded-none border-t bg-background px-6 py-4 sm:justify-between">
-						<Button variant="ghost" onClick={() => onDelete(skill)}>
-							<Trash2 />
-							{t('common.delete')}
-						</Button>
+						<div className="flex gap-2">
+							{onVersions ? (
+								<Button variant="outline" onClick={onVersions}>
+									<History />
+									{t('panel.skill.versionHistory')}
+								</Button>
+							) : null}
+							<Button variant="ghost" onClick={() => onDelete(skill)}>
+								<Trash2 />
+								{t('common.delete')}
+							</Button>
+						</div>
 						<div className="flex justify-end gap-2">
 							<Button variant="outline" onClick={() => onOpenChange(false)}>
 								{t('common.close')}

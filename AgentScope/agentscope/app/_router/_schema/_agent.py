@@ -10,6 +10,7 @@ from ....agent import ContextConfig, ReActConfig
 from ...storage import (
     AgentCallConfig,
     AgentMCPConfig,
+    AgentSkillConfig,
     AgentModelPolicy,
     InviteConfig,
     MemorySettingsData,
@@ -62,6 +63,10 @@ class CreateAgentRequest(BaseModel):
     mcp_config: AgentMCPConfig = Field(
         default_factory=AgentMCPConfig,
         description="Managed MCP packages assigned to this agent.",
+    )
+    skill_config: AgentSkillConfig = Field(
+        default_factory=AgentSkillConfig,
+        description="Managed skill packages assigned to this agent.",
     )
 
 
@@ -122,6 +127,13 @@ class UpdateAgentRequest(BaseModel):
         default=None,
         description=(
             "Complete managed-MCP assignment for this agent. Omit to keep "
+            "the existing assignment."
+        ),
+    )
+    skill_config: AgentSkillConfig | None = Field(
+        default=None,
+        description=(
+            "Complete managed-skill assignment for this agent. Omit to keep "
             "the existing assignment."
         ),
     )

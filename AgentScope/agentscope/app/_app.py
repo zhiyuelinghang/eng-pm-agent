@@ -17,6 +17,7 @@ from ._router import (
     knowledge_base_router,
     model_router,
     mcp_registry_router,
+    skill_registry_router,
     memory_management_router,
     platform_audit_router,
     tts_model_router,
@@ -35,6 +36,7 @@ from ._types import (
 from .message_bus import MessageBus
 from .storage import StorageBase
 from .mcp_registry import MCPRegistryManager
+from .skill_registry import SkillRegistryManager
 from ..agent import Agent
 from ..credential import CredentialFactory, CredentialBase
 from ..rag import (
@@ -64,6 +66,7 @@ def create_app(
     blob_store: BlobStoreBase | None = None,
     enable_index_worker: bool = True,
     mcp_registry_manager: MCPRegistryManager | None = None,
+    skill_registry_manager: SkillRegistryManager | None = None,
     *,
     extra_credentials: list[Type[CredentialBase]] | None = None,
     extra_middlewares: list[FastAPIMiddleware] | None = None,
@@ -245,6 +248,7 @@ def create_app(
     app.state.message_bus = message_bus
     app.state.workspace_manager = workspace_manager
     app.state.mcp_registry_manager = mcp_registry_manager
+    app.state.skill_registry_manager = skill_registry_manager
     app.state.knowledge_base_manager = knowledge_base_manager
     app.state.extra_agent_middlewares = extra_agent_middlewares
     app.state.session_end_handler = session_end_handler
@@ -309,6 +313,7 @@ def create_app(
         session_router,
         workspace_router,
         mcp_registry_router,
+        skill_registry_router,
         memory_management_router,
         model_router,
         tts_model_router,

@@ -27,6 +27,7 @@ from ._types import (
 )
 from .message_bus import MessageBus
 from .mcp_registry import MCPRegistryManager
+from .skill_registry import SkillRegistryManager
 from .database_interactions import DatabaseInteractionManager
 from .rag.blob_store import BlobStoreBase
 from .rag.knowledge_base_manager import KnowledgeBaseManagerBase
@@ -302,6 +303,28 @@ async def get_optional_mcp_registry_manager(
 ) -> MCPRegistryManager | None:
     """Return the managed-package registry when the app configured one."""
     return getattr(request.app.state, "mcp_registry_manager", None)
+
+
+async def get_skill_registry_manager(request: Request) -> SkillRegistryManager:
+    """Return the configured platform-level skill package registry."""
+    manager: SkillRegistryManager | None = getattr(
+        request.app.state,
+        "skill_registry_manager",
+        None,
+    )
+    if manager is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Managed skill package registry is not configured.",
+        )
+    return manager
+
+
+async def get_optional_skill_registry_manager(
+    request: Request,
+) -> SkillRegistryManager | None:
+    """Return the managed-skill registry when configured."""
+    return getattr(request.app.state, "skill_registry_manager", None)
 
 
 async def get_database_interaction_manager(
