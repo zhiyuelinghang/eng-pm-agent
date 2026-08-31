@@ -3255,17 +3255,67 @@ class Agent:
 
         # The last reasoning produced a text-only final message
         if final_msg is not None:
+            # ``cur_iter == max_iters + 1`` means the text came from the
+            # one forced finalization call after the normal budget ended.
+            exceeded_max_iters = (
+                self.state.cur_iter > self.react_config.max_iters
+            )
+            finished_reason = (
+                ReplyFinishedReason.EXCEED_MAX_ITERS
+                if exceeded_max_iters
+                else ReplyFinishedReason.COMPLETED
+            )
+            exit_events: list[AgentEvent] = []
+
+            if exceeded_max_iters:
+                logger.warning(
+                    "Agent %s exceeds the max iteration numbers %d. "
+                    "Stop the react loop.",
+                    self.name,
+                    self.react_config.max_iters,
+                )
+                final_msg.finished_reason = finished_reason
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", DeprecationWarning)
+                    exit_events.append(
+                        ExceedMaxItersEvent(
+                            reply_id=self.state.reply_id,
+                            name=self.name,
+                        ),
+                    )
+
+            exit_events.append(
+                ReplyEndEvent(
+                    session_id=self.state.session_id,
+                    reply_id=self.state.reply_id,
+                    finished_reason=finished_reason,
+                ),
+            )
             return Exit(
-                exit_events=[
-                    ReplyEndEvent(
-                        session_id=self.state.session_id,
-                        reply_id=self.state.reply_id,
-                        finished_reason=ReplyFinishedReason.COMPLETED,
-                    ),
-                ],
+                exit_events=exit_events,
                 exit_msg=final_msg,
             )
 
+        # Spend one additional, tool-free call turning partial progress into
+        # a useful final answer instead of returning only a generic error.
+        if self.state.cur_iter == self.react_config.max_iters:
+            return Reasoning(
+                hint=HintBlock(
+                    hint=(
+                        f"<system-reminder>You have reached the maximum of "
+                        f"{self.react_config.max_iters} reasoning-acting "
+                        f"iterations. Summarize the work and findings so far "
+                        f"and return the final answer as text. Do not call "
+                        f"any tools.</system-reminder>"
+                    ),
+                    source='{"label": "System", "sublabel": '
+                    '"Max Iterations Reached"}',
+                ),
+                tool_choice=ToolChoice(mode="none"),
+            )
+
+        # Equality returned above, so this is the bounded fallback after the
+        # forced finalization call also failed to produce text.
         if self.state.cur_iter >= self.react_config.max_iters:
             logger.warning(
                 "Agent %s exceeds the max iteration numbers %d. "

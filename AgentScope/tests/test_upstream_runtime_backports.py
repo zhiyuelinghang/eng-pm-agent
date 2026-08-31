@@ -387,8 +387,10 @@ class _RoundCountingModel:
     def __init__(self, responses: list[ChatResponse]) -> None:
         self._responses = responses
         self.call_count = 0
+        self.tool_choices: list[ToolChoice | None] = []
 
-    async def __call__(self, **_: Any) -> ChatResponse:
+    async def __call__(self, **kwargs: Any) -> ChatResponse:
+        self.tool_choices.append(kwargs.get("tool_choice"))
         response = self._responses[self.call_count]
         self.call_count += 1
         return response
@@ -441,6 +443,41 @@ class AgentIterationAccountingBackportTest(IsolatedAsyncioTestCase):
         self.assertEqual(model.call_count, 2)
         self.assertEqual(agent.state.cur_iter, 2)
         self.assertEqual(tool.execution_values, ["original"])
+
+    async def test_limit_forces_one_tool_free_final_summary(self) -> None:
+        """A thinking-only last round gets one bounded final text call."""
+        model = _RoundCountingModel(
+            [
+                ChatResponse(
+                    content=[ThinkingBlock(thinking="仍在整理")],
+                    is_last=True,
+                ),
+                ChatResponse(
+                    content=[TextBlock(text="已完成阶段性总结")],
+                    is_last=True,
+                ),
+            ],
+        )
+        agent = Agent(
+            name="worker",
+            system_prompt="test",
+            model=model,
+            toolkit=Toolkit(),
+            react_config=ReActConfig(max_iters=1),
+            injection_config=InjectionConfig(inject_runtime_state=False),
+        )
+
+        reply = await agent.reply(UserMsg(name="user", content="run"))
+
+        self.assertEqual(model.call_count, 2)
+        self.assertEqual(agent.state.cur_iter, 2)
+        self.assertIsNone(model.tool_choices[0])
+        self.assertEqual(model.tool_choices[1].mode, "none")
+        self.assertEqual(reply.finished_reason, "exceed_max_iters")
+        self.assertEqual(
+            [block.text for block in reply.get_content_blocks("text")],
+            ["已完成阶段性总结"],
+        )
 
 
 class _MutatingPermissionMiddleware(MiddlewareBase):

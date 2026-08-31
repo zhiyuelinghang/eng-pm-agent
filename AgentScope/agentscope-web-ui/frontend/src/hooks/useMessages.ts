@@ -131,7 +131,10 @@ export function useMessages(
 	},
 ) {
 	const [msgs, setMsgs] = useState<Msg[]>([]);
-	const [loading, setLoading] = useState(false);
+	// The conversation that `msgs` actually belongs to. Rendering is
+	// gated by this key so a prop switch cannot paint the previous
+	// agent/session for the one frame before effects run.
+	const [loadedKey, setLoadedKey] = useState<string | null>(null);
 	const [phase, setPhase] = useState<ReplyPhase>('idle');
 	const [error, setError] = useState<Error | null>(null);
 	// Pending subagent HITL cards projected onto this (leader) session.
@@ -319,6 +322,7 @@ export function useMessages(
 
 	// ── Lifecycle: fetch history + open SSE stream ──────────────────
 	useEffect(() => {
+		setLoadedKey(null);
 		bindingGenerationRef.current += 1;
 		settleGenerationRef.current += 1;
 		msgsRef.current = [];
@@ -338,7 +342,6 @@ export function useMessages(
 
 		(async () => {
 			// 1. Fetch persisted history
-			setLoading(true);
 			try {
 				const { messages, is_running } = await sessionApi.messages(sessionId, agentId);
 				if (cancelled) return;
@@ -360,12 +363,15 @@ export function useMessages(
 						currentReplyRef.current = tail ?? null;
 					}
 				}
-				scheduleUpdate();
+				// Publish history synchronously with `loadedKey` below. Deferring
+				// through requestAnimationFrame would briefly show the empty-state
+				// UI for a conversation that already has messages.
+				setMsgs([...msgsRef.current]);
 			} catch (e) {
 				if (!cancelled) setError(e as Error);
 				return;
 			} finally {
-				if (!cancelled) setLoading(false);
+				if (!cancelled) setLoadedKey(`${agentId}:${sessionId}`);
 			}
 
 			// 2. Open SSE long connection for live events
@@ -613,15 +619,20 @@ export function useMessages(
 		[agentId, sessionId],
 	);
 
+	const currentKey =
+		agentId !== null && sessionId !== null ? `${agentId}:${sessionId}` : null;
+	const ownsConversation = currentKey !== null && loadedKey === currentKey;
+	const loading = currentKey !== null && !ownsConversation;
+
 	return {
-		msgs,
+		msgs: ownsConversation ? msgs : [],
 		loading,
-		phase,
-		error,
+		phase: ownsConversation ? phase : ('idle' as ReplyPhase),
+		error: ownsConversation ? error : null,
 		send,
 		onUserConfirm,
 		onSubagentConfirm,
-		subagentHitl,
+		subagentHitl: ownsConversation ? subagentHitl : [],
 		abort,
 		interrupt,
 	};
