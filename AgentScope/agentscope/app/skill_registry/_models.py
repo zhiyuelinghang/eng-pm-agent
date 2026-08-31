@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Models for the platform-managed skill package registry."""
 from datetime import datetime, timezone
-from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -28,7 +27,6 @@ class SkillPackageRecord(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(min_length=1, max_length=4000)
     relative_dir: str
-    source: Literal["editor", "upload"]
     content_hash: str = Field(min_length=64, max_length=64)
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -47,9 +45,7 @@ class SkillPackageView(BaseModel):
     name: str
     description: str
     markdown: str
-    source: Literal["editor", "upload"]
     assigned: bool = False
-    asset_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -60,7 +56,5 @@ class SkillPackageVersionView(BaseModel):
     version: int
     name: str
     description: str
-    source: Literal["editor", "upload"]
-    asset_count: int = 0
     created_at: datetime
     updated_at: datetime

@@ -213,11 +213,9 @@ export function ChatViewport({
 	const {
 		packages: skillPackages,
 		loading: skillsLoading,
-		uploading: skillUploading,
 		error: skillError,
 		createPackage: createSkillPackage,
 		updatePackage: updateSkillPackage,
-		uploadPackage: uploadSkillPackage,
 		removePackage: removeSkillPackage,
 		listVersions: listSkillVersions,
 		downloadVersion: downloadSkillVersion,
@@ -292,11 +290,9 @@ export function ChatViewport({
 						agent={activeAgent}
 						packages={skillPackages}
 						loading={skillsLoading}
-						uploading={skillUploading}
 						loadError={skillError}
 						onCreate={createSkillPackage}
 						onUpdate={updateSkillPackage}
-						onUpload={uploadSkillPackage}
 						onRemove={removeSkillPackage}
 						onListVersions={listSkillVersions}
 						onDownloadVersion={downloadSkillVersion}
@@ -382,11 +378,9 @@ export function ChatViewport({
 			onUpdateAgentMCPConfig,
 			skillPackages,
 			skillsLoading,
-			skillUploading,
 			skillError,
 			createSkillPackage,
 			updateSkillPackage,
-			uploadSkillPackage,
 			removeSkillPackage,
 			listSkillVersions,
 			downloadSkillVersion,

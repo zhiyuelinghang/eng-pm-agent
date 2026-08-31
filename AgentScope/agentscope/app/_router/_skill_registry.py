@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Management endpoints for platform-managed, versioned skills."""
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
@@ -92,39 +92,6 @@ async def create_skill_package(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
-    return await _current_view(manager, record)
-
-
-@skill_registry_router.post(
-    "/upload",
-    response_model=SkillPackageView,
-    status_code=status.HTTP_201_CREATED,
-)
-async def upload_skill_package(
-    file: UploadFile = File(...),
-    _user_id: str = Depends(get_current_user_id),
-    manager: SkillRegistryManager = Depends(get_skill_registry_manager),
-) -> SkillPackageView:
-    """Upload a ZIP skill package containing ``SKILL.md`` and assets."""
-    try:
-        if not (file.filename or "").lower().endswith((".zip", ".skill")):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="技能包必须是 .zip 或 .skill 文件。",
-            )
-        record = await manager.install_archive(file.file)
-    except SkillPackageConflictError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=str(exc),
-        ) from exc
-    except SkillPackageError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
-    finally:
-        await file.close()
     return await _current_view(manager, record)
 
 

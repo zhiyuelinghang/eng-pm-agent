@@ -6,7 +6,6 @@ import type { ManagedSkillInput, ManagedSkillPackage, ManagedSkillVersion } from
 export function useSkillRegistry(agentId: string | null) {
 	const [packages, setPackages] = useState<ManagedSkillPackage[]>([]);
 	const [loading, setLoading] = useState(false);
-	const [uploading, setUploading] = useState(false);
 	const [error, setError] = useState<Error | null>(null);
 
 	const refetch = useCallback(async () => {
@@ -45,20 +44,6 @@ export function useSkillRegistry(agentId: string | null) {
 		[refetch],
 	);
 
-	const uploadPackage = useCallback(
-		async (file: File) => {
-			setUploading(true);
-			setError(null);
-			try {
-				await skillRegistryApi.upload(file);
-				await refetch();
-			} finally {
-				setUploading(false);
-			}
-		},
-		[refetch],
-	);
-
 	const removePackage = useCallback(
 		async (packageId: string) => {
 			await skillRegistryApi.delete(packageId);
@@ -82,12 +67,10 @@ export function useSkillRegistry(agentId: string | null) {
 	return {
 		packages,
 		loading,
-		uploading,
 		error,
 		refetch,
 		createPackage,
 		updatePackage,
-		uploadPackage,
 		removePackage,
 		listVersions,
 		downloadVersion,

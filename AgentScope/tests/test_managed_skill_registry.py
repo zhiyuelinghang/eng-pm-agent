@@ -1,38 +1,15 @@
 # -*- coding: utf-8 -*-
 """Tests for the platform-managed skill package registry."""
-from io import BytesIO
 from pathlib import Path
-import zipfile
 
 from fastapi.testclient import TestClient
 import pytest
 
 from agentscope.app import create_app
 from agentscope.app.message_bus import InMemoryMessageBus
-from agentscope.app.skill_registry import (
-    SkillPackageConflictError,
-    SkillPackageError,
-    SkillRegistryManager,
-)
+from agentscope.app.skill_registry import SkillRegistryManager
 from agentscope.app.storage import AsyncSQLAlchemyStorage
 from agentscope.app.workspace_manager import LocalWorkspaceManager
-
-
-def _skill_archive(
-    *,
-    name: str = "risk-review",
-    description: str = "Review engineering risks.",
-    body: str = "# Steps\n\n1. Read the evidence.\n2. Report risks.",
-) -> BytesIO:
-    stream = BytesIO()
-    with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as bundle:
-        bundle.writestr(
-            "risk-review/SKILL.md",
-            f"---\nname: {name}\ndescription: {description}\n---\n\n{body}\n",
-        )
-        bundle.writestr("risk-review/references/checklist.md", "# Checklist\n")
-    stream.seek(0)
-    return stream
 
 
 @pytest.mark.asyncio
@@ -63,54 +40,6 @@ async def test_create_update_assign_and_retain_versions(tmp_path) -> None:
         assert len(skills) == 1
         assert skills[0].name == "工程风险复核"
         assert "检查措施" in skills[0].markdown
-
-
-@pytest.mark.asyncio
-async def test_upload_package_keeps_assets_and_creates_new_version(tmp_path) -> None:
-    manager = SkillRegistryManager(tmp_path / "skills")
-    async with manager:
-        first = await manager.install_archive(_skill_archive())
-        assert first.version == 1
-        first_view = (await manager.list_views())[0]
-        assert first_view.asset_count == 1
-        assert first_view.source == "upload"
-
-        second = await manager.install_archive(
-            _skill_archive(body="# Steps\n\n1. Review.\n2. Escalate."),
-        )
-        assert second.id == first.id
-        assert second.version == 2
-
-        with pytest.raises(SkillPackageConflictError):
-            await manager.install_archive(
-                _skill_archive(body="# Steps\n\n1. Review.\n2. Escalate."),
-            )
-
-
-@pytest.mark.asyncio
-async def test_upload_rejects_unsafe_or_ambiguous_packages(tmp_path) -> None:
-    manager = SkillRegistryManager(tmp_path / "skills")
-    async with manager:
-        unsafe = BytesIO()
-        with zipfile.ZipFile(unsafe, "w") as bundle:
-            bundle.writestr("../SKILL.md", "unsafe")
-        unsafe.seek(0)
-        with pytest.raises(SkillPackageError, match="不安全路径"):
-            await manager.install_archive(unsafe)
-
-        ambiguous = BytesIO()
-        with zipfile.ZipFile(ambiguous, "w") as bundle:
-            bundle.writestr(
-                "a/SKILL.md",
-                "---\nname: a\ndescription: a\n---\n\n# A\n",
-            )
-            bundle.writestr(
-                "b/SKILL.md",
-                "---\nname: b\ndescription: b\n---\n\n# B\n",
-            )
-        ambiguous.seek(0)
-        with pytest.raises(SkillPackageError, match="只能包含一个"):
-            await manager.install_archive(ambiguous)
 
 
 def test_http_create_assign_version_and_download(tmp_path) -> None:

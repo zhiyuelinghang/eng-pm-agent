@@ -1,4 +1,4 @@
-import { CircleAlert, Download, FileArchive, Loader2 } from 'lucide-react';
+import { CircleAlert, Download, FileText, Loader2 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 import type { ManagedSkillPackage, ManagedSkillVersion } from '@/api';
@@ -89,20 +89,14 @@ export function SkillVersionsDialog({
 									>
 										<div className="min-w-0">
 											<div className="flex items-center gap-2">
-												<FileArchive className="size-4 text-muted-foreground" />
+												<FileText className="size-4 text-muted-foreground" />
 												<span className="font-medium">v{item.version}</span>
 												{item.version === skill.version ? (
 													<Badge>{t('panel.skill.currentVersion')}</Badge>
 												) : null}
 											</div>
 											<p className="mt-1 truncate text-xs text-muted-foreground">
-												{new Date(item.updated_at).toLocaleString()} ·{' '}
-												{item.source === 'upload'
-													? t('panel.skill.packageSource')
-													: t('panel.skill.editorSource')}
-												{item.asset_count > 0
-													? ` · ${t('panel.skill.assets', { count: item.asset_count })}`
-													: ''}
+												{new Date(item.updated_at).toLocaleString()}
 											</p>
 										</div>
 										<Button

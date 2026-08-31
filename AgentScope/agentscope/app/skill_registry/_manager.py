@@ -8,11 +8,10 @@ import json
 import os
 import re
 import shutil
-import stat
 import uuid
 import zipfile
-from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Self
+from pathlib import Path
+from typing import Self
 
 import frontmatter
 
@@ -37,11 +36,8 @@ class SkillPackageConflictError(SkillPackageError):
 class SkillRegistryManager:
     """Own managed skill artifacts and resolve agent assignments at runtime."""
 
-    _INDEX_VERSION = 1
+    _INDEX_VERSION = 2
     _SKILL_FILE = "SKILL.md"
-    _MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
-    _MAX_UNCOMPRESSED_BYTES = 150 * 1024 * 1024
-    _MAX_FILES = 2000
     _MAX_MARKDOWN_BYTES = 2 * 1024 * 1024
 
     def __init__(self, root_dir: str | Path) -> None:
@@ -187,12 +183,7 @@ class SkillRegistryManager:
                     name=name,
                     description=description,
                     markdown=markdown,
-                    source=record.source,
                     assigned=record.id in assigned,
-                    asset_count=await asyncio.to_thread(
-                        self._asset_count,
-                        record,
-                    ),
                     created_at=record.created_at,
                     updated_at=record.updated_at,
                 ),
@@ -211,11 +202,6 @@ class SkillRegistryManager:
                     version=record.version,
                     name=record.name,
                     description=record.description,
-                    source=record.source,
-                    asset_count=await asyncio.to_thread(
-                        self._asset_count,
-                        record,
-                    ),
                     created_at=record.created_at,
                     updated_at=record.updated_at,
                 ),
@@ -246,10 +232,7 @@ class SkillRegistryManager:
                     description,
                     markdown,
                 )
-                return await self._publish_directory(
-                    package_root,
-                    source="editor",
-                )
+                return await self._publish_directory(package_root)
             finally:
                 if stage.exists():
                     await asyncio.to_thread(shutil.rmtree, stage, True)
@@ -286,33 +269,7 @@ class SkillRegistryManager:
                 )
                 return await self._publish_directory(
                     package_root,
-                    source="editor",
                     package_id=package_id,
-                )
-            finally:
-                if stage.exists():
-                    await asyncio.to_thread(shutil.rmtree, stage, True)
-
-    async def install_archive(self, archive: BinaryIO) -> SkillPackageRecord:
-        """Validate and publish a ZIP package containing one ``SKILL.md``."""
-        async with self._publish_lock:
-            stage = self.staging_dir / uuid.uuid4().hex
-            await asyncio.to_thread(stage.mkdir, parents=True, exist_ok=False)
-            try:
-                package_root = await asyncio.to_thread(
-                    self._extract_skill_package,
-                    archive,
-                    stage,
-                )
-                name, _, _ = await asyncio.to_thread(
-                    self._parse_skill_path,
-                    package_root / self._SKILL_FILE,
-                )
-                existing = await self._find_by_name(name)
-                return await self._publish_directory(
-                    package_root,
-                    source="upload",
-                    package_id=existing.id if existing is not None else None,
                 )
             finally:
                 if stage.exists():
@@ -322,7 +279,6 @@ class SkillRegistryManager:
         self,
         package_root: Path,
         *,
-        source: str,
         package_id: str | None = None,
     ) -> SkillPackageRecord:
         name, description, _ = await asyncio.to_thread(
@@ -358,7 +314,6 @@ class SkillRegistryManager:
             name=name,
             description=description,
             relative_dir=relative_dir.as_posix(),
-            source=source,
             content_hash=content_hash,
             created_at=current.created_at if current is not None else now,
             updated_at=now,
@@ -536,70 +491,6 @@ class SkillRegistryManager:
             raise SkillPackageError("SKILL.md 的 name 或 description 超过长度限制。")
         return name, description, markdown
 
-    def _extract_skill_package(self, archive: BinaryIO, stage: Path) -> Path:
-        try:
-            archive.seek(0, os.SEEK_END)
-            archive_size = archive.tell()
-            archive.seek(0)
-        except (AttributeError, OSError):
-            archive_size = 0
-        if archive_size > self._MAX_ARCHIVE_BYTES:
-            raise SkillPackageError("技能包超过 50 MB 上传限制。")
-        try:
-            with zipfile.ZipFile(archive) as bundle:
-                infos = bundle.infolist()
-                if not infos:
-                    raise SkillPackageError("技能包为空。")
-                if len(infos) > self._MAX_FILES:
-                    raise SkillPackageError("技能包文件数量超过 2000 个。")
-                if sum(item.file_size for item in infos) > self._MAX_UNCOMPRESSED_BYTES:
-                    raise SkillPackageError("技能包解压后超过 150 MB 限制。")
-                for info in infos:
-                    self._extract_member(bundle, info, stage)
-        except zipfile.BadZipFile as exc:
-            raise SkillPackageError("上传文件不是有效的 ZIP 技能包。") from exc
-        except SkillPackageError:
-            raise
-        except (OSError, RuntimeError, NotImplementedError) as exc:
-            raise SkillPackageError(f"技能包无法解压：{exc}") from exc
-
-        skill_files = [
-            path
-            for path in stage.rglob(self._SKILL_FILE)
-            if "__MACOSX" not in path.parts
-        ]
-        if len(skill_files) != 1:
-            raise SkillPackageError("技能包必须且只能包含一个 SKILL.md。")
-        self._parse_skill_path(skill_files[0])
-        return skill_files[0].parent
-
-    @staticmethod
-    def _extract_member(
-        bundle: zipfile.ZipFile,
-        info: zipfile.ZipInfo,
-        stage: Path,
-    ) -> None:
-        normalized = info.filename.replace("\\", "/")
-        member_path = PurePosixPath(normalized)
-        if (
-            member_path.is_absolute()
-            or ".." in member_path.parts
-            or "\x00" in normalized
-        ):
-            raise SkillPackageError(f"技能包包含不安全路径：{info.filename!r}")
-        unix_mode = info.external_attr >> 16
-        if stat.S_ISLNK(unix_mode):
-            raise SkillPackageError("技能包不允许包含符号链接。")
-        target = (stage / Path(*member_path.parts)).resolve()
-        if stage != target and stage not in target.parents:
-            raise SkillPackageError(f"技能包包含不安全路径：{info.filename!r}")
-        if info.is_dir():
-            target.mkdir(parents=True, exist_ok=True)
-            return
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with bundle.open(info) as source, target.open("wb") as destination:
-            shutil.copyfileobj(source, destination)
-
     def _hash_tree(self, package_root: Path) -> str:
         digest = hashlib.sha256()
         for path in sorted(item for item in package_root.rglob("*") if item.is_file()):
@@ -608,11 +499,3 @@ class SkillRegistryManager:
                 while chunk := source.read(1024 * 1024):
                     digest.update(chunk)
         return digest.hexdigest()
-
-    def _asset_count(self, record: SkillPackageRecord) -> int:
-        package_dir = self.root_dir / record.relative_dir
-        return sum(
-            1
-            for path in package_dir.rglob("*")
-            if path.is_file() and path.name != self._SKILL_FILE
-        )

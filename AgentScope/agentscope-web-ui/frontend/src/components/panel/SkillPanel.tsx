@@ -1,6 +1,5 @@
 import {
 	CircleAlert,
-	FileArchive,
 	FileX,
 	Loader2,
 	PlusCircle,
@@ -8,9 +7,8 @@ import {
 	Save,
 	Search,
 	SearchX,
-	Upload,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
 import type {
@@ -38,11 +36,9 @@ interface SkillPanelProps {
 	agent: AgentView | null;
 	packages: ManagedSkillPackage[];
 	loading?: boolean;
-	uploading?: boolean;
 	loadError?: Error | null;
 	onCreate: (input: ManagedSkillInput) => Promise<void>;
 	onUpdate: (packageId: string, input: ManagedSkillInput) => Promise<void>;
-	onUpload: (file: File) => Promise<void>;
 	onRemove: (packageId: string) => Promise<void>;
 	onListVersions: (packageId: string) => Promise<ManagedSkillVersion[]>;
 	onDownloadVersion: (packageId: string, version: number) => Promise<void>;
@@ -64,18 +60,15 @@ export function SkillPanel({
 	agent,
 	packages,
 	loading = false,
-	uploading = false,
 	loadError = null,
 	onCreate,
 	onUpdate,
-	onUpload,
 	onRemove,
 	onListVersions,
 	onDownloadVersion,
 	onSave,
 }: SkillPanelProps) {
 	const { t } = useTranslation();
-	const fileInputRef = useRef<HTMLInputElement>(null);
 	const [search, setSearch] = useState('');
 	const [draftIds, setDraftIds] = useState<string[]>(() => assignedIds(agent));
 	const [createOpen, setCreateOpen] = useState(false);
@@ -124,18 +117,6 @@ export function SkillPanel({
 		);
 	};
 
-	const handleUpload = async (file: File) => {
-		setErrorMsg('');
-		try {
-			await onUpload(file);
-			toast.success(t('panel.skill.uploaded'));
-		} catch (reason) {
-			setErrorMsg(formatApiErrorForAlert(reason));
-		} finally {
-			if (fileInputRef.current) fileInputRef.current.value = '';
-		}
-	};
-
 	const handleSave = async () => {
 		if (!agent?.editable || !isDirty) return;
 		setSubmitting(true);
@@ -152,17 +133,6 @@ export function SkillPanel({
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
-			<input
-				ref={fileInputRef}
-				type="file"
-				accept=".zip,.skill,application/zip"
-				className="hidden"
-				onChange={(event) => {
-					const file = event.target.files?.[0];
-					if (file) void handleUpload(file);
-				}}
-			/>
-
 			<div className="flex-none space-y-3 pb-3">
 				<div className="flex flex-wrap items-center justify-between gap-2">
 					<div className="flex min-w-0 items-baseline gap-1.5">
@@ -177,14 +147,6 @@ export function SkillPanel({
 						<Button size="xs" variant="outline" onClick={() => setCreateOpen(true)}>
 							<PlusCircle />
 							{t('panel.skill.create')}
-						</Button>
-						<Button
-							size="xs"
-							onClick={() => fileInputRef.current?.click()}
-							disabled={uploading}
-						>
-							{uploading ? <Loader2 className="animate-spin" /> : <Upload />}
-							{t('panel.skill.uploadPackage')}
 						</Button>
 					</div>
 				</div>
@@ -233,15 +195,7 @@ export function SkillPanel({
 									title={item.name}
 									description={item.description}
 									metadata={
-										<span className="flex items-center gap-2">
-											<FileArchive className="size-3.5" />
-											{item.source === 'upload'
-												? t('panel.skill.packageSource')
-												: t('panel.skill.editorSource')}
-											{item.asset_count > 0
-												? ` · ${t('panel.skill.assets', { count: item.asset_count })}`
-												: ''}
-										</span>
+										<span>{new Date(item.updated_at).toLocaleString()}</span>
 									}
 									badge={<Badge variant="secondary">v{item.version}</Badge>}
 									selected={checked}

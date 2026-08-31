@@ -18,12 +18,6 @@ export const skillRegistryApi = {
 			body,
 		),
 
-	upload: (file: File) => {
-		const body = new FormData();
-		body.append('file', file);
-		return client.upload<ManagedSkillPackage>('/skill-registry/upload', body);
-	},
-
 	versions: (packageId: string) =>
 		client.get<ManagedSkillVersion[]>(
 			`/skill-registry/${encodeURIComponent(packageId)}/versions`,

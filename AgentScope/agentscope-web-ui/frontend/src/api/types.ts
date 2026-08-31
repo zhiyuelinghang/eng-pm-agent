@@ -1130,17 +1130,13 @@ export interface UpdateSkillRequest {
 	markdown: string;
 }
 
-export type ManagedSkillSource = 'editor' | 'upload';
-
 export interface ManagedSkillPackage {
 	id: string;
 	version: number;
 	name: string;
 	description: string;
 	markdown: string;
-	source: ManagedSkillSource;
 	assigned: boolean;
-	asset_count: number;
 	created_at: string;
 	updated_at: string;
 }
@@ -1150,8 +1146,6 @@ export interface ManagedSkillVersion {
 	version: number;
 	name: string;
 	description: string;
-	source: ManagedSkillSource;
-	asset_count: number;
 	created_at: string;
 	updated_at: string;
 }
