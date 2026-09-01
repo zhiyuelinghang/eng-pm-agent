@@ -599,10 +599,10 @@
           <header><div><span>{{ taskTypeLabel(selectedTask.type) }} · {{ statusLabel(selectedTask.status) }}</span><h2 id="task-disposition-title">{{ selectedTask.title }}</h2><p>{{ taskCurrentOwnerName(selectedTask) }} · 截止 {{ taskCurrentStep(selectedTask)?.due_at || selectedTask.deadline }}</p></div><button type="button" aria-label="关闭任务处置" @click="closeTaskDisposition">关闭</button></header>
           <div class="task-disposition-body">
             <section class="task-disposition-ai"><span class="task-disposition-bot"><Robot :size="18" /></span><div><strong>Dobby 处置提示</strong><p>{{ selectedTaskConclusion }}</p><small>依据：{{ selectedTask.triggerReason }}</small></div></section>
-            <section class="task-disposition-flow"><div class="task-disposition-section-title"><span>任务流程</span><strong>{{ selectedTaskCompletedSteps }}/{{ selectedTask.workflowSteps.length || 1 }} 个节点已完成</strong></div><ol><li v-for="(step, index) in selectedTask.workflowSteps" :key="`${selectedTask.id}-dispose-${index}`" :class="step.status"><span>{{ index + 1 }}</span><div><strong>{{ step.name }}</strong><small>{{ step.owner || store.getMemberName(step.owner_user_id || '') || '待指定负责人' }} · {{ step.due_at || '未设置截止时间' }}</small><small v-if="step.reopened" class="task-disposition-reopen-hint">⚠ 该节点被退回，需重新提交材料</small></div><em>{{ taskStepLabel(step.status) }}</em><button v-if="selectedTask.status === 'processing' && step.status !== 'completed'" type="button" @click="store.updateTaskStep(selectedTask.id, index, 'completed')">完成节点</button></li></ol></section>
+            <section class="task-disposition-flow"><div class="task-disposition-section-title"><span>任务流程</span><strong>{{ selectedTaskCompletedSteps }}/{{ selectedTask.workflowSteps.length || 1 }} 个节点已完成</strong></div><ol><li v-for="(step, index) in selectedTask.workflowSteps" :key="`${selectedTask.id}-dispose-${index}`" :class="step.status"><span>{{ index + 1 }}</span><div><strong>{{ step.name }}</strong><small>{{ step.owner || store.getMemberName(step.owner_user_id || '') || '待指定负责人' }} · {{ step.due_at || '未设置截止时间' }}</small><small v-if="step.reopened" class="task-disposition-reopen-hint">⚠ 该节点被退回，需重新提交材料</small><p v-if="step.note" class="task-disposition-step-note">{{ step.note }}</p><div v-if="step.attachments?.length" class="task-disposition-step-files"><button v-for="attachment in step.attachments" :key="attachment" type="button" class="task-disposition-step-file" @click="downloadTaskAttachment(attachment)"><n-icon :size="14"><Paperclip /></n-icon>{{ taskAttachmentFileName(attachment) }}</button></div></div><em>{{ taskStepLabel(step.status) }}</em><button v-if="selectedTask.status === 'processing' && step.status !== 'completed'" type="button" @click="store.updateTaskStep(selectedTask.id, index, 'completed')">完成节点</button></li></ol></section>
             <section class="task-disposition-form"><div class="task-disposition-section-title"><span>回复与材料</span><strong>结果将进入任务处理记录</strong></div><textarea v-model.trim="taskDispositionReply" rows="5" placeholder="回复 Dobby，例如：已完成复核，照片符合闭环要求"></textarea><label class="task-disposition-files"><input type="file" multiple @change="handleTaskDispositionFiles"><span><Paperclip :size="16" />选择文件或图片</span><small>{{ taskDispositionFiles.length ? `已选择 ${taskDispositionFiles.length} 个文件` : '支持提交本节点的证明材料' }}</small></label><label class="task-disposition-forward"><span>转交当前节点</span><select v-model="taskDispositionForwardId"><option value="">不转交</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }} · {{ member.title }}</option></select></label></section>
           </div>
-          <footer><button type="button" class="task-disposition-history" @click="openTaskHistory(selectedTask.id)">查看处理记录</button><router-link to="/ai">发起讨论</router-link><button type="button" class="task-disposition-submit" :disabled="taskDispositionSubmitting || needsFreshEvidence" @click="submitTaskDisposition">{{ taskDispositionSubmitting ? '正在提交…' : needsFreshEvidence ? '需重新上传材料' : '回复并推进' }}</button></footer>
+          <footer><button type="button" class="task-disposition-history" @click="openTaskHistory(selectedTask.id)">查看处理记录</button><router-link to="/ai">发起讨论</router-link><button v-if="canConfirmSelectedTask" type="button" class="task-disposition-history" :disabled="taskDispositionSubmitting" @click="rejectSelectedTask">退回重做</button><button v-if="canConfirmSelectedTask" type="button" class="task-disposition-submit" :disabled="taskDispositionSubmitting" @click="acceptSelectedTask">{{ taskDispositionSubmitting ? '正在提交…' : '确认通过' }}</button><button v-else type="button" class="task-disposition-submit" :disabled="taskDispositionSubmitting || needsFreshEvidence" @click="submitTaskDisposition">{{ taskDispositionSubmitting ? '正在提交…' : needsFreshEvidence ? '需重新上传材料' : '回复并推进' }}</button></footer>
         </aside>
       </div>
       <div v-if="taskHistoryOpenId && selectedTaskHistoryTask" class="workflow-modal-backdrop" @click.self="closeTaskHistory">
@@ -1910,6 +1910,10 @@ const taskTabCounts = computed<Record<'all' | TaskStatus, number>>(() => ({
   cancelled: store.tasks.filter(task => task.status === 'cancelled').length,
 }))
 const selectedTask = computed(() => store.tasks.find(task => task.id === selectedTaskId.value))
+const canConfirmSelectedTask = computed(() => (
+  selectedTask.value?.status === 'waiting_confirm'
+  && selectedTask.value.confirmatorId === currentUserId.value
+))
 const selectedTaskCompletedSteps = computed(() => selectedTask.value?.workflowSteps.filter(step => step.status === 'completed').length ?? 0)
 const needsFreshEvidence = computed(() => {
   const step = selectedTask.value?.workflowSteps.find(item => item.status === 'processing' && item.reopened)
@@ -2217,6 +2221,67 @@ async function submitTaskDisposition() {
     message.error(error.response?.data?.detail || '任务处置提交失败，请稍后重试。')
   } finally {
     taskDispositionSubmitting.value = false
+  }
+}
+
+async function acceptSelectedTask() {
+  const task = selectedTask.value
+  if (!task) return
+  taskDispositionSubmitting.value = true
+  try {
+    await store.updateTaskStatus(
+      task.id,
+      'done',
+      taskDispositionReply.value || '确认通过',
+    )
+    message.success('任务已通过验收。')
+    closeTaskDisposition()
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '验收提交失败，请稍后重试。')
+  } finally {
+    taskDispositionSubmitting.value = false
+  }
+}
+
+async function rejectSelectedTask() {
+  const task = selectedTask.value
+  if (!task) return
+  taskDispositionSubmitting.value = true
+  try {
+    await store.updateTaskStatus(
+      task.id,
+      'processing',
+      taskDispositionReply.value || '退回重做',
+    )
+    message.success('任务已退回重做。')
+    closeTaskDisposition()
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '退回提交失败，请稍后重试。')
+  } finally {
+    taskDispositionSubmitting.value = false
+  }
+}
+
+function taskAttachmentRecord(reference: string) {
+  return store.attachments.find(item => (
+    item.id === reference || item.fileName === reference
+  ))
+}
+
+function taskAttachmentFileName(reference: string) {
+  return taskAttachmentRecord(reference)?.fileName || reference
+}
+
+async function downloadTaskAttachment(reference: string) {
+  const attachment = taskAttachmentRecord(reference)
+  if (!attachment) {
+    message.warning('未找到对应附件记录。')
+    return
+  }
+  try {
+    await store.downloadAttachment(attachment.id, attachment.fileName)
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '附件下载失败，请稍后重试。')
   }
 }
 
@@ -5276,6 +5341,9 @@ function nowStr() {
 .task-disposition-flow li div strong { display: block; overflow: hidden; color: #35534f; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .task-disposition-flow li div small { display: block; overflow: hidden; margin-top: 3px; color: #85958f; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .task-disposition-flow li div .task-disposition-reopen-hint { color: #b45309; font-size: 12px; font-weight: 700; text-overflow: clip; white-space: normal; }
+.task-disposition-step-note { margin: 6px 0 0; color: #56716b; font-size: 12px; line-height: 1.5; white-space: normal; }
+.task-disposition-step-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.task-disposition-flow li .task-disposition-step-file { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; }
 .task-disposition-flow li em { color: #738983; font-size: 12px; font-style: normal; }
 .task-disposition-flow li button { border: 1px solid #c8d9d4; border-radius: 5px; padding: 5px 7px; color: #0f766e; background: #fff; font: inherit; font-size: 12px; cursor: pointer; }
 .task-disposition-form textarea { width: 100%; min-height: 92px; box-sizing: border-box; padding: 10px; border: 1px solid #cddbd7; border-radius: 6px; color: #294844; background: #fff; font: inherit; font-size: 12px; line-height: 1.6; resize: vertical; }

@@ -109,6 +109,16 @@ def _require_in_turn(task: TaskInstance, step: Step) -> None:
         )
 
 
+def _require_step_owner(step: Step, actor: str, action: str) -> None:
+    """只允许当前节点负责人执行人工节点操作；空 actor 视为系统调用。"""
+    if not actor or step.assignee is None:
+        return
+    if actor != step.assignee.ref:
+        raise TransitionError(
+            f"只有节点负责人 {step.assignee} 可以{action}「{step.name}」",
+        )
+
+
 def complete_step(
     task: TaskInstance,
     seq: int,
@@ -127,6 +137,7 @@ def complete_step(
     if step.is_settled:
         raise TransitionError(f"节点「{step.name}」已经了结，不能重复完成")
     _require_in_turn(task, step)
+    _require_step_owner(step, actor, "完成")
 
     files = attachments or []
     if step.requires_attachment and not files:
@@ -176,6 +187,7 @@ def skip_step(
     if not step.optional:
         raise TransitionError(f"节点「{step.name}」是必经节点，不能跳过")
     _require_in_turn(task, step)
+    _require_step_owner(step, actor, "跳过")
 
     step.state = StepState.SKIPPED
     step.finished_at = now
@@ -209,6 +221,7 @@ def block_step(
     step = task.step_at(seq)
     if step.is_settled:
         raise TransitionError(f"节点「{step.name}」已经了结")
+    _require_step_owner(step, actor, "阻塞")
 
     step.state = StepState.BLOCKED
     task.log(
@@ -237,6 +250,7 @@ def unblock_step(
     step = task.step_at(seq)
     if step.state is not StepState.BLOCKED:
         raise TransitionError(f"节点「{step.name}」当前未受阻")
+    _require_step_owner(step, actor, "解除阻塞")
     step.state = StepState.ACTIVE
     task.log(
         Activity(

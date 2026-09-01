@@ -143,6 +143,52 @@ def test_validation_a_rejects_task_without_site(
     assert error.value.detail == "任务未关联工点，无法布置"
 
 
+def test_validation_b_only_current_owner_can_complete_step(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    platform_db: Session,
+    responsibility_context: tuple[Project, User, User, WbsItem],
+) -> None:
+    project, responsible, confirmer, site = responsibility_context
+    reference_engine = TaskEngine(tmp_path / "validation-b-owner.db")
+    monkeypatch.setattr(api, "get_engine", lambda: reference_engine)
+    created = api.create_task(
+        project.id,
+        _task_payload(responsible, confirmer, site),
+        platform_db,
+        responsible,
+    )["data"]
+
+    with pytest.raises(HTTPException) as error:
+        api.update_task_step(
+            created["id"],
+            0,
+            TaskStepUpdate(
+                status="completed",
+                note="非负责人尝试完成",
+                attachments=["现场照片.jpg"],
+            ),
+            platform_db,
+            confirmer,
+        )
+
+    assert error.value.status_code == 409
+    assert "只有节点负责人" in error.value.detail
+
+    completed = api.update_task_step(
+        created["id"],
+        0,
+        TaskStepUpdate(
+            status="completed",
+            note="负责人已完成",
+            attachments=["现场照片.jpg"],
+        ),
+        platform_db,
+        responsible,
+    )["data"]
+    assert completed["status"] == "pending_confirm"
+
+
 def test_validation_c_only_confirmer_can_accept(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

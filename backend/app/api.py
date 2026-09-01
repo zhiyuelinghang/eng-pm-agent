@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 import httpx
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -6175,6 +6175,26 @@ def list_attachments(project_id: int, keyword: str | None = None, db: Session = 
     if keyword: stmt = stmt.where(Attachment.file_name.contains(keyword))
     rows = db.execute(stmt.order_by(Attachment.created_at.desc())).all()
     return ok([{**serialize(attachment), "folder_id": folder_id, "attachment_preprocessing": parse_details or {"status": "pending"}} for attachment, folder_id, parse_details in rows])
+
+
+@router.get("/attachments/{attachment_id}/download")
+def download_attachment(
+    attachment_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> FileResponse:
+    """下载项目附件，并在返回文件前校验当前用户的项目成员身份。"""
+    attachment = entity_or_404(db, Attachment, attachment_id, "附件不存在")
+    project_for_user_or_403(db, attachment.project_id, user)
+    path = Path(attachment.storage_path)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="附件文件不存在")
+    return FileResponse(
+        path,
+        media_type=attachment.content_type or "application/octet-stream",
+        filename=attachment.file_name,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.patch("/attachments/{attachment_id}")

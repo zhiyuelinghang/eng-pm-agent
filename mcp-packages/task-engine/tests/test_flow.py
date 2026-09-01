@@ -93,8 +93,8 @@ class TestStepProgression:
 
     def test_all_done_enters_review(self):
         task = instantiate(make_flow(), T0)
-        for seq in range(3):
-            complete_step(task, seq, now=T0, actor="u1")
+        for seq, actor in enumerate(("u1", "u2", "u3")):
+            complete_step(task, seq, now=T0, actor=actor)
         assert task.state is TaskState.REVIEW
         assert task.current_step is None
 
@@ -441,6 +441,55 @@ class TestAccountabilityRequirements:
     def test_site_appears_in_creation_log(self):
         task = instantiate(make_flow(), T0)
         assert "3号楼" in task.activities[0].summary
+
+
+class TestStepOwnerAuthority:
+    """人工节点只能由当前负责人推进，系统调用仍可执行自动流程。"""
+
+    def test_only_owner_can_complete_current_step(self):
+        task = instantiate(make_flow(), T0)
+
+        with pytest.raises(TransitionError, match="只有节点负责人"):
+            complete_step(task, 0, now=T0, actor="u2")
+
+        complete_step(task, 0, now=T0, actor="u1")
+        assert task.steps[0].state is StepState.DONE
+
+    def test_only_owner_can_skip_optional_step(self):
+        task = instantiate(
+            make_flow(
+                steps=(
+                    StepSpec(name="可选核查", assignee=ZHANG, optional=True),
+                    StepSpec(name="复核", assignee=WANG),
+                ),
+            ),
+            T0,
+        )
+
+        with pytest.raises(TransitionError, match="只有节点负责人"):
+            skip_step(task, 0, now=T0, actor="u2")
+
+        skip_step(task, 0, now=T0, actor="u1")
+        assert task.steps[0].state is StepState.SKIPPED
+
+    def test_only_owner_can_block_and_unblock_step(self):
+        task = instantiate(make_flow(), T0)
+
+        with pytest.raises(TransitionError, match="只有节点负责人"):
+            block_step(task, 0, now=T0, actor="u2", reason="等待材料")
+
+        block_step(task, 0, now=T0, actor="u1", reason="等待材料")
+        with pytest.raises(TransitionError, match="只有节点负责人"):
+            unblock_step(task, 0, now=T0, actor="u2")
+
+        unblock_step(task, 0, now=T0, actor="u1")
+        assert task.steps[0].state is StepState.ACTIVE
+
+    def test_empty_actor_remains_a_system_call(self):
+        task = instantiate(make_flow(), T0)
+
+        complete_step(task, 0, now=T0)
+        assert task.steps[0].state is StepState.DONE
 
 
 class TestConfirmerAuthority:

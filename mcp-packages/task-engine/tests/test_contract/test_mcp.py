@@ -234,7 +234,12 @@ class TestEndToEndWorkflow:
         for seq in range(total):
             detail = session.payload("get_task", {"task_id": task["id"]})["task"]
             step = detail["steps"][seq]
-            args = {"task_id": task["id"], "seq": seq, "actor": "u1", "comment": "已处理"}
+            args = {
+                "task_id": task["id"],
+                "seq": seq,
+                "actor": step["assignee"]["ref"],
+                "comment": "已处理",
+            }
             if step["requires_attachment"]:
                 args["attachments"] = ["evidence.jpg"]
             session.payload("complete_step", args)
@@ -453,8 +458,13 @@ class TestConfirmerAuthority:
         task = session.payload("dispatch_task", {"flow_id": flow["id"]})["task"]
         for seq in range(len(task["steps"])):
             detail = session.payload("get_task", {"task_id": task["id"]})["task"]
-            args = {"task_id": task["id"], "seq": seq, "actor": "u1"}
-            if detail["steps"][seq]["requires_attachment"]:
+            step = detail["steps"][seq]
+            args = {
+                "task_id": task["id"],
+                "seq": seq,
+                "actor": step["assignee"]["ref"],
+            }
+            if step["requires_attachment"]:
                 args["attachments"] = ["proof.jpg"]
             session.payload("complete_step", args)
         return task["id"]
