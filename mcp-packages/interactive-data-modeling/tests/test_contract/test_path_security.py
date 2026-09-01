@@ -151,6 +151,7 @@ def test_public_session_artifacts_use_allowlisted_metadata(tmp_path: Path) -> No
 
 @pytest.mark.asyncio
 async def test_artifact_resource_never_returns_internal_storage_fields(tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[2]
     runtime = tmp_path / "runtime"
     source = tmp_path / "data.csv"
     pd.DataFrame({"x": [1, 2], "target": [0, 1]}).to_csv(source, index=False)
@@ -170,8 +171,9 @@ async def test_artifact_resource_never_returns_internal_storage_fields(tmp_path:
     environment["PREDICT_MCP_WORKDIR"] = str(runtime)
     parameters = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "shield_prediction_mcp.server"],
+        args=[str(project_root / "server.py")],
         env=environment,
+        cwd=str(project_root),
     )
     uri = f"predict://session/{state['session_id']}/artifact/plot1"
     async with stdio_client(parameters) as (read, write):

@@ -16,15 +16,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import joblib
 import numpy as np
 import pandas as pd
 
-from preprocessing_runtime import load_data, transform_features
-
 BASE = Path(__file__).resolve().parent
+if str(BASE) not in sys.path:
+    sys.path.insert(0, str(BASE))
+
+from preprocessing_runtime import load_data, transform_features
 
 
 def predict(input_path, output_path):

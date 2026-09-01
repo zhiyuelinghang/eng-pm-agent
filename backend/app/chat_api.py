@@ -13,10 +13,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .agentscope_client import AgentScopeGatewayError
-from .api import (
+from .agent_api_support import (
     _agentscope_client,
     _build_agent_project_context,
     _public_task_assistant_catalog_item,
+)
+from .api_common import (
     get_current_user,
     ok,
     project_for_user_or_403,

@@ -6,9 +6,11 @@ from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from backend.app.api import (
+from backend.app.agent_api_support import (
     _engineering_knowledge_message_view,
     _reset_unsafe_engineering_knowledge_session,
+)
+from backend.app.engineering_documents_api import (
     create_engineering_knowledge_conversation,
     create_engineering_knowledge_message,
     delete_engineering_knowledge_conversation,
@@ -243,7 +245,7 @@ def test_unauthorized_historical_answer_is_hidden_and_session_is_reset(
     assert view["failed"] is True
 
     with patch(
-        "backend.app.api._restricted_engineering_knowledge_ids",
+        "backend.app.agent_api_support._restricted_engineering_knowledge_ids",
         return_value={"allowed-document"},
     ):
         request_body = _reset_unsafe_engineering_knowledge_session(

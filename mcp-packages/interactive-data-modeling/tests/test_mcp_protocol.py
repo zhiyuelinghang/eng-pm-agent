@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import pytest
 from mcp import ClientSession, StdioServerParameters
@@ -10,12 +11,14 @@ from mcp.client.stdio import stdio_client
 
 @pytest.mark.asyncio
 async def test_server_lists_and_calls_tools(tmp_path) -> None:
+    project_root = Path(__file__).resolve().parents[1]
     environment = os.environ.copy()
     environment["SHIELD_MCP_WORKDIR"] = str(tmp_path / "runtime")
     parameters = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "shield_prediction_mcp.server"],
+        args=[str(project_root / "server.py")],
         env=environment,
+        cwd=str(project_root),
     )
     async with stdio_client(parameters) as (read, write):
         async with ClientSession(read, write) as session:

@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
-from backend.app.api import download_attachment
+from backend.app.engineering_documents_api import download_attachment
 from backend.app.db import Base
 from backend.app.models import Attachment, Project, ProjectMember, User
 

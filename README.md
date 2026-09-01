@@ -32,6 +32,24 @@
 `data\runtime\process-control.log`。可执行 `一键停止全部服务.bat /dry-run`
 进行只读安全检查。
 
+## 开发与验证
+
+项目统一验证入口为：
+
+```powershell
+.\test-all.bat
+```
+
+查看或选择结构、后端、AgentScope、MCP、前端和发布包冒烟套件：
+
+```powershell
+.\test-all.bat --list
+.\test-all.bat --suite structure --suite backend --suite frontend
+```
+
+代码结构、测试、前端、后端及评审约定统一收录在
+[开发规范](docs/开发规范/README.md)。
+
 ## Windows 服务器更新
 
 原有“前端更新”和“后端更新”两个压缩包不包含 AgentScope 核心、Dobby 管理端

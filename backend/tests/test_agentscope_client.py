@@ -13,7 +13,7 @@ from backend.app.agentscope_client import (
     AgentScopeGatewayError,
     AgentScopeReply,
 )
-from backend.app.api import (
+from backend.app.agent_api_support import (
     _annotate_collaboration_event,
     _agent_conversation_or_404,
     _agent_reply_extra_data,
@@ -23,14 +23,18 @@ from backend.app.api import (
     _build_agent_project_context,
     _catalog_agent_for_conversation,
     _platform_session_context,
-    _project_weknora_reference_urls,
     _project_agentscope_user_message,
     _sse_frame,
+)
+from backend.app.agent_conversations_api import (
     create_agent_conversation,
-    get_engineering_document,
     list_agent_conversations,
     list_agent_conversation_messages,
     stream_agent_conversation_tool_confirmation,
+)
+from backend.app.engineering_documents_api import (
+    _project_weknora_reference_urls,
+    get_engineering_document,
 )
 from backend.app.config import Settings
 from backend.app.models import AgentConversation
@@ -174,16 +178,23 @@ class AgentScopeClientTest(TestCase):
         user = Mock()
 
         with (
-            patch("backend.app.api.project_for_user_or_403"),
             patch(
-                "backend.app.api._ready_project_weknora_agent_id",
+                "backend.app.engineering_documents_api."
+                "project_for_user_or_403",
+            ),
+            patch(
+                "backend.app.engineering_documents_api."
+                "_ready_project_weknora_agent_id",
                 return_value="robot-1",
             ),
             patch(
-                "backend.app.api.local_file_view",
+                "backend.app.engineering_documents_api.local_file_view",
                 return_value=(Mock(), local_result),
             ),
-            patch("backend.app.api._agentscope_client", return_value=agentscope),
+            patch(
+                "backend.app.engineering_documents_api._agentscope_client",
+                return_value=agentscope,
+            ),
         ):
             response = get_engineering_document(
                 project_id=17,
@@ -388,7 +399,7 @@ class AgentScopeClientTest(TestCase):
         db, project, user = self._project_context_fixtures(None)
 
         with patch(
-            "backend.app.api.get_engine",
+            "backend.app.agent_api_support.get_engine",
             return_value=SimpleNamespace(list_tasks=Mock(return_value=[])),
         ):
             context = _build_agent_project_context(db, project, user)
@@ -402,7 +413,7 @@ class AgentScopeClientTest(TestCase):
         db, project, user = self._project_context_fixtures("robot-current")
 
         with patch(
-            "backend.app.api.get_engine",
+            "backend.app.agent_api_support.get_engine",
             return_value=SimpleNamespace(list_tasks=Mock(return_value=[])),
         ):
             context = _build_agent_project_context(db, project, user)
@@ -468,8 +479,11 @@ class AgentScopeClientTest(TestCase):
         }
 
         with (
-            patch("backend.app.api.project_for_user_or_403"),
-            patch("backend.app.api._agentscope_client", return_value=gateway),
+            patch("backend.app.agent_conversations_api.project_for_user_or_403"),
+            patch(
+                "backend.app.agent_conversations_api._agentscope_client",
+                return_value=gateway,
+            ),
         ):
             result = list_agent_conversation_messages(
                 conversation_id=7,
@@ -506,7 +520,9 @@ class AgentScopeClientTest(TestCase):
         database = Mock()
         database.scalars.return_value.all.return_value = [conversation]
         user = SimpleNamespace(id=2, role="admin")
-        with patch("backend.app.api.project_for_user_or_403"):
+        with patch(
+            "backend.app.agent_conversations_api.project_for_user_or_403",
+        ):
             result = list_agent_conversations(
                 project_id=5,
                 conversation_type="initialization",
@@ -547,10 +563,14 @@ class AgentScopeClientTest(TestCase):
 
         with (
             patch(
-                "backend.app.api.project_for_user_or_403",
+                "backend.app.agent_conversations_api."
+                "project_for_user_or_403",
                 return_value=project,
             ),
-            patch("backend.app.api._agentscope_client", return_value=gateway),
+            patch(
+                "backend.app.agent_conversations_api._agentscope_client",
+                return_value=gateway,
+            ),
         ):
             result = create_agent_conversation(
                 project_id=5,
@@ -1191,14 +1211,18 @@ class AgentScopeClientTest(TestCase):
 
         with (
             patch(
-                "backend.app.api._agent_conversation_or_404",
+                "backend.app.agent_conversations_api."
+                "_agent_conversation_or_404",
                 return_value=conversation,
             ),
             patch(
-                "backend.app.api._agentscope_client",
+                "backend.app.agent_conversations_api._agentscope_client",
                 return_value=gateway,
             ),
-            patch("backend.app.api._catalog_agent_for_conversation"),
+            patch(
+                "backend.app.agent_conversations_api."
+                "_catalog_agent_for_conversation",
+            ),
         ):
             response = stream_agent_conversation_tool_confirmation(
                 conversation_id=conversation.id,

@@ -391,7 +391,7 @@ async def async_main() -> int:
     )
     parameters = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "shield_prediction_mcp.server"],
+        args=[str(PROJECT_ROOT / "server.py")],
         env=server_environment,
         cwd=str(PROJECT_ROOT),
         encoding="utf-8",
