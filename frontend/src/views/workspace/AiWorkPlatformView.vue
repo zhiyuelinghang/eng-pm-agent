@@ -552,7 +552,7 @@
                     <p>让 Dobby 生成、选择标准模板，或手工添加第一个节点。</p>
                     <button type="button" @click="addTaskFlowStep"><n-icon :size="16"><Plus /></n-icon>添加第一个节点</button>
                   </div>
-                  <article v-for="(step, index) in taskFlowSteps" :key="step.id" class="task-flow-node-card" :class="{ active: selectedTaskFlowStepIndex === index }" @click="selectedTaskFlowStepIndex = index">
+                  <article v-for="(step, index) in taskFlowSteps" :id="`task-flow-node-${index}`" :key="step.id" class="task-flow-node-card" :class="{ active: selectedTaskFlowStepIndex === index }" tabindex="-1" @click="selectedTaskFlowStepIndex = index">
                     <header>
                       <span>{{ index + 1 }}</span>
                       <div class="task-flow-node-heading"><strong>{{ step.name || `节点 ${index + 1}` }}</strong><small>{{ taskFlowStepSummary(step) }}</small></div>
@@ -586,6 +586,18 @@
               <ul class="task-flow-validation-list">
                 <li v-for="item in taskFlowValidationItems" :key="item.key" :class="{ ok: item.ok }"><n-icon :size="17"><component :is="item.ok ? CircleCheck : AlertCircle" /></n-icon><div><strong>{{ item.label }}</strong><span>{{ item.detail }}</span></div></li>
               </ul>
+              <details v-if="taskFlowSteps.length" class="task-flow-overview" open>
+                <summary><span>流程概览</span><em>{{ taskFlowSteps.length }} 个节点</em><n-icon :size="16"><ChevronDown /></n-icon></summary>
+                <ol>
+                  <li v-for="(step, index) in taskFlowSteps" :key="`overview-${step.id}`">
+                    <button type="button" :class="{ active: selectedTaskFlowStepIndex === index }" :aria-label="`定位到第 ${index + 1} 个节点：${step.name || `节点 ${index + 1}`}`" @click="focusTaskFlowStep(index)">
+                      <span>{{ index + 1 }}</span>
+                      <div><strong>{{ step.name || `节点 ${index + 1}` }}</strong><small>{{ step.node_type === 'project_chat_message' ? '自动消息' : '人工处理' }} · {{ taskFlowStepSummary(step) }}</small></div>
+                      <n-icon :size="15"><ChevronRight /></n-icon>
+                    </button>
+                  </li>
+                </ol>
+              </details>
               <div class="task-flow-validation-note"><strong>引擎约束</strong><p>流程中存在“人工处理”节点时，任务引擎要求选择具体负责人、关联工点和确认人；全部为自动动作节点时，关联工点和确认人可以选择“无”。</p></div>
               <button type="submit" class="task-flow-submit" :disabled="!taskFlowCanSubmit">{{ taskCreateForm.run_mode === 'immediate' ? '校验并布置任务' : '校验并登记计划' }}</button>
               <button type="button" class="task-flow-back" @click="taskManagementTab = 'mine'">返回我的待办</button>
@@ -2450,6 +2462,15 @@ async function generateTaskFlowWithDobby() {
 function addTaskFlowStep() {
   taskFlowSteps.value.push(createTaskFlowStepDraft({ id: `manual-${Date.now()}`, name: `新节点 ${taskFlowSteps.value.length + 1}`, due_at: todayDateString(taskFlowSteps.value.length + 1) }))
   selectedTaskFlowStepIndex.value = taskFlowSteps.value.length - 1
+}
+
+async function focusTaskFlowStep(index: number) {
+  if (index < 0 || index >= taskFlowSteps.value.length) return
+  selectedTaskFlowStepIndex.value = index
+  await nextTick()
+  const node = document.getElementById(`task-flow-node-${index}`)
+  node?.focus({ preventScroll: true })
+  node?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 
 function handleTaskFlowStepTypeChange(step: TaskFlowStepDraft) {
@@ -5605,24 +5626,9 @@ function nowStr() {
 .task-flow-add-button { flex: 0 0 auto; border: 1px solid #bbd5cf; border-radius: 6px; padding: 8px 10px; color: #0f766e; background: #f6fbf9; font: inherit; font-size: 12px; font-weight: 750; cursor: pointer; }
 .task-flow-canvas-body { display:grid; flex:1 1 auto; min-height:0; grid-template-columns:minmax(0,1fr) minmax(190px,.42fr); gap:14px; padding-top:10px; }
 .task-flow-editor-panel { display:flex; min-width:0; min-height:0; flex-direction:column; }
-.task-flow-preview-panel { display:flex; min-width:0; min-height:0; flex-direction:column; padding-left:14px; border-left:1px solid #e1e9e7; }
-.task-flow-preview-head { display:grid; flex:0 0 auto; gap:2px; }
-.task-flow-preview-head span { color:#0f766e; font-size:12px; font-weight:850; letter-spacing:.04em; }
-.task-flow-preview-head strong { color:#173235; font-size:14px; }
-.task-flow-preview-head em { color:#76908b; font-size:12px; font-style:normal; }
-.task-flow-strip { display: flex; flex:1 1 auto; min-height:0; flex-direction:column; align-items:stretch; gap:6px; margin:10px 0 16px; padding:12px; overflow-y:auto; border: 1px solid #dfe8e6; border-radius: 9px; background: linear-gradient(180deg, #f7faf9, #fbfcfc); }
-.task-flow-node { position: relative; display: grid; flex:0 0 auto; width:100%; min-height:70px; box-sizing:border-box; align-content: center; gap: 3px; border: 1px solid #cfdedb; border-radius: 8px; padding: 11px 10px 10px 39px; color: #173235; background: #fff; text-align: left; cursor: pointer; box-shadow: 0 3px 9px rgba(23,50,53,.05); }
-.task-flow-node > span { position: absolute; top: 10px; left: 10px; display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; color: #fff; background: #7d9792; font-size: 12px; font-weight: 850; }
-.task-flow-node strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.task-flow-node em { overflow: hidden; color: #657d78; font-size: 12px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
-.task-flow-node.active { border-color: #0f766e; background: #eff9f6; box-shadow: 0 0 0 2px rgba(15,118,110,.1); }
-.task-flow-node.active > span { background: #0f766e; }
-.task-flow-arrow { flex: 0 0 auto; height:16px; color: #8da29e; font-size: 17px; line-height:16px; text-align:center; }
-.task-flow-empty { display: grid; width: 100%; min-height: 80px; place-items: center; color: #82938f; font-size: 12px; }
 .task-flow-editor-head { flex: 0 0 auto; margin: 0 0 10px; padding-top: 1px; }
 .task-flow-editor-actions { display:flex; align-items:center; gap:9px; }
 .task-flow-editor-actions .task-flow-add-button { padding:6px 9px; }
-.task-flow-node-grid { display: grid; min-height: 0; flex: 1 1 auto; grid-template-columns:repeat(auto-fill,minmax(min(260px,100%),1fr)); grid-auto-rows:max-content; align-content: start; gap: 10px; padding: 0 5px 16px 0; overflow-y: auto; }
 .task-flow-node-card { border: 1px solid #dce6e3; border-radius: 9px; padding: 12px; background: #fff; transition: border-color .16s ease, box-shadow .16s ease; }
 .task-flow-node-card.active { border-color: #8fbab2; box-shadow: 0 4px 14px rgba(15,118,110,.09); }
 .task-flow-node-card header { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-bottom: 10px; }
@@ -6662,9 +6668,6 @@ function nowStr() {
   .dobby-generator textarea { min-height: 180px; }
   .task-flow-canvas { min-height: 720px; overflow: visible; }
   .task-flow-canvas-body { grid-template-columns:1fr; }
-  .task-flow-preview-panel { padding:14px 0 0; border-top:1px solid #e1e9e7; border-left:0; }
-  .task-flow-strip { max-height:none; overflow:visible; }
-  .task-flow-node-grid { overflow: visible; }
   .task-flow-footer { padding: 10px 14px; }
   .task-flow-footer > p { display: none; }
   .workflow-modal-head { gap:12px; margin-bottom:10px; }
@@ -6762,6 +6765,7 @@ function nowStr() {
 .task-flow-node-list:hover::-webkit-scrollbar-thumb { background: #b8c8c4; }
 .task-flow-builder .task-flow-node-card { flex: 0 0 auto; border: 1px solid #dce6e3; border-radius: 8px; padding: 0; background: #fff; box-shadow: none; }
 .task-flow-builder .task-flow-node-card.active { border-color: #67a99d; box-shadow: 0 0 0 2px rgba(15, 118, 110, .08); }
+.task-flow-builder .task-flow-node-card:focus-visible { outline: 2px solid rgba(15, 118, 110, .28); outline-offset: 2px; }
 .task-flow-builder .task-flow-node-card header { display: grid; min-height: 54px; grid-template-columns: 29px minmax(0, 1fr) auto auto; align-items: center; gap: 9px; margin: 0; padding: 7px 9px; cursor: pointer; }
 .task-flow-builder .task-flow-node-card header > span { display: grid; width: 29px; height: 29px; place-items: center; border-radius: 50%; color: #fff; background: #809993; font-size: 12px; font-weight: 850; }
 .task-flow-builder .task-flow-node-card.active header > span { background: #0f766e; }
@@ -6804,6 +6808,26 @@ function nowStr() {
 .task-flow-validation-list strong,.task-flow-validation-list span { display: block; }
 .task-flow-validation-list strong { color: #36534e; font-size: 12px; }
 .task-flow-validation-list span { overflow: hidden; margin-top: 2px; color: #82918d; font-size: 12px; line-height: 1.4; text-overflow: ellipsis; }
+.task-flow-overview { min-height: 0; flex: 0 1 210px; padding-top: 9px; border-top: 1px solid #dfe7e5; }
+.task-flow-overview summary { display: grid; grid-template-columns: minmax(0, 1fr) auto 16px; align-items: center; gap: 7px; color: #36534e; cursor: pointer; list-style: none; }
+.task-flow-overview summary::-webkit-details-marker { display: none; }
+.task-flow-overview summary span { font-size: 12px; font-weight: 800; }
+.task-flow-overview summary em { color: #788b86; font-size: 12px; font-style: normal; font-weight: 600; }
+.task-flow-overview summary .n-icon { color: #718781; transition: transform .16s ease; }
+.task-flow-overview:not([open]) summary .n-icon { transform: rotate(-90deg); }
+.task-flow-overview ol { display: grid; max-height: 172px; gap: 5px; margin: 8px 0 0; padding: 1px 3px 1px 0; overflow-y: auto; list-style: none; scrollbar-color: #bdcbc7 transparent; scrollbar-width: thin; }
+.task-flow-overview li { position: relative; min-width: 0; }
+.task-flow-overview li:not(:last-child)::after { position: absolute; z-index: 0; top: 29px; bottom: -7px; left: 13px; width: 1px; background: #cbdad6; content: ''; }
+.task-flow-overview button { position: relative; z-index: 1; display: grid; width: 100%; min-width: 0; grid-template-columns: 27px minmax(0, 1fr) 16px; align-items: center; gap: 7px; border: 1px solid #dce6e3; border-radius: 7px; padding: 6px 7px; color: #48635e; background: #fff; font: inherit; text-align: left; cursor: pointer; }
+.task-flow-overview button:hover { border-color: #9cc3bb; background: #f5faf8; }
+.task-flow-overview button.active { border-color: #67a99d; color: #0f766e; background: #edf7f4; box-shadow: 0 0 0 2px rgba(15,118,110,.07); }
+.task-flow-overview button > span { display: grid; width: 27px; height: 27px; place-items: center; border-radius: 50%; color: #fff; background: #839a95; font-size: 12px; font-weight: 800; }
+.task-flow-overview button.active > span { background: #0f766e; }
+.task-flow-overview button div { min-width: 0; }
+.task-flow-overview button strong,.task-flow-overview button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-flow-overview button strong { color: #294641; font-size: 12px; }
+.task-flow-overview button small { margin-top: 2px; color: #7d8e8a; font-size: 11px; }
+.task-flow-overview button > .n-icon { color: #899995; }
 .task-flow-validation-note { flex: 0 0 auto; padding-top: 9px; border-top: 1px solid #dfe7e5; }
 .task-flow-validation-note strong { color: #395650; font-size: 12px; }
 .task-flow-validation-note p { margin: 5px 0 0; color: #788b86; font-size: 12px; line-height: 1.55; }
