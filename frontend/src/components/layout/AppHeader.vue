@@ -192,11 +192,16 @@ const dropdownTheme = {
   flex-shrink: 0;
 }
 .proj-info { display: flex; flex-direction: column; align-items: flex-start; flex: 1; min-width: 0; }
-.proj-name { font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap; line-height: 1.4; }
+.proj-name { overflow: hidden; max-width: 100%; color: var(--text-primary); font-size: 13px; font-weight: 600; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
 .proj-meta { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
 
 :global(.project-switcher-dropdown .n-dropdown-divider) {
   margin: 9px 0;
+}
+
+@media (max-width: 1100px) {
+  .global-search { width: 200px; }
+  .project-switcher { max-width: 230px; }
 }
 
 @media (max-width: 860px) {

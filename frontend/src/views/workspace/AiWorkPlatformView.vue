@@ -643,76 +643,167 @@
       </div>
     </section>
 
-    <section v-else-if="section === 'project'" class="page-stack project-page project-status-view">
-      <section class="project-kpi-strip" aria-label="项目状态指标">
+    <section v-else-if="section === 'project'" class="page-stack project-page project-status-view project-status-v2">
+      <section class="project-status-v2-summary" aria-label="项目关键数据">
         <article v-for="metric in projectStatusMetrics" :key="metric.label" :class="metric.tone">
-          <div class="project-kpi-icon"><n-icon :size="22"><component :is="metric.icon" /></n-icon></div>
+          <div class="project-status-v2-metric-icon"><n-icon :size="27"><component :is="metric.icon" /></n-icon></div>
           <div><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong><small>{{ metric.hint }}</small></div>
         </article>
       </section>
 
-      <section class="project-health-band" aria-label="项目健康度概览">
-        <article class="project-health-summary">
-          <div class="project-health-gauge" :style="{ '--health-progress': `${projectHealth.actual}%` }"><div><strong>{{ projectHealthGrade }}</strong><small>项目健康度</small></div></div>
-          <div class="project-health-copy"><span>项目健康度评估</span><p>{{ projectHealth.conclusion }}</p><small>根据进度、风险、质量和任务闭环状态综合判断。</small></div>
-        </article>
-        <dl class="project-health-data">
-          <div class="project-progress-compare"><dt>进度对比</dt><div class="progress-compare-values"><span><small>计划</small><b>{{ projectHealth.planned }}%</b></span><span><small>实际</small><b>{{ projectHealth.actual }}%</b></span></div><dd :class="projectHealth.delta >= 0 ? 'positive' : 'negative'"><small>差异</small><strong>{{ projectHealth.delta >= 0 ? '+' : '' }}{{ projectHealth.delta }}%</strong></dd></div>
-          <div><dt>任务完成率</dt><dd>{{ projectHealth.taskCompletion }}%</dd><div class="project-health-progress"><i><em :style="{ width: `${projectHealth.taskCompletion}%` }" /></i><small>已完成 {{ projectHealth.doneTasks }} / {{ projectHealth.totalTasks }}</small></div></div>
-          <div class="project-health-conclusion">
-            <div class="project-conclusion-head">
-              <dt>关键结论</dt>
-              <em>{{ projectHealthGrade }}</em>
-            </div>
-            <dd>{{ projectHealth.label }}</dd>
-            <div class="project-conclusion-points">
-              <p><b>风险</b><span>{{ projectHealth.mainRisk }}</span></p>
-              <p><b>安全</b><span>{{ projectHealth.mainSafety }}</span></p>
-              <p><b>质量</b><span>{{ projectHealth.mainQuality }}</span></p>
-            </div>
-            <div class="project-conclusion-meta">
-              <span>实际 {{ projectHealth.actual }}% · 计划 {{ projectHealth.planned }}% · 差异 {{ projectHealth.delta >= 0 ? '+' : '' }}{{ projectHealth.delta }}%</span>
-              <strong>任务闭环 {{ projectHealth.doneTasks }}/{{ projectHealth.totalTasks }}</strong>
-            </div>
-          </div>
-        </dl>
-      </section>
-
-      <nav class="project-status-tabs" aria-label="项目状态视图">
-        <button v-for="tab in projectStatusTabs" :key="tab.key" type="button" :class="{ active: projectStatusTab === tab.key }" @click="projectStatusTab = tab.key"><strong>{{ tab.label }}</strong><span>{{ tab.hint }}</span></button>
+      <nav class="project-status-tabs" aria-label="项目状态汇总视图">
+        <button
+          v-for="tab in projectStatusTabs"
+          :key="tab.key"
+          type="button"
+          :class="{ active: projectStatusTab === tab.key }"
+          :aria-selected="projectStatusTab === tab.key"
+          role="tab"
+          @click="projectStatusTab = tab.key"
+        ><strong>{{ tab.label }}</strong><span>{{ tab.hint }}</span></button>
       </nav>
 
-      <section class="project-status-content">
-        <main class="project-status-main">
-          <section v-if="projectStatusTab === 'latest'" class="status-workspace status-latest-workspace">
-            <header class="status-workspace-head"><div><span>最新动态</span><h2>项目多源信息</h2><p>汇集群消息、日报、照片、平台导出、会议纪要和工程文件；待确认信息在此完成处置。</p></div><small>{{ statusLatestItems.length }} 条</small></header>
-            <div v-if="statusLatestItems.length" class="status-latest-list"><article v-for="item in statusLatestItems" :key="item.id"><i :class="['status-event-dot', item.tone]" /><div><strong>{{ item.title }}</strong><p>{{ item.sourceType }} · {{ item.content }}</p></div><em :class="item.tone">{{ item.status }}</em><time>{{ item.time }}</time><button v-if="item.canDispose" type="button" class="status-row-action" @click="openInformationDisposition(item.recordId)">处置</button><span v-else class="status-row-placeholder" /></article></div><p v-else class="status-empty">当前还没有项目最新信息。接入群消息、日报、照片或平台导出后，将在此等待核验和处置。</p>
-          </section>
+      <main class="project-status-v2-content">
+        <section v-if="projectStatusTab === 'progress'" class="project-status-v2-stack">
+          <article class="project-status-v2-panel project-status-task-panel">
+            <header class="project-status-task-title">
+              <h2>责任任务</h2>
+              <router-link to="/tasks">查看全部任务</router-link>
+            </header>
+            <div class="project-status-task-layout">
+              <dl class="project-status-task-counts">
+                <div v-for="item in projectTaskCounts" :key="item.label" :class="item.tone"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div>
+              </dl>
+              <div class="project-status-task-table">
+                <div class="project-status-task-table-head"><span>任务名称</span><span>责任人</span><span>计划完成日期</span><span>状态</span></div>
+                <article v-for="task in projectStatusTaskPreview" :key="task.id">
+                  <strong :title="task.title">{{ task.title }}</strong>
+                  <span>{{ store.getMemberName(task.responsibleId) || '未指定' }}</span>
+                  <time>{{ projectDateLabel(task.deadline) || '未设置' }}</time>
+                  <span :class="['project-status-task-state', task.status]"><i aria-hidden="true" />{{ projectTaskStatusLabel(task.status) }}</span>
+                </article>
+                <div v-if="!projectStatusTaskPreview.length" class="project-status-task-table-empty">当前没有未完成的责任任务</div>
+              </div>
+            </div>
+          </article>
 
-          <section v-else-if="projectStatusTab === 'process'" class="status-workspace status-process-workspace">
-            <header class="status-workspace-head"><div><span>过程监管</span><h2>当前工序过程监管</h2><p>逐项核对今日进度、质量验收数据、关联风险和现场关注点。</p></div><small>{{ processSupervisionRows.length }} 项</small></header>
-            <div v-if="processSupervisionRows.length" class="process-supervision-table"><div class="process-supervision-head"><span>工序</span><span>状态</span><span>今日进度</span><span>质量验收</span><span>关联风险</span><span>关注点</span></div><article v-for="item in processSupervisionRows" :key="item.id"><div><small>{{ item.code }}</small><strong>{{ item.name }}</strong></div><div class="process-progress"><b>{{ item.progressStatus }}</b><i><em :style="{ width: `${item.progress}%` }" /></i><small>{{ item.progress }}% · 昨日：{{ item.yesterday }}</small></div><div>{{ item.today }}</div><div>{{ item.quality }}</div><div :class="['process-risk', item.riskTone]">{{ item.risk }}</div><div>{{ item.focus }}</div></article></div><p v-else class="status-empty">尚未维护 WBS 工序。可在“工程配置 → 人工配置”中补充项目工序。</p>
-          </section>
-
-          <section v-else-if="projectStatusTab === 'execution'" class="status-workspace status-execution-workspace">
-            <header class="status-workspace-head"><div><span>任务执行</span><h2>项目任务执行状态</h2><p>聚焦项目任务的当前阶段、关联 WBS 或风险、负责人和计划闭环节点。</p></div><small>{{ projectExecutionTasks.length }} 项</small></header>
-            <div v-if="projectExecutionTasks.length" class="status-execution-table"><div class="status-execution-head"><span>状态</span><span>任务标题</span><span>关联 WBS / 风险</span><span>负责人</span><span>计划完成</span><span>闭环阶段</span></div><article v-for="task in projectExecutionTasks" :key="task.id"><div><span :class="['execution-status', task.status]">{{ projectTaskStatusLabel(task.status) }}</span></div><div><strong>{{ task.title }}</strong><small>{{ taskPhaseLabel(task) }} · 所需材料：{{ taskMaterialLabel(task) }}</small></div><div>{{ taskRelationLabel(task) }}</div><div>{{ store.getMemberName(task.responsibleId) }}</div><div><strong :class="{ overdue: task.status === 'overdue' }">{{ task.deadline }}</strong><small>{{ task.status === 'overdue' ? '已逾期，需优先处理' : task.triggerReason || '按计划推进' }}</small></div><div><span :class="['closure-status', taskClosureTone(task)]">{{ taskClosureLabel(task) }}</span></div></article></div><p v-else class="status-empty">当前没有项目任务。</p>
-          </section>
-
-          <section v-else class="status-workspace status-change-workspace">
-            <header class="status-workspace-head"><div><span>工程变更</span><h2>工程变更记录</h2><p>保留项目已记录变更及其对应的证据文件，便于快速追溯。</p></div><small>{{ store.projectChanges.length }} 条</small></header>
-            <div v-if="store.projectChanges.length" class="status-change-list"><article v-for="item in store.projectChanges" :key="item.id"><div><span>{{ item.category }}</span><strong>{{ item.title }}</strong><p>{{ item.content }}</p></div><em>{{ item.source_refs?.join('、') || '未关联证据' }}</em><time>{{ statusTimeLabel(item.created_at) }}</time></article></div><p v-else class="status-empty">当前没有工程变更记录。</p>
-          </section>
-        </main>
-      </section>
-
-      <div v-if="informationDispositionOpen && selectedInformationRecord" class="workflow-modal-backdrop" @click.self="closeInformationDisposition">
-        <section class="workflow-modal information-disposition-modal" role="dialog" aria-modal="true" aria-labelledby="information-disposition-title">
-          <div class="workflow-modal-head"><div><h2 id="information-disposition-title">信息处置</h2></div><button type="button" class="modal-close" aria-label="关闭信息处置窗口" @click="closeInformationDisposition">关闭</button></div>
-          <div class="information-disposition-content"><strong>{{ selectedInformationRecord.sourceName }}</strong><div class="information-disposition-meta"><span>{{ selectedInformationRecord.sourceType }}</span><span>{{ selectedInformationRecord.status }}</span><span>置信度 {{ selectedInformationRecord.confidence }}</span><span>{{ selectedInformationRecord.author || '来源待补充' }}</span></div><p>{{ selectedInformationRecord.content }}</p><label class="form-field">修订信息<textarea v-model.trim="informationRevision" placeholder="修订信息，例如：S3测斜位移需以监测单位原始记录为准"></textarea></label></div>
-          <div class="workflow-modal-actions"><button type="button" class="modal-secondary" @click="disposeInformation('confirm')">确认</button><button type="button" class="modal-secondary" @click="disposeInformation('deny')">否认</button><button type="button" class="modal-primary" :disabled="!informationRevision" @click="disposeInformation('revise')">修订</button></div>
+          <article class="project-status-v2-panel project-status-wbs-panel">
+            <header class="project-status-wbs-title">
+              <h2>工序进度 <small>{{ projectStatusWbsTotal }} 项</small></h2>
+            </header>
+            <div class="project-status-v2-table project-status-wbs-table">
+              <div class="project-status-v2-table-head"><span>工序编码</span><span>工序名称</span><span>状态</span><span>进度</span><span>计划完成日期</span></div>
+              <article v-for="item in projectStatusWbsRows" :key="item.id">
+                <span>{{ item.code || '—' }}</span>
+                <strong>{{ item.name }}</strong>
+                <span :class="['project-status-state', item.status]">{{ item.statusText || wbsStatusLabel(item.status) }}</span>
+                <div class="project-status-progress"><b>{{ Math.round(item.progress) }}%</b><i><em :style="{ width: `${item.progress}%` }" /></i></div>
+                <time>{{ projectDateLabel(item.planEnd) || '未设置' }}</time>
+              </article>
+              <div v-if="!projectStatusWbsRows.length" class="project-status-wbs-empty"><strong>尚未配置 WBS</strong><router-link to="/settings">前往工程配置</router-link></div>
+            </div>
+          </article>
         </section>
-      </div>
+
+        <section v-else-if="projectStatusTab === 'riskQuality'" class="project-status-v2-stack">
+          <article class="project-status-v2-panel">
+            <header class="project-status-v2-panel-head">
+              <div><span>风险源</span><h2>风险源配置汇总</h2><p>展示工程配置页面已维护的风险等级、工序和管控窗口，不推断风险是否触发。</p></div>
+              <router-link class="project-status-v2-link" to="/settings">维护风险源 <ChevronRight :size="15" /></router-link>
+            </header>
+            <div v-if="projectStatusRiskRows.length" class="project-status-v2-table project-status-risk-table">
+              <div class="project-status-v2-table-head"><span>风险等级</span><span>风险源</span><span>关联工序</span><span>管控窗口</span><span>责任人</span></div>
+              <article v-for="risk in projectStatusRiskRows" :key="risk.id">
+                <span :class="['project-status-risk-level', risk.level]">{{ risk.levelText || riskLabel(risk.level) }}</span>
+                <strong>{{ risk.name }}</strong>
+                <span>{{ risk.relatedProcessName || '未填写' }}</span>
+                <time>{{ projectDateRange(risk.controlStart, risk.controlEnd) }}</time>
+                <span>{{ store.getMemberName(risk.responsibleId) || '未指定' }}</span>
+              </article>
+            </div>
+            <div v-else class="project-status-v2-empty"><strong>风险源尚未维护</strong><p>这里不显示“无风险”，只说明工程配置中还没有风险源记录。</p><router-link to="/settings">前往工程配置</router-link></div>
+          </article>
+
+          <article class="project-status-v2-panel">
+            <header class="project-status-v2-panel-head">
+              <div><span>质量要求</span><h2>质量检查要求汇总</h2><p>展示已配置的检查项、控制指标和检查频次，不作为质量问题统计。</p></div>
+              <router-link class="project-status-v2-link" to="/settings">维护质量要求 <ChevronRight :size="15" /></router-link>
+            </header>
+            <div v-if="projectStatusQualityRows.length" class="project-status-v2-table project-status-quality-table">
+              <div class="project-status-v2-table-head"><span>关联 WBS</span><span>检查项</span><span>控制指标</span><span>检查频次</span><span>责任人</span></div>
+              <article v-for="item in projectStatusQualityRows" :key="item.id">
+                <span>{{ projectQualityWbsLabel(item) }}</span>
+                <strong>{{ item.name || '未命名检查项' }}</strong>
+                <span>{{ item.controlIndicator || item.requirement || '未填写' }}</span>
+                <span>{{ item.inspectionFrequency || '未填写' }}</span>
+                <span>{{ store.getMemberName(item.ownerId || '') || '未指定' }}</span>
+              </article>
+            </div>
+            <div v-else class="project-status-v2-empty"><strong>质量要求尚未配置</strong><p>工程配置中新增质量要求后会自动出现在这里。</p><router-link to="/settings">前往工程配置</router-link></div>
+          </article>
+        </section>
+
+        <section v-else-if="projectStatusTab === 'documents'" class="project-status-v2-stack">
+          <article class="project-status-v2-panel project-status-documents-panel">
+            <header class="project-status-v2-panel-head">
+              <div><span>工程资料</span><h2>资料目录概览</h2><p>{{ projectDocumentSummary.caption }}</p></div>
+              <router-link class="project-status-v2-link" to="/docs">查看工程资料 <ChevronRight :size="15" /></router-link>
+            </header>
+            <dl class="project-status-document-kpis">
+              <div><dt>资料文件</dt><dd><strong>{{ projectDocumentSummary.totalFiles }}</strong><span>份</span></dd></div>
+              <div><dt>资料目录</dt><dd><strong>{{ projectDocumentSummary.folderCount }}</strong><span>个</span></dd></div>
+              <div><dt>资料库</dt><dd><strong>{{ projectDocumentSummary.knowledgeBaseCount }}</strong><span>个</span></dd></div>
+            </dl>
+            <div v-if="projectDocumentKnowledgeBases.length" class="project-status-document-grid">
+              <section class="project-status-document-block">
+                <header><h3>资料库构成</h3><span>{{ projectDocumentSummary.knowledgeBaseCount }} 个资料库</span></header>
+                <div class="project-status-document-table">
+                  <div class="project-status-document-table-head"><span>资料库</span><span>目录</span><span>文件</span></div>
+                  <article v-for="item in projectDocumentKnowledgeBases" :key="item.id">
+                    <strong :title="item.name">{{ item.name }}</strong><span>{{ item.folderCount }} 个</span><span>{{ item.totalDocumentCount }} 份</span>
+                  </article>
+                </div>
+              </section>
+              <section class="project-status-document-block">
+                <header><h3>最近新增资料</h3><span>最近 {{ projectDocumentRecentFiles.length }} 份</span></header>
+                <div v-if="projectDocumentRecentFiles.length" class="project-status-document-recent">
+                  <article v-for="item in projectDocumentRecentFiles" :key="`${item.knowledgeBaseId}:${item.id}`">
+                    <div>
+                      <strong :title="item.name">{{ item.name }}</strong>
+                      <small :title="`${item.knowledgeBaseName} / ${item.folderPath || '资料库根目录'}`">{{ projectDocumentTypeLabel(item.fileType, item.name) }} · {{ projectDocumentFileSizeLabel(item.fileSize) }} · {{ projectDocumentFolderLabel(item.folderPath) }}</small>
+                    </div>
+                    <time>{{ projectDateLabel(item.createdAt) || '日期未记录' }}</time>
+                  </article>
+                </div>
+                <div v-else class="project-status-document-recent-empty">暂无可展示的最近新增资料</div>
+              </section>
+            </div>
+            <div v-else class="project-status-v2-empty"><strong>尚无可汇总的资料目录</strong><p>{{ projectDocumentSummary.emptyHint }}</p><router-link to="/docs">前往工程资料</router-link></div>
+          </article>
+        </section>
+
+        <section v-else class="project-status-v2-stack">
+          <article class="project-status-v2-panel">
+            <header class="project-status-v2-panel-head">
+              <div><span>项目基础信息</span><h2>已维护字段</h2><p>项目名称已在右上角项目选择器展示，此处不再重复。</p></div>
+              <router-link class="project-status-v2-link" to="/settings">编辑项目信息 <ChevronRight :size="15" /></router-link>
+            </header>
+            <dl class="project-status-base-grid"><div v-for="item in projectBaseInfoRows" :key="item.label"><dt>{{ item.label }}</dt><dd :class="{ missing: !item.present }">{{ item.value }}</dd></div></dl>
+          </article>
+
+          <article class="project-status-v2-panel">
+            <header class="project-status-v2-panel-head">
+              <div><span>项目成员</span><h2>成员与岗位</h2><p>汇总工程配置中已加入当前项目的成员。</p></div>
+              <router-link class="project-status-v2-link" to="/settings">维护成员 <ChevronRight :size="15" /></router-link>
+            </header>
+            <div v-if="projectStatusMemberRows.length" class="project-status-v2-table project-status-member-table">
+              <div class="project-status-v2-table-head"><span>成员</span><span>岗位</span><span>职责</span></div>
+              <article v-for="member in projectStatusMemberRows" :key="member.id"><strong>{{ member.name }}</strong><span>{{ member.title || '未配置岗位' }}</span><span>{{ member.role.join('、') || '未填写职责' }}</span></article>
+            </div>
+            <div v-else class="project-status-v2-empty"><strong>尚未配置项目成员</strong><p>项目成员及岗位配置后会自动汇总到这里。</p><router-link to="/settings">前往工程配置</router-link></div>
+          </article>
+        </section>
+      </main>
     </section>
 
     <section v-else class="page-stack docs-page">
@@ -892,7 +983,7 @@ import {
   type AgentToolCallBlock,
   type ApiAgentMessage,
 } from '@/types/agentRuntime'
-import type { DraftStatus, FillStatus, Member, RiskLevel, Task, TaskStatus } from '@/types'
+import type { DraftStatus, FillStatus, Member, QualityMetric, RiskLevel, Task, TaskStatus } from '@/types'
 
 type ChatMessage = {
   id: string
@@ -990,8 +1081,7 @@ type GeneratedTaskFlow = {
   generation_note: string
 }
 
-type ProjectStatusTab = 'latest' | 'process' | 'execution' | 'changes'
-type ProjectStatusEvent = { id: string; recordId: string; tone: 'teal' | 'orange' | 'red' | 'blue'; sourceType: string; status: string; confidence: string; title: string; content: string; time: string; canDispose: boolean }
+type ProjectStatusTab = 'progress' | 'riskQuality' | 'documents' | 'overview'
 
 const route = useRoute()
 const store = useAppStore()
@@ -1008,104 +1098,86 @@ const section = computed(() => {
 
 const currentProject = computed(() => store.currentProject)
 const currentUserId = computed(() => sessionStorage.getItem('current_user_id') || store.members[0]?.id || '')
-const projectProgress = computed(() => {
-  if (!store.wbsItems.length) return 0
-  return Math.round(store.wbsItems.reduce((sum, item) => sum + item.progress, 0) / store.wbsItems.length)
-})
 const focusTasks = computed(() => store.tasks.filter(task => ['overdue', 'pending', 'processing', 'waiting_confirm'].includes(task.status)))
-const importantWbs = computed(() => store.wbsItems.filter(item => item.level <= 2).slice(0, 5))
-const activeWbs = computed(() => store.wbsItems.find(item => item.status === 'in_progress' && item.level > 1) ?? store.wbsItems.find(item => item.status === 'in_progress') ?? importantWbs.value[0])
-const criticalRisks = computed(() => store.riskSources.filter(risk => risk.level === 'critical' || risk.level === 'high'))
-const projectStatusTab = ref<ProjectStatusTab>('latest')
+const projectStatusTab = ref<ProjectStatusTab>('progress')
 const projectStatusTabs: Array<{ key: ProjectStatusTab; label: string; hint: string }> = [
-  { key: 'latest', label: '最新信息', hint: '采集记录与处理' },
-  { key: 'process', label: '过程监管', hint: '工序、质量与风险' },
-  { key: 'execution', label: '任务执行', hint: '阶段、材料与闭环' },
-  { key: 'changes', label: '工程变更', hint: '变更留痕' },
+  { key: 'progress', label: '进度与任务', hint: 'WBS 与责任任务' },
+  { key: 'riskQuality', label: '风险与质量', hint: '风险源与质量要求' },
+  { key: 'documents', label: '工程资料', hint: '目录与最近资料' },
+  { key: 'overview', label: '项目概况', hint: '基础信息与成员' },
 ]
-const actualProgress = computed(() => store.dashboard?.progress_rate ?? projectProgress.value)
-const plannedProgress = computed(() => {
-  const planned = store.wbsItems.filter(item => item.planStart && item.planEnd).map(item => {
-    const start = Date.parse(item.planStart)
-    const end = Date.parse(item.planEnd)
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return item.progress
-    return Math.max(0, Math.min(100, Math.round(((Date.now() - start) / (end - start)) * 100)))
-  })
-  return planned.length ? Math.round(planned.reduce((sum, value) => sum + value, 0) / planned.length) : actualProgress.value
+const projectResponsibilityTasks = computed(() => {
+  const rank: Record<TaskStatus, number> = { overdue: 0, need_more_info: 1, pending: 2, processing: 3, waiting_confirm: 4, done: 5, cancelled: 6 }
+  return store.tasks
+    .filter(task => task.type !== 'automation' && !['done', 'cancelled'].includes(task.status))
+    .slice()
+    .sort((left, right) => (rank[left.status] ?? 9) - (rank[right.status] ?? 9) || (left.deadline || '9999').localeCompare(right.deadline || '9999'))
 })
-const projectHealth = computed(() => {
-  const totalTasks = store.tasks.length
-  const doneTasks = store.tasks.filter(task => task.status === 'done').length
-  const taskCompletion = store.dashboard?.task_completion_rate ?? (totalTasks ? Math.round((doneTasks / totalTasks) * 100) : 0)
-  const delta = actualProgress.value - plannedProgress.value
-  const needsAttention = store.tasks.some(task => task.status === 'overdue') || criticalRisks.value.some(risk => risk.level === 'critical')
-  const label = store.dashboard?.overall || (needsAttention ? '需重点跟进' : criticalRisks.value.length ? '风险可控' : '整体平稳')
-  const safetyIssues = store.dashboard?.safety_issues ?? 0
-  const qualityIssues = store.dashboard?.quality_issues ?? store.qualityMetrics.filter(item => item.status === 'failed').length
-  const mainRisk = store.dashboard?.main_risk || criticalRisks.value[0]?.name || '暂无新增风险预警'
-  const mainSafety = store.dashboard?.main_safety || (safetyIssues ? `有 ${safetyIssues} 项安全事项待核查` : '暂无新增安全隐患')
-  const mainQuality = store.dashboard?.main_quality || (qualityIssues ? `有 ${qualityIssues} 项质量事项待复核` : '暂无待复核质量问题')
-  const conclusion = criticalRisks.value.length
-    ? `重点关注 ${criticalRisks.value.slice(0, 2).map(item => item.name).join('、')}。`
-    : focusTasks.value.length
-      ? `当前有 ${focusTasks.value.length} 项待办需要持续推进。`
-      : '暂无未闭环的重点事项。'
+const projectStatusTaskPreview = computed(() => projectResponsibilityTasks.value.slice(0, 2))
+const projectTaskCounts = computed(() => {
+  const overview = store.projectStatusOverview?.tasks
+  const counts = overview || {
+    total: projectResponsibilityTasks.value.length,
+    pending: projectResponsibilityTasks.value.filter(task => ['pending', 'need_more_info'].includes(task.status)).length,
+    processing: projectResponsibilityTasks.value.filter(task => task.status === 'processing').length,
+    waitingConfirm: projectResponsibilityTasks.value.filter(task => task.status === 'waiting_confirm').length,
+    overdue: projectResponsibilityTasks.value.filter(task => task.status === 'overdue').length,
+  }
+  return [
+    { label: '待处理', value: counts.pending, tone: 'pending' },
+    { label: '进行中', value: counts.processing, tone: 'processing' },
+    { label: '待确认', value: counts.waitingConfirm, tone: 'waiting' },
+    { label: '已逾期', value: counts.overdue, tone: counts.overdue ? 'overdue' : 'quiet' },
+  ]
+})
+const projectStatusWbsRows = computed(() => store.wbsItems.slice().sort((left, right) => left.code.localeCompare(right.code, 'zh-CN')).slice(0, 8))
+const projectStatusWbsTotal = computed(() => store.projectStatusOverview?.wbs.totalItems ?? store.wbsItems.length)
+const projectStatusRiskRows = computed(() => store.riskSources.slice().sort((left, right) => (left.serialNo || 0) - (right.serialNo || 0)).slice(0, 8))
+const projectStatusQualityRows = computed(() => store.qualityMetrics.slice(0, 8))
+const projectStatusMemberRows = computed(() => store.members.slice(0, 10))
+
+const projectDocumentSummary = computed(() => {
+  const documents = store.projectStatusOverview?.documents
+  if (!documents) return { caption: '正在读取工程资料汇总。', emptyHint: '资料目录数据正在加载。', totalFiles: '—', folderCount: '—', knowledgeBaseCount: '—' }
   return {
-    label,
-    planned: plannedProgress.value,
-    actual: actualProgress.value,
-    delta,
-    taskCompletion,
-    doneTasks,
-    totalTasks,
-    conclusion,
-    mainRisk,
-    mainSafety,
-    mainQuality,
+    caption: '汇总工程资料页中的资料库、目录和最近新增文件。',
+    emptyHint: '工程资料页当前还没有可汇总的资料库。',
+    totalFiles: documents.totalFiles,
+    folderCount: documents.folderCount,
+    knowledgeBaseCount: documents.knowledgeBaseCount,
   }
 })
-const projectHealthGrade = computed(() => {
-  if (criticalRisks.value.some(item => item.level === 'critical') || store.tasks.some(task => task.status === 'overdue')) return '关注'
-  if (criticalRisks.value.length || (store.dashboard?.safety_issues ?? 0) || (store.dashboard?.quality_issues ?? 0)) return '可控'
-  return '良好'
+const projectDocumentKnowledgeBases = computed(() => store.projectStatusOverview?.documents.knowledgeBases || [])
+const projectDocumentRecentFiles = computed(() => store.projectStatusOverview?.documents.recentFiles || [])
+const projectBaseInfoRows = computed(() => {
+  const project = currentProject.value
+  const amount = project?.contractAmountWanYuan
+  const duration = project?.contractDurationDays
+  return [
+    projectBaseInfoRow('工程类型', project?.engineeringTypeDescription),
+    projectBaseInfoRow('合同开工日期', projectDateLabel(project?.contractStartDate)),
+    projectBaseInfoRow('合同竣工日期', projectDateLabel(project?.contractEndDate)),
+    projectBaseInfoRow('合同工期', duration == null ? '' : `${duration} 天`),
+    projectBaseInfoRow('合同金额', amount == null ? '' : `${amount.toLocaleString('zh-CN')} 万元`),
+    projectBaseInfoRow('建设单位', project?.constructionUnitName),
+    projectBaseInfoRow('施工总承包单位', project?.generalContractorUnitName),
+    projectBaseInfoRow('监理单位', project?.supervisionUnitName),
+    projectBaseInfoRow('设计单位', project?.designUnitName),
+    projectBaseInfoRow('勘察单位', project?.surveyUnitName),
+  ]
 })
-const projectStatusMetrics = computed(() => [
-  { label: '进度完成率', value: `${actualProgress.value}%`, hint: `计划 ${plannedProgress.value}%`, icon: ChartBar, tone: actualProgress.value >= plannedProgress.value ? 'teal' : 'orange' },
-  { label: '风险预警数', value: store.dashboard?.risk_warnings ?? criticalRisks.value.length, hint: criticalRisks.value.length ? '当前存在重点风险' : '当前无重点风险', icon: Pin, tone: criticalRisks.value.length ? 'orange' : 'teal' },
-  { label: '安全隐患数', value: store.dashboard?.safety_issues ?? 0, hint: (store.dashboard?.safety_issues ?? 0) ? '待核查安全事项' : '暂无新增安全隐患', icon: UserPlus, tone: (store.dashboard?.safety_issues ?? 0) ? 'orange' : 'teal' },
-  { label: '质量问题数', value: store.dashboard?.quality_issues ?? store.qualityMetrics.filter(item => item.status === 'failed').length, hint: (store.dashboard?.quality_issues ?? 0) ? '待复核质量事项' : '暂无待复核质量问题', icon: Notes, tone: (store.dashboard?.quality_issues ?? 0) ? 'orange' : 'teal' },
-  { label: '待办任务数', value: focusTasks.value.length, hint: focusTasks.value.length ? '未完成事项' : '暂无待办事项', icon: ListCheck, tone: focusTasks.value.length ? 'blue' : 'teal' },
-  { label: '逾期任务', value: store.tasks.filter(task => task.status === 'overdue').length, hint: store.tasks.some(task => task.status === 'overdue') ? '需要优先处置' : '当前无逾期任务', icon: CalendarEvent, tone: store.tasks.some(task => task.status === 'overdue') ? 'red' : 'teal' },
-])
-const statusLatestItems = computed<ProjectStatusEvent[]>(() => {
-  const records = store.informationRecords || []
-  return records.map(item => ({
-    id: `information-${item.id}`,
-    recordId: item.id,
-    tone: item.status === '待确认' || item.status === '待复核' ? 'orange' : item.status === '已否认' ? 'red' : item.sourceType === '平台导出' ? 'blue' : 'teal',
-    sourceType: item.sourceType,
-    status: item.status,
-    confidence: item.confidence,
-    title: item.sourceName,
-    content: item.content,
-    time: item.recordedAt,
-    canDispose: item.status === '待确认' || item.status === '待复核',
-  }))
-})
-const processSupervisionRows = computed(() => store.wbsItems.slice().sort((a, b) => a.code.localeCompare(b.code, 'zh-CN')).slice(0, 12).map(item => {
-  const metric = store.qualityMetrics.find(candidate => candidate.wbsId === item.id)
-  const link = store.wbsRiskLinks.find(candidate => candidate.wbsId === item.id)
-  const risk = link ? store.riskSources.find(candidate => candidate.id === link.riskId) : undefined
-  const task = store.tasks.find(candidate => candidate.linkedWbsIds.includes(item.id) && candidate.status !== 'done')
-  const supervision = item.supervision
-  const quality = supervision?.quality || (metric ? `${metric.name}：${metric.requirement || qualityStatusLabel(metric.status)}` : '暂未配置质量验收数据')
-  const riskText = supervision?.risk || (risk ? `${riskLabel(risk.level)}风险：${risk.name}${risk.controlMeasures ? `；${risk.controlMeasures}` : ''}` : '暂无关联风险数据')
-  const key = supervision?.key ?? (Boolean(risk && ['critical', 'high'].includes(risk.level)) || task?.status === 'overdue' || item.status === 'delayed')
-  return { id: item.id, code: item.code, name: item.name, progress: item.progress, yesterday: supervision?.yesterday || (item.actualStart ? `已于 ${item.actualStart} 开工，累计完成 ${item.progress}%` : '暂无昨日日报记录'), today: supervision?.today || (item.status === 'in_progress' ? `按计划推进，当前累计完成 ${item.progress}%` : item.status === 'done' ? '工序已完成，等待资料归档或复核' : item.status === 'delayed' ? '当前进度滞后，需核对计划与处置措施' : '尚未启动，待满足开工条件'), quality, risk: riskText, focus: supervision?.focus || task?.title || '暂无待办事项', riskTone: risk?.level || (item.status === 'delayed' ? 'high' : 'low'), progressStatus: item.status === 'delayed' ? '滞后' : item.status === 'done' ? '已完成' : item.status === 'in_progress' ? '正常' : '待启动', key }
-}))
-const projectExecutionTasks = computed(() => {
-  const rank: Record<string, number> = { overdue: 0, need_more_info: 1, pending: 2, processing: 3, waiting_confirm: 4, done: 5, cancelled: 6 }
-  return store.tasks.slice().sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || a.deadline.localeCompare(b.deadline)).slice(0, 20)
+const projectStatusMetrics = computed(() => {
+  const overview = store.projectStatusOverview
+  const documents = projectDocumentSummary.value
+  const wbsValue = !overview ? '—' : overview.wbs.configured && overview.wbs.progressRate != null ? `${overview.wbs.progressRate}%` : '未配置'
+  const riskValue = !overview ? '—' : overview.risks.configured ? overview.risks.highLevelCount : '未维护'
+  return [
+    { label: '基础信息', value: overview ? `${overview.baseInfo.completedFields} / ${overview.baseInfo.totalFields}` : '—', hint: '已录入字段', icon: FileText, tone: 'teal' },
+    { label: '工序进度', value: wbsValue, hint: '叶子工序平均', icon: ChartBar, tone: 'teal' },
+    { label: '项目任务', value: overview?.tasks.total ?? projectResponsibilityTasks.value.length, hint: '责任任务', icon: ListCheck, tone: 'teal' },
+    { label: '高等级风险源', value: riskValue, hint: '重大级、高风险', icon: AlertCircle, tone: 'orange' },
+    { label: '工程资料', value: documents.totalFiles, hint: '目录内文件', icon: Folder, tone: 'teal' },
+  ]
 })
 
 const myAttentionTasks = computed(() =>
@@ -1655,10 +1727,6 @@ const taskHistoryKeyword = ref('')
 const taskHistoryStatus = ref<'all' | TaskStatus>('all')
 const taskHistoryStart = ref('')
 const taskHistoryEnd = ref('')
-const informationDispositionOpen = ref(false)
-const selectedInformationRecordId = ref('')
-const informationRevision = ref('')
-const selectedInformationRecord = computed(() => (store.informationRecords || []).find(item => item.id === selectedInformationRecordId.value))
 const taskHistoryOpenId = ref('')
 type TaskHistoryEntry = { id: string | number; kind?: string; step_seq?: number | null; from_status?: string; to_status?: string; note?: string; created_at: string }
 const taskHistories = ref<Record<string, TaskHistoryEntry[]>>({})
@@ -2320,30 +2388,6 @@ async function openTaskHistory(taskId: string) {
 function closeTaskHistory() {
   taskHistoryOpenId.value = ''
 }
-function openInformationDisposition(recordId: string) {
-  selectedInformationRecordId.value = recordId
-  informationRevision.value = selectedInformationRecord.value?.content || ''
-  informationDispositionOpen.value = true
-}
-
-function closeInformationDisposition() {
-  informationDispositionOpen.value = false
-  selectedInformationRecordId.value = ''
-  informationRevision.value = ''
-}
-
-async function disposeInformation(action: 'confirm' | 'deny' | 'revise') {
-  const record = selectedInformationRecord.value
-  if (!record || (action === 'revise' && !informationRevision.value.trim())) return
-  try {
-    await store.disposeInformationRecord(record.id, action, action === 'revise' ? informationRevision.value.trim() : undefined)
-    message.success(action === 'confirm' ? '信息已确认' : action === 'deny' ? '信息已否认' : '信息已修订')
-    closeInformationDisposition()
-  } catch (error: any) {
-    message.error(error.response?.data?.detail || '信息处置失败，请检查服务连接后重试。')
-  }
-}
-
 function todayDateString(offsetDays = 0) {
   const value = new Date()
   value.setDate(value.getDate() + offsetDays)
@@ -2684,6 +2728,49 @@ const recentDocuments = computed(() => [
   ...store.riskDrafts.map(item => ({ type: '草稿', name: item.title, desc: item.hazardType, state: draftStatusLabel(item.status) })),
   ...store.fillPackages.map(item => ({ type: '填报', name: item.processName, desc: item.platformName, state: fillStatusLabel(item.status) })),
 ].slice(0, 6))
+
+function projectBaseInfoRow(label: string, rawValue?: string | null) {
+  const value = String(rawValue || '').trim()
+  return { label, value: value || '未填写', present: Boolean(value) }
+}
+
+function projectDateLabel(value?: string | null) {
+  if (!value) return ''
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return value
+  const date = new Date(timestamp)
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+}
+
+function projectDocumentTypeLabel(fileType: string, fileName: string) {
+  const extension = fileName.includes('.') ? fileName.split('.').pop() || '' : ''
+  const normalized = (fileType || extension).trim().replace(/^\./, '').split('/').pop() || ''
+  return normalized ? normalized.toUpperCase() : '文件'
+}
+
+function projectDocumentFileSizeLabel(fileSize: number) {
+  return fileSize > 0 ? formatFileSize(fileSize) : '大小未记录'
+}
+
+function projectDocumentFolderLabel(folderPath: string) {
+  const segments = folderPath.replace(/\\/g, '/').split('/').map(item => item.trim()).filter(Boolean)
+  return segments.length ? segments[segments.length - 1] : '资料库根目录'
+}
+
+function projectDateRange(start?: string | null, end?: string | null) {
+  const startLabel = projectDateLabel(start)
+  const endLabel = projectDateLabel(end)
+  if (startLabel && endLabel) return `${startLabel} 至 ${endLabel}`
+  if (startLabel) return `${startLabel} 起`
+  if (endLabel) return `截至 ${endLabel}`
+  return '未填写'
+}
+
+function projectQualityWbsLabel(item: QualityMetric) {
+  const code = item.wbsCode || (item.wbsId ? store.getWbsName(item.wbsId) : '')
+  return [code, item.wbsName].filter(Boolean).join(' · ') || '未关联'
+}
 
 function riskLabel(level: RiskLevel) {
   return ({ critical: '重大', high: '高', medium: '中', low: '低' } as Record<RiskLevel, string>)[level]

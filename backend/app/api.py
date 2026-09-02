@@ -29,6 +29,11 @@ from .api_common import (
 from .config import get_settings
 from .connector_secrets import encrypt_connector_secret
 from .db import get_db
+from .engineering_document_catalog import (
+    local_folder_tree_view,
+    local_knowledge_page,
+    local_workspace_view,
+)
 from .initialization_draft_queries import (
     compose_initialization_draft_payload,
     initialization_draft_workflow_summary,
@@ -709,6 +714,213 @@ def refresh_project_notifications(project_id: int, db: Session) -> None:
         exists = db.scalar(select(Notification).where(Notification.project_id == project_id, Notification.source_type == "daily_report", Notification.source_id == report.id, Notification.notification_type == "daily_confirm"))
         if not exists: db.add(Notification(project_id=project_id, notification_type="daily_confirm", title="日报待确认", content=report.file_name, priority="normal", source_type="daily_report", source_id=report.id))
     db.commit()
+
+
+PROJECT_STATUS_BASE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("name", "项目名称"),
+    ("engineering_type_description", "工程类型"),
+    ("contract_start_date", "合同开工日期"),
+    ("contract_end_date", "合同竣工日期"),
+    ("contract_duration_days", "合同工期"),
+    ("contract_amount_wan_yuan", "合同金额"),
+    ("construction_unit_name", "建设单位"),
+    ("general_contractor_unit_name", "施工总承包单位"),
+    ("supervision_unit_name", "监理单位"),
+    ("design_unit_name", "设计单位"),
+    ("survey_unit_name", "勘察单位"),
+)
+
+PROJECT_STATUS_HIGH_RISK_LEVELS = {
+    "critical",
+    "high",
+    "重大",
+    "重大风险",
+    "较大",
+    "较大风险",
+    "一级",
+    "二级",
+}
+
+
+def _project_status_value_present(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def _project_status_folder_count(folders: list[dict[str, Any]] | None) -> int:
+    return sum(
+        1 + _project_status_folder_count(folder.get("children") or [])
+        for folder in folders or []
+    )
+
+
+@router.get("/projects/{project_id}/status-overview")
+def project_status_overview(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """汇总项目现有页面已经维护的数据，不生成新的业务判断。"""
+    project = project_for_user_or_403(db, project_id, user)
+
+    missing_fields = [
+        label
+        for field, label in PROJECT_STATUS_BASE_FIELDS
+        if not _project_status_value_present(getattr(project, field))
+    ]
+    completed_fields = len(PROJECT_STATUS_BASE_FIELDS) - len(missing_fields)
+
+    wbs_rows = list(
+        db.scalars(
+            select(WbsItem)
+            .where(WbsItem.project_id == project_id)
+            .order_by(WbsItem.sort_order, WbsItem.id),
+        ).all(),
+    )
+    parent_ids = {row.parent_id for row in wbs_rows if row.parent_id is not None}
+    leaf_rows = [row for row in wbs_rows if row.id not in parent_ids]
+    progress_rate = (
+        round(
+            sum(float(row.progress_percent or 0) for row in leaf_rows)
+            / len(leaf_rows),
+        )
+        if leaf_rows
+        else None
+    )
+
+    task_counts = {
+        "pending": 0,
+        "processing": 0,
+        "waiting_confirm": 0,
+        "overdue": 0,
+    }
+    for task in get_engine().list_tasks(limit=500):
+        if _to_int((task.scope or {}).get("project_id")) != project_id:
+            continue
+        row = to_api_task(task)
+        if row["task_type"] == "automation":
+            continue
+        if row["status"] in {"done", "completed", "cancelled"}:
+            continue
+        status_value = row["status"]
+        if status_value == "pending_confirm":
+            status_value = "waiting_confirm"
+        elif status_value == "need_more_info":
+            status_value = "pending"
+        if status_value in task_counts:
+            task_counts[status_value] += 1
+
+    risks = list(
+        db.scalars(
+            select(RiskSource)
+            .where(RiskSource.project_id == project_id)
+            .order_by(RiskSource.serial_no, RiskSource.id),
+        ).all(),
+    )
+    high_risk_count = sum(
+        1
+        for risk in risks
+        if risk.risk_level.strip().lower() in PROJECT_STATUS_HIGH_RISK_LEVELS
+    )
+    quality_requirements = list(
+        db.scalars(
+            select(QualityMetric).where(QualityMetric.project_id == project_id),
+        ).all(),
+    )
+
+    workspace = local_workspace_view(db, project_id, user)
+    document_total = 0
+    document_folder_count = 0
+    knowledge_bases: list[dict[str, Any]] = []
+    recent_files: list[dict[str, Any]] = []
+    for knowledge_base in workspace["knowledge_bases"]:
+        folder_tree = local_folder_tree_view(
+            db,
+            project_id,
+            knowledge_base["id"],
+            user,
+        )
+        total_document_count = int(folder_tree.get("total_document_count") or 0)
+        folder_count = _project_status_folder_count(folder_tree.get("folders"))
+        document_total += total_document_count
+        document_folder_count += folder_count
+        knowledge_bases.append({
+            "id": knowledge_base["id"],
+            "name": knowledge_base["name"],
+            "folder_count": folder_count,
+            "total_document_count": total_document_count,
+        })
+        knowledge_page = local_knowledge_page(
+            db,
+            project_id,
+            knowledge_base["id"],
+            user,
+            page=1,
+            page_size=5,
+            folder_path=None,
+            folder_recursive=True,
+            keyword="",
+        )
+        recent_files.extend({
+            "id": str(file_row.get("id") or file_row.get("node_id") or ""),
+            "name": file_row.get("file_name") or file_row.get("title") or "未命名资料",
+            "file_type": file_row.get("file_type") or "",
+            "file_size": int(file_row.get("file_size") or 0),
+            "folder_path": file_row.get("folder_path") or "",
+            "created_at": file_row.get("created_at"),
+            "knowledge_base_id": knowledge_base["id"],
+            "knowledge_base_name": knowledge_base["name"],
+        } for file_row in knowledge_page["knowledge"])
+    recent_files.sort(
+        key=lambda file_row: str(file_row.get("created_at") or ""),
+        reverse=True,
+    )
+    member_count = int(
+        db.scalar(
+            select(func.count(ProjectMember.id)).where(
+                ProjectMember.project_id == project_id,
+            ),
+        )
+        or 0,
+    )
+
+    return ok({
+        "base_info": {
+            "completed_fields": completed_fields,
+            "total_fields": len(PROJECT_STATUS_BASE_FIELDS),
+            "missing_fields": missing_fields,
+        },
+        "wbs": {
+            "configured": bool(wbs_rows),
+            "total_items": len(wbs_rows),
+            "leaf_items": len(leaf_rows),
+            "progress_rate": progress_rate,
+        },
+        "tasks": {
+            "total": sum(task_counts.values()),
+            **task_counts,
+        },
+        "risks": {
+            "configured": bool(risks),
+            "total": len(risks),
+            "high_level_count": high_risk_count,
+        },
+        "quality": {
+            "configured": bool(quality_requirements),
+            "total": len(quality_requirements),
+        },
+        "documents": {
+            "total_files": document_total,
+            "folder_count": document_folder_count,
+            "knowledge_base_count": len(knowledge_bases),
+            "knowledge_bases": knowledge_bases,
+            "recent_files": recent_files[:5],
+        },
+        "members": {"total": member_count},
+    })
 
 
 @router.get("/projects/{project_id}/dashboard")

@@ -147,6 +147,59 @@ type ApiLog = { id: number; created_at: string; action: string; detail: string; 
 type ApiProjectSettings = { project_id: number; main_dir?: string; archive_dir?: string; temp_dir?: string; failed_dir?: string; backup_dir?: string; scan_interval?: number; enabled?: boolean; reminder_rules?: Array<{ id?: string; level: RemindRule['level']; days: number; enabled: boolean; frequency?: string }>; weknora_agent_id?: string | null }
 export type EngineeringDocumentCapabilities = { can_read: boolean; can_create: boolean; can_update: boolean; can_delete: boolean; can_manage: boolean }
 export type EngineeringDocumentSyncState = { status: 'uninitialized' | 'pending' | 'syncing' | 'ready' | 'error'; access_mode: 'project' | 'restricted'; revision: number; last_started_at?: string | null; last_completed_at?: string | null; last_error?: string | null }
+type ApiProjectStatusOverview = {
+  base_info: { completed_fields: number; total_fields: number; missing_fields: string[] }
+  wbs: {
+    configured: boolean
+    total_items: number
+    leaf_items: number
+    progress_rate: number | null
+  }
+  tasks: { total: number; pending: number; processing: number; waiting_confirm: number; overdue: number }
+  risks: { configured: boolean; total: number; high_level_count: number }
+  quality: { configured: boolean; total: number }
+  documents: {
+    total_files: number
+    folder_count?: number
+    knowledge_base_count: number
+    knowledge_bases: Array<{ id: string; name: string; folder_count?: number; total_document_count: number }>
+    recent_files?: Array<{
+      id: string
+      name: string
+      file_type: string
+      file_size: number
+      folder_path: string
+      created_at?: string | null
+      knowledge_base_id: string
+      knowledge_base_name: string
+    }>
+  }
+  members: { total: number }
+}
+export type ProjectStatusOverview = {
+  baseInfo: { completedFields: number; totalFields: number; missingFields: string[] }
+  wbs: { configured: boolean; totalItems: number; leafItems: number; progressRate: number | null }
+  tasks: { total: number; pending: number; processing: number; waitingConfirm: number; overdue: number }
+  risks: { configured: boolean; total: number; highLevelCount: number }
+  quality: { configured: boolean; total: number }
+  documents: {
+    totalFiles: number
+    folderCount: number
+    knowledgeBaseCount: number
+    knowledgeBases: Array<{ id: string; name: string; folderCount: number; totalDocumentCount: number }>
+    recentFiles: Array<{
+      id: string
+      name: string
+      fileType: string
+      fileSize: number
+      folderPath: string
+      createdAt?: string | null
+      knowledgeBaseId: string
+      knowledgeBaseName: string
+    }>
+  }
+  members: { total: number }
+}
 type ApiWeKnoraKnowledgeBase = { id: string; name: string; description?: string; created_at?: string | null; updated_at?: string | null; capabilities?: EngineeringDocumentCapabilities }
 type ApiWeKnoraWorkspace = { project_id: number; project_name: string; weknora_configured: boolean; weknora_agent_id: string; knowledge_bases: ApiWeKnoraKnowledgeBase[]; total: number; sync?: EngineeringDocumentSyncState }
 type ApiWeKnoraFolder = { path: string; name: string; document_count?: number; total_count?: number; children?: ApiWeKnoraFolder[]; capabilities?: EngineeringDocumentCapabilities }
@@ -218,7 +271,6 @@ export type EngineeringKnowledgeMessageRecord = {
   failed?: boolean
   created_at: string
 }
-type ProjectDashboard = { progress_rate: number; progress_status?: string; planned_delta?: string; risk_warnings: number; safety_issues: number; quality_issues: number; task_completion_rate: number; open_changes: number; unread_notifications: number; main_risk: string; main_safety?: string; main_quality: string; overall?: string }
 type ProjectChangeRecord = { id: number; category: string; title: string; content: string; status: string; source_refs: string[]; created_at: string }
 type ApiInformationRecord = { id: number; project_id: number; source_type: string; source_name: string; author?: string; recorded_at: string; status: string; confidence: string; content: string; source_refs: string[] }
 type NotificationRecord = { id: number; notification_type: string; title: string; content: string; priority: string; is_read: boolean; created_at: string }
@@ -374,7 +426,7 @@ export const useAppStore = defineStore('app', () => {
   const engineeringDocumentsError = ref('')
   const logs = ref<OperationLog[]>([])
   const projectSettings = ref<ApiProjectSettings | null>(null)
-  const dashboard = ref<ProjectDashboard | null>(null)
+  const projectStatusOverview = ref<ProjectStatusOverview | null>(null)
   const projectChanges = ref<ProjectChangeRecord[]>([])
   const notifications = ref<NotificationRecord[]>([])
   const loading = ref(false)
@@ -523,6 +575,56 @@ export const useAppStore = defineStore('app', () => {
   function mapLog(row: ApiLog): OperationLog { return { id: id(row.id), time: row.created_at, operator: row.operator_id ? getMemberName(id(row.operator_id)) : '系统', action: row.action, detail: row.detail, level: 'info' } }
   function mapAttachment(row: ApiAttachment): AttachmentRecord { return { id: id(row.id), projectId: id(row.project_id), fileName: row.file_name, category: row.category, version: row.version, fileSize: row.file_size, contentType: row.content_type || '', createdAt: row.created_at, folderId: id(row.folder_id) || undefined, snippet: row.snippet } }
   function mapDocumentFolder(row: ApiDocumentFolder): DocumentFolderRecord { return { id: id(row.id), projectId: id(row.project_id), parentId: id(row.parent_id) || undefined, name: row.name, createdAt: row.created_at } }
+  function mapProjectStatusOverview(row: ApiProjectStatusOverview): ProjectStatusOverview {
+    return {
+      baseInfo: {
+        completedFields: row.base_info.completed_fields,
+        totalFields: row.base_info.total_fields,
+        missingFields: row.base_info.missing_fields,
+      },
+      wbs: {
+        configured: row.wbs.configured,
+        totalItems: row.wbs.total_items,
+        leafItems: row.wbs.leaf_items,
+        progressRate: row.wbs.progress_rate,
+      },
+      tasks: {
+        total: row.tasks.total,
+        pending: row.tasks.pending,
+        processing: row.tasks.processing,
+        waitingConfirm: row.tasks.waiting_confirm,
+        overdue: row.tasks.overdue,
+      },
+      risks: {
+        configured: row.risks.configured,
+        total: row.risks.total,
+        highLevelCount: row.risks.high_level_count,
+      },
+      quality: row.quality,
+      documents: {
+        totalFiles: row.documents.total_files,
+        folderCount: row.documents.folder_count ?? 0,
+        knowledgeBaseCount: row.documents.knowledge_base_count,
+        knowledgeBases: row.documents.knowledge_bases.map(item => ({
+          id: item.id,
+          name: item.name,
+          folderCount: item.folder_count ?? 0,
+          totalDocumentCount: item.total_document_count,
+        })),
+        recentFiles: (row.documents.recent_files || []).map(item => ({
+          id: item.id,
+          name: item.name,
+          fileType: item.file_type,
+          fileSize: item.file_size,
+          folderPath: item.folder_path,
+          createdAt: item.created_at,
+          knowledgeBaseId: item.knowledge_base_id,
+          knowledgeBaseName: item.knowledge_base_name,
+        })),
+      },
+      members: row.members,
+    }
+  }
   function normalizeWeKnoraFolderPath(value?: string | null) {
     return (value || '').replace(/\\/g, '/').split('/').map(segment => segment.trim()).filter(Boolean).join('/')
   }
@@ -828,13 +930,13 @@ export const useAppStore = defineStore('app', () => {
     if (!projectId) return
     const previousSettingsProjectId = id(projectSettings.value?.project_id)
     const previousWeKnoraAgentId = projectSettings.value?.weknora_agent_id || ''
-    const [memberResult, wbsResult, riskResult, qualityResult, mappingResult, linkResult, taskResult, archiveTaskResult, dailyResult, informationResult, draftResult, fillResult, logResult, settingsResult, dashboardResult, changesResult, notificationsResult] = await Promise.all([
-      api.get<ApiEnvelope<ApiMember[]>>(`/projects/${projectId}/members`), api.get<ApiEnvelope<ApiWbs[]>>(`/projects/${projectId}/wbs`), api.get<ApiEnvelope<ApiRisk[]>>(`/projects/${projectId}/risks`), api.get<ApiEnvelope<ApiQualityMetric[]>>(`/projects/${projectId}/quality-metrics`), api.get<ApiEnvelope<ApiPlatformMapping[]>>(`/projects/${projectId}/platform-field-mappings`), api.get<ApiEnvelope<ApiLink[]>>(`/projects/${projectId}/wbs-risk-links`), api.get<ApiEnvelope<ApiTask[]>>(`/projects/${projectId}/tasks`), api.get<ApiEnvelope<ApiTask[]>>(`/projects/${projectId}/tasks/archive`), api.get<ApiEnvelope<ApiDaily[]>>(`/projects/${projectId}/daily-reports`), api.get<ApiEnvelope<ApiInformationRecord[]>>(`/projects/${projectId}/information-records`), api.get<ApiEnvelope<ApiDraft[]>>(`/projects/${projectId}/risk-drafts`), api.get<ApiEnvelope<ApiFill[]>>(`/projects/${projectId}/fill-packages`), api.get<ApiEnvelope<ApiLog[]>>(`/projects/${projectId}/operation-logs`), api.get<ApiEnvelope<ApiProjectSettings>>(`/projects/${projectId}/settings`), api.get<ApiEnvelope<ProjectDashboard>>(`/projects/${projectId}/dashboard`), api.get<ApiEnvelope<ProjectChangeRecord[]>>(`/projects/${projectId}/changes`), api.get<ApiEnvelope<NotificationRecord[]>>(`/projects/${projectId}/notifications`),
+    const [memberResult, wbsResult, riskResult, qualityResult, mappingResult, linkResult, taskResult, archiveTaskResult, dailyResult, informationResult, draftResult, fillResult, logResult, settingsResult, statusOverviewResult, changesResult, notificationsResult] = await Promise.all([
+      api.get<ApiEnvelope<ApiMember[]>>(`/projects/${projectId}/members`), api.get<ApiEnvelope<ApiWbs[]>>(`/projects/${projectId}/wbs`), api.get<ApiEnvelope<ApiRisk[]>>(`/projects/${projectId}/risks`), api.get<ApiEnvelope<ApiQualityMetric[]>>(`/projects/${projectId}/quality-metrics`), api.get<ApiEnvelope<ApiPlatformMapping[]>>(`/projects/${projectId}/platform-field-mappings`), api.get<ApiEnvelope<ApiLink[]>>(`/projects/${projectId}/wbs-risk-links`), api.get<ApiEnvelope<ApiTask[]>>(`/projects/${projectId}/tasks`), api.get<ApiEnvelope<ApiTask[]>>(`/projects/${projectId}/tasks/archive`), api.get<ApiEnvelope<ApiDaily[]>>(`/projects/${projectId}/daily-reports`), api.get<ApiEnvelope<ApiInformationRecord[]>>(`/projects/${projectId}/information-records`), api.get<ApiEnvelope<ApiDraft[]>>(`/projects/${projectId}/risk-drafts`), api.get<ApiEnvelope<ApiFill[]>>(`/projects/${projectId}/fill-packages`), api.get<ApiEnvelope<ApiLog[]>>(`/projects/${projectId}/operation-logs`), api.get<ApiEnvelope<ApiProjectSettings>>(`/projects/${projectId}/settings`), api.get<ApiEnvelope<ApiProjectStatusOverview>>(`/projects/${projectId}/status-overview`), api.get<ApiEnvelope<ProjectChangeRecord[]>>(`/projects/${projectId}/changes`), api.get<ApiEnvelope<NotificationRecord[]>>(`/projects/${projectId}/notifications`),
     ])
     allMembers.value = memberResult.data.data.map(mapMember); allWbsItems.value = wbsResult.data.data.map(mapWbs); allRiskSources.value = riskResult.data.data.map(mapRisk); allQualityMetrics.value = qualityResult.data.data.map(row => mapQualityMetric(row, allWbsItems.value)); allPlatformMappings.value = mappingResult.data.data.map(mapPlatformMapping)
     allWbsRiskLinks.value = linkResult.data.data.map(link => ({ id: id(link.id), wbsId: id(link.wbs_item_id), riskId: id(link.risk_source_id), alertDays: link.alert_days, notifyMethods: link.notify_methods, basis: link.basis }))
     const activeTasks = taskResult.data.data.map(mapTask).filter(task => !['done', 'cancelled'].includes(task.status))
-    allTasks.value = [...activeTasks, ...archiveTaskResult.data.data.map(mapTask)]; allDailyReports.value = dailyResult.data.data.map(mapDaily); informationRecords.value = informationResult.data.data.map(mapInformationRecord); allRiskDrafts.value = draftResult.data.data.map(mapDraft); allFillPackages.value = fillResult.data.data.map(mapFill); logs.value = logResult.data.data.map(mapLog); projectSettings.value = settingsResult.data.data; dashboard.value = dashboardResult.data.data; projectChanges.value = changesResult.data.data; notifications.value = notificationsResult.data.data
+    allTasks.value = [...activeTasks, ...archiveTaskResult.data.data.map(mapTask)]; allDailyReports.value = dailyResult.data.data.map(mapDaily); informationRecords.value = informationResult.data.data.map(mapInformationRecord); allRiskDrafts.value = draftResult.data.data.map(mapDraft); allFillPackages.value = fillResult.data.data.map(mapFill); logs.value = logResult.data.data.map(mapLog); projectSettings.value = settingsResult.data.data; projectStatusOverview.value = mapProjectStatusOverview(statusOverviewResult.data.data); projectChanges.value = changesResult.data.data; notifications.value = notificationsResult.data.data
     const nextWeKnoraAgentId = settingsResult.data.data.weknora_agent_id || ''
     if (nextWeKnoraAgentId) {
       try {
@@ -935,6 +1037,7 @@ export const useAppStore = defineStore('app', () => {
   function resetSession() {
     projects.value = []
     currentProjectId.value = ''
+    projectStatusOverview.value = null
     attachments.value = []
     documentFolders.value = []
     weknoraKnowledgeBases.value = []
@@ -1485,5 +1588,5 @@ export const useAppStore = defineStore('app', () => {
   async function removeWbsRiskLink(linkId: string) { await api.delete(`/wbs-risk-links/${linkId}`); await loadProjectData() }
   function addLog(log: OperationLog) { if (!currentProjectId.value) return; void api.post(`/projects/${currentProjectId.value}/operation-logs`, { action: log.action, detail: log.detail }).then(() => loadProjectData()) }
 
-  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, weknoraKnowledgeBases, engineeringDocumentSync, engineeringDocumentsLoading, engineeringDocumentFolderLoading, engineeringDocumentsError, remindRules, dirConfig, logs, dashboard, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, updateProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, loadEngineeringDocumentAccess, updateEngineeringDocumentAccessMode, saveEngineeringDocumentPermission, deleteEngineeringDocumentPermission, uploadAttachment, updateAttachmentCategory, createDocumentFolder, updateDocumentFolder, deleteDocumentFolder, moveEngineeringDocuments, getEngineeringDocument, deleteEngineeringDocument, searchDocuments, createEngineeringDocumentSession, stopEngineeringDocumentAnswer, askEngineeringDocuments, loadEngineeringKnowledgeConversations, createEngineeringKnowledgeConversation, loadEngineeringKnowledgeMessages, updateEngineeringKnowledgeConversation, appendEngineeringKnowledgeMessage, deleteEngineeringKnowledgeConversation, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, loadEngineeringDocuments, loadEngineeringDocumentFolder, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, downloadAttachment, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
+  return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, weknoraKnowledgeBases, engineeringDocumentSync, engineeringDocumentsLoading, engineeringDocumentFolderLoading, engineeringDocumentsError, remindRules, dirConfig, logs, projectStatusOverview, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, updateProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, loadEngineeringDocumentAccess, updateEngineeringDocumentAccessMode, saveEngineeringDocumentPermission, deleteEngineeringDocumentPermission, uploadAttachment, updateAttachmentCategory, createDocumentFolder, updateDocumentFolder, deleteDocumentFolder, moveEngineeringDocuments, getEngineeringDocument, deleteEngineeringDocument, searchDocuments, createEngineeringDocumentSession, stopEngineeringDocumentAnswer, askEngineeringDocuments, loadEngineeringKnowledgeConversations, createEngineeringKnowledgeConversation, loadEngineeringKnowledgeMessages, updateEngineeringKnowledgeConversation, appendEngineeringKnowledgeMessage, deleteEngineeringKnowledgeConversation, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, loadEngineeringDocuments, loadEngineeringDocumentFolder, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, downloadAttachment, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
 })
