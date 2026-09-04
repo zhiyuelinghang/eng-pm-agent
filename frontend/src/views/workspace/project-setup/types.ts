@@ -1,6 +1,24 @@
 import type { AgentRuntimeTrace } from '@/types/agentRuntime'
 import type { Member, WbsItem } from '@/types'
 
+export const PROJECT_POSITION_OPTIONS = [
+  { name: '项目经理', code: 'role_pm', category: '决策与总体管理' },
+  { name: '项目常务副经理', code: 'role_deputy_pm', category: '决策与总体管理' },
+  { name: '项目商务副经理', code: 'role_biz', category: '决策与总体管理' },
+  { name: '项目总工', code: 'role_chief_eng', category: '技术与方案' },
+  { name: '项目技术员', code: 'role_tech', category: '技术与方案' },
+  { name: '安全员', code: 'role_safety', category: '安全' },
+  { name: '质量员', code: 'role_qa', category: '质量与试验' },
+  { name: '施工员', code: 'role_site', category: '现场施工组织' },
+  { name: '劳务员', code: 'role_labor', category: '专业职能支持' },
+  { name: '材料员', code: 'role_material', category: '专业职能支持' },
+  { name: '机械员', code: 'role_mech', category: '专业职能支持' },
+  { name: '测量员', code: 'role_survey', category: '专业职能支持' },
+  { name: '资料员', code: 'role_doc', category: '专业职能支持' },
+  { name: '标准员', code: 'role_std', category: '专业职能支持' },
+  { name: '取样员', code: 'role_sample', category: '质量与试验' },
+] as const
+
 export type ProjectConnectorKey = 'wecom' | 'feishu' | 'dingtalk'
 export type WorkspaceTab = 'agent' | 'manual'
 export type ManualSection =
@@ -65,6 +83,8 @@ export type ApiAgentConversation = {
   title: string
   agentscope_session_id?: string | null
   status: string
+  created_at: string
+  updated_at: string
 }
 
 export type ApiInitializationFile = {

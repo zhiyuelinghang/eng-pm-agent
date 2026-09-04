@@ -19,11 +19,20 @@ from agentscope.app.storage._model._platform_settings import (
 from agentscope.credential import CustomOpenAICredential
 from agentscope.event import ReplyEndEvent, ReplyStartEvent
 from agentscope.message import AssistantMsg, SystemMsg, UserMsg
-from utils import langgraph_utils
+from utils import decay_curves, langgraph_utils
+from utils.context_trigger import classify
 from utils.memory_manager import MemoryManager
 
 
 class MemoryScopeTest(TestCase):
+    def test_unrelated_turns_never_force_memory_retrieval(self) -> None:
+        state: dict[str, object] = {}
+
+        modes = [classify("你好", state) for _ in range(10)]
+
+        self.assertEqual(modes, ["minimal"] * 10)
+        self.assertEqual(state, {})
+
     def test_project_resources_are_shared_but_personal_memory_is_isolated(self) -> None:
         runtime = MemoryRuntime(tenant_id="tenant-a")
 
@@ -288,6 +297,26 @@ class MemoryManagerScopeTest(IsolatedAsyncioTestCase):
 
         manager._search_knowledge.assert_not_awaited()
 
+    async def test_default_context_waits_for_model_directed_retrieval(self) -> None:
+        manager = MemoryManager(project_id="project_7", role_id="agent-a")
+        manager._search_memory = AsyncMock(return_value=[])
+        manager._search_knowledge = AsyncMock(return_value=[])
+        manager._search_graph_rag = AsyncMock(return_value={})
+
+        with patch(
+            "utils.memory_manager.SkillRegistry.render_injection",
+            new=AsyncMock(return_value=""),
+        ):
+            assembly = await manager.assemble_context(
+                self._empty_state(),
+                "请说一下项目进度",
+            )
+
+        self.assertEqual(assembly.mode_used, "minimal")
+        manager._search_memory.assert_not_awaited()
+        manager._search_knowledge.assert_not_awaited()
+        manager._search_graph_rag.assert_not_awaited()
+
     async def test_minimal_context_can_skip_legacy_knowledge_hints(self) -> None:
         manager = MemoryManager(project_id="project_7", role_id="agent-a")
         manager._auto_hinter.get_hints = AsyncMock(
@@ -436,6 +465,32 @@ class MemoryManagerScopeTest(IsolatedAsyncioTestCase):
             self.assertEqual(call.kwargs["agent_id"], target.agent_id)
 
 
+class DecayCurveAsyncDatabaseTest(IsolatedAsyncioTestCase):
+    async def test_user_activity_database_work_is_offloaded(self) -> None:
+        connection = MagicMock()
+
+        async def run_inline(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        with (
+            patch.object(
+                decay_curves,
+                "_get_db_conn",
+                return_value=connection,
+            ),
+            patch.object(
+                decay_curves.asyncio,
+                "to_thread",
+                new=AsyncMock(side_effect=run_inline),
+            ) as to_thread,
+        ):
+            await decay_curves.record_user_activity("project_7")
+
+        to_thread.assert_awaited_once()
+        connection.execute.assert_called_once()
+        connection.close.assert_called_once()
+
+
 class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.scope = MemoryRuntime(tenant_id="tenant-a").scope(
@@ -512,7 +567,25 @@ class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_can_disable_legacy_knowledge_base_tool(self) -> None:
+    async def test_memory_search_runs_only_as_a_model_tool_call(self) -> None:
+        self.manager.recall_scopes.return_value = [
+            {"id": "memory-a", "memory": "本项目周五例会", "score": 0.91},
+        ]
+        tools = await self.middleware.list_tools()
+        search_memory = next(
+            tool for tool in tools if tool.name == "search_memory"
+        )
+
+        result = await search_memory.call(query="例会时间", top_k=3)
+
+        self.manager.recall_scopes.assert_awaited_once_with(
+            "例会时间",
+            [target.as_dict() for target in self.scope.memory_targets],
+            top_k=3,
+        )
+        self.assertIn("本项目周五例会", result.content[0].text)
+
+    async def test_can_disable_document_knowledge_tools(self) -> None:
         middleware = DobbyMemoryMiddleware(
             self.runtime,
             self.scope,
@@ -529,7 +602,6 @@ class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
                 "add_memory",
                 "search_experiences",
                 "get_session_summary",
-                "search_graph_rag",
             ],
         )
 
@@ -561,6 +633,37 @@ class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
             self.manager.assemble_context.await_args.kwargs[
                 "include_knowledge_base"
             ],
+        )
+        self.assertEqual(
+            self.manager.assemble_context.await_args.kwargs["mode"],
+            "minimal",
+        )
+
+    async def test_context_assembly_uses_platform_display_content(self) -> None:
+        agent = self._agent()
+        user_message = UserMsg(
+            "user",
+            "<platform-context>包含大量项目与任务规则</platform-context>",
+            metadata={"platform_display_content": "今天有什么新文件？"},
+        )
+
+        async def next_handler(**_kwargs):
+            yield ReplyStartEvent(
+                session_id="session-a",
+                reply_id="reply-a",
+                name="agent-a",
+            )
+
+        async for _event in self.middleware.on_reply(
+            agent,
+            {"inputs": user_message},
+            next_handler,
+        ):
+            pass
+
+        self.assertEqual(
+            self.manager.assemble_context.await_args.args[1],
+            "今天有什么新文件？",
         )
 
     async def test_context_layers_are_injected_then_removed(self) -> None:
@@ -598,6 +701,10 @@ class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(agent.state.context, [user_message, assistant_message])
         self.manager.assemble_context.assert_awaited_once()
+        self.assertEqual(
+            self.manager.assemble_context.await_args.kwargs["mode"],
+            "minimal",
+        )
         self.assertTrue(
             self.manager.assemble_context.await_args.kwargs[
                 "include_knowledge_base"
@@ -610,6 +717,35 @@ class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
             [item["scope_type"] for item in persisted["memory_targets"]],
             ["user", "user_project"],
         )
+
+    async def test_completed_turn_does_not_implicitly_write_memory(self) -> None:
+        agent = self._agent()
+        self.middleware._remember_routed = AsyncMock(return_value=1)
+        audit = SimpleNamespace(log_message=AsyncMock())
+
+        with (
+            patch(
+                "utils.audit_logger.get_audit_logger",
+                return_value=audit,
+            ),
+            patch(
+                "utils.decay_curves.record_user_activity",
+                new=AsyncMock(),
+            ),
+            patch(
+                "utils.skill_compiler._extract_correction_rule",
+                return_value=None,
+            ),
+        ):
+            await self.middleware._record_completed_turn(
+                agent,
+                {},
+                query="今天进展怎么样？",
+                response="进展正常。",
+                previous_response="",
+            )
+
+        self.middleware._remember_routed.assert_not_awaited()
 
     async def test_completed_turn_is_split_into_explicit_personal_scopes(self) -> None:
         agent = self._agent()

@@ -424,7 +424,7 @@ class MemoryManager:
         state: DobbyState,
         user_input: str,
         system_prompt: str | None = None,
-        mode: str = "auto",
+        mode: str = "minimal",
         include_knowledge_base: bool = True,
     ) -> ContextAssembly:
         """Assemble 7-layer context for an LLM call.
@@ -441,6 +441,8 @@ class MemoryManager:
             state: current DobbyState
             user_input: the current user message text
             system_prompt: override system prompt (uses role default if None)
+            mode: retrieval mode. The safe default is ``minimal``; callers
+                must explicitly request ``auto``, ``standard`` or ``full``.
             include_knowledge_base: whether to retrieve from the legacy
                 globally configured WeKnora knowledge base
 
@@ -942,6 +944,7 @@ class MemoryManager:
             # P0-1: Bump recall_count for high-similarity results.
             # mem0ai 2.x wraps search results in {"results": [...]}, so
             # reinforcement must run after normalising the response shape.
+            reinforcements: list[tuple[str, dict[str, Any]]] = []
             for item in items:
                 if not isinstance(item, dict):
                     continue
@@ -957,9 +960,30 @@ class MemoryManager:
                         meta = dict(meta)
                         meta["recall_count"] = int(meta.get("recall_count", 0)) + 1
                         meta["strength"] = item.get("strength", 1.0)
-                        get_mem0().update(item["id"], metadata=meta)
+                        reinforcements.append((str(item["id"]), meta))
                 except Exception:
                     pass
+            if reinforcements:
+                async def _reinforce(
+                    memory_id: str,
+                    metadata: dict[str, Any],
+                ) -> None:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(
+                            get_mem0().update,
+                            memory_id,
+                            metadata=metadata,
+                        ),
+                        timeout=5,
+                    )
+
+                await asyncio.gather(
+                    *(
+                        _reinforce(memory_id, metadata)
+                        for memory_id, metadata in reinforcements
+                    ),
+                    return_exceptions=True,
+                )
             return items
         except Exception:
             return []

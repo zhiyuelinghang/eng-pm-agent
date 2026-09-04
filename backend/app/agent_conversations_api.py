@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import re
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +35,7 @@ from .agent_api_support import (
     _public_agent_catalog_item,
     _public_initialization_file,
     _public_task_assistant_catalog_item,
+    _ready_project_weknora_agent_id,
     _raise_agentscope_http_error,
     _record_agent_turn_error,
     _sse_frame,
@@ -52,7 +54,7 @@ from .initialization_attachment_store import (
     store_failed_initialization_attachment,
     store_parsed_initialization_attachment,
 )
-from .models import AgentConversation, ProjectInitializationFile, User
+from .models import AgentConversation, Project, ProjectInitializationFile, User
 from .schemas import (
     AgentConversationConfirmInput,
     AgentConversationInput,
@@ -65,6 +67,92 @@ from .system_attachment_parser import (
 
 
 router = APIRouter(prefix="/api", tags=["agent-conversations"])
+
+
+def _conversation_title_from_content(content: str) -> str:
+    """Use the first sentence the user actually wrote as the chat title."""
+    request = re.search(
+        r"(?:^|\n)用户请求[：:]\s*(.*)$",
+        str(content or ""),
+        flags=re.DOTALL,
+    )
+    source = request.group(1) if request else str(content or "")
+    first_line = next(
+        (line.strip() for line in source.splitlines() if line.strip()),
+        "",
+    )
+    normalized = re.sub(r"\s+", " ", first_line).strip()
+    if not normalized:
+        return "新对话"
+    sentence = re.match(
+        r"^.*?[。！？!?]|^.*?\.(?=\s|$)",
+        normalized,
+    )
+    title = sentence.group(0) if sentence else normalized
+    if len(title) > 300:
+        return title[:299].rstrip() + "…"
+    return title
+
+
+def _adopt_initial_conversation_title(
+    conversation: AgentConversation,
+    content: str,
+) -> None:
+    default_suffix = {
+        "general": " · 智能协同",
+        "initialization": " · 项目初始化",
+    }.get(conversation.conversation_type)
+    if default_suffix and conversation.title.endswith(default_suffix):
+        conversation.title = _conversation_title_from_content(content)
+
+
+def _turn_platform_context(
+    db: Session,
+    user: User,
+    project: Project,
+    conversation: AgentConversation,
+    content: str,
+) -> tuple[dict[str, Any], bool | None]:
+    """Resolve explicitly invoked home capabilities for one agent turn."""
+    if conversation.conversation_type != "general":
+        return (
+            _platform_session_context(user, project, conversation, db),
+            None,
+        )
+    if "@任务助手" in content:
+        raise HTTPException(
+            status_code=409,
+            detail="任务助手需要先生成私有草稿，请通过首页任务助手入口发起。",
+        )
+    knowledge_query_enabled = "@资料助手" in content
+    if knowledge_query_enabled:
+        _ready_project_weknora_agent_id(db, project.id)
+    platform_context = _platform_session_context(
+        user,
+        project,
+        conversation,
+        db,
+        knowledge_query_enabled=knowledge_query_enabled,
+    )
+    if knowledge_query_enabled:
+        knowledge_base_ids = platform_context.get(
+            "weknora_knowledge_base_ids",
+        ) or []
+        knowledge_ids = platform_context.get("weknora_knowledge_ids") or []
+        if not knowledge_base_ids:
+            raise HTTPException(
+                status_code=403,
+                detail="当前项目没有你可查询的工程资料。",
+            )
+        if (
+            platform_context.get("weknora_access_mode") == "restricted"
+            and not knowledge_ids
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="当前账号没有可查询的工程资料权限。",
+            )
+    return platform_context, knowledge_query_enabled
 
 
 @router.get("/agents/catalog")
@@ -136,10 +224,7 @@ def list_agent_conversations(
         )
     if agent_id:
         statement = statement.where(AgentConversation.agent_id == agent_id)
-    if conversation_type == "initialization":
-        statement = statement.order_by(AgentConversation.id.asc()).limit(1)
-    else:
-        statement = statement.order_by(AgentConversation.updated_at.desc())
+    statement = statement.order_by(AgentConversation.updated_at.desc())
     rows = db.scalars(statement).all()
     return ok([serialize(row) for row in rows])
 
@@ -152,19 +237,6 @@ def create_agent_conversation(
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     project = project_for_user_or_403(db, project_id, user)
-    if payload.conversation_type == "initialization":
-        existing = db.scalar(
-            select(AgentConversation)
-            .where(
-                AgentConversation.project_id == project.id,
-                AgentConversation.user_id == user.id,
-                AgentConversation.conversation_type == "initialization",
-            )
-            .order_by(AgentConversation.id.asc()),
-        )
-        if existing is not None:
-            return ok(serialize(existing), "已复用现有项目初始化会话")
-
     client = _agentscope_client()
     try:
         catalog = client.get_catalog()
@@ -246,6 +318,45 @@ def create_agent_conversation(
     except AgentScopeGatewayError as exc:
         db.rollback()
         _raise_agentscope_http_error(exc)
+
+
+@router.delete("/agent-conversations/{conversation_id}")
+def delete_agent_conversation(
+    conversation_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Delete a user-owned chat and its AgentScope runtime session."""
+    conversation = _agent_conversation_or_404(db, conversation_id, user)
+    if conversation.conversation_type == "initialization":
+        raise HTTPException(
+            status_code=409,
+            detail="项目初始化会话属于项目初始化流程，不能在聊天记录中删除",
+        )
+
+    if conversation.agentscope_session_id:
+        try:
+            _agentscope_client().delete_session(
+                conversation.agentscope_session_id,
+                conversation.agent_id,
+            )
+        except AgentScopeGatewayError as exc:
+            _raise_agentscope_http_error(exc)
+
+    deleted_id = conversation.id
+    project_id = conversation.project_id
+    audit(
+        db,
+        user,
+        "删除智能体会话",
+        f"删除「{conversation.title}」平台会话及聊天记录",
+        project_id,
+        "agent_conversation",
+        deleted_id,
+    )
+    db.delete(conversation)
+    db.commit()
+    return ok({"id": deleted_id}, "智能体会话已删除")
 
 
 @router.get(
@@ -435,6 +546,15 @@ def list_agent_conversation_messages(
         list(history.get("messages") or []),
         live_status,
     )
+    first_user_message = next(
+        (item for item in messages if item["role"] == "user"),
+        None,
+    )
+    if first_user_message:
+        _adopt_initial_conversation_title(
+            conversation,
+            str(first_user_message.get("content") or ""),
+        )
     latest_assistant = next(
         (item for item in reversed(messages) if item["role"] == "assistant"),
         None,
@@ -468,6 +588,14 @@ def create_agent_conversation_message(
             status_code=409,
             detail="智能体会话尚未完成初始化",
         )
+    _adopt_initial_conversation_title(conversation, payload.content)
+    platform_context, knowledge_query_enabled = _turn_platform_context(
+        db,
+        user,
+        project,
+        conversation,
+        payload.content,
+    )
 
     client = _agentscope_client()
     try:
@@ -479,12 +607,8 @@ def create_agent_conversation_message(
         client.sync_session(
             agent=selected_agent,
             session_id=conversation.agentscope_session_id,
-            platform_context=_platform_session_context(
-                user,
-                project,
-                conversation,
-                db,
-            ),
+            platform_context=platform_context,
+            name=conversation.title,
         )
     except AgentScopeGatewayError as exc:
         conversation.status = "error"
@@ -502,7 +626,12 @@ def create_agent_conversation_message(
         initialization_files,
     )
     injected_content = (
-        _build_agent_project_context(db, project, user)
+        _build_agent_project_context(
+            db,
+            project,
+            user,
+            knowledge_query_enabled=knowledge_query_enabled,
+        )
         + attachment_manifest
         + "\n<user-request>\n"
         + payload.content
@@ -601,6 +730,14 @@ def stream_agent_conversation_message(
             status_code=409,
             detail="智能体会话尚未完成初始化",
         )
+    _adopt_initial_conversation_title(conversation, payload.content)
+    platform_context, knowledge_query_enabled = _turn_platform_context(
+        db,
+        user,
+        project,
+        conversation,
+        payload.content,
+    )
 
     client = _agentscope_client()
     try:
@@ -612,12 +749,8 @@ def stream_agent_conversation_message(
         client.sync_session(
             agent=selected_agent,
             session_id=conversation.agentscope_session_id,
-            platform_context=_platform_session_context(
-                user,
-                project,
-                conversation,
-                db,
-            ),
+            platform_context=platform_context,
+            name=conversation.title,
         )
     except AgentScopeGatewayError as exc:
         conversation.status = "error"
@@ -635,7 +768,12 @@ def stream_agent_conversation_message(
         initialization_files,
     )
     injected_content = (
-        _build_agent_project_context(db, project, user)
+        _build_agent_project_context(
+            db,
+            project,
+            user,
+            knowledge_query_enabled=knowledge_query_enabled,
+        )
         + attachment_manifest
         + "\n<user-request>\n"
         + payload.content
@@ -701,21 +839,26 @@ def stream_agent_conversation_message(
             "turn_finished_at": None,
         }
         try:
+            # Start the turn immediately and acknowledge the browser before
+            # opening the observability stream. AgentScope keeps a replay log
+            # for the active run, so events emitted during this brief overlap
+            # are delivered when the stream subscribes; the user no longer
+            # waits for a second connection before the model can start.
+            chat_task = asyncio.create_task(
+                asyncio.to_thread(
+                    client.chat,
+                    agent_id=agent_id,
+                    session_id=session_id,
+                    content=injected_content,
+                    sender_name=sender_name,
+                    metadata=metadata,
+                    user_message_id=user_message_id,
+                ),
+            )
+            yield _sse_frame("accepted", accepted_payload)
+
             async with client.event_stream(session_id, agent_id) as events:
                 event_task = asyncio.create_task(anext(events))
-                await asyncio.sleep(0)
-                chat_task = asyncio.create_task(
-                    asyncio.to_thread(
-                        client.chat,
-                        agent_id=agent_id,
-                        session_id=session_id,
-                        content=injected_content,
-                        sender_name=sender_name,
-                        metadata=metadata,
-                        user_message_id=user_message_id,
-                    ),
-                )
-                yield _sse_frame("accepted", accepted_payload)
 
                 while True:
                     waiting: set[asyncio.Task[Any]] = {chat_task}

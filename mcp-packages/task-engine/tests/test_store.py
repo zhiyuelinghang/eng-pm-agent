@@ -208,6 +208,26 @@ class TestTaskRoundTrip:
 
 
 class TestTaskQueries:
+    def test_filters_by_project_id(self, store):
+        project_one = instantiate(
+            make_flow(title="项目一任务", scope={"project_id": 1}),
+            T0,
+        )
+        project_two = instantiate(
+            make_flow(title="项目二任务", scope={"project_id": "2"}),
+            T0,
+        )
+        store.save_task(project_one)
+        store.save_task(project_two)
+
+        assert [
+            task.id for task in store.list_tasks(project_id="1")
+        ] == [project_one.id]
+        assert [
+            task.id for task in store.list_tasks(project_id=2)
+        ] == [project_two.id]
+        assert store.list_tasks(project_id=3) == []
+
     def test_filters_by_assignee(self, store):
         task_a = instantiate(make_flow(), T0)
         task_b = instantiate(

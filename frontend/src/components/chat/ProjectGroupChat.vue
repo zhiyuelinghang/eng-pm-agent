@@ -1,16 +1,17 @@
 <template>
-  <section class="project-chat-shell" aria-label="项目群聊">
-    <aside class="channel-rail" aria-label="项目会话">
+  <section class="project-chat-shell" aria-label="智能协同会话">
+    <aside class="channel-rail" aria-label="会话列表">
       <header class="rail-heading">
-        <div class="heading-icon"><n-icon :size="19"><MessageCircle /></n-icon></div>
-        <div class="rail-title">
-          <h1>项目群聊</h1>
-          <p>项目群与私密会话</p>
-        </div>
-        <button class="new-private-chat" type="button" title="发起私密会话" @click="openPrivateChatDialog">
+        <button class="new-private-chat" type="button" title="新建会话" @click="openPrivateChatDialog">
           <n-icon :size="18"><Plus /></n-icon>
+          <span>新会话</span>
         </button>
       </header>
+
+      <label class="channel-search">
+        <n-icon :size="17"><Search /></n-icon>
+        <input v-model="channelSearch" type="search" aria-label="搜索会话" placeholder="搜索会话" />
+      </label>
 
       <div class="channel-list">
         <div v-if="loadingChannels" class="channel-skeleton" aria-label="正在加载群聊">
@@ -25,29 +26,25 @@
             v-for="channel in sectionItem.channels"
             :key="channel.id"
             type="button"
-            :class="['channel-item', { active: channel.id === activeChannelId, private: channel.channel_type === 'private' }]"
+            :class="['channel-item', { active: channel.id === activeChannelId }]"
             :aria-pressed="channel.id === activeChannelId"
             @click="activateChannel(channel.id)"
           >
-            <span class="channel-symbol">
-              <n-icon :size="17"><Lock v-if="channel.channel_type === 'private'" /><Hash v-else /></n-icon>
-            </span>
             <span class="channel-copy">
-              <strong>{{ channelDisplayTitle(channel) }}</strong>
-              <small>{{ channel.last_message?.content || channel.summary || '还没有消息' }}</small>
+              <strong :title="channelDisplayTitle(channel)">{{ channelDisplayTitle(channel) }}</strong>
+              <span v-if="channel.last_message_at" class="channel-meta">
+                <time>{{ compactTime(channel.last_message_at) }}</time>
+              </span>
             </span>
-            <time v-if="channel.last_message_at">{{ compactTime(channel.last_message_at) }}</time>
           </button>
         </template>
         <div v-if="!loadingChannels && !channels.length && !pageError" class="rail-empty">
-          当前项目还没有可用群聊
+          当前项目还没有会话
+        </div>
+        <div v-else-if="!loadingChannels && !filteredChannels.length && !pageError" class="rail-empty">
+          没有匹配的会话
         </div>
       </div>
-
-      <footer class="rail-foot">
-        <n-icon :size="17"><Lock /></n-icon>
-        <span>消息按项目隔离，非项目成员不可访问</span>
-      </footer>
     </aside>
 
     <main class="chat-stage">
@@ -113,7 +110,23 @@
               <span v-if="agentRuntimeLabel(item)" class="runtime-label">{{ agentRuntimeLabel(item) }}</span>
               <time>{{ messageTime(item.created_at) }}</time>
             </div>
-            <div class="message-content">
+            <div
+              v-if="item.message_type === 'task_draft'"
+              class="message-content task-draft-history"
+              v-html="renderTaskDraftContent(item.content)"
+            ></div>
+            <div v-else-if="item.message_type === 'task_event'" class="task-event-message">
+              <span class="task-event-icon" aria-hidden="true"><n-icon :size="19"><CircleCheck /></n-icon></span>
+              <span class="task-event-copy">
+                <small>{{ item.content }}</small>
+                <strong>{{ taskEventTitle(item) }}</strong>
+                <em>{{ taskEventExecutionLabel(item) }}</em>
+              </span>
+              <router-link :to="taskEventRoute(item)">
+                {{ taskEventLinkLabel(item) }}
+              </router-link>
+            </div>
+            <div v-else class="message-content">
               <template v-for="(segment, segmentIndex) in messageSegments(item)" :key="`${item.id}-${segmentIndex}`">
                 <span
                   v-if="segment.targetType"
@@ -122,15 +135,43 @@
                 <template v-else>{{ segment.text }}</template>
               </template>
             </div>
-            <div v-if="mentionedAgentNames(item).length" class="agent-request-note">
+            <div v-if="item.message_type !== 'task_event' && item.task_ids?.length" class="message-task-links" aria-label="消息关联任务">
+              <router-link v-for="taskId in item.task_ids" :key="taskId" :to="taskRoute(taskId)">
+                <n-icon :size="14"><ListCheck /></n-icon>{{ taskTitle(taskId) }}
+              </router-link>
+            </div>
+            <div v-if="businessMentionedAgentNames(item).length" class="agent-request-note">
               <n-icon :size="15"><Robot /></n-icon>
-              已通知 {{ mentionedAgentNames(item).join('、') }}，处理结果会自动回复到当前会话
+              已通知 {{ businessMentionedAgentNames(item).join('、') }}，处理结果会自动回复到当前会话
             </div>
           </div>
         </article>
       </div>
 
       <footer class="message-composer">
+        <button
+          v-if="activePrivateTaskDraft && !taskDraftDialogOpen"
+          type="button"
+          :class="['private-task-draft-launcher', `is-${activePrivateTaskDraft.status}`]"
+          @click="openTaskDraftDialog"
+        >
+          <span class="private-task-draft-launcher-icon">
+            <n-icon v-if="['generating', 'publishing'].includes(activePrivateTaskDraft.status)" :size="18" class="task-draft-spinner"><Loader /></n-icon>
+            <n-icon v-else-if="activePrivateTaskDraft.status === 'ready'" :size="18"><ClipboardCheck /></n-icon>
+            <n-icon v-else :size="18"><AlertCircle /></n-icon>
+          </span>
+          <span>
+            <strong>{{ privateTaskDraftLauncherTitle }}</strong>
+            <small>{{ privateTaskDraftLauncherDescription }}</small>
+          </span>
+          <em>打开</em>
+        </button>
+        <div v-if="contextTask" class="task-context-notice" role="status">
+          <span><n-icon :size="17"><ListCheck /></n-icon></span>
+          <div><strong>正在讨论：{{ contextTask.title }}</strong><small>{{ contextTask.triggerReason || '任务上下文已带入当前群聊' }}</small></div>
+          <router-link :to="taskRoute(contextTask.id)">查看任务</router-link>
+          <button type="button" aria-label="取消关联任务" @click="clearTaskContext"><X :size="16" /></button>
+        </div>
         <div v-if="activeMentionNotice" class="mention-notice" role="status" aria-live="polite">
           <span class="mention-notice-icon" aria-hidden="true">
             <n-icon :size="17"><At /></n-icon>
@@ -153,9 +194,12 @@
         </div>
         <div v-if="realtimeStatus !== 'connected'" class="polling-note">
           实时通道暂未连接，页面会定时刷新；消息仍会正常保存。
-          <button type="button" @click="manualRefresh">立即刷新</button>
+          <button type="button" :disabled="manualRefreshing || loadingMessages" :aria-busy="manualRefreshing" @click="manualRefresh">
+            <n-icon v-if="manualRefreshing" :size="14" class="task-draft-spinner"><Loader /></n-icon>
+            {{ manualRefreshing ? '正在刷新…' : '立即刷新' }}
+          </button>
         </div>
-        <form @submit.prevent="sendMessage">
+        <form class="project-chat-composer" @submit.prevent="sendMessage">
           <div v-if="mentionMenuOpen" class="mention-menu" role="listbox" aria-label="选择要提及的人员或智能体">
             <div v-if="filteredMentionOptions.length" class="mention-options">
               <button
@@ -182,26 +226,26 @@
             <div v-else class="mention-empty">没有符合条件的可提及对象</div>
           </div>
 
-          <div
-            ref="composerInput"
-            :contenteditable="Boolean(activeChannel && !sending)"
-            :class="['composer-editor', { disabled: !activeChannel || sending }]"
-            :data-empty="!draft"
-            :data-placeholder="activeChannel ? `发消息到${displayChannelTitle}；输入 @ 提及成员或智能体` : '请先选择会话'"
-            role="textbox"
-            aria-multiline="true"
-            aria-label="群聊消息"
-            @blur="deferCloseMentionMenu"
-            @click="updateMentionState"
-            @input="updateMentionState"
-            @paste="handleComposerPaste"
-            @keydown="handleComposerKeydown"
-          ></div>
-          <div class="composer-actions">
-            <div class="composer-tools">
+          <ChatComposerSurface :busy="sending">
+            <div
+              ref="composerInput"
+              :contenteditable="Boolean(activeChannel && !sending)"
+              :class="['composer-editor', 'chat-composer-input', { disabled: !activeChannel || sending }]"
+              :data-empty="!draft"
+              :data-placeholder="activeChannel ? `发消息到${displayChannelTitle}；输入 @ 提及成员或智能体` : '请先选择会话'"
+              role="textbox"
+              aria-multiline="true"
+              aria-label="群聊消息"
+              @blur="deferCloseMentionMenu"
+              @click="updateMentionState"
+              @input="updateMentionState"
+              @paste="handleComposerPaste"
+              @keydown="handleComposerKeydown"
+            ></div>
+            <template #tools>
               <button
                 type="button"
-                class="mention-trigger"
+                class="mention-trigger chat-composer-tool"
                 :disabled="!activeChannel || sending"
                 aria-label="提及成员或智能体"
                 title="提及成员或智能体"
@@ -209,13 +253,16 @@
                 @click="openMentionMenu"
               >
                 <n-icon :size="16"><At /></n-icon>
+                <span>提及</span>
               </button>
-            </div>
-            <button class="send-message" type="submit" :disabled="!canSend">
+            </template>
+            <template #action>
+              <button class="send-message chat-composer-action" type="submit" :disabled="!canSend">
               <n-icon :size="17"><Send /></n-icon>
               {{ sending ? '发送中' : '发送' }}
-            </button>
-          </div>
+              </button>
+            </template>
+          </ChatComposerSurface>
         </form>
       </footer>
     </main>
@@ -243,7 +290,7 @@
         <div class="member-list">
           <article v-for="member in members" :key="member.user_id" class="member-row">
             <div class="member-avatar">{{ member.name.slice(0, 1) }}</div>
-            <div>
+            <div class="participant-picker-summary">
               <strong>{{ member.name }}<em v-if="member.user_id === currentUserId">我</em></strong>
               <small>{{ member.title }}</small>
             </div>
@@ -262,7 +309,12 @@
     </aside>
   </section>
 
-  <n-modal v-model:show="privateChatDialogOpen" :mask-closable="!creatingPrivateChat">
+  <n-modal
+    v-model:show="privateChatDialogOpen"
+    :auto-focus="false"
+    :mask-closable="!creatingPrivateChat"
+    @after-enter="focusPrivateChatTitle"
+  >
     <section class="private-chat-dialog" role="dialog" aria-modal="true" aria-labelledby="private-chat-dialog-title">
       <header>
         <div>
@@ -276,10 +328,19 @@
       </header>
 
       <div class="private-chat-form">
-        <label class="private-chat-name">
-          <span>会话名称 <em>选填</em></span>
-          <input v-model="privateChatTitle" type="text" maxlength="100" placeholder="未填写时，将根据参与人自动命名">
-        </label>
+        <div class="private-chat-name">
+          <label for="private-chat-title">群名称 <em>必填</em></label>
+          <input
+            id="private-chat-title"
+            ref="privateChatTitleInput"
+            v-model="privateChatTitle"
+            type="text"
+            maxlength="100"
+            required
+            aria-required="true"
+            placeholder="请输入私聊群名称"
+          >
+        </div>
 
         <section class="participant-picker" aria-label="选择私密会话参与人">
           <div class="participant-picker-head">
@@ -287,27 +348,54 @@
               <strong>选择参与人</strong>
               <span>已选 {{ selectedParticipantIds.length }} 人</span>
             </div>
-            <label class="participant-search">
+            <div class="participant-search" @click="focusParticipantSearch">
               <n-icon :size="17"><Search /></n-icon>
-              <input v-model="participantSearch" type="search" placeholder="搜索姓名或岗位">
-            </label>
+              <input
+                id="private-chat-participant-search"
+                ref="participantSearchInput"
+                v-model="participantSearch"
+                type="search"
+                aria-label="搜索参与人"
+                placeholder="搜索姓名或岗位"
+              >
+            </div>
           </div>
 
           <div v-if="loadingParticipants" class="participant-loading">正在加载项目成员…</div>
-          <div v-else-if="filteredParticipants.length" class="participant-list">
-            <label
-              v-for="participant in filteredParticipants"
-              :key="participant.user_id"
-              :class="['participant-option', { selected: selectedParticipantIds.includes(participant.user_id) }]"
-            >
-              <input v-model="selectedParticipantIds" type="checkbox" :value="participant.user_id">
-              <span class="participant-avatar">{{ participant.name.slice(0, 1) }}</span>
-              <span class="participant-copy">
+          <div v-else-if="filteredParticipants.length" class="participant-results">
+            <div class="participant-list" role="list" aria-label="可选项目成员">
+              <div class="participant-list-head" aria-hidden="true">
+                <span>选择</span>
+                <span>姓名</span>
+                <span>岗位</span>
+              </div>
+              <label
+                v-for="participant in pagedParticipants"
+                :key="participant.user_id"
+                :class="['participant-option', { selected: selectedParticipantIds.includes(participant.user_id) }]"
+                role="listitem"
+              >
+                <input v-model="selectedParticipantIds" type="checkbox" :value="participant.user_id">
                 <strong>{{ participant.name }}</strong>
-                <small>{{ participant.title }}</small>
-              </span>
-              <span class="participant-check" aria-hidden="true">✓</span>
-            </label>
+                <span>{{ participant.title }}</span>
+              </label>
+            </div>
+            <nav class="participant-pagination" aria-label="参与人分页">
+              <span>{{ participantRangeStart }}–{{ participantRangeEnd }} / {{ filteredParticipants.length }}</span>
+              <div>
+                <button
+                  type="button"
+                  :disabled="participantPage <= 1"
+                  @click="setParticipantPage(participantPage - 1)"
+                >上一页</button>
+                <em>第 {{ participantPage }} / {{ participantPageCount }} 页</em>
+                <button
+                  type="button"
+                  :disabled="participantPage >= participantPageCount"
+                  @click="setParticipantPage(participantPage + 1)"
+                >下一页</button>
+              </div>
+            </nav>
           </div>
           <div v-else class="participant-empty">没有符合条件的项目成员</div>
         </section>
@@ -320,7 +408,267 @@
         <div>
           <button type="button" class="dialog-cancel" :disabled="creatingPrivateChat" @click="closePrivateChatDialog">取消</button>
           <button type="button" class="dialog-submit" :disabled="!canCreatePrivateChat" @click="createPrivateChat">
+            <n-icon v-if="creatingPrivateChat" :size="16" class="task-draft-spinner"><Loader /></n-icon>
             {{ creatingPrivateChat ? '创建中…' : '创建会话' }}
+          </button>
+        </div>
+      </footer>
+    </section>
+  </n-modal>
+
+  <n-modal
+    v-model:show="taskDraftDialogOpen"
+    :auto-focus="true"
+    :close-on-esc="!isTaskDraftPublishing"
+    :mask-closable="false"
+  >
+    <section
+      v-if="activePrivateTaskDraft || creatingTaskDraft || taskDraftStartError"
+      class="task-draft-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="task-draft-dialog-title"
+    >
+      <header>
+        <div class="task-draft-dialog-mark"><n-icon :size="22"><ClipboardCheck /></n-icon></div>
+        <div>
+          <h2 id="task-draft-dialog-title">布置任务</h2>
+          <p>{{ privateTaskDraftRequestSummary }}</p>
+        </div>
+        <span :class="['task-draft-status', `is-${privateTaskDraftStatus}`]">{{ privateTaskDraftStatusLabel }}</span>
+        <button type="button" aria-label="关闭" :disabled="isTaskDraftPublishing" @click="closeTaskDraftDialog">
+          <n-icon :size="20"><X /></n-icon>
+        </button>
+      </header>
+
+      <div v-if="isTaskDraftGenerating" class="task-draft-generation" role="status" aria-live="polite">
+        <ol class="task-draft-generation-flow" aria-label="Dobby 任务分析进度">
+          <li class="is-active"><i>1</i><span><strong>读取群聊上下文</strong><small>只读取当前会话必要内容</small></span></li>
+          <li class="is-active"><i>2</i><span><strong>提取任务要素</strong><small>识别时间、对象与交付要求</small></span></li>
+          <li class="is-active"><i>3</i><span><strong>整理任务草稿</strong><small>发布前仍由你确认和修改</small></span></li>
+        </ol>
+        <section class="task-draft-generation-stage">
+          <span class="task-draft-generation-orbit" aria-hidden="true">
+            <n-icon :size="28"><Robot /></n-icon>
+          </span>
+          <h3>Dobby 正在分析任务需求</h3>
+          <p>正在结合群聊上下文梳理任务要素，完成后会在这里显示可编辑草稿。</p>
+          <div class="task-draft-generation-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>
+        </section>
+      </div>
+
+      <div v-else-if="isTaskDraftPublishing" class="task-draft-publishing" role="status" aria-live="polite">
+        <span class="task-draft-generation-orbit" aria-hidden="true">
+          <n-icon :size="28"><ClipboardCheck /></n-icon>
+        </span>
+        <h3>正在发布任务</h3>
+        <p>正在写入任务中心并同步群内正式任务消息，请勿重复操作。</p>
+      </div>
+
+      <div v-else-if="isTaskDraftUnavailable" class="task-draft-unavailable" role="alert">
+        <span><n-icon :size="28"><AlertCircle /></n-icon></span>
+        <h3>{{ privateTaskDraftStatus === 'cancelled' ? 'Dobby 已停止分析' : 'Dobby 未能完成分析' }}</h3>
+        <p>{{ taskDraftStartError || activePrivateTaskDraft?.error || '分析过程遇到问题，请重新尝试。' }}</p>
+        <small>本次内容没有发送到群聊，也没有创建任务。</small>
+      </div>
+
+      <form v-else-if="taskDraftForm" class="task-draft-form" @submit.prevent="publishTaskDraft">
+        <section class="task-draft-form-section">
+          <h3>任务内容</h3>
+          <label class="task-draft-field full">
+            <span>任务名称</span>
+            <input v-model.trim="taskDraftForm.title" type="text" maxlength="120" required>
+          </label>
+          <label class="task-draft-field full">
+            <span>分析依据</span>
+            <textarea v-model.trim="taskDraftForm.trigger_reason" rows="2" maxlength="1000"></textarea>
+          </label>
+        </section>
+
+        <section class="task-draft-form-section">
+          <h3>执行时间</h3>
+          <div class="task-draft-field-grid three">
+            <label class="task-draft-field">
+              <span>执行方式</span>
+              <select v-model="taskDraftForm.run_mode">
+                <option value="immediate">立即执行</option>
+                <option value="once">单次定时</option>
+                <option value="recurring">周期执行</option>
+              </select>
+            </label>
+            <label v-if="taskDraftForm.run_mode !== 'immediate'" class="task-draft-field">
+              <span>首次日期</span>
+              <input v-model="taskDraftForm.trigger_date" type="date" required>
+            </label>
+            <label v-if="taskDraftForm.run_mode !== 'immediate'" class="task-draft-field">
+              <span>执行时间</span>
+              <input v-model="taskDraftForm.trigger_time" type="time" required>
+            </label>
+          </div>
+          <div v-if="taskDraftForm.run_mode === 'recurring'" class="task-draft-field-grid two compact-row">
+            <label class="task-draft-field">
+              <span>间隔</span>
+              <input v-model.number="taskDraftForm.trigger_interval_value" type="number" min="1" max="999" required>
+            </label>
+            <label class="task-draft-field">
+              <span>单位</span>
+              <select v-model="taskDraftForm.trigger_interval_unit">
+                <option value="minute">分钟</option>
+                <option value="hour">小时</option>
+                <option value="day">天</option>
+                <option value="week">周</option>
+                <option value="month">月</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section v-if="taskDraftForm.action_type === 'project_chat_message'" class="task-draft-form-section">
+          <h3>群聊消息</h3>
+          <div class="task-draft-field-grid two">
+            <label class="task-draft-field">
+              <span>目标群聊</span>
+              <select v-model="taskDraftForm.target_channel_id" required>
+                <option v-for="channel in channels" :key="channel.id" :value="channel.id">
+                  {{ channelDisplayTitle(channel) }}
+                </option>
+              </select>
+            </label>
+            <label class="task-draft-field">
+              <span>提醒范围</span>
+              <select v-model="taskDraftForm.mention_mode">
+                <option value="none">不艾特成员</option>
+                <option value="all">全体成员</option>
+                <option value="users">指定成员</option>
+              </select>
+            </label>
+          </div>
+
+          <div v-if="taskDraftForm.mention_mode === 'users'" class="task-draft-recipient-picker">
+            <label class="task-draft-field">
+              <span>添加成员</span>
+              <select v-model="taskDraftMemberToAdd" @change="addTaskDraftMember">
+                <option value="">选择要提醒的成员</option>
+                <option
+                  v-for="person in availableTaskDraftPeople"
+                  :key="person.user_id"
+                  :value="String(person.user_id)"
+                >{{ person.name }} · {{ person.title }}</option>
+              </select>
+            </label>
+            <div class="task-draft-recipient-cards" aria-label="已选择提醒成员">
+              <span v-for="person in selectedTaskDraftPeople" :key="person.user_id">
+                <b>{{ person.name }}</b>
+                <button type="button" :aria-label="`移除${person.name}`" @click="removeTaskDraftMember(person.user_id)"><X :size="14" /></button>
+              </span>
+              <em v-if="!selectedTaskDraftPeople.length">还没有选择提醒成员</em>
+            </div>
+          </div>
+
+          <label class="task-draft-field full">
+            <span>消息正文</span>
+            <textarea v-model.trim="taskDraftForm.message_content" rows="4" maxlength="8000" required></textarea>
+          </label>
+        </section>
+
+        <section v-else class="task-draft-form-section">
+          <h3>责任配置</h3>
+          <div class="task-draft-field-grid two">
+            <label class="task-draft-field">
+              <span>默认责任人</span>
+              <select v-model="taskDraftForm.assignee_user_id">
+                <option :value="null">请选择</option>
+                <option v-for="person in taskDraftPeople" :key="person.user_id" :value="person.user_id">{{ person.name }}</option>
+              </select>
+            </label>
+            <label class="task-draft-field">
+              <span>确认人</span>
+              <select v-model="taskDraftForm.confirmer_user_id">
+                <option :value="null">请选择</option>
+                <option v-for="person in taskDraftPeople" :key="person.user_id" :value="person.user_id">{{ person.name }}</option>
+              </select>
+            </label>
+            <label class="task-draft-field">
+              <span>关联 WBS</span>
+              <select v-model="taskDraftForm.wbs_item_id">
+                <option :value="null">不关联</option>
+                <option v-for="item in store.wbsItems" :key="item.id" :value="Number(item.id)">{{ item.name }}</option>
+              </select>
+            </label>
+            <label class="task-draft-field">
+              <span>关联风险源</span>
+              <select v-model="taskDraftForm.risk_source_id">
+                <option :value="null">不关联</option>
+                <option v-for="risk in store.riskSources" :key="risk.id" :value="Number(risk.id)">{{ risk.name }}</option>
+              </select>
+            </label>
+          </div>
+          <div class="task-draft-steps">
+            <article v-for="(step, index) in taskDraftForm.workflow_steps" :key="index">
+              <div class="task-draft-step-number">{{ index + 1 }}</div>
+              <label class="task-draft-field">
+                <span>节点名称</span>
+                <input v-model.trim="step.name" type="text" maxlength="80" required>
+              </label>
+              <label v-if="step.node_type === 'manual'" class="task-draft-field">
+                <span>责任人</span>
+                <select v-model="step.owner_user_id" required>
+                  <option :value="null">请选择</option>
+                  <option v-for="person in taskDraftPeople" :key="person.user_id" :value="person.user_id">{{ person.name }}</option>
+                </select>
+              </label>
+              <label v-if="step.node_type === 'manual'" class="task-draft-field full">
+                <span>交付材料</span>
+                <input v-model.trim="step.material" type="text" maxlength="200">
+              </label>
+            </article>
+          </div>
+        </section>
+
+        <p v-if="taskDraftError" class="task-draft-error" role="alert">{{ taskDraftError }}</p>
+      </form>
+
+      <footer v-if="isTaskDraftGenerating">
+        <span>该过程仅你可见，可以关闭弹框后继续等待</span>
+        <div>
+          <button type="button" class="dialog-cancel" :disabled="taskDraftActionId !== null" @click="dismissTaskDraft">
+            {{ taskDraftActionId !== null ? '正在取消…' : '取消本次' }}
+          </button>
+          <button type="button" class="dialog-submit secondary" @click="closeTaskDraftDialog">后台继续</button>
+        </div>
+      </footer>
+
+      <footer v-else-if="isTaskDraftPublishing">
+        <span>发布完成后，群内会出现一条正式任务卡片</span>
+        <div><button type="button" class="dialog-submit" disabled>正在发布…</button></div>
+      </footer>
+
+      <footer v-else-if="isTaskDraftUnavailable">
+        <span>重新分析仍会使用刚才的群聊上下文</span>
+        <div>
+          <button type="button" class="dialog-cancel" :disabled="taskDraftActionId !== null" @click="dismissTaskDraft">关闭本次</button>
+          <button
+            v-if="activePrivateTaskDraft"
+            type="button"
+            class="dialog-submit"
+            :disabled="taskDraftActionId !== null"
+            @click="retryTaskDraft"
+          >
+            <n-icon v-if="taskDraftActionId !== null" :size="16" class="task-draft-spinner"><Loader /></n-icon>
+            {{ taskDraftActionId !== null ? 'Dobby 正在重新分析…' : '重新分析' }}
+          </button>
+        </div>
+      </footer>
+
+      <footer v-else-if="taskDraftForm">
+        <span>草稿仅你可见，发布后群内才显示正式任务</span>
+        <div>
+          <button type="button" class="dialog-cancel" :disabled="publishingTaskDraft || dismissingTaskDraft" @click="dismissTaskDraft">
+            {{ dismissingTaskDraft ? '正在取消…' : '取消本次' }}
+          </button>
+          <button type="button" class="dialog-submit" :disabled="!canPublishTaskDraft" @click="publishTaskDraft">
+            <n-icon v-if="publishingTaskDraft" :size="16" class="task-draft-spinner"><Loader /></n-icon>
+            {{ publishingTaskDraft ? '发布中…' : '确认发布任务' }}
           </button>
         </div>
       </footer>
@@ -330,50 +678,86 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
 import { NIcon, NModal, useMessage } from 'naive-ui'
 import dayjs from 'dayjs'
+import MarkdownIt from 'markdown-it'
 import {
-  AlertCircle, At, Hash, Lock, MessageCircle, Plus, Robot, Search, Send, User, Wifi, WifiOff, X,
+  AlertCircle, At, CircleCheck, ClipboardCheck, Hash, ListCheck, Loader, Lock,
+  Plus, Robot, Search, Send, User, Wifi, WifiOff, X,
 } from '@vicons/tabler'
 
 import {
+  PROJECT_CHAT_TASK_ASSISTANT,
   claimProjectChatMention,
   connectProjectChatRealtime,
   createPrivateProjectChatChannel,
+  createProjectChatTaskDraft,
+  dismissPrivateProjectChatTaskDraft,
   getProjectChatMessage,
+  getProjectChatTaskDraft,
   listProjectChatAgents,
   listProjectChatChannels,
   listProjectChatMembers,
   listProjectChatMessages,
   listProjectChatMentionNotices,
   listProjectChatParticipants,
+  listProjectChatTaskDrafts,
+  publishPrivateProjectChatTaskDraft,
+  retryPrivateProjectChatTaskDraft,
   sendProjectChatMessage,
+  stopPrivateProjectChatTaskDraft,
   type ProjectChatAgent,
   type ProjectChatChannel,
   type ProjectChatMember,
   type ProjectChatMessage,
   type ProjectChatParticipant,
+  type ProjectChatPrivateTaskDraft,
   type ProjectChatRealtimeStatus,
+  type ProjectChatTaskDraft,
 } from '@/api/projectChat'
+import ChatComposerSurface from '@/components/chat/ChatComposerSurface.vue'
 import { useAppStore } from '@/stores/app'
 
 const store = useAppStore()
 const notice = useMessage()
+const route = useRoute()
+const router = useRouter()
+
+const taskDraftMarkdown = new MarkdownIt({
+  html: false,
+  linkify: true,
+  breaks: true,
+  typographer: false,
+})
+const taskDraftLinkOpen = taskDraftMarkdown.renderer.rules.link_open
+taskDraftMarkdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
+  tokens[index].attrSet('target', '_blank')
+  tokens[index].attrSet('rel', 'noopener noreferrer')
+  return taskDraftLinkOpen
+    ? taskDraftLinkOpen(tokens, index, options, env, self)
+    : self.renderToken(tokens, index, options)
+}
+const taskDraftMarkdownCache = new Map<string, string>()
 
 const channels = ref<ProjectChatChannel[]>([])
+const channelSearch = ref('')
 const activeChannelId = ref<number | null>(null)
 const members = ref<ProjectChatMember[]>([])
 const messages = ref<ProjectChatMessage[]>([])
 const draft = ref('')
 const loadingChannels = ref(false)
 const loadingMessages = ref(false)
+const manualRefreshing = ref(false)
 const sending = ref(false)
 const pageError = ref('')
 const realtimeStatus = ref<ProjectChatRealtimeStatus>('connecting')
 const messageViewport = ref<HTMLElement | null>(null)
 const composerInput = ref<HTMLDivElement | null>(null)
 const projectParticipants = ref<ProjectChatParticipant[]>([])
-const mentionAgents = ref<ProjectChatAgent[]>([])
+const mentionAgents = ref<ProjectChatAgent[]>([PROJECT_CHAT_TASK_ASSISTANT])
+const mentionAgentsLoading = ref(false)
+const mentionAgentsLoaded = ref(false)
 const mentionMenuOpen = ref(false)
 const mentionQuery = ref('')
 const mentionRangeStart = ref(0)
@@ -381,7 +765,10 @@ const mentionRangeEnd = ref(0)
 const mentionActiveIndex = ref(0)
 const privateChatDialogOpen = ref(false)
 const privateChatTitle = ref('')
+const privateChatTitleInput = ref<HTMLInputElement | null>(null)
 const participantSearch = ref('')
+const participantSearchInput = ref<HTMLInputElement | null>(null)
+const participantPage = ref(1)
 const selectedParticipantIds = ref<number[]>([])
 const loadingParticipants = ref(false)
 const creatingPrivateChat = ref(false)
@@ -389,10 +776,22 @@ const privateChatError = ref('')
 const pulsingMentionIds = ref<Set<number>>(new Set())
 const mentionNotices = ref<ProjectChatMessage[]>([])
 const locatingMentionNotice = ref(false)
+  const taskDraftDialogOpen = ref(false)
+const activePrivateTaskDraft = ref<ProjectChatPrivateTaskDraft | null>(null)
+const taskDraftForm = ref<ProjectChatTaskDraft | null>(null)
+const taskDraftMemberToAdd = ref('')
+const taskDraftError = ref('')
+const taskDraftStartError = ref('')
+const creatingTaskDraft = ref(false)
+const cancelPendingTaskDraftCreation = ref(false)
+const taskDraftRequestPreview = ref('')
+const taskDraftActionId = ref<number | null>(null)
+const publishingTaskDraft = ref(false)
+const dismissingTaskDraft = ref(false)
 
 let loadGeneration = 0
 let pollTimer: number | null = null
-let realtimeClient: Awaited<ReturnType<typeof connectProjectChatRealtime>> = null
+let realtimeClient: Awaited<ReturnType<typeof connectProjectChatRealtime>> | null = null
 let refreshingChannelList = false
 let mentionObserver: IntersectionObserver | null = null
 const messageElements = new Map<number, HTMLElement>()
@@ -418,6 +817,10 @@ const selectedMentions = ref<MentionOption[]>([])
 const activeChannel = computed(() => (
   channels.value.find(item => item.id === activeChannelId.value) || null
 ))
+const contextTaskId = computed(() => queryNumberOrString(route.query.taskId))
+const contextTask = computed(() => (
+  store.tasks.find(task => task.id === contextTaskId.value) || null
+))
 const activeMentionNotice = computed(() => mentionNotices.value[0] || null)
 const activeMentionNoticeTitle = computed(() => {
   const item = activeMentionNotice.value
@@ -434,18 +837,30 @@ const activeMentionNoticeDescription = computed(() => {
 const currentProjectName = computed(() => store.currentProject?.name || '当前项目')
 const currentUserId = computed(() => Number(sessionStorage.getItem('current_user_id') || 0))
 const canSend = computed(() => Boolean(activeChannel.value && draft.value.trim() && !sending.value))
-const channelSections = computed(() => [
-  {
-    key: 'project',
-    label: '项目会话',
-    channels: channels.value.filter(channel => channel.channel_type !== 'private'),
-  },
-  {
-    key: 'private',
-    label: '私密会话',
-    channels: channels.value.filter(channel => channel.channel_type === 'private'),
-  },
-].filter(sectionItem => sectionItem.channels.length))
+const filteredChannels = computed(() => {
+  const keyword = channelSearch.value.trim().toLowerCase()
+  if (!keyword) return channels.value
+  return channels.value.filter(channel => [
+    channelDisplayTitle(channel),
+    channel.summary,
+    channel.last_message?.content,
+  ].some(value => value?.toLowerCase().includes(keyword)))
+})
+const channelSections = computed(() => {
+  if (!channels.value.length) return []
+  return [
+    {
+      key: 'project',
+      label: '项目群',
+      channels: filteredChannels.value.filter(channel => channel.channel_type !== 'private'),
+    },
+    {
+      key: 'private',
+      label: '私密群',
+      channels: filteredChannels.value.filter(channel => channel.channel_type === 'private'),
+    },
+  ]
+})
 const displayChannelTitle = computed(() => {
   if (loadingChannels.value) return '正在加载项目群'
   return activeChannel.value ? channelDisplayTitle(activeChannel.value) : '项目群'
@@ -463,6 +878,24 @@ const filteredParticipants = computed(() => {
     return `${participant.name} ${participant.title}`.toLowerCase().includes(keyword)
   })
 })
+const PARTICIPANTS_PER_PAGE = 10
+const participantPageCount = computed(() => Math.max(
+  1,
+  Math.ceil(filteredParticipants.value.length / PARTICIPANTS_PER_PAGE),
+))
+const pagedParticipants = computed(() => {
+  const start = (participantPage.value - 1) * PARTICIPANTS_PER_PAGE
+  return filteredParticipants.value.slice(start, start + PARTICIPANTS_PER_PAGE)
+})
+const participantRangeStart = computed(() => (
+  filteredParticipants.value.length
+    ? (participantPage.value - 1) * PARTICIPANTS_PER_PAGE + 1
+    : 0
+))
+const participantRangeEnd = computed(() => Math.min(
+  participantPage.value * PARTICIPANTS_PER_PAGE,
+  filteredParticipants.value.length,
+))
 const mentionOptions = computed<MentionOption[]>(() => [
   {
     key: 'all',
@@ -498,8 +931,105 @@ const filteredMentionOptions = computed(() => {
   ))
 })
 const canCreatePrivateChat = computed(() => (
-  selectedParticipantIds.value.length > 0 && !creatingPrivateChat.value
+  privateChatTitle.value.trim().length > 0
+  && selectedParticipantIds.value.length > 0
+  && !creatingPrivateChat.value
 ))
+const taskDraftPeople = computed(() => {
+  const people = new Map<number, ProjectChatParticipant>()
+  projectParticipants.value.forEach(person => people.set(person.user_id, person))
+  members.value.forEach(member => people.set(member.user_id, {
+    user_id: member.user_id,
+    name: member.name,
+    title: member.title,
+  }))
+  return [...people.values()].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
+})
+const selectedTaskDraftPeople = computed(() => {
+  const selected = new Set(taskDraftForm.value?.mentioned_user_ids || [])
+  return taskDraftPeople.value.filter(person => selected.has(person.user_id))
+})
+const availableTaskDraftPeople = computed(() => {
+  const selected = new Set(taskDraftForm.value?.mentioned_user_ids || [])
+  return taskDraftPeople.value.filter(person => !selected.has(person.user_id))
+})
+const canPublishTaskDraft = computed(() => {
+  const form = taskDraftForm.value
+  if (
+    !form
+    || activePrivateTaskDraft.value?.status !== 'ready'
+    || publishingTaskDraft.value
+    || dismissingTaskDraft.value
+  ) return false
+  if (!form.title.trim()) return false
+  if (form.run_mode !== 'immediate' && (!form.trigger_date || !form.trigger_time)) return false
+  if (form.run_mode === 'recurring' && form.trigger_interval_value < 1) return false
+  if (form.action_type === 'project_chat_message') {
+    return Boolean(
+      form.target_channel_id
+      && form.message_content?.trim()
+      && (form.mention_mode !== 'users' || form.mentioned_user_ids.length),
+    )
+  }
+  const fallbackOwner = form.assignee_user_id
+  return Boolean(
+    form.confirmer_user_id
+    && form.wbs_item_id
+    && form.workflow_steps.length
+    && form.workflow_steps.every(step => (
+      step.node_type !== 'manual' || step.owner_user_id || fallbackOwner
+    )),
+  )
+})
+const privateTaskDraftStatus = computed(() => {
+  if (publishingTaskDraft.value) return 'publishing'
+  if (creatingTaskDraft.value) return 'generating'
+  if (taskDraftStartError.value) return 'failed'
+  return activePrivateTaskDraft.value?.status || 'generating'
+})
+const privateTaskDraftStatusLabel = computed(() => ({
+  generating: 'Dobby 分析中',
+  ready: '待你确认',
+  publishing: '正在发布',
+  published: '已经发布',
+  dismissed: '已经关闭',
+  cancelled: '已停止',
+  failed: '分析失败',
+}[privateTaskDraftStatus.value] || '处理中'))
+const isTaskDraftGenerating = computed(() => (
+  creatingTaskDraft.value || activePrivateTaskDraft.value?.status === 'generating'
+))
+const isTaskDraftPublishing = computed(() => (
+  publishingTaskDraft.value || activePrivateTaskDraft.value?.status === 'publishing'
+))
+const isTaskDraftUnavailable = computed(() => Boolean(
+  taskDraftStartError.value
+  || ['failed', 'cancelled'].includes(activePrivateTaskDraft.value?.status || ''),
+))
+const privateTaskDraftRequestSummary = computed(() => {
+  const source = (
+    activePrivateTaskDraft.value?.request_text
+    || taskDraftRequestPreview.value
+    || '正在读取当前群聊上下文'
+  ).replace(/\s+/g, ' ').trim()
+  return source.length > 110 ? `${source.slice(0, 110)}…` : source
+})
+const privateTaskDraftLauncherTitle = computed(() => ({
+  generating: 'Dobby 正在分析任务需求',
+  ready: '任务草稿等待确认',
+  publishing: '任务正在发布',
+  failed: 'Dobby 未能完成分析',
+  cancelled: 'Dobby 已停止分析',
+} as Record<string, string>)[activePrivateTaskDraft.value?.status || ''] || '继续处理任务草稿')
+const privateTaskDraftLauncherDescription = computed(() => {
+  const row = activePrivateTaskDraft.value
+  if (!row) return ''
+  if (row.status === 'ready') return row.draft?.title || '打开后检查内容并决定是否发布'
+  if (row.status === 'publishing') return '正在写入任务中心，请勿重复操作'
+  if (row.status === 'failed') return row.error || '打开后可让 Dobby 重新分析'
+  if (row.status === 'cancelled') return '打开后可重新分析或关闭本次草稿'
+  return `正在根据「${row.channel_title || '当前会话'}」整理任务要求`
+})
 const connectionLabel = computed(() => ({
   connected: '实时连接',
   connecting: '正在连接',
@@ -516,18 +1046,57 @@ function errorDetail(error: any, fallback: string) {
   return error?.response?.data?.detail || error?.message || fallback
 }
 
+function queryNumberOrString(value: unknown) {
+  return Array.isArray(value) ? String(value[0] || '') : String(value || '')
+}
+
+function queryPositiveInt(value: unknown) {
+  const parsed = Number(queryNumberOrString(value))
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+function replaceChatQuery(patch: Record<string, string | undefined>) {
+  const query = { ...route.query }
+  Object.entries(patch).forEach(([key, value]) => {
+    if (value) query[key] = value
+    else delete query[key]
+  })
+  void router.replace({ path: '/ai', query })
+}
+
+function taskTitle(taskId: string) {
+  return store.tasks.find(task => task.id === taskId)?.title || `任务 ${taskId}`
+}
+
+function taskRoute(taskId: string): RouteLocationRaw {
+  return { path: '/tasks', query: { tab: 'history', taskId, view: 'history' } }
+}
+
+async function applyTaskContextDraft() {
+  const task = contextTask.value
+  if (!task || draft.value.trim()) return
+  draft.value = `关于任务“${task.title}”（${task.id}）：`
+  await nextTick()
+  renderComposer()
+}
+
+function clearTaskContext() {
+  const task = contextTask.value
+  if (task && draft.value === `关于任务“${task.title}”（${task.id}）：`) clearComposer()
+  replaceChatQuery({ taskId: undefined, messageId: undefined })
+}
+
 function channelDisplayTitle(channel: ProjectChatChannel) {
   const title = channel.title?.trim()
-  if (!title) return channel.channel_type === 'private' ? '私密会话' : '项目群'
-  if (channel.channel_type === 'project' && title === `${currentProjectName.value}项目群`) {
-    return '项目群'
+  if (channel.channel_type === 'project') {
+    return store.currentProject?.name?.trim() || title || '项目群'
   }
+  if (!title) return channel.channel_type === 'private' ? '私密会话' : '项目群'
   return title
 }
 
 function compactTime(value: string) {
-  const time = dayjs(value)
-  return time.isSame(dayjs(), 'day') ? time.format('HH:mm') : time.format('M/D')
+  return dayjs(value).format('YYYY-MM-DD HH:mm:ss')
 }
 
 function messageTime(value: string | null) {
@@ -542,7 +1111,11 @@ function isOwnMessage(item: ProjectChatMessage) {
 
 function senderName(item: ProjectChatMessage) {
   if (item.sender_type === 'agent') {
-    return String(item.metadata?.agent_name || item.sender?.name || item.sender_agent_id || '项目智能体')
+    const name = String(item.metadata?.agent_name || item.sender?.name || item.sender_agent_id || '项目智能体').trim()
+    if (item.sender_agent_id === 'dobby-task-engine' || /^Dobby\s*(?:（任务引擎）|\(任务引擎\))?$/.test(name)) {
+      return 'Dobby'
+    }
+    return name
   }
   if (item.sender_type === 'system') return '系统消息'
   return item.sender?.name || '项目成员'
@@ -687,10 +1260,236 @@ function agentRuntimeLabel(item: ProjectChatMessage) {
   } as Record<string, string>)[status] || ''
 }
 
-function mentionedAgentNames(item: ProjectChatMessage) {
+function renderTaskDraftContent(content: string) {
+  const source = content || ''
+  const cached = taskDraftMarkdownCache.get(source)
+  if (cached !== undefined) return cached
+  const rendered = taskDraftMarkdown.render(source)
+  if (taskDraftMarkdownCache.size >= 128) {
+    const oldest = taskDraftMarkdownCache.keys().next().value
+    if (oldest !== undefined) taskDraftMarkdownCache.delete(oldest)
+  }
+  taskDraftMarkdownCache.set(source, rendered)
+  return rendered
+}
+
+function taskDraftExecutionLabel(value: ProjectChatTaskDraft | null) {
+  if (!value) return ''
+  if (value.run_mode === 'immediate') return '立即执行'
+  const at = [value.trigger_date, value.trigger_time].filter(Boolean).join(' ')
+  if (value.run_mode === 'recurring') {
+    const unit = ({ minute: '分钟', hour: '小时', day: '天', week: '周', month: '月' } as Record<string, string>)[value.trigger_interval_unit]
+    return `${at} 起，每 ${value.trigger_interval_value} ${unit || value.trigger_interval_unit}`
+  }
+  return at || '单次定时'
+}
+
+function taskEventTitle(item: ProjectChatMessage) {
+  return String(item.metadata?.task_title || item.content || '新任务')
+}
+
+function taskEventExecutionLabel(item: ProjectChatMessage) {
+  const runMode = String(item.metadata?.run_mode || '')
+  return ({
+    immediate: '立即执行',
+    once: '单次定时',
+    recurring: '周期执行',
+    calendar: '日历触发',
+  } as Record<string, string>)[runMode] || '已进入任务中心'
+}
+
+function taskEventRoute(item: ProjectChatMessage): RouteLocationRaw {
+  if (item.task_ids?.[0]) return taskRoute(item.task_ids[0])
+  return { path: '/tasks', query: { tab: 'schedules' } }
+}
+
+function taskEventLinkLabel(item: ProjectChatMessage) {
+  return item.task_ids?.[0] ? '查看任务' : '查看计划'
+}
+
+function businessMentionedAgentNames(item: ProjectChatMessage) {
+  const taskAssistantIds = new Set(
+    Array.isArray(item.metadata?.task_assistant_ids)
+      ? item.metadata.task_assistant_ids.map(String)
+      : [],
+  )
   return item.mentions
-    .filter(mention => mention.target_type === 'agent')
+    .filter(mention => (
+      mention.target_type === 'agent'
+      && !taskAssistantIds.has(String(mention.target_agent_id || ''))
+    ))
     .map(mention => mention.display_name)
+}
+
+async function ensureTaskDraftPeople() {
+  const projectId = store.currentProjectId
+  if (!projectId || projectParticipants.value.length) return
+  projectParticipants.value = await listProjectChatParticipants(projectId)
+}
+
+function cloneTaskDraft(value: ProjectChatTaskDraft) {
+  return {
+    ...value,
+    required_materials: [...(value.required_materials || [])],
+    mentioned_user_ids: [...(value.mentioned_user_ids || [])],
+    workflow_steps: (value.workflow_steps || []).map(step => ({
+      ...step,
+      action: step.action ? {
+        ...step.action,
+        mentioned_user_ids: [...(step.action.mentioned_user_ids || [])],
+      } : undefined,
+    })),
+    target_channel_id: value.target_channel_id
+      || channels.value.find(channel => channel.channel_type === 'project')?.id
+      || activeChannelId.value,
+  }
+}
+
+function resetPrivateTaskDraft() {
+  activePrivateTaskDraft.value = null
+  taskDraftForm.value = null
+  taskDraftMemberToAdd.value = ''
+  taskDraftError.value = ''
+  taskDraftStartError.value = ''
+  taskDraftRequestPreview.value = ''
+}
+
+function applyPrivateTaskDraft(row: ProjectChatPrivateTaskDraft, open = false) {
+  const previous = activePrivateTaskDraft.value
+  if (
+    previous?.id === row.id
+    && previous.updated_at
+    && row.updated_at
+    && dayjs(row.updated_at).isBefore(dayjs(previous.updated_at))
+  ) return
+  if (row.status === 'published' || row.status === 'dismissed') {
+    if (!previous || previous.id === row.id) {
+      resetPrivateTaskDraft()
+      taskDraftDialogOpen.value = false
+    }
+    return
+  }
+  activePrivateTaskDraft.value = row
+  taskDraftRequestPreview.value = row.request_text
+  taskDraftStartError.value = ''
+  if (row.status === 'ready' && row.draft) {
+    if (
+      !taskDraftForm.value
+      || previous?.id !== row.id
+      || previous?.status !== 'ready'
+    ) {
+      taskDraftForm.value = cloneTaskDraft(row.draft)
+    }
+    void ensureTaskDraftPeople().catch((error: any) => {
+      taskDraftError.value = errorDetail(error, '无法加载可选项目成员。')
+    })
+  } else {
+    taskDraftForm.value = null
+  }
+  if (open) taskDraftDialogOpen.value = true
+}
+
+function openTaskDraftDialog() {
+  taskDraftError.value = ''
+  taskDraftDialogOpen.value = true
+  const row = activePrivateTaskDraft.value
+  if (row?.status === 'ready' && row.draft && !taskDraftForm.value) {
+    taskDraftForm.value = cloneTaskDraft(row.draft)
+  }
+}
+
+function closeTaskDraftDialog() {
+  if (publishingTaskDraft.value || dismissingTaskDraft.value) return
+  taskDraftDialogOpen.value = false
+}
+
+function addTaskDraftMember() {
+  const form = taskDraftForm.value
+  const userId = Number(taskDraftMemberToAdd.value)
+  if (!form || !userId) return
+  form.mentioned_user_ids = [...new Set([...form.mentioned_user_ids, userId])]
+  taskDraftMemberToAdd.value = ''
+}
+
+function removeTaskDraftMember(userId: number) {
+  const form = taskDraftForm.value
+  if (!form) return
+  form.mentioned_user_ids = form.mentioned_user_ids.filter(id => id !== userId)
+}
+
+async function retryTaskDraft() {
+  const row = activePrivateTaskDraft.value
+  if (!row || taskDraftActionId.value !== null) return
+  taskDraftActionId.value = row.id
+  taskDraftError.value = ''
+  try {
+    const updated = await retryPrivateProjectChatTaskDraft(row.id)
+    applyPrivateTaskDraft(updated, true)
+  } catch (error: any) {
+    taskDraftError.value = errorDetail(error, 'Dobby 重新分析任务失败。')
+  } finally {
+    taskDraftActionId.value = null
+  }
+}
+
+async function dismissTaskDraft() {
+  const row = activePrivateTaskDraft.value
+  if (dismissingTaskDraft.value || publishingTaskDraft.value) return
+  if (!row) {
+    cancelPendingTaskDraftCreation.value = creatingTaskDraft.value
+    taskDraftDialogOpen.value = false
+    taskDraftStartError.value = ''
+    return
+  }
+  dismissingTaskDraft.value = true
+  taskDraftActionId.value = row.id
+  taskDraftError.value = ''
+  try {
+    if (row.status === 'generating') {
+      await stopPrivateProjectChatTaskDraft(row.id)
+    }
+    await dismissPrivateProjectChatTaskDraft(row.id)
+    taskDraftDialogOpen.value = false
+    resetPrivateTaskDraft()
+  } catch (error: any) {
+    taskDraftError.value = errorDetail(error, '取消任务草稿失败。')
+  } finally {
+    dismissingTaskDraft.value = false
+    taskDraftActionId.value = null
+  }
+}
+
+async function publishTaskDraft() {
+  const item = activePrivateTaskDraft.value
+  const form = taskDraftForm.value
+  if (!item || !form || !canPublishTaskDraft.value) return
+  publishingTaskDraft.value = true
+  taskDraftError.value = ''
+  try {
+    const payload: ProjectChatTaskDraft = {
+      ...form,
+      title: form.title.trim(),
+      trigger_reason: form.trigger_reason?.trim() || null,
+      message_content: form.message_content?.trim() || null,
+      workflow_steps: form.workflow_steps.map(step => ({
+        ...step,
+        owner_user_id: step.node_type === 'manual'
+          ? step.owner_user_id || form.assignee_user_id || null
+          : null,
+        material: step.material?.trim() || '',
+      })),
+    }
+    const response = await publishPrivateProjectChatTaskDraft(item.id, payload)
+    if (response.data.message) mergeMessages([response.data.message], true)
+    notice.success(response.message || '任务已发布。')
+    taskDraftDialogOpen.value = false
+    resetPrivateTaskDraft()
+    await store.loadProjectData()
+  } catch (error: any) {
+    taskDraftError.value = errorDetail(error, '发布任务失败。')
+  } finally {
+    publishingTaskDraft.value = false
+  }
 }
 
 function escapeRegExp(value: string) {
@@ -853,6 +1652,7 @@ function updateMentionState() {
   if (mentionQuery.value !== query) mentionActiveIndex.value = 0
   mentionQuery.value = query
   mentionMenuOpen.value = true
+  void loadMentionAgents()
 }
 
 async function selectMention(option: MentionOption) {
@@ -982,8 +1782,10 @@ function mergeMessages(incoming: ProjectChatMessage[], forceScroll = false) {
   if (shouldScroll) void scrollMessagesToBottom(forceScroll)
 }
 
-async function fetchMessages(channelId: number, replace = false) {
-  const latestId = replace ? undefined : messages.value[messages.value.length - 1]?.id
+async function fetchMessages(channelId: number, replace = false, refreshExisting = false) {
+  const latestId = replace || refreshExisting
+    ? undefined
+    : messages.value[messages.value.length - 1]?.id
   const rows = await listProjectChatMessages(channelId, { afterId: latestId, limit: 100 })
   if (activeChannelId.value !== channelId) return
   if (replace) {
@@ -994,11 +1796,16 @@ async function fetchMessages(channelId: number, replace = false) {
   }
 }
 
-async function activateChannel(channelId: number) {
-  if (activeChannelId.value === channelId && messages.value.length) return
+async function activateChannel(channelId: number, syncRoute = true) {
+  if (activeChannelId.value === channelId && messages.value.length) {
+    if (syncRoute) replaceChatQuery({ channelId: String(channelId), messageId: undefined })
+    await applyTaskContextDraft()
+    return
+  }
   if (activeChannelId.value !== channelId) {
     clearComposer()
   }
+  if (syncRoute) replaceChatQuery({ channelId: String(channelId), messageId: undefined })
   activeChannelId.value = channelId
   loadingMessages.value = true
   pageError.value = ''
@@ -1013,11 +1820,54 @@ async function activateChannel(channelId: number) {
     messages.value = loadedMessages
     members.value = loadedMembers
     await scrollMessagesToBottom()
+    await applyTaskContextDraft()
   } catch (error: any) {
     pageError.value = errorDetail(error, '无法加载项目群聊。')
   } finally {
     if (activeChannelId.value === channelId) loadingMessages.value = false
   }
+}
+
+async function focusRouteMessage() {
+  const messageId = queryPositiveInt(route.query.messageId)
+  if (!messageId) return
+  let item = messages.value.find(message => message.id === messageId)
+  if (!item) item = await getProjectChatMessage(messageId)
+  if (!channels.value.some(channel => channel.id === item.channel_id)) return
+  if (activeChannelId.value !== item.channel_id) {
+    await activateChannel(item.channel_id, false)
+  }
+  if (!messages.value.some(message => message.id === item.id)) mergeMessages([item])
+  await nextTick()
+  const element = messageElements.get(item.id)
+  const viewport = messageViewport.value
+  if (!element || !viewport) return
+  const viewportRect = viewport.getBoundingClientRect()
+  const messageRect = element.getBoundingClientRect()
+  const targetTop = viewport.scrollTop
+    + messageRect.top
+    - viewportRect.top
+    - Math.max(0, (viewport.clientHeight - messageRect.height) / 2)
+  viewport.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
+  startMentionPulse(item.id)
+}
+
+async function syncChatRouteContext() {
+  if (!channels.value.length) {
+    await applyTaskContextDraft()
+    return
+  }
+  const requestedChannelId = queryPositiveInt(route.query.channelId)
+  const targetChannel = channels.value.find(channel => channel.id === requestedChannelId)
+  if (targetChannel && targetChannel.id !== activeChannelId.value) {
+    await activateChannel(targetChannel.id, false)
+  }
+  try {
+    await focusRouteMessage()
+  } catch (error: any) {
+    notice.error(errorDetail(error, '无法定位任务来源消息。'))
+  }
+  await applyTaskContextDraft()
 }
 
 async function loadPrivateChatParticipants() {
@@ -1035,16 +1885,34 @@ async function loadPrivateChatParticipants() {
 }
 
 async function loadMentionAgents() {
+  if (mentionAgentsLoaded.value || mentionAgentsLoading.value) return
+  mentionAgentsLoading.value = true
   try {
     mentionAgents.value = await listProjectChatAgents()
+    mentionAgentsLoaded.value = true
   } catch {
-    mentionAgents.value = []
+    mentionAgents.value = [PROJECT_CHAT_TASK_ASSISTANT]
+  } finally {
+    mentionAgentsLoading.value = false
   }
+}
+
+function focusPrivateChatTitle() {
+  privateChatTitleInput.value?.focus()
+}
+
+function focusParticipantSearch() {
+  participantSearchInput.value?.focus()
+}
+
+function setParticipantPage(page: number) {
+  participantPage.value = Math.min(Math.max(1, page), participantPageCount.value)
 }
 
 function openPrivateChatDialog() {
   privateChatTitle.value = ''
   participantSearch.value = ''
+  participantPage.value = 1
   selectedParticipantIds.value = []
   privateChatError.value = ''
   privateChatDialogOpen.value = true
@@ -1063,7 +1931,7 @@ async function createPrivateChat() {
   privateChatError.value = ''
   try {
     const created = await createPrivateProjectChatChannel(projectId, {
-      title: privateChatTitle.value.trim() || undefined,
+      title: privateChatTitle.value.trim(),
       participant_user_ids: selectedParticipantIds.value,
     })
     channels.value = await listProjectChatChannels(projectId)
@@ -1090,8 +1958,25 @@ function stopRealtime() {
 function startPolling() {
   if (pollTimer !== null) window.clearInterval(pollTimer)
   pollTimer = window.setInterval(() => {
-    if (activeChannelId.value && !loadingMessages.value) {
-      void fetchMessages(activeChannelId.value).catch(() => undefined)
+    // The timer is only a degraded-mode safety net. A healthy realtime
+    // subscription already delivers every new message and must not keep
+    // hitting the history API in parallel.
+    if (
+      realtimeStatus.value !== 'connected'
+      && activeChannelId.value
+      && !loadingMessages.value
+    ) {
+      void fetchMessages(
+        activeChannelId.value,
+        false,
+        true,
+      ).catch(() => undefined)
+      const draftId = activePrivateTaskDraft.value?.id
+      if (draftId && ['generating', 'publishing'].includes(activePrivateTaskDraft.value?.status || '')) {
+        void getProjectChatTaskDraft(draftId)
+          .then(row => applyPrivateTaskDraft(row))
+          .catch(() => undefined)
+      }
     }
   }, 5000)
 }
@@ -1135,6 +2020,14 @@ async function startRealtime(projectId: string, generation: number) {
         if (incoming.channel_id === activeChannelId.value) mergeMessages([incoming])
         queueMentionNotice(incoming)
       },
+      onTaskDraft: incoming => {
+        if (generation !== loadGeneration) return
+        const previousStatus = activePrivateTaskDraft.value?.status
+        applyPrivateTaskDraft(incoming)
+        if (incoming.status === 'ready' && previousStatus === 'generating') {
+          notice.success('Dobby 已完成分析，请确认任务草稿后发布。')
+        }
+      },
     })
     if (generation !== loadGeneration) {
       client?.disconnect()
@@ -1151,6 +2044,9 @@ async function loadProjectChat(projectId: string) {
   const generation = ++loadGeneration
   stopRealtime()
   privateChatDialogOpen.value = false
+  taskDraftDialogOpen.value = false
+  creatingTaskDraft.value = false
+  resetPrivateTaskDraft()
   projectParticipants.value = []
   selectedParticipantIds.value = []
   channels.value = []
@@ -1165,16 +2061,19 @@ async function loadProjectChat(projectId: string) {
   if (!projectId) return
   loadingChannels.value = true
   try {
-    const [rows, unseenNotices] = await Promise.all([
+    const [rows, unseenNotices, privateDrafts] = await Promise.all([
       listProjectChatChannels(projectId),
       listProjectChatMentionNotices(projectId),
-      loadMentionAgents(),
+      listProjectChatTaskDrafts(projectId),
     ])
     if (generation !== loadGeneration) return
     channels.value = rows
     mentionNotices.value = unseenNotices
-    const firstChannel = rows[0]
-    if (firstChannel) await activateChannel(firstChannel.id)
+    if (privateDrafts[0]) applyPrivateTaskDraft(privateDrafts[0])
+    const requestedChannelId = queryPositiveInt(route.query.channelId)
+    const firstChannel = rows.find(channel => channel.id === requestedChannelId) || rows[0]
+    if (firstChannel) await activateChannel(firstChannel.id, !requestedChannelId)
+    await syncChatRouteContext()
     if (generation === loadGeneration) void startRealtime(projectId, generation)
   } catch (error: any) {
     if (generation === loadGeneration) {
@@ -1191,12 +2090,15 @@ function reloadProjectChat() {
 }
 
 async function manualRefresh() {
-  if (!activeChannelId.value) return
+  if (!activeChannelId.value || manualRefreshing.value || loadingMessages.value) return
+  manualRefreshing.value = true
   try {
     await fetchMessages(activeChannelId.value)
     notice.success('已刷新群聊消息。')
   } catch (error: any) {
     notice.error(errorDetail(error, '刷新消息失败。'))
+  } finally {
+    manualRefreshing.value = false
   }
 }
 
@@ -1205,6 +2107,67 @@ async function sendMessage() {
   const content = draft.value.trim()
   const channelId = activeChannelId.value
   if (!content || !channelId || sending.value) return
+  const selectedAgentIds = selectedMentions.value
+    .filter(mention => mention.type === 'agent')
+    .map(mention => String(mention.id))
+  const invokesTaskAssistant = selectedAgentIds.includes(PROJECT_CHAT_TASK_ASSISTANT.id)
+  if (invokesTaskAssistant) {
+    const otherAgentIds = selectedAgentIds.filter(id => id !== PROJECT_CHAT_TASK_ASSISTANT.id)
+    if (otherAgentIds.length) {
+      notice.warning('任务助手需要单独使用，请移除其他智能体后再发送。')
+      return
+    }
+    if (activePrivateTaskDraft.value) {
+      openTaskDraftDialog()
+      notice.warning('请先处理当前任务草稿。')
+      return
+    }
+    const requirement = content.replace('@任务助手', '').trim()
+    if (requirement.length < 4) {
+      notice.warning('请在 @任务助手 后说明要布置的任务。')
+      return
+    }
+    sending.value = true
+    creatingTaskDraft.value = true
+    cancelPendingTaskDraftCreation.value = false
+    taskDraftRequestPreview.value = requirement
+    taskDraftStartError.value = ''
+    taskDraftDialogOpen.value = true
+    try {
+      const created = await createProjectChatTaskDraft(channelId, content)
+      clearComposer()
+      if (cancelPendingTaskDraftCreation.value) {
+        if (created.status === 'generating') await stopPrivateProjectChatTaskDraft(created.id)
+        await dismissPrivateProjectChatTaskDraft(created.id)
+        resetPrivateTaskDraft()
+      } else {
+        applyPrivateTaskDraft(created, true)
+      }
+    } catch (error: any) {
+      if (!cancelPendingTaskDraftCreation.value) {
+        if (error?.response?.status === 409 && store.currentProjectId) {
+          try {
+            const existing = await listProjectChatTaskDrafts(store.currentProjectId)
+            if (existing[0]) {
+              applyPrivateTaskDraft(existing[0], true)
+              notice.warning('已为你打开尚未处理的任务草稿。')
+            } else {
+              taskDraftStartError.value = errorDetail(error, '无法启动 Dobby 任务分析。')
+            }
+          } catch {
+            taskDraftStartError.value = errorDetail(error, '无法启动 Dobby 任务分析。')
+          }
+        } else {
+          taskDraftStartError.value = errorDetail(error, '无法启动 Dobby 任务分析。')
+        }
+      }
+    } finally {
+      creatingTaskDraft.value = false
+      cancelPendingTaskDraftCreation.value = false
+      sending.value = false
+    }
+    return
+  }
   sending.value = true
   try {
     const created = await sendProjectChatMessage(channelId, content, {
@@ -1254,6 +2217,17 @@ watch(
   { immediate: true },
 )
 
+watch(
+  () => [route.query.channelId, route.query.messageId, route.query.taskId] as const,
+  () => void syncChatRouteContext(),
+)
+
+watch(contextTask, () => void applyTaskContextDraft())
+watch(participantSearch, () => { participantPage.value = 1 })
+watch(participantPageCount, pageCount => {
+  if (participantPage.value > pageCount) participantPage.value = pageCount
+})
+
 onBeforeUnmount(() => {
   loadGeneration += 1
   stopRealtime()
@@ -1266,731 +2240,4 @@ onBeforeUnmount(() => {
 })
 </script>
 
-<style scoped>
-.project-chat-shell {
-  --chat-ink: #102c30;
-  --chat-muted: #61757a;
-  --chat-accent: #0b756e;
-  position: relative;
-  display: grid;
-  grid-template-columns: 19rem minmax(32rem, 1fr) 23rem;
-  gap: 0.55rem;
-  height: calc(100dvh - var(--header-height, 56px) - 36px);
-  min-height: 38rem;
-  overflow: hidden;
-  color: var(--chat-ink);
-}
-
-.channel-rail,
-.chat-stage,
-.chat-context {
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid rgba(19, 54, 58, 0.11);
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 18px 44px rgba(29, 55, 50, 0.06);
-}
-
-.channel-rail {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  border-radius: 0.75rem 0.35rem 0.35rem 0.75rem;
-}
-
-.rail-heading,
-.chat-heading {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  border-bottom: 1px solid rgba(19, 54, 58, 0.09);
-}
-
-.rail-heading { padding: 0.9rem; }
-.rail-title { min-width: 0; flex: 1; }
-.rail-title p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.new-private-chat {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 2.25rem;
-  height: 2.25rem;
-  border: 1px solid rgba(11, 117, 110, 0.2);
-  border-radius: 0.5rem;
-  background: #f1f8f6;
-  color: var(--chat-accent);
-  cursor: pointer;
-  transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
-}
-.new-private-chat:hover { border-color: rgba(11, 117, 110, 0.42); background: #e3f2ee; }
-.new-private-chat:active { transform: translateY(1px); }
-.new-private-chat:focus-visible { outline: 2px solid rgba(11, 117, 110, 0.35); outline-offset: 2px; }
-
-.heading-icon,
-.chat-channel-mark,
-.boundary-icon {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 2.25rem;
-  height: 2.25rem;
-  border-radius: 0.55rem;
-  background: #e5f3f0;
-  color: var(--chat-accent);
-}
-
-.rail-heading h1,
-.chat-heading h1,
-.chat-context h2,
-.chat-context h3 {
-  margin: 0;
-  color: var(--chat-ink);
-}
-
-.rail-heading h1 { font-size: 15px; line-height: 1.25; font-weight: 800; }
-
-.rail-heading p,
-.chat-heading p,
-.chat-context p {
-  margin: 0.2rem 0 0;
-  color: var(--chat-muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.channel-section-label,
-.context-eyebrow {
-  color: #6c7f83;
-  font-size: 12px;
-  font-weight: 750;
-  letter-spacing: 0.04em;
-}
-
-.channel-list { min-height: 0; overflow: auto; padding: 0.65rem 0.5rem; }
-.channel-section-label { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.65rem 0.45rem 0.4rem; }
-.channel-section-label:first-of-type { padding-top: 0; }
-.channel-section-label em { color: #839491; font-size: 12px; font-style: normal; font-variant-numeric: tabular-nums; }
-.channel-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 0.5rem;
-  align-items: center;
-  width: 100%;
-  min-height: 3.8rem;
-  padding: 0.55rem;
-  border: 1px solid transparent;
-  border-radius: 0.55rem;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background 180ms ease, border-color 180ms ease, transform 180ms ease;
-}
-.channel-item:hover { border-color: rgba(11, 117, 110, 0.14); background: #f3f8f6; }
-.channel-item:active { transform: translateY(1px); }
-.channel-item:focus-visible { outline: 2px solid rgba(11, 117, 110, 0.35); outline-offset: 2px; }
-.channel-item.active { border-color: rgba(11, 117, 110, 0.24); background: #eaf5f2; box-shadow: inset 3px 0 0 var(--chat-accent); }
-.channel-symbol { color: var(--chat-accent); }
-.channel-item.private .channel-symbol { color: #5b706f; }
-.channel-copy { min-width: 0; display: grid; gap: 0.2rem; }
-.channel-copy strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.channel-copy small { overflow: hidden; color: var(--chat-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.channel-item time { display: block; align-self: start; color: #819095; font-size: 12px; font-variant-numeric: tabular-nums; }
-.rail-foot { display: flex; gap: 0.45rem; align-items: flex-start; padding: 0.7rem 0.8rem; border-top: 1px solid rgba(19, 54, 58, 0.08); color: #6c7f83; font-size: 12px; line-height: 1.4; }
-.rail-empty { padding: 0.9rem 0.4rem; color: var(--chat-muted); font-size: 12px; }
-.channel-skeleton { display: grid; grid-template-columns: 1.5rem 1fr; gap: 0.5rem; padding: 0.65rem; }
-.channel-skeleton i { grid-row: 1 / 3; width: 1.5rem; height: 1.5rem; border-radius: 0.4rem; }
-.channel-skeleton span { height: 0.8rem; width: 70%; }
-.channel-skeleton small { height: 0.7rem; width: 90%; }
-.channel-skeleton i,
-.channel-skeleton span,
-.channel-skeleton small,
-.message-placeholder i,
-.message-placeholder span {
-  display: block;
-  background: linear-gradient(90deg, #edf2f0, #f8faf9, #edf2f0);
-  background-size: 200% 100%;
-  animation: chat-shimmer 1.4s linear infinite;
-}
-
-.chat-stage {
-  display: flex;
-  height: 100%;
-  flex-direction: column;
-  border-radius: 0.75rem;
-}
-
-.chat-heading {
-  justify-content: space-between;
-  min-height: 4.5rem;
-  padding: 0.7rem 1.1rem;
-  background: rgba(255, 255, 255, 0.97);
-}
-
-.chat-heading-main { display: flex; align-items: center; gap: 0.7rem; min-width: 0; }
-.chat-heading-main > div:last-child { min-width: 0; }
-.chat-heading h1 { overflow: hidden; font-size: 17px; line-height: 1.25; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
-.chat-heading p { display: flex; min-width: 0; gap: 0.4rem; align-items: center; white-space: nowrap; }
-.current-project-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
-.connection-state {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 0.4rem;
-  min-height: 2rem;
-  padding: 0 0.65rem;
-  border-radius: 0.45rem;
-  background: #f1f5f3;
-  color: #63777b;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.connection-state.connected { background: #e6f5ef; color: #11715d; }
-.connection-state.connecting { color: #8a6c20; }
-
-.chat-alert {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
-  margin: 0.65rem 1rem 0;
-  padding: 0.65rem 0.75rem;
-  border: 1px solid #efd2c6;
-  border-radius: 0.45rem;
-  background: #fff7f3;
-  color: #8b452c;
-  font-size: 12px;
-}
-
-.chat-alert span { min-width: 0; flex: 1; }
-.chat-alert button,
-.polling-note button {
-  border: 0;
-  background: transparent;
-  color: var(--chat-accent);
-  font: inherit;
-  font-weight: 750;
-  cursor: pointer;
-}
-
-.message-viewport {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-  padding: 1.35rem clamp(1.1rem, 4vw, 4.5rem) 1.75rem;
-  background:
-    radial-gradient(circle at 8% 2%, rgba(11, 117, 110, 0.065), transparent 22rem),
-    radial-gradient(circle at 94% 96%, rgba(104, 139, 132, 0.05), transparent 24rem),
-    #f7faf8;
-  scroll-behavior: smooth;
-}
-
-.chat-message {
-  display: flex;
-  gap: 0.65rem;
-  align-items: flex-start;
-  max-width: min(46rem, 84%);
-  margin-bottom: 1rem;
-}
-
-.chat-message.own { flex-direction: row-reverse; margin-left: auto; }
-.sender-avatar,
-.member-avatar {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 2rem;
-  height: 2rem;
-  border-radius: 0.5rem;
-  background: #dfeae7;
-  color: #21484a;
-  font-size: 12px;
-  font-weight: 800;
-}
-.chat-message.own .sender-avatar { background: #0b6865; color: #fff; }
-.chat-message.agent .sender-avatar { background: #e4f1ee; color: var(--chat-accent); }
-
-.message-body { min-width: 0; display: grid; gap: 0.35rem; }
-.message-meta { display: flex; align-items: center; gap: 0.45rem; color: #718287; font-size: 12px; }
-.chat-message.own .message-meta { justify-content: flex-end; }
-.message-meta strong { color: #385257; font-size: 12px; }
-.message-meta time { font-variant-numeric: tabular-nums; }
-.agent-label,
-.owner-label,
-.runtime-label {
-  padding: 0.1rem 0.35rem;
-  border-radius: 0.25rem;
-  background: #e8f3f0;
-  color: var(--chat-accent);
-  font-size: 12px;
-  font-weight: 700;
-  font-style: normal;
-}
-.runtime-label { background: #fff2df; color: #9b5e16; }
-
-.message-content {
-  padding: 0.7rem 0.85rem;
-  border: 1px solid rgba(19, 54, 58, 0.1);
-  border-radius: 0.35rem 0.75rem 0.75rem 0.75rem;
-  background: #fff;
-  color: #213b3f;
-  box-shadow: 0 8px 22px rgba(30, 56, 52, 0.055);
-  font-size: 14px;
-  line-height: 1.65;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.chat-message.own .message-content {
-  border-color: #0a6562;
-  border-radius: 0.75rem 0.35rem 0.75rem 0.75rem;
-  background: #0a5655;
-  color: #fff;
-}
-.chat-message.mentioned:not(.own) .message-content {
-  border-color: rgba(11, 117, 110, 0.42);
-  box-shadow: 0 10px 26px rgba(11, 117, 110, 0.1);
-}
-.chat-message.mention-pulse:not(.own) .message-content {
-  transform-origin: left center;
-  animation: mention-attention-pulse 640ms ease-in-out 4;
-  will-change: transform, background-color, border-color, box-shadow;
-}
-.chat-message.failed .message-content { border-color: #e7bbaa; background: #fff8f4; color: #7e3c28; }
-.message-mention {
-  display: inline;
-  border-radius: 0.28rem;
-  padding: 0.08rem 0.24rem;
-  background: #e3f2ee;
-  color: #087169;
-  font-weight: 760;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
-}
-.message-mention.agent { background: #e9eefb; color: #3d5ca4; }
-.message-mention.all { background: #e6f0ff; color: #1769bd; }
-.chat-message.own .message-mention { background: rgba(255, 255, 255, 0.18); color: #fff; }
-.agent-request-note {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  color: #5d7377;
-  font-size: 12px;
-  line-height: 1.45;
-}
-.chat-message.own .agent-request-note { justify-content: flex-end; }
-
-.chat-empty {
-  display: grid;
-  justify-items: center;
-  align-content: center;
-  min-height: 100%;
-  padding: 2rem;
-  text-align: center;
-}
-.empty-robot { display: grid; place-items: center; width: 4.5rem; height: 4.5rem; margin-bottom: 1rem; border-radius: 1rem; background: #e5f2ef; color: var(--chat-accent); box-shadow: 0 14px 34px rgba(11, 117, 110, 0.12); }
-.chat-empty h3 { margin: 0; color: var(--chat-ink); font-size: 17px; }
-.chat-empty p { max-width: 30rem; margin: 0.55rem 0 0; color: var(--chat-muted); font-size: 13px; line-height: 1.65; text-wrap: pretty; }
-
-.message-loading { padding-top: 0.5rem; }
-.message-placeholder { display: flex; gap: 0.65rem; align-items: flex-start; margin-bottom: 1rem; }
-.message-placeholder.own { flex-direction: row-reverse; }
-.message-placeholder i { width: 2rem; height: 2rem; border-radius: 0.5rem; }
-.message-placeholder span { width: min(26rem, 65%); height: 4.3rem; border-radius: 0.7rem; }
-
-.message-composer {
-  flex: 0 0 auto;
-  padding: 0 1rem 1rem;
-  border-top: 0;
-  background: linear-gradient(180deg, rgba(247, 250, 248, 0), #fff 32%);
-}
-.mention-notice {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 0.6rem;
-  min-height: 3.15rem;
-  margin-bottom: 0.5rem;
-  padding: 0.48rem 0.55rem 0.48rem 0.65rem;
-  border: 1px solid rgba(11, 117, 110, 0.2);
-  border-radius: 0.65rem;
-  background: #edf7f4;
-  box-shadow: 0 10px 24px rgba(25, 69, 61, 0.08);
-  animation: mention-notice-enter 180ms ease-out;
-}
-.mention-notice-icon {
-  display: grid;
-  place-items: center;
-  width: 2rem;
-  height: 2rem;
-  border-radius: 50%;
-  background: #d9eee9;
-  color: #0b756e;
-}
-.mention-notice-copy {
-  display: grid;
-  min-width: 0;
-  gap: 0.08rem;
-}
-.mention-notice-copy strong,
-.mention-notice-copy > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.mention-notice-copy strong { color: #173d40; font-size: 13px; font-weight: 760; }
-.mention-notice-copy > span { color: #5b7477; font-size: 12px; }
-.mention-notice-count {
-  color: #0b6b65;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  font-weight: 700;
-}
-.mention-notice-locate {
-  min-width: 3.6rem;
-  min-height: 2rem;
-  padding: 0 0.65rem;
-  border: 1px solid rgba(11, 117, 110, 0.28);
-  border-radius: 0.42rem;
-  background: #fff;
-  color: #0b6964;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 750;
-  cursor: pointer;
-  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
-}
-.mention-notice-locate:hover:not(:disabled) { border-color: rgba(11, 117, 110, 0.5); background: #f7fbfa; }
-.mention-notice-locate:active:not(:disabled) { transform: translateY(1px); }
-.mention-notice-locate:focus-visible { outline: 2px solid rgba(11, 117, 110, 0.32); outline-offset: 2px; }
-.mention-notice-locate:disabled { opacity: 0.55; cursor: wait; }
-.polling-note { display: flex; justify-content: center; gap: 0.35rem; padding: 0.4rem 1rem 0; color: #7d6b39; font-size: 12px; line-height: 1.4; }
-.message-composer form {
-  position: relative;
-  padding: 0.65rem 0.7rem 0.7rem;
-  border: 1px solid rgba(19, 54, 58, 0.16);
-  border-radius: 0.75rem;
-  background: #fff;
-  box-shadow: 0 15px 34px rgba(28, 63, 57, 0.09);
-  transition: border-color 180ms ease, box-shadow 180ms ease;
-}
-.mention-menu {
-  position: absolute;
-  z-index: 20;
-  bottom: calc(100% + 0.5rem);
-  left: 0.7rem;
-  width: min(20rem, calc(100% - 1.4rem));
-  overflow: hidden;
-  border: 1px solid rgba(19, 54, 58, 0.17);
-  border-radius: 0.7rem;
-  background: #fff;
-  box-shadow: 0 18px 48px rgba(16, 44, 48, 0.18);
-}
-.mention-options { max-height: 17rem; overflow: auto; padding: 0.35rem; }
-.mention-option {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 0.65rem;
-  width: 100%;
-  min-height: 3.35rem;
-  padding: 0.45rem 0.55rem;
-  border: 0;
-  border-radius: 0.5rem;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.mention-option:hover,
-.mention-option.active { background: #eaf5f2; }
-.mention-option:focus-visible { outline: 2px solid rgba(11, 117, 110, 0.35); outline-offset: -1px; }
-.mention-avatar {
-  display: grid;
-  place-items: center;
-  width: 2rem;
-  height: 2rem;
-  border-radius: 0.48rem;
-  background: #e5eeeb;
-  color: #36575b;
-}
-.mention-avatar.agent { background: #e8edfa; color: #4862a2; }
-.mention-avatar.all { border-radius: 50%; background: #e6f0ff; color: #1677c8; }
-.mention-copy { min-width: 0; display: grid; gap: 0.12rem; }
-.mention-copy strong,
-.mention-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mention-copy strong { color: #29474b; font-size: 13px; }
-.mention-copy small { color: var(--chat-muted); font-size: 12px; }
-.mention-empty { display: grid; min-height: 5.5rem; place-items: center; color: var(--chat-muted); font-size: 13px; }
-.message-composer form:focus-within { border-color: rgba(11, 117, 110, 0.5); box-shadow: 0 17px 38px rgba(28, 73, 65, 0.12), 0 0 0 3px rgba(11, 117, 110, 0.07); }
-.composer-editor {
-  display: block;
-  width: 100%;
-  min-height: 3.5rem;
-  max-height: 10rem;
-  overflow-y: auto;
-  padding: 0.45rem 0.5rem;
-  border: 0;
-  border-radius: 0.4rem;
-  outline: none;
-  color: var(--chat-ink);
-  font: inherit;
-  font-size: 14px;
-  line-height: 1.55;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-  cursor: text;
-}
-.composer-editor[data-empty='true']::before {
-  color: #879599;
-  content: attr(data-placeholder);
-  pointer-events: none;
-}
-.composer-editor.disabled { background: #f3f5f4; cursor: not-allowed; }
-.composer-mention {
-  border-radius: 0.2rem;
-  color: #1677c8;
-  font-weight: 650;
-  box-decoration-break: clone;
-  -webkit-box-decoration-break: clone;
-}
-.composer-mention.agent { color: #4c65a4; }
-.composer-mention.all { color: #1769bd; }
-.composer-actions { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-top: 0.35rem; padding-left: 0.5rem; }
-.composer-tools { min-width: 0; display: flex; align-items: center; gap: 0.7rem; }
-.mention-trigger {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  width: 2rem;
-  min-height: 2rem;
-  padding: 0;
-  border: 1px solid rgba(11, 117, 110, 0.18);
-  border-radius: 0.42rem;
-  background: #f2f8f6;
-  color: #176d67;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 750;
-  cursor: pointer;
-}
-.mention-trigger:hover:not(:disabled) { border-color: rgba(11, 117, 110, 0.35); background: #e6f3ef; }
-.mention-trigger:disabled { opacity: 0.5; cursor: not-allowed; }
-.send-message {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.4rem;
-  min-width: 5.6rem;
-  height: 2.35rem;
-  border: 1px solid #0b6964;
-  border-radius: 0.45rem;
-  background: #0b6964;
-  color: #fff;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 750;
-  cursor: pointer;
-  transition: transform 180ms ease, background 180ms ease, box-shadow 180ms ease;
-}
-.send-message:hover:not(:disabled) { background: #085b58; box-shadow: 0 9px 20px rgba(11, 105, 100, 0.2); transform: translateY(-1px); }
-.send-message:active:not(:disabled) { transform: translateY(1px); }
-.send-message:focus-visible { outline: 2px solid rgba(11, 117, 110, 0.35); outline-offset: 2px; }
-.send-message:disabled { opacity: 0.48; cursor: not-allowed; }
-
-.chat-context {
-  display: grid;
-  align-content: start;
-  overflow: auto;
-  border-radius: 0.35rem 0.75rem 0.75rem 0.35rem;
-}
-.context-section { padding: 0.9rem; border-bottom: 1px solid rgba(19, 54, 58, 0.09); }
-.chat-context h2 { margin-top: 0.35rem; font-size: 16px; line-height: 1.35; }
-.chat-context h3 { font-size: 14px; line-height: 1.35; }
-.group-summary dl { display: grid; gap: 0.5rem; margin: 1rem 0 0; }
-.group-summary dl div { display: flex; justify-content: space-between; gap: 1rem; font-size: 12px; }
-.group-summary dt { color: var(--chat-muted); }
-.group-summary dd { margin: 0; color: #29464a; font-weight: 700; }
-.member-section header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.member-section header > span { color: var(--chat-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.member-section h3 { margin-top: 0.25rem; }
-.member-list { display: grid; gap: 0.35rem; margin-top: 0.8rem; }
-.member-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.6rem; align-items: center; padding: 0.45rem 0; }
-.member-avatar { width: 1.9rem; height: 1.9rem; border-radius: 0.45rem; }
-.member-row > div:nth-child(2) { min-width: 0; display: grid; gap: 0.15rem; }
-.member-row strong { display: flex; align-items: center; gap: 0.35rem; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.member-row strong em { color: var(--chat-accent); font-size: 12px; font-style: normal; }
-.member-row small { overflow: hidden; color: var(--chat-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.owner-label { background: #f1f4f2; color: #607377; }
-.agent-boundary { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.7rem; background: #f4f9f7; }
-.agent-boundary p { line-height: 1.6; }
-
-.private-chat-dialog {
-  --chat-ink: #102c30;
-  --chat-muted: #61757a;
-  --chat-accent: #0b756e;
-  width: min(44rem, calc(100vw - 2rem));
-  overflow: hidden;
-  border: 1px solid rgba(19, 54, 58, 0.14);
-  border-radius: 0.9rem;
-  background: #fff;
-  box-shadow: 0 28px 80px rgba(16, 44, 48, 0.2);
-}
-.private-chat-dialog > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1.25rem 1.35rem 1.05rem;
-  border-bottom: 1px solid rgba(19, 54, 58, 0.09);
-  background: radial-gradient(circle at 6% 0, rgba(11, 117, 110, 0.08), transparent 18rem), #fbfcfc;
-}
-.private-chat-dialog > header span { color: var(--chat-accent); font-size: 12px; font-weight: 800; letter-spacing: 0.05em; }
-.private-chat-dialog > header h2 { margin: 0.25rem 0 0; color: var(--chat-ink); font-size: 20px; line-height: 1.25; }
-.private-chat-dialog > header p { max-width: 38rem; margin: 0.35rem 0 0; color: var(--chat-muted); font-size: 13px; line-height: 1.55; }
-.private-chat-dialog > header button {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 2.3rem;
-  height: 2.3rem;
-  border: 1px solid rgba(19, 54, 58, 0.13);
-  border-radius: 0.5rem;
-  background: #fff;
-  color: #50696d;
-  cursor: pointer;
-}
-.private-chat-dialog > header button:hover:not(:disabled) { background: #edf5f2; }
-.private-chat-dialog > header button:focus-visible { outline: 2px solid rgba(11, 117, 110, 0.35); outline-offset: 2px; }
-.private-chat-dialog button:disabled { opacity: 0.5; cursor: not-allowed; }
-.private-chat-form { display: grid; gap: 1rem; padding: 1.1rem 1.35rem 1.2rem; }
-.private-chat-name { display: grid; gap: 0.45rem; color: #36575b; font-size: 12px; font-weight: 750; }
-.private-chat-name > span { display: flex; align-items: center; gap: 0.4rem; }
-.private-chat-name em { color: #849491; font-size: 12px; font-style: normal; font-weight: 500; }
-.private-chat-name input,
-.participant-search input {
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  color: var(--chat-ink);
-  background: transparent;
-  font: inherit;
-  font-size: 13px;
-}
-.private-chat-name > input {
-  width: 100%;
-  height: 2.55rem;
-  padding: 0 0.75rem;
-  border: 1px solid rgba(19, 54, 58, 0.16);
-  border-radius: 0.5rem;
-  background: #fff;
-}
-.private-chat-name > input:focus { border-color: rgba(11, 117, 110, 0.55); box-shadow: 0 0 0 3px rgba(11, 117, 110, 0.08); }
-.participant-picker { overflow: hidden; border: 1px solid rgba(19, 54, 58, 0.12); border-radius: 0.65rem; }
-.participant-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.75rem; border-bottom: 1px solid rgba(19, 54, 58, 0.09); background: #f7faf9; }
-.participant-picker-head > div { display: flex; align-items: baseline; gap: 0.6rem; }
-.participant-picker-head strong { color: #2b4a4e; font-size: 13px; }
-.participant-picker-head span { color: var(--chat-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.participant-search { display: flex; align-items: center; width: 15rem; height: 2.2rem; gap: 0.45rem; padding: 0 0.65rem; border: 1px solid rgba(19, 54, 58, 0.14); border-radius: 0.45rem; color: #708488; background: #fff; }
-.participant-search:focus-within { border-color: rgba(11, 117, 110, 0.5); box-shadow: 0 0 0 3px rgba(11, 117, 110, 0.07); }
-.participant-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.45rem; max-height: 20rem; overflow: auto; padding: 0.7rem; }
-.participant-option {
-  position: relative;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 0.65rem;
-  min-height: 3.65rem;
-  padding: 0.55rem 0.6rem;
-  border: 1px solid rgba(19, 54, 58, 0.1);
-  border-radius: 0.55rem;
-  background: #fff;
-  cursor: pointer;
-  transition: border-color 180ms ease, background 180ms ease, transform 180ms ease;
-}
-.participant-option:hover { border-color: rgba(11, 117, 110, 0.28); background: #f5f9f8; }
-.participant-option:active { transform: translateY(1px); }
-.participant-option.selected { border-color: rgba(11, 117, 110, 0.42); background: #eaf5f2; }
-.participant-option:focus-within { outline: 2px solid rgba(11, 117, 110, 0.3); outline-offset: 1px; }
-.participant-option > input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.participant-avatar { display: grid; place-items: center; width: 2.15rem; height: 2.15rem; border-radius: 0.5rem; color: #36575b; background: #e3ece9; font-size: 12px; font-weight: 800; }
-.participant-copy { min-width: 0; display: grid; gap: 0.15rem; }
-.participant-copy strong,
-.participant-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.participant-copy strong { color: #29474b; font-size: 13px; }
-.participant-copy small { color: var(--chat-muted); font-size: 12px; }
-.participant-check { display: grid; place-items: center; width: 1.25rem; height: 1.25rem; border: 1px solid #b7c7c4; border-radius: 0.35rem; color: transparent; background: #fff; font-size: 12px; font-weight: 850; }
-.participant-option.selected .participant-check { border-color: var(--chat-accent); color: #fff; background: var(--chat-accent); }
-.participant-loading,
-.participant-empty { display: grid; min-height: 8rem; place-items: center; padding: 1rem; color: var(--chat-muted); font-size: 13px; }
-.private-chat-error { margin: 0; padding: 0.65rem 0.75rem; border: 1px solid #efd2c6; border-radius: 0.5rem; color: #8b452c; background: #fff7f3; font-size: 12px; }
-.private-chat-dialog > footer { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.9rem 1.35rem; border-top: 1px solid rgba(19, 54, 58, 0.09); background: #fbfcfc; }
-.private-chat-dialog > footer > span { color: var(--chat-muted); font-size: 12px; }
-.private-chat-dialog > footer > div { display: flex; gap: 0.55rem; }
-.private-chat-dialog > footer button { min-height: 2.35rem; padding: 0 1rem; border-radius: 0.45rem; font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; transition: transform 180ms ease, background 180ms ease; }
-.private-chat-dialog > footer button:active:not(:disabled) { transform: translateY(1px); }
-.private-chat-dialog > footer button:focus-visible { outline: 2px solid rgba(11, 117, 110, 0.35); outline-offset: 2px; }
-.dialog-cancel { border: 1px solid rgba(19, 54, 58, 0.14); color: #4e696d; background: #fff; }
-.dialog-cancel:hover:not(:disabled) { background: #f1f5f4; }
-.dialog-submit { border: 1px solid #0b6964; color: #fff; background: #0b6964; }
-.dialog-submit:hover:not(:disabled) { background: #085b58; }
-
-@keyframes chat-shimmer { to { background-position: -200% 0; } }
-@keyframes mention-notice-enter {
-  from { opacity: 0; transform: translateY(0.35rem); }
-  to { opacity: 1; transform: translateY(0); }
-}
-@keyframes mention-attention-pulse {
-  0%, 100% {
-    border-color: rgba(11, 117, 110, 0.42);
-    background: #fff;
-    box-shadow: 0 10px 26px rgba(11, 117, 110, 0.1);
-    transform: translateX(0) scale(1);
-  }
-  50% {
-    border-color: rgba(11, 117, 110, 0.82);
-    background: #dcf4ee;
-    box-shadow: 0 0 0 0.35rem rgba(11, 117, 110, 0.14), 0 14px 30px rgba(11, 117, 110, 0.2);
-    transform: translateX(0.12rem) scale(1.008);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .mention-notice { animation: none; }
-  .chat-message.mention-pulse:not(.own) .message-content {
-    animation: none;
-    border-color: rgba(11, 117, 110, 0.82);
-    box-shadow: 0 0 0 0.28rem rgba(11, 117, 110, 0.14), 0 14px 30px rgba(11, 117, 110, 0.16);
-  }
-}
-
-@media (max-width: 1360px) {
-  .project-chat-shell { grid-template-columns: 16rem minmax(30rem, 1fr); }
-  .chat-context { display: none; }
-}
-
-@media (max-width: 900px) {
-  .project-chat-shell { grid-template-columns: minmax(0, 1fr); min-height: 34rem; }
-  .channel-rail { display: none; }
-  .chat-stage { border-radius: 0.75rem; }
-  .chat-message { max-width: 94%; }
-  .message-viewport { padding-inline: 1.2rem; }
-}
-
-@media (max-width: 620px) {
-  .chat-heading { min-height: 4.2rem; padding-inline: 0.8rem; }
-  .chat-channel-mark { display: none; }
-  .chat-heading h1 { font-size: 16px; }
-  .connection-state span { display: none; }
-  .connection-state { min-width: 2.2rem; justify-content: center; padding-inline: 0.55rem; }
-  .mention-menu { right: 0.35rem; left: 0.35rem; width: auto; }
-  .message-composer { padding-inline: 0.65rem; }
-  .private-chat-dialog { width: min(40rem, calc(100vw - 1rem)); }
-  .participant-list { grid-template-columns: minmax(0, 1fr); }
-  .participant-picker-head { align-items: stretch; flex-direction: column; }
-  .participant-search { width: 100%; }
-  .private-chat-dialog > footer { align-items: flex-end; flex-direction: column; }
-}
-</style>
+<style scoped src="./ProjectGroupChat.css"></style>

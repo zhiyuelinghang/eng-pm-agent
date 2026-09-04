@@ -13,7 +13,7 @@ Magic Context 参考: decay-render.ts 的确定性 tier 选择（纯规则，无
 兜底策略:
   - LLM 可通过工具覆盖任何模式
   - 用户显式指令（"查一下"/"搜索"/"回忆"）→ 强制 full
-  - 连续N轮minimal → 强制至少standard（MAX_CONSECUTIVE_MINIMAL=5）
+  - 不再按对话轮数强制检索，避免无关消息触发长期记忆
 """
 
 from __future__ import annotations
@@ -40,59 +40,28 @@ _EXPLICIT_SEARCH_KEYWORDS = [
     "看看有没有", "有没有记录", "帮我查",
 ]
 
-# ═══════════════════════════════════════════════════════════════
-# State tracking (module-level for simplicity)
-# ═══════════════════════════════════════════════════════════════
-
-_STATE_KEY = "__context_trigger_consecutive"
-_MAX_CONSECUTIVE_MINIMAL = 5
-
 
 def classify(query: str, state: dict | None = None) -> str:
     """Zero-latency classification. Returns 'minimal' | 'standard' | 'full'.
 
     Args:
         query: user input text
-        state: optional DobbyState dict for consecutive-minimal tracking
+        state: retained for API compatibility; classification does not mutate it
     """
     if not query:
         return "minimal"
 
     # ── Explicit search → force full ──
     if any(kw in query for kw in _EXPLICIT_SEARCH_KEYWORDS):
-        _reset_consecutive(state)
         return "full"
 
     # ── Full keywords → full ──
     if any(kw in query for kw in _FULL_KEYWORDS):
-        _reset_consecutive(state)
         return "full"
 
     # ── Standard keywords → standard ──
     if any(kw in query for kw in _STANDARD_KEYWORDS):
-        _reset_consecutive(state)
         return "standard"
 
     # ── Default: minimal ──
-    # Track consecutive minimal to prevent starvation
-    count = _increment_consecutive(state)
-    if count >= _MAX_CONSECUTIVE_MINIMAL:
-        _reset_consecutive(state)
-        return "standard"
-
     return "minimal"
-
-
-def _increment_consecutive(state: dict | None) -> int:
-    """Track consecutive minimal classifications. Returns new count."""
-    if state is None:
-        return 0
-    current = state.get(_STATE_KEY, 0) + 1
-    state[_STATE_KEY] = current
-    return current
-
-
-def _reset_consecutive(state: dict | None) -> None:
-    """Reset the consecutive counter."""
-    if state is not None:
-        state[_STATE_KEY] = 0

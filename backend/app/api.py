@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
+from contextlib import suppress
 from datetime import date, datetime
 from typing import Any
 
@@ -11,6 +15,7 @@ from sqlalchemy.orm import Session
 from task_engine.domain.flow import TransitionError
 from task_engine.domain.models import Assignee
 from task_engine.engine import TaskEngine
+from task_engine.generator.llm import AIFlowGenerationError
 from task_engine.serialize import schedule_json
 
 from .api_common import (
@@ -26,13 +31,14 @@ from .api_common import (
     serialize,
     user_connector_view,
 )
-from .config import get_settings
+from .chat_api import ensure_project_chat_channel
 from .connector_secrets import encrypt_connector_secret
 from .db import get_db
 from .engineering_document_catalog import (
     local_folder_tree_view,
     local_knowledge_page,
     local_workspace_view,
+    reconcile_name_based_catalogue_permissions,
 )
 from .initialization_draft_queries import (
     compose_initialization_draft_payload,
@@ -49,11 +55,10 @@ from .initialization_validation import (
 from .models import (
     Attachment,
     AttachmentText,
-    CollaborationMessage,
-    CollaborationSession,
+    ChatChannel,
+    ChatChannelMember,
     DailyReport,
     FillPackage,
-    MeetingMinute,
     Notification,
     PlatformFieldMapping,
     Project,
@@ -83,9 +88,14 @@ from .project_initialization import (
     build_initialization_state,
     suggest_unique_username,
 )
+from .personnel_policy import (
+    PROJECT_MANAGER_POSITION_NAME,
+    PROJECT_POSITION_DEFINITIONS,
+    UnsupportedProjectPositionError,
+    reconcile_user_management_role,
+    require_supported_project_position,
+)
 from .schemas import (
-    CollaborationMessageInput,
-    CollaborationSessionInput,
     DailyReportInput,
     DailyReportUpdate,
     DraftInput,
@@ -123,9 +133,10 @@ from .task_action_gateway import (
 from .task_engine_gateway import (
     DOBBY_TO_ENGINE_STATE,
     PRIORITY_TO_RISK,
+    TASK_MESSAGE_AGENT_ID,
+    TASK_MESSAGE_AGENT_NAME,
     _to_int,
     build_flow,
-    build_project_chat_generation_draft,
     dispatch_platform_task,
     get_engine,
     get_generator,
@@ -143,6 +154,17 @@ from .wecom_notification_gateway import (
 
 
 router = APIRouter(prefix="/api")
+logger = logging.getLogger(__name__)
+_active_task_flow_generations: dict[tuple[int, str], asyncio.Task[Any]] = {}
+_cancelled_task_flow_generations: dict[tuple[int, str], float] = {}
+
+
+def _prune_cancelled_task_flow_generations() -> None:
+    """清理极短竞态窗口使用的停止标记，避免无界占用内存。"""
+    cutoff = time.monotonic() - 300
+    for key, cancelled_at in list(_cancelled_task_flow_generations.items()):
+        if cancelled_at < cutoff:
+            _cancelled_task_flow_generations.pop(key, None)
 
 
 @router.post("/auth/login")
@@ -150,6 +172,11 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict[str, Any
     user = db.scalar(select(User).where(User.username == payload.username))
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
+    previous_role = user.role
+    reconcile_user_management_role(db, user)
+    if user.role != previous_role:
+        db.commit()
+        db.refresh(user)
     return ok({"access_token": create_access_token(user.id, user.role), "token_type": "bearer", "user": serialize(user)})
 
 
@@ -268,8 +295,36 @@ def delete_my_connector(
 
 
 @router.get("/projects")
-def list_projects(db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    return ok([serialize(row) for row in db.scalars(select(Project).order_by(Project.updated_at.desc())).all()])
+def list_projects(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    query = select(Project)
+    if user.role != "admin":
+        query = (
+            query.join(ProjectMember, ProjectMember.project_id == Project.id)
+            .where(ProjectMember.user_id == user.id)
+            .distinct()
+        )
+    rows = db.scalars(query.order_by(Project.updated_at.desc())).all()
+    return ok([serialize(row) for row in rows])
+
+
+@router.get("/project-positions/catalog")
+def get_project_position_catalog(
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    return ok(
+        [
+            {
+                "name": item.name,
+                "code": item.code,
+                "category": item.category,
+                "management_account": item.name == PROJECT_MANAGER_POSITION_NAME,
+            }
+            for item in PROJECT_POSITION_DEFINITIONS
+        ],
+    )
 
 
 @router.post("/projects")
@@ -1089,6 +1144,10 @@ def serialize_project_member(db: Session, member: ProjectMember) -> dict[str, An
 @router.post("/projects/{project_id}/members")
 def add_member(project_id: int, payload: MemberInput, db: Session = Depends(get_db), user: User = Depends(require_admin)) -> dict[str, Any]:
     project_or_404(db, project_id)
+    try:
+        position_name = require_supported_project_position(payload.position_name)
+    except UnsupportedProjectPositionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     account = db.scalar(
         select(User).where(User.identity_card_no == payload.identity_card_no),
     )
@@ -1108,7 +1167,7 @@ def add_member(project_id: int, payload: MemberInput, db: Session = Depends(get_
             password_hash=hash_password(payload.password),
             real_name=payload.real_name,
             identity_card_no=payload.identity_card_no,
-            role=payload.system_role,
+            role="user",
         )
         db.add(account)
         db.flush()
@@ -1127,13 +1186,13 @@ def add_member(project_id: int, payload: MemberInput, db: Session = Depends(get_
     position = db.scalar(
         select(ProjectPosition).where(
             ProjectPosition.project_id == project_id,
-            ProjectPosition.position_name == payload.position_name,
+            ProjectPosition.position_name == position_name,
         ),
     )
     if position is None:
         position = ProjectPosition(
             project_id=project_id,
-            position_name=payload.position_name,
+            position_name=position_name,
         )
         db.add(position)
         db.flush()
@@ -1162,11 +1221,13 @@ def add_member(project_id: int, payload: MemberInput, db: Session = Depends(get_
     )
     db.add(assignment)
     db.flush()
+    reconcile_user_management_role(db, account)
+    reconcile_name_based_catalogue_permissions(db, project_id)
     audit(
         db,
         user,
         "添加项目成员岗位",
-        f"为「{payload.real_name}」添加岗位「{payload.position_name}」",
+        f"为「{payload.real_name}」添加岗位「{position_name}」",
         project_id,
         "project_member_position",
         assignment.id,
@@ -1185,6 +1246,10 @@ def update_member_position(
     user: User = Depends(require_admin),
 ) -> dict[str, Any]:
     project_or_404(db, project_id)
+    try:
+        position_name = require_supported_project_position(payload.position_name)
+    except UnsupportedProjectPositionError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     assignment = db.scalar(
         select(ProjectMemberPosition).where(
             ProjectMemberPosition.id == assignment_id,
@@ -1205,13 +1270,13 @@ def update_member_position(
     position = db.scalar(
         select(ProjectPosition).where(
             ProjectPosition.project_id == project_id,
-            ProjectPosition.position_name == payload.position_name,
+            ProjectPosition.position_name == position_name,
         ),
     )
     if position is None:
         position = ProjectPosition(
             project_id=project_id,
-            position_name=payload.position_name,
+            position_name=position_name,
         )
         db.add(position)
         db.flush()
@@ -1227,11 +1292,14 @@ def update_member_position(
     assignment.position_id = position.id
     assignment.certificate_no = payload.certificate_no
     assignment.responsibility_description = payload.responsibility_description
+    db.flush()
+    reconcile_user_management_role(db, account)
+    reconcile_name_based_catalogue_permissions(db, project_id)
     audit(
         db,
         user,
         "更新项目成员岗位",
-        f"更新「{payload.real_name}」的岗位「{payload.position_name}」",
+        f"更新「{payload.real_name}」的岗位「{position_name}」",
         project_id,
         "project_member_position",
         assignment.id,
@@ -1831,26 +1899,15 @@ def list_archived_tasks(
 
 
 @router.post("/projects/{project_id}/tasks/generate-flow")
-def generate_task_flow(
+async def generate_task_flow(
     project_id: int,
     payload: TaskFlowGenerateInput,
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """通过引擎生成可由现有前端直接编辑的任务流。"""
+    """仅通过 AI 生成可由现有前端直接编辑的任务流。"""
     project = project_or_404(db, project_id)
     engine = get_engine()
-
-    # 群聊消息属于 Dobby 平台动作，不属于通用任务引擎的工程模板语义。
-    # 先由宿主适配层生成真实动作节点，也避免模型不可用时降级成 4 个通用工程节点。
-    action_draft = build_project_chat_generation_draft(
-        db,
-        project_id,
-        payload.requirement,
-        now=engine.now(),
-    )
-    if action_draft is not None:
-        return ok(action_draft, "群聊消息任务流已生成")
 
     generator = get_generator()
 
@@ -1860,9 +1917,62 @@ def generate_task_flow(
         .where(ProjectMember.project_id == project_id),
     ).all()
     assignees = [
-        Assignee(ref=str(member.user_id), display_name=user.real_name)
-        for member, user in rows
+        Assignee(
+            ref=str(member.user_id),
+            display_name=member_user.real_name or member_user.username,
+        )
+        for member, member_user in rows
     ]
+    if all(assignee.ref != str(user.id) for assignee in assignees):
+        # 管理员可能拥有项目访问权但不是 ProjectMember；“我”仍必须指向当前账号。
+        assignees.append(
+            Assignee(
+                ref=str(user.id),
+                display_name=user.real_name or user.username,
+            ),
+        )
+
+    ensure_project_chat_channel(db, project_id, user)
+    private_channel_ids = set(
+        db.scalars(
+            select(ChatChannelMember.channel_id).where(
+                ChatChannelMember.user_id == user.id,
+                ChatChannelMember.left_at.is_(None),
+            ),
+        ).all(),
+    )
+    chat_channels = [
+        channel
+        for channel in db.scalars(
+            select(ChatChannel)
+            .where(
+                ChatChannel.project_id == project_id,
+                ChatChannel.archived_at.is_(None),
+            )
+            .order_by(ChatChannel.id.asc()),
+        ).all()
+        if channel.channel_type != "private" or channel.id in private_channel_ids
+    ]
+    channel_member_refs: dict[int, set[str]] = {
+        channel.id: set() for channel in chat_channels
+    }
+    if chat_channels:
+        membership_rows = db.execute(
+            select(
+                ChatChannelMember.channel_id,
+                ChatChannelMember.user_id,
+            ).where(
+                ChatChannelMember.channel_id.in_(
+                    [channel.id for channel in chat_channels],
+                ),
+                ChatChannelMember.left_at.is_(None),
+            ),
+        ).all()
+        for channel_id, member_user_id in membership_rows:
+            channel_member_refs[channel_id].add(str(member_user_id))
+    project_member_refs = {assignee.ref for assignee in assignees}
+    # ensure_project_chat_channel 可能创建群聊或补入当前管理员，需在等待模型前持久化。
+    db.commit()
 
     wbs_items = db.scalars(
         select(WbsItem).where(WbsItem.project_id == project_id),
@@ -1874,34 +1984,163 @@ def generate_task_flow(
         ),
     ).all()
 
-    flow = generator.generate(
-        payload.requirement,
-        now=engine.now(),
-        assignees=assignees,
-        context={
-            "project": {"id": project.id, "name": project.name},
-            "wbs_items": [
-                {"id": item.id, "code": item.wbs_code, "name": item.name}
-                for item in wbs_items
-            ],
-            "risk_sources": [
-                {
-                    "id": risk.id,
-                    "name": risk.risk_part,
-                    "level": risk.risk_level,
-                }
-                for risk in risks
-            ],
-        },
+    generation_key = (project_id, payload.generation_id)
+    _prune_cancelled_task_flow_generations()
+    if _cancelled_task_flow_generations.pop(generation_key, None) is not None:
+        raise HTTPException(status_code=409, detail="Dobby AI 生成已由用户停止")
+    existing_generation = _active_task_flow_generations.get(generation_key)
+    if existing_generation is not None and not existing_generation.done():
+        raise HTTPException(status_code=409, detail="该 AI 生成请求正在处理中")
+
+    generation_task = asyncio.create_task(
+        generator.generate_async(
+            payload.requirement,
+            now=engine.now(),
+            assignees=assignees,
+            context={
+                "project": {"id": project.id, "name": project.name},
+                "current_user": {
+                    "ref": str(user.id),
+                    "username": user.username,
+                    "display_name": user.real_name or user.username,
+                    "system_role": user.role,
+                },
+                "chat_channels": [
+                    {
+                        "ref": str(channel.id),
+                        "title": channel.title,
+                        "channel_type": channel.channel_type,
+                        "member_refs": sorted(
+                            channel_member_refs[channel.id]
+                            if channel.channel_type == "private"
+                            else project_member_refs,
+                        ),
+                    }
+                    for channel in chat_channels
+                ],
+                "wbs_items": [
+                    {"id": item.id, "code": item.wbs_code, "name": item.name}
+                    for item in wbs_items
+                ],
+                "risk_sources": [
+                    {
+                        "id": risk.id,
+                        "name": risk.risk_part,
+                        "level": risk.risk_level,
+                    }
+                    for risk in risks
+                ],
+            },
+        ),
+        name=f"dobby-task-flow-{project_id}-{payload.generation_id}",
     )
+    _active_task_flow_generations[generation_key] = generation_task
+
+    try:
+        flow = await generation_task
+    except asyncio.CancelledError as exc:
+        current_task = asyncio.current_task()
+        if current_task is not None and current_task.cancelling():
+            raise
+        logger.info(
+            "Dobby AI 任务流生成已由用户停止：project_id=%s generation_id=%s",
+            project_id,
+            payload.generation_id,
+        )
+        raise HTTPException(status_code=409, detail="Dobby AI 生成已由用户停止") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except AIFlowGenerationError as exc:
+        logger.exception("Dobby AI 任务流生成失败：project_id=%s", project_id)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        if _active_task_flow_generations.get(generation_key) is generation_task:
+            _active_task_flow_generations.pop(generation_key, None)
+
+    if flow.origin != "ai":
+        raise HTTPException(
+            status_code=502,
+            detail="Dobby AI 未返回 AI 生成结果，已拒绝使用替代结果",
+        )
 
     trigger = flow.trigger
     first_at = trigger.first_at or engine.now()
+    raw_step_actions = flow.scope.get("step_actions")
+    step_actions = raw_step_actions if isinstance(raw_step_actions, dict) else {}
+    generated_steps: list[dict[str, Any]] = []
+    for index, step in enumerate(flow.steps):
+        if not step.automated:
+            generated_steps.append(
+                {
+                    "name": step.name,
+                    "node_type": "manual",
+                    "owner_user_id": (
+                        _to_int(step.assignee.ref) if step.assignee else None
+                    ),
+                    "due_at": None,
+                    "material": step.deliverable,
+                },
+            )
+            continue
+
+        raw_action = step_actions.get(str(index))
+        if raw_action is None and flow.is_automation and index == 0:
+            raw_action = flow.scope.get("action")
+        if (
+            not isinstance(raw_action, dict)
+            or raw_action.get("type") != "project_chat_message"
+        ):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Dobby AI 返回的第 {index + 1} 个自动节点缺少群聊动作",
+            )
+        try:
+            action_view = {
+                "type": "project_chat_message",
+                "channel_id": int(raw_action["channel_id"]),
+                "sender_agent_id": TASK_MESSAGE_AGENT_ID,
+                "sender_agent_name": TASK_MESSAGE_AGENT_NAME,
+                "mention_mode": str(raw_action.get("mention_mode") or "none"),
+                "mentioned_user_ids": [
+                    int(item)
+                    for item in (raw_action.get("mentioned_user_ids") or [])
+                ],
+                "content": str(raw_action["content"]),
+            }
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Dobby AI 返回的第 {index + 1} 个群聊动作格式不正确",
+            ) from exc
+        generated_steps.append(
+            {
+                "name": step.name,
+                "node_type": "project_chat_message",
+                "owner_user_id": None,
+                "due_at": None,
+                "material": "",
+                "action": action_view,
+            },
+        )
+
+    first_manual_assignee = next(
+        (step.assignee for step in flow.steps if not step.automated and step.assignee),
+        None,
+    )
+    pure_automation = bool(flow.steps) and all(step.automated for step in flow.steps)
     return ok(
         {
             "title": flow.title,
+            "summary": flow.summary,
+            "action_type": (
+                "project_chat_message"
+                if pure_automation and len(generated_steps) == 1
+                else "responsibility_task"
+            ),
             "task_type": (
-                flow.category
+                "automation"
+                if pure_automation
+                else flow.category
                 if flow.category
                 in {
                     "risk_alert",
@@ -1914,36 +2153,50 @@ def generate_task_flow(
             ),
             "risk_level": PRIORITY_TO_RISK.get(flow.priority, "medium"),
             "assignee_user_id": (
-                _to_int(flow.steps[0].assignee.ref)
-                if flow.steps[0].assignee
+                _to_int(first_manual_assignee.ref)
+                if first_manual_assignee
                 else None
             ),
             "confirmer_user_id": None,
             "wbs_item_id": None,
             "risk_source_id": None,
-            "run_mode": "scheduled" if trigger.is_recurring else "single",
+            "run_mode": "recurring" if trigger.is_recurring else "once",
             "trigger_date": first_at.strftime("%Y-%m-%d"),
             "trigger_time": first_at.strftime("%H:%M"),
             "trigger_rule": trigger.describe(),
             "trigger_interval_value": trigger.interval_value,
             "trigger_interval_unit": str(trigger.interval_unit),
             "cc": "，".join(watcher.display_name for watcher in flow.watchers),
-            "steps": [
-                {
-                    "name": step.name,
-                    "owner_user_id": (
-                        _to_int(step.assignee.ref) if step.assignee else None
-                    ),
-                    "due_at": None,
-                    "material": step.deliverable,
-                }
-                for step in flow.steps
-            ],
-            "generated_by": "ai" if flow.origin == "ai" else "rules",
+            "steps": generated_steps,
+            "generated_by": "ai",
             "generation_note": flow.origin_note,
         },
         "任务流已生成",
     )
+
+
+@router.post("/projects/{project_id}/tasks/generate-flow/{generation_id}/stop")
+async def stop_task_flow_generation(
+    project_id: int,
+    generation_id: str,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """按用户指令取消正在等待模型响应的任务流生成请求。"""
+    project_or_404(db, project_id)
+    generation_key = (project_id, generation_id)
+    generation_task = _active_task_flow_generations.get(generation_key)
+    if generation_task is None or generation_task.done():
+        # 停止请求可能比生成请求先到达另一个 HTTP 连接；短期保留标记，
+        # 让随后进入的同一 generation_id 直接结束，而不是在页面停止后继续跑。
+        _prune_cancelled_task_flow_generations()
+        _cancelled_task_flow_generations[generation_key] = time.monotonic()
+        return ok({"stopped": True}, "停止请求已接收")
+
+    generation_task.cancel()
+    with suppress(asyncio.CancelledError, Exception):
+        await generation_task
+    return ok({"stopped": True}, "Dobby AI 生成已停止")
 
 
 @router.post("/projects/{project_id}/tasks")
@@ -2466,222 +2719,3 @@ def transition_fill_package(package_id: int, payload: TaskTransitionInput, db: S
     if payload.status not in {"pending", "filling", "saved", "submitted", "failed", "cancelled"}: raise HTTPException(status_code=422, detail="不支持的填报状态")
     row.status = payload.status; audit(db, user, "更新填报状态", f"填报包状态变更为 {row.status}", row.project_id, "fill_package", row.id); db.commit(); db.refresh(row)
     return ok(serialize(row), "填报状态已更新")
-
-
-def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str, list[str]]:
-    project = project_or_404(db, project_id)
-    tasks = [
-        task
-        for task in get_engine().list_tasks(open_only=True, limit=200)
-        if task.scope.get("project_id") == project_id
-    ]
-    wbs_items = db.scalars(select(WbsItem).where(WbsItem.project_id == project_id).order_by(WbsItem.wbs_code).limit(30)).all()
-    risk_sources = db.scalars(select(RiskSource).where(RiskSource.project_id == project_id).order_by(RiskSource.updated_at.desc()).limit(30)).all()
-    quality_metrics = db.scalars(select(QualityMetric).where(QualityMetric.project_id == project_id).order_by(QualityMetric.updated_at.desc()).limit(30)).all()
-    daily_reports = db.scalars(select(DailyReport).where(DailyReport.project_id == project_id).order_by(DailyReport.updated_at.desc()).limit(20)).all()
-    field_mappings = db.scalars(select(PlatformFieldMapping).where(PlatformFieldMapping.project_id == project_id).order_by(PlatformFieldMapping.platform_name, PlatformFieldMapping.target_field).limit(30)).all()
-    materials = db.execute(
-        select(
-            Attachment.file_name,
-            Attachment.category,
-            AttachmentText.content,
-            AttachmentText.parse_status,
-            AttachmentText.parse_error,
-        )
-        .outerjoin(AttachmentText, AttachmentText.attachment_id == Attachment.id)
-        .where(Attachment.project_id == project_id)
-        .order_by(Attachment.created_at.desc())
-        .limit(12)
-    ).all()
-    material_context = "；".join(
-        f"{file_name}（{category}）"
-        + (
-            f"：{(content or '')[:360]}"
-            if parse_status == "ready" and content
-            else f"：[附件解析失败：{parse_error or '未知原因'}]"
-            if parse_status == "failed"
-            else "：[历史资料尚未经过统一附件解析]"
-            if parse_status == "legacy"
-            else ""
-        )
-        for file_name, category, content, parse_status, parse_error in materials
-    ) or "暂无已入库资料"
-    project_context = (
-        f"项目：{project.name}；建设单位：{project.construction_unit_name or '未填写'}；说明：{(project.engineering_type_description or '未填写')[:360]}\n"
-        + "WBS：" + ("；".join(f"{item.wbs_code} {item.name}（{float(item.progress_percent or 0)}%/{item.status_text or '未设置'}）" for item in wbs_items) or "暂无") + "\n"
-        + "风险源：" + ("；".join(f"{item.risk_part}（{item.risk_level}/{item.status}）" for item in risk_sources) or "暂无") + "\n"
-        + "质量指标：" + ("；".join(f"{item.quality_acceptance_item}（{item.inspection_frequency or '未设置频次'}）" for item in quality_metrics) or "暂无") + "\n"
-        + "日报：" + ("；".join(f"{item.file_name}（{item.report_date or '日期待确认'}/{item.status}）" for item in daily_reports) or "暂无") + "\n"
-        + "字段映射：" + ("；".join(f"{item.platform_name}:{item.source_field}→{item.target_field}" for item in field_mappings) or "暂无")
-    )
-    related = [task.id for task in tasks[:4]]
-    settings = get_settings()
-    if settings.ai_api_key:
-        prompt = (
-            "你是工程项目资料智能体。请只依据已入库资料和项目待办给出简洁、可执行、可追溯的建议。"
-            "优先说明：资料可归入的类别、可补全的项目字段、仍缺少的资料；未知内容必须明确标注为待确认，不能编造。"
-            f"\n用户请求：{content}\n项目当前数据：{project_context}\n已入库资料：{material_context}\n待办任务："
-            + "；".join(f"{task.title}（{task.state}，截止{task.due_at or '未设置'}）" for task in tasks[:8])
-        )
-        try:
-            response = httpx.post(f"{settings.ai_base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {settings.ai_api_key}"}, json={"model": settings.ai_model, "messages": [{"role": "system", "content": "给出简洁、可执行、可追溯的工程资料补全建议。"}, {"role": "user", "content": prompt}]}, timeout=30)
-            response.raise_for_status()
-            answer = response.json()["choices"][0]["message"]["content"]
-            return answer, related
-        except (httpx.HTTPError, KeyError, IndexError, TypeError):
-            pass
-    overdue = next((task for task in tasks if str(task.state) == "overdue"), None)
-    focus = overdue or (tasks[0] if tasks else None)
-    if focus:
-        return f"已基于当前项目的 {len(materials)} 份已入库资料和待办记录生成建议：优先处理「{focus.title}」，状态为{focus.state}，截止日期{focus.due_at or '未设置'}。请核对资料类别、明确对应 WBS/风险项，再补齐缺少材料后提交复核。", related
-    return f"当前项目已入库 {len(materials)} 份资料，暂无未闭环任务。可先让智能体核对资料类别与资料缺口，再补充 WBS、风险源或质量指标。", []
-
-
-@router.get("/projects/{project_id}/collaboration-sessions")
-def list_collaboration_sessions(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    project_or_404(db, project_id)
-    rows = db.scalars(select(CollaborationSession).where(CollaborationSession.project_id == project_id).order_by(CollaborationSession.updated_at.desc())).all()
-    return ok([serialize(row) for row in rows])
-
-
-@router.post("/projects/{project_id}/collaboration-sessions")
-def create_collaboration_session(project_id: int, payload: CollaborationSessionInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    project_or_404(db, project_id)
-    row = CollaborationSession(project_id=project_id, participant_ids=list(set(payload.participant_ids + [user.id])), **payload.model_dump(exclude={"participant_ids"}))
-    db.add(row); db.flush(); audit(db, user, "创建协同会话", f"创建会话「{row.title}」", project_id, "collaboration_session", row.id); db.commit(); db.refresh(row)
-    return ok(serialize(row), "协同会话已创建")
-
-
-def session_or_404(db: Session, session_id: int) -> CollaborationSession:
-    return entity_or_404(db, CollaborationSession, session_id, "协同会话不存在")
-
-
-@router.delete("/collaboration-sessions/{session_id}")
-def delete_collaboration_session(session_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    session = session_or_404(db, session_id)
-    project_id, title = session.project_id, session.title
-    db.query(MeetingMinute).filter(MeetingMinute.session_id == session_id).delete(synchronize_session=False)
-    db.query(CollaborationMessage).filter(CollaborationMessage.session_id == session_id).delete(synchronize_session=False)
-    db.delete(session)
-    audit(db, user, "删除协同会话", f"删除会话「{title}」；会话生成的任务保留", project_id, "collaboration_session", session_id)
-    db.commit()
-    return ok(None, "协同会话已删除")
-
-
-@router.get("/collaboration-sessions/{session_id}/messages")
-def list_collaboration_messages(session_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    session_or_404(db, session_id)
-    rows = db.scalars(select(CollaborationMessage).where(CollaborationMessage.session_id == session_id).order_by(CollaborationMessage.created_at)).all()
-    return ok([serialize(row) for row in rows])
-
-
-@router.post("/collaboration-sessions/{session_id}/messages")
-def create_collaboration_message(session_id: int, payload: CollaborationMessageInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    session = session_or_404(db, session_id)
-    db.add(CollaborationMessage(session_id=session.id, role="user", content=payload.content)); db.flush()
-    answer, task_ids = collaboration_reply(session.project_id, payload.content, db)
-    if "创建任务" in payload.content or "生成任务" in payload.content:
-        title = payload.content.replace("创建任务", "").replace("生成任务", "").strip(" ：:，,。")[:200] or "协同会话待办"
-        source_task = next(
-            (
-                task
-                for task_id in (session.task_ids or [])
-                if (task := get_engine().get_task(str(task_id))) is not None
-            ),
-            None,
-        )
-        legacy_source = None
-        if source_task is None:
-            for raw_task_id in session.task_ids or []:
-                try:
-                    legacy_id = int(str(raw_task_id).removeprefix("legacy_"))
-                except ValueError:
-                    continue
-                legacy_source = db.get(Task, legacy_id)
-                if legacy_source is not None:
-                    break
-
-        try:
-            task = dispatch_platform_task(
-                db,
-                project_id=session.project_id,
-                title=f"协同任务 — {title}",
-                task_type="risk_alert",
-                risk_level="medium",
-                assignee_user_id=user.id,
-                confirmer_user_id=(
-                    source_task.confirmer.ref
-                    if source_task and source_task.confirmer
-                    else legacy_source.confirmer_user_id
-                    if legacy_source
-                    else None
-                ),
-                wbs_item_id=(
-                    source_task.site.ref
-                    if source_task and source_task.site
-                    else legacy_source.wbs_item_id
-                    if legacy_source
-                    else None
-                ),
-                actor=user.id,
-                trigger_reason=f"由协同会话「{session.title}」自动创建",
-                risk_source_id=(
-                    source_task.scope.get("risk_source_id")
-                    if source_task
-                    else legacy_source.risk_source_id
-                    if legacy_source
-                    else None
-                ),
-                step_name="处理协同事项",
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        task_ids = list(dict.fromkeys([*task_ids, task.id])); session.task_ids = list(dict.fromkeys([*(session.task_ids or []), task.id]))
-        answer = f"已创建任务「{task.title}」。\n{answer}"
-    assistant = CollaborationMessage(session_id=session.id, role="assistant", content=answer, generated_task_ids=task_ids)
-    db.add(assistant); session.summary = payload.content[:120]
-    audit(db, user, "协同会话处理", f"会话「{session.title}」处理新消息", session.project_id, "collaboration_session", session.id)
-    db.commit(); db.refresh(assistant); db.refresh(session)
-    return ok({"session": serialize(session), "message": serialize(assistant)}, "协同建议已生成")
-
-
-@router.post("/collaboration-sessions/{session_id}/minutes")
-def create_meeting_minute(session_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    session = session_or_404(db, session_id)
-    messages = db.scalars(select(CollaborationMessage).where(CollaborationMessage.session_id == session_id).order_by(CollaborationMessage.created_at)).all()
-    task_ids = list(dict.fromkeys([*(session.task_ids or []), *(item for message in messages for item in (message.generated_task_ids or []))]))
-    actions: list[dict[str, Any]] = []
-    engine = get_engine()
-    for raw_task_id in task_ids:
-        engine_task = engine.get_task(str(raw_task_id))
-        if engine_task is not None:
-            task_data = to_api_task(engine_task)
-            actions.append(
-                {
-                    "task_id": engine_task.id,
-                    "title": engine_task.title,
-                    "status": task_data["status"],
-                    "assignee_user_id": task_data["assignee_user_id"],
-                    "due_at": task_data["due_at"],
-                },
-            )
-            continue
-        try:
-            legacy_id = int(str(raw_task_id).removeprefix("legacy_"))
-        except ValueError:
-            continue
-        legacy_task = db.get(Task, legacy_id)
-        if legacy_task is not None:
-            actions.append(
-                {
-                    "task_id": f"legacy_{legacy_task.id}",
-                    "title": legacy_task.title,
-                    "status": legacy_task.status,
-                    "assignee_user_id": legacy_task.assignee_user_id,
-                    "due_at": legacy_task.due_at,
-                },
-            )
-    discussion = "；".join(message.content[:120] for message in messages[-6:]) or "暂无会话消息"
-    row = MeetingMinute(project_id=session.project_id, session_id=session.id, title=f"会议纪要 — {session.title}", summary=f"会话结论：{discussion}", action_items=actions)
-    db.add(row); db.flush(); audit(db, user, "生成会议纪要", f"从会话「{session.title}」生成会议纪要", session.project_id, "meeting_minute", row.id); db.commit(); db.refresh(row)
-    return ok(serialize(row), "会议纪要已生成")

@@ -261,13 +261,14 @@ class TaskEngine:
         site: str | None = None,
         state: str | None = None,
         category: str | None = None,
+        project_id: str | int | None = None,
         open_only: bool = False,
         limit: int = 50,
         offset: int = 0,
     ) -> list[TaskInstance]:
         return self.store.list_tasks(
             assignee=assignee, confirmer=confirmer, site=site,
-            state=state, category=category,
+            state=state, category=category, project_id=project_id,
             open_only=open_only, limit=limit, offset=offset,
         )
 

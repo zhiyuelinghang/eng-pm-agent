@@ -188,9 +188,10 @@ def create_app(
             tenant isolation, etc.).  The returned middlewares are appended
             to the framework-supplied ones (e.g. ``ToolOffloadMiddleware``).
         session_end_handler (`SessionEndHandler | None`, optional):
-            Async callback invoked with the final durable session record before
-            deletion. Embedded applications can use it for lifecycle flushing,
-            experience extraction, or external audit finalization.
+            Best-effort async callback scheduled with the final durable session
+            record after deletion. Embedded applications can use it for memory
+            maintenance, experience extraction, or external audit finalization;
+            its I/O never blocks or vetoes the user's delete request.
         extra_agent_tools (`AgentToolFactory | None`, optional):
             An async factory ``(user_id, agent_id, session_id) -> awaitable
             of list[ToolBase]`` that produces extra

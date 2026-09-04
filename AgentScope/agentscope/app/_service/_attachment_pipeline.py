@@ -45,6 +45,19 @@ class AttachmentPipeline:
     in both messages' metadata so refreshes retain auditable pipeline state.
     """
 
+    @classmethod
+    def has_attachments(cls, input_msg: Any) -> bool:
+        """Return whether this turn contains binary attachment blocks."""
+        if isinstance(input_msg, Msg):
+            messages = [input_msg]
+        elif isinstance(input_msg, list):
+            messages = [
+                message for message in input_msg if isinstance(message, Msg)
+            ]
+        else:
+            return False
+        return any(cls._collect_sources(message) for message in messages)
+
     async def prepare(
         self,
         input_msg: Msg | list[Msg],

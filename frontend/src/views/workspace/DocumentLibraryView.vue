@@ -36,6 +36,7 @@
       <ProjectKnowledgeChat
         v-show="activeWorkspaceTab === 'chat'"
         :focus-document-id="chatFocusDocumentId"
+        :locating-knowledge-id="locatingReferenceId"
         :disabled="knowledgeWorkspaceBlocked"
         @document-consumed="chatFocusDocumentId = ''"
         @busy-change="knowledgeChatBusy = $event"
@@ -45,7 +46,7 @@
 
       <section v-show="activeWorkspaceTab === 'files'" class="file-workspace" aria-label="工程资料文件管理">
         <header class="file-toolbar">
-          <form class="file-search" @submit.prevent="searchDocuments">
+          <form class="file-search" @submit.prevent="searchDocuments()">
             <label class="file-search-field">
               <n-icon :size="18"><Search /></n-icon>
               <input
@@ -74,8 +75,9 @@
               <n-icon :size="16"><Pencil /></n-icon>
               移动/重命名
             </button>
-            <button v-if="activeFolder && !activeFolder.isKnowledgeBase" type="button" class="secondary-action is-danger" :disabled="!canDeleteActiveFolder || knowledgeChatBusy || folderDeleting || folderUpdating || folderCreating || documentUploading || Boolean(documentMovingId) || Boolean(documentDeletingId)" @click="confirmDeleteFolder">
-              <n-icon :size="16"><Trash /></n-icon>
+            <button v-if="activeFolder && !activeFolder.isKnowledgeBase" type="button" class="secondary-action is-danger" :disabled="!canDeleteActiveFolder || knowledgeChatBusy || folderDeleting || folderUpdating || folderCreating || documentUploading || Boolean(documentMovingId) || Boolean(documentDeletingId)" :aria-busy="folderDeleting" @click="confirmDeleteFolder">
+              <n-icon v-if="folderDeleting" class="is-spinning" :size="16"><Loader /></n-icon>
+              <n-icon v-else :size="16"><Trash /></n-icon>
               {{ folderDeleting ? '正在删除…' : '删除目录' }}
             </button>
             <button type="button" class="primary-action" :disabled="!canCreateDocuments || documentUploading || folderCreating || folderUpdating || folderDeleting || Boolean(documentMovingId) || Boolean(documentDeletingId)" @click="openUploadModal">
@@ -141,7 +143,7 @@
           <section class="document-queue" aria-label="工程资料文件">
             <div v-if="isSearchActive" class="search-state">
               <span>找到 {{ visibleFiles.length }} 条与“{{ documentSearchKeyword }}”相关的资料</span>
-              <button type="button" @click="clearSearch">返回当前目录</button>
+              <button type="button" @click="clearSearch()">返回当前目录</button>
             </div>
 
             <div class="library-stream">
@@ -225,12 +227,14 @@
                         type="button"
                         class="is-delete"
                         :disabled="knowledgeChatBusy || !allowsCapability(file.capabilities, 'can_delete') || folderUpdating || Boolean(documentMovingId) || Boolean(documentDeletingId)"
+                        :aria-busy="documentDeletingId === file.id"
                         :title="documentDeletingId === file.id ? '正在删除' : '删除文件'"
                         :aria-label="documentDeletingId === file.id ? `正在删除 ${file.fileName}` : `删除 ${file.fileName}`"
                         @click.stop="confirmDeleteDocument(file)"
                         @keydown.stop
                       >
-                        <n-icon :size="16"><Trash /></n-icon>
+                        <n-icon v-if="documentDeletingId === file.id" class="is-spinning" :size="16"><Loader /></n-icon>
+                        <n-icon v-else :size="16"><Trash /></n-icon>
                       </button>
                     </span>
                   </div>
@@ -497,7 +501,8 @@
 
 <script setup lang="ts">
 import { computed, h, nextTick, onUnmounted, ref, watch } from 'vue'
-import { useDialog, useMessage, NIcon, NTreeSelect, type TreeSelectOption } from 'naive-ui'
+import { useRoute, useRouter } from 'vue-router'
+import { useMessage, NIcon, NTreeSelect, type TreeSelectOption } from 'naive-ui'
 import {
   ArrowsLeftRight,
   ChevronDown,
@@ -507,6 +512,7 @@ import {
   Folder,
   FolderPlus,
   InfoCircle,
+  Loader,
   MessageCircle,
   Paperclip,
   Pencil,
@@ -517,6 +523,7 @@ import {
 } from '@vicons/tabler'
 import DocumentTypeIcon from '@/components/business/DocumentTypeIcon.vue'
 import ProjectKnowledgeChat from '@/components/business/ProjectKnowledgeChat.vue'
+import { useAsyncConfirmDialog } from '@/composables/useAsyncConfirmDialog'
 import {
   useAppStore,
   type AttachmentRecord,
@@ -536,7 +543,22 @@ type FolderTreeDisplayNode = {
 
 const store = useAppStore()
 const message = useMessage()
-const dialog = useDialog()
+const { confirmAsyncAction } = useAsyncConfirmDialog()
+const route = useRoute()
+const router = useRouter()
+
+function documentQueryValue(value: unknown) {
+  return Array.isArray(value) ? String(value[0] || '') : String(value || '')
+}
+
+function replaceDocumentQuery(patch: Record<string, string | undefined>) {
+  const query = { ...route.query }
+  Object.entries(patch).forEach(([key, value]) => {
+    if (value) query[key] = value
+    else delete query[key]
+  })
+  void router.replace({ path: '/docs', query })
+}
 
 const activeWorkspaceTab = ref<'chat' | 'files'>('chat')
 const chatFocusDocumentId = ref('')
@@ -750,7 +772,13 @@ watch(() => store.currentProjectId, async projectId => {
   documentRefreshing.value = false
   if (!projectId) return
   await initializeKnowledgeWorkspace(projectId)
+  await applyDocumentRouteContext()
 }, { immediate: true })
+
+watch(
+  () => [route.query.tab, route.query.folderId, route.query.documentId, route.query.search] as const,
+  () => void applyDocumentRouteContext(),
+)
 
 async function initializeKnowledgeWorkspace(projectId: string, force = false) {
   if (!projectId || projectId !== store.currentProjectId) return
@@ -869,6 +897,7 @@ function folderOptionsForKnowledgeBase(knowledgeBaseId: string, excludedIds = ne
     .filter((option): option is TreeSelectOption => Boolean(option))
 }
 function selectTreeNode(node: FolderTreeDisplayNode) {
+  replaceDocumentQuery({ tab: 'files', folderId: node.folderId || node.id, documentId: undefined, search: undefined })
   void selectFolder(node.folderId || node.id)
 }
 async function selectFolder(folderId: string, force = false) {
@@ -916,6 +945,7 @@ async function refreshDocumentLibrary() {
 }
 function selectDocument(file: AttachmentRecord) {
   selectedFileId.value = file.id
+  replaceDocumentQuery({ tab: 'files', documentId: file.id, search: undefined })
 }
 
 function openDocumentInfo(file: AttachmentRecord) {
@@ -951,7 +981,7 @@ function referenceFolder(knowledgeBaseId: string, folderPath?: string) {
   ))
 }
 
-async function locateReferenceDocument(reference: KnowledgeReferenceLocation) {
+async function locateReferenceDocument(reference: KnowledgeReferenceLocation, syncRoute = true) {
   const projectId = store.currentProjectId
   const knowledgeId = reference.knowledgeId?.trim()
   if (!projectId || !knowledgeId || locatingReferenceId.value) return
@@ -981,6 +1011,7 @@ async function locateReferenceDocument(reference: KnowledgeReferenceLocation) {
 
     selectedFileId.value = knowledgeId
     fileWorkspaceInitialized.value = true
+    if (syncRoute) replaceDocumentQuery({ tab: 'files', folderId: folder.id, documentId: knowledgeId, search: undefined })
     await nextTick()
     const row = [...document.querySelectorAll<HTMLElement>('[data-document-id]')]
       .find(element => element.dataset.documentId === knowledgeId)
@@ -998,8 +1029,16 @@ async function locateReferenceDocument(reference: KnowledgeReferenceLocation) {
   }
 }
 
-async function switchWorkspaceTab(tab: 'chat' | 'files') {
+async function switchWorkspaceTab(tab: 'chat' | 'files', syncRoute = true) {
   activeWorkspaceTab.value = tab
+  if (syncRoute) {
+    replaceDocumentQuery({
+      tab,
+      folderId: tab === 'files' ? activeFolderId.value || undefined : undefined,
+      documentId: tab === 'files' ? selectedFileId.value || undefined : chatFocusDocumentId.value || undefined,
+      search: tab === 'files' && isSearchActive.value ? documentSearchKeyword.value || undefined : undefined,
+    })
+  }
   if (tab !== 'files' || fileWorkspaceInitialized.value || !store.currentProjectId) return
   const preferredFolder = store.documentFolders.find(folder => folder.id === activeFolderId.value)
     || store.documentFolders.find(folder => folder.isKnowledgeBase)
@@ -1015,6 +1054,44 @@ function openDocumentConversation(file: AttachmentRecord) {
   selectedFileId.value = file.id
   chatFocusDocumentId.value = file.id
   activeWorkspaceTab.value = 'chat'
+  replaceDocumentQuery({ tab: 'chat', documentId: file.id, folderId: undefined, search: undefined })
+}
+
+let documentRouteSequence = 0
+async function applyDocumentRouteContext() {
+  const projectId = store.currentProjectId
+  if (!projectId) return
+  const sequence = ++documentRouteSequence
+  const tab = documentQueryValue(route.query.tab)
+  const folderId = documentQueryValue(route.query.folderId)
+  const documentId = documentQueryValue(route.query.documentId)
+  const search = documentQueryValue(route.query.search).trim()
+  if (tab === 'chat' && !folderId && !search) {
+    activeWorkspaceTab.value = 'chat'
+    chatFocusDocumentId.value = documentId
+    return
+  }
+  if (tab !== 'files' && !folderId && !documentId && !search) return
+  await switchWorkspaceTab('files', false)
+  if (sequence !== documentRouteSequence || projectId !== store.currentProjectId) return
+  if (folderId && store.documentFolders.some(folder => folder.id === folderId)) {
+    await selectFolder(folderId)
+  }
+  if (sequence !== documentRouteSequence || projectId !== store.currentProjectId) return
+  if (documentId) {
+    const known = store.attachments.find(file => file.id === documentId)
+    await locateReferenceDocument({
+      knowledgeId: documentId,
+      knowledgeBaseId: known?.knowledgeBaseId,
+      fileName: known?.fileName || '目标资料',
+      folderPath: known?.folderPath,
+    }, false)
+    return
+  }
+  if (search) {
+    documentSearchKeyword.value = search
+    await searchDocuments(false)
+  }
 }
 
 function normalizedFolderPath(value?: string) {
@@ -1217,20 +1294,19 @@ function confirmDeleteDocument(file: AttachmentRecord) {
     message.warning('请先终止当前回答，再删除文件。')
     return
   }
-  dialog.warning({
+  confirmAsyncAction({
     title: '删除文件',
     content: `确认永久删除“${file.fileName}”吗？删除后无法恢复。`,
     positiveText: '删除',
     negativeText: '取消',
-    positiveButtonProps: { type: 'error' },
-    maskClosable: false,
-    onPositiveClick: () => deleteDocument(file),
+    loadingText: '正在删除…',
+    onConfirm: () => deleteDocument(file),
   })
 }
-async function deleteDocument(file: AttachmentRecord) {
-  if (documentDeletingId.value || documentMovingId.value || folderDeleting.value || folderUpdating.value) return
+async function deleteDocument(file: AttachmentRecord): Promise<boolean> {
+  if (documentDeletingId.value || documentMovingId.value || folderDeleting.value || folderUpdating.value) return false
   const projectId = store.currentProjectId
-  if (!projectId) return
+  if (!projectId) return false
   const preferredFolderId = activeFolderId.value || file.folderId || ''
   const preferredFolder = store.documentFolders.find(item => item.id === preferredFolderId)
   const fileFolder = store.documentFolders.find(item => item.id === file.folderId)
@@ -1241,7 +1317,7 @@ async function deleteDocument(file: AttachmentRecord) {
   } catch (error: any) {
     message.error(error.response?.data?.detail || error.message || '文件删除失败。')
     documentDeletingId.value = ''
-    return
+    return false
   }
 
   documentSearchResults.value = documentSearchResults.value.filter(item => item.id !== file.id)
@@ -1266,6 +1342,7 @@ async function deleteDocument(file: AttachmentRecord) {
   } finally {
     documentDeletingId.value = ''
   }
+  return true
 }
 function confirmDeleteFolder() {
   if (folderUpdating.value || documentMovingId.value) return
@@ -1283,20 +1360,19 @@ function confirmDeleteFolder() {
   const content = documentCount || nestedFolderCount
     ? `“${folder.name}”包含 ${documentCount} 份资料、${nestedFolderCount} 个子目录。确认永久删除该目录及全部内容吗？此操作无法恢复。`
     : `确认永久删除空目录“${folder.name}”吗？此操作无法恢复。`
-  dialog.warning({
+  confirmAsyncAction({
     title: '删除目录',
     content,
     positiveText: documentCount || nestedFolderCount ? '删除全部' : '删除',
     negativeText: '取消',
-    positiveButtonProps: { type: 'error' },
-    maskClosable: false,
-    onPositiveClick: () => deleteFolder(folder),
+    loadingText: '正在删除…',
+    onConfirm: () => deleteFolder(folder),
   })
 }
-async function deleteFolder(folder: DocumentFolderRecord) {
-  if (folderDeleting.value || folderUpdating.value || documentMovingId.value || documentDeletingId.value) return
+async function deleteFolder(folder: DocumentFolderRecord): Promise<boolean> {
+  if (folderDeleting.value || folderUpdating.value || documentMovingId.value || documentDeletingId.value) return false
   const projectId = store.currentProjectId
-  if (!projectId) return
+  if (!projectId) return false
   folderDeleting.value = true
   const nestedIds = new Set([folder.id, ...descendantFolderIds(folder)])
   try {
@@ -1310,6 +1386,7 @@ async function deleteFolder(folder: DocumentFolderRecord) {
       || store.documentFolders.find(item => item.isKnowledgeBase && item.knowledgeBaseId === folder.knowledgeBaseId)
     if (target) await selectFolder(target.id)
     message.success(`目录“${folder.name}”及其中内容已删除`)
+    return true
   } catch (error: any) {
     try {
       await store.loadEngineeringDocuments(projectId, true)
@@ -1317,6 +1394,7 @@ async function deleteFolder(folder: DocumentFolderRecord) {
       // 递归删除可能已完成一部分，保留原始错误并让用户稍后刷新。
     }
     message.error(error.response?.data?.detail || error.message || '目录删除失败。')
+    return false
   } finally {
     folderDeleting.value = false
   }
@@ -1449,7 +1527,8 @@ async function uploadDocuments() {
     documentUploading.value = false
   }
 }
-async function searchDocuments() {
+async function searchDocuments(syncRoute = true) {
+  if (documentSearching.value) return
   if (!documentSearchKeyword.value) {
     clearSearch()
     return
@@ -1464,527 +1543,20 @@ async function searchDocuments() {
     isSearchActive.value = true
     const firstResult = documentSearchResults.value[0]
     selectedFileId.value = firstResult?.id || ''
+    if (syncRoute) replaceDocumentQuery({ tab: 'files', search: rawKeyword, documentId: undefined })
   } catch (error: any) {
     message.error(error.response?.data?.detail || '资料检索失败，请稍后重试。')
   } finally {
     documentSearching.value = false
   }
 }
-function clearSearch() {
+function clearSearch(syncRoute = true) {
   documentSearchKeyword.value = ''
   documentSearchResults.value = []
   isSearchActive.value = false
   selectedFileId.value = ''
+  if (syncRoute) replaceDocumentQuery({ search: undefined, documentId: undefined })
 }
 </script>
 
-<style scoped>
-.document-library {
-  height: calc(100dvh - var(--header-height, 56px));
-  min-height: 0;
-  box-sizing: border-box;
-  overflow: hidden;
-  color: var(--text-primary);
-  background: #fff;
-}
-
-.dobby-workspace {
-  position: relative;
-  --folder-rail-width: 272px;
-  display: grid;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr);
-  overflow: hidden;
-  background: #fff;
-}
-
-.knowledge-workspace-overlay {
-  position: absolute;
-  z-index: 25;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-  background:
-    radial-gradient(circle at 50% 42%, rgba(221, 239, 234, .72), transparent 32%),
-    rgba(250, 252, 251, .98);
-}
-.knowledge-workspace-loading,
-.knowledge-workspace-error {
-  display: grid;
-  width: min(100%, 430px);
-  justify-items: center;
-  gap: 11px;
-  color: #6d827d;
-  text-align: center;
-}
-.knowledge-workspace-robot {
-  display: grid;
-  width: 68px;
-  height: 68px;
-  place-items: center;
-  border: 1px solid #bcd6d0;
-  border-radius: 20px;
-  color: #fff;
-  background: linear-gradient(145deg, #176b62, #123f3d);
-  box-shadow: 0 15px 32px rgba(19, 77, 71, .19);
-  transform-origin: 50% 100%;
-  animation: knowledge-workspace-duang 1.08s cubic-bezier(.34, 1.56, .64, 1) infinite;
-}
-.knowledge-workspace-robot.is-error {
-  color: #a24a38;
-  border-color: #e2beb6;
-  background: #fff4f1;
-  box-shadow: none;
-  animation: none;
-}
-.knowledge-workspace-robot.is-idle {
-  color: #176b62;
-  background: #eef8f5;
-  box-shadow: none;
-  animation: none;
-}
-.knowledge-workspace-loading strong,
-.knowledge-workspace-error strong { color: #234844; font-size: 17px; font-weight: 850; }
-.knowledge-workspace-loading p,
-.knowledge-workspace-error p { max-width: 48ch; margin: 0; font-size: 13px; line-height: 1.65; }
-.knowledge-workspace-error button {
-  margin-top: 4px;
-  border: 1px solid #9bbeb7;
-  border-radius: 7px;
-  padding: 9px 16px;
-  color: #155f57;
-  background: #fff;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 800;
-  cursor: pointer;
-}
-.knowledge-loading-dots { display: inline-flex; align-items: center; gap: 5px; min-height: 16px; }
-.knowledge-loading-dots i { display: block; width: 6px; height: 6px; border-radius: 50%; background: #4d8b82; animation: knowledge-loading-dot 1.1s ease-in-out infinite; }
-.knowledge-loading-dots i:nth-child(2) { animation-delay: .14s; }
-.knowledge-loading-dots i:nth-child(3) { animation-delay: .28s; }
-
-.knowledge-tabs {
-  display: flex;
-  min-height: 54px;
-  align-items: center;
-  gap: 26px;
-  padding: 0 28px;
-  border-bottom: 1px solid #e0e8e5;
-  background: #fff;
-}
-.knowledge-tabs button {
-  position: relative;
-  display: inline-flex;
-  min-height: 54px;
-  align-items: center;
-  gap: 8px;
-  border: 0;
-  padding: 0 2px;
-  color: #60756f;
-  background: transparent;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 760;
-  cursor: pointer;
-}
-.knowledge-tabs button::after {
-  content: '';
-  position: absolute;
-  right: 0;
-  bottom: -1px;
-  left: 0;
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: transparent;
-}
-.knowledge-tabs button.active { color: #0f6f67; }
-.knowledge-tabs button.active::after { background: #0f766e; }
-.knowledge-tabs button > span {
-  display: inline-flex;
-  min-width: 24px;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  border-radius: 10px;
-  padding: 2px 7px;
-  color: #70827e;
-  background: #edf2f0;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-.knowledge-tabs button.active > span { color: #0f6f67; background: #e4f0ed; }
-.knowledge-tabs button > span.is-loading { min-width: 74px; color: #8a6a2c; background: #f7f0df; }
-.knowledge-loading-robot {
-  flex: 0 0 auto;
-  transform-origin: 50% 100%;
-  animation: knowledge-robot-duang .92s cubic-bezier(.36, .07, .19, .97) infinite;
-}
-
-.file-workspace {
-  display: grid;
-  min-width: 0;
-  min-height: 0;
-  grid-template-rows: auto minmax(0, 1fr);
-  overflow: hidden;
-  background: #fff;
-}
-.file-toolbar {
-  display: grid;
-  grid-template-columns: minmax(280px, 1fr) auto;
-  align-items: center;
-  gap: 18px;
-  min-height: 64px;
-  padding: 10px 18px;
-  border-bottom: 1px solid #e3e9e7;
-  background: #fbfcfc;
-}
-.file-search {
-  display: grid;
-  width: max-content;
-  grid-template-columns: calc(var(--folder-rail-width) - 18px) auto;
-  align-items: center;
-  gap: 8px;
-}
-.file-search-field {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  min-height: 42px;
-  box-sizing: border-box;
-  padding: 4px 10px;
-  border: 1px solid #c6d5d1;
-  border-radius: 7px;
-  background: #fff;
-  transition: border-color .18s ease, box-shadow .18s ease;
-}
-.file-search-field:focus-within { border-color: #4b8a80; box-shadow: 0 0 0 3px rgba(15, 118, 110, .09); }
-.file-search-field > svg { color: #6c827d; }
-.file-search input { min-width: 0; height: 34px; border: 0; outline: 0; color: #173235; background: transparent; font: inherit; font-size: 13px; }
-.file-search button,
-.primary-action,
-.secondary-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  border-radius: 6px;
-  padding: 8px 11px;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 780;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.file-search button { border: 0; color: #fff; background: #173f3e; }
-.file-toolbar-actions { display: flex; align-items: center; gap: 7px; }
-.file-toolbar-actions .is-spinning { animation: folder-refresh-spin .78s linear infinite; }
-.primary-action { border: 1px solid #d45f1f; color: #fff; background: #d45f1f; box-shadow: 0 5px 12px rgba(212, 95, 31, .16); }
-.secondary-action { border: 1px solid #b9cdc8; color: #315e58; background: #fff; }
-.secondary-action.is-danger { border-color: #e3b9b4; color: #b44735; background: #fff9f8; }
-button:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
-.file-search button:not(:disabled):hover,
-.primary-action:not(:disabled):hover,
-.secondary-action:not(:disabled):hover { filter: brightness(.96); transform: translateY(-1px); }
-
-.dobby-workspace-grid {
-  display: grid;
-  min-width: 0;
-  min-height: 0;
-  grid-template-columns: var(--folder-rail-width) minmax(0, 1fr);
-  overflow: hidden;
-}
-
-.folder-rail {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex-direction: column;
-  overflow: hidden;
-  border-right: 1px solid #e0e8e5;
-  background: linear-gradient(180deg, #f8faf9, #f3f7f5);
-}
-.folder-rail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 15px 13px 12px; }
-.folder-rail-head > div:not(.folder-rail-tools) { display: grid; min-width: 0; gap: 4px; }
-.folder-rail-head span { color: #6f8580; font-size: 12px; font-weight: 800; letter-spacing: .05em; }
-.folder-rail-head strong { overflow: hidden; color: #1c3936; font-size: 14px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
-.folder-count-legend { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 8px; color: #788a86; font-size: 12px; font-weight: 600; letter-spacing: 0; line-height: 1; }
-.folder-count-legend > span { display: inline-flex; align-items: center; gap: 4px; color: inherit; font-size: 12px; font-weight: inherit; letter-spacing: 0; white-space: nowrap; }
-.folder-rail-tools { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 7px; }
-.folder-refresh-button { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 1px solid #c7d6d2; border-radius: 6px; padding: 0; color: #456f69; background: #fff; cursor: pointer; }
-.folder-refresh-button:not(:disabled):hover { border-color: #84aaa3; color: #0f6f67; background: #eef6f4; }
-.folder-refresh-button .is-spinning { animation: folder-refresh-spin .78s linear infinite; }
-.legend-swatch { display: inline-block; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 2px; }
-.legend-swatch.is-total { background: #0f766e; }
-.legend-swatch.is-direct { background: #b7791f; }
-.folder-tree-nav { display: grid; flex: 1 1 auto; min-height: 0; align-content: start; overflow: auto; padding: 2px 8px 12px; scrollbar-gutter: stable; }
-.folder-tree-loading { width: 100%; height: 100%; min-height: 100%; box-sizing: border-box; padding: 24px 8px; }
-.library-loading-state { display: grid; width: 100%; min-height: 220px; place-content: center; justify-items: center; gap: 14px; color: #607a75; text-align: center; }
-.library-loading-state.is-compact { min-height: 100%; gap: 10px; }
-.library-loading-state.is-compact > strong { font-size: 12px; font-weight: 750; }
-.library-loading-stack { position: relative; display: block; width: 54px; height: 48px; }
-.library-loading-state.is-compact .library-loading-stack { transform: scale(.82); }
-.library-loading-stack > i { position: absolute; display: block; width: 38px; height: 42px; box-sizing: border-box; border: 1px solid rgba(77, 126, 118, .24); border-radius: 7px; background: #eef5f3; box-shadow: 0 8px 18px rgba(35, 84, 76, .07); animation: library-loading-float 1.55s ease-in-out infinite; }
-.library-loading-stack > i::before,
-.library-loading-stack > i::after { content: ''; position: absolute; left: 9px; display: block; height: 3px; border-radius: 2px; background: #bfd6d0; }
-.library-loading-stack > i::before { top: 12px; width: 18px; }
-.library-loading-stack > i::after { top: 20px; width: 13px; box-shadow: 0 8px 0 #d2e2de; }
-.library-loading-stack > i:nth-child(1) { left: 0; top: 5px; opacity: .42; animation-delay: -.52s; }
-.library-loading-stack > i:nth-child(2) { left: 8px; top: 2px; opacity: .68; animation-delay: -.26s; }
-.library-loading-stack > i:nth-child(3) { left: 16px; top: 0; border-color: rgba(28, 114, 101, .28); background: #f8fbfa; }
-.library-loading-text { display: grid; justify-items: center; gap: 4px; }
-.library-loading-text strong { color: #315a54; font-size: 13px; font-weight: 800; }
-.library-loading-text > span { color: #81928e; font-size: 12px; line-height: 1.5; }
-.tree-row { display: flex; width: max-content; min-width: 100%; align-items: center; }
-.tree-depth-1 { padding-left: 12px; }.tree-depth-2 { padding-left: 24px; }.tree-depth-3 { padding-left: 36px; }.tree-depth-4 { padding-left: 48px; }
-.tree-toggle,
-.tree-spacer { flex: 0 0 21px; width: 21px; height: 31px; }
-.tree-toggle { display: grid; place-items: center; border: 0; border-radius: 4px; padding: 0; color: #758b87; background: transparent; cursor: pointer; }
-.tree-toggle:hover { color: #174f49; background: #e6f0ed; }
-.tree-item {
-  display: flex;
-  flex: 1 0 auto;
-  min-width: max-content;
-  align-items: center;
-  gap: 7px;
-  height: 32px;
-  border: 0;
-  border-radius: 6px;
-  padding: 0 8px 0 5px;
-  color: #49635f;
-  background: transparent;
-  font: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-.tree-item > svg { color: #cf861b; }.tree-root-row .tree-item > svg { color: #1b746a; }
-.tree-item span { flex: 0 0 auto; white-space: nowrap; }
-.tree-counts { display: inline-grid; min-width: 48px; grid-template-columns: repeat(2, minmax(18px, auto)); align-items: center; justify-content: end; gap: 4px; font-size: 12px; font-variant-numeric: tabular-nums; line-height: 1; text-align: right; }
-.tree-counts b { font-size: 12px; font-weight: 850; }
-.tree-count-total { color: #0f766e; }
-.tree-count-direct { color: #b7791f; }
-.tree-item:hover { color: #173b37; background: #eaf2ef; }
-.tree-item.is-active { color: #173b37; background: transparent; font-weight: 800; box-shadow: inset 0 0 0 1.5px #0f766e; }
-.tree-item.is-library-root { height: 36px; color: #173f3e; background: transparent; font-weight: 850; }
-.tree-item.is-library-root > svg { color: #0f766e; }
-.tree-item.is-library-root:hover { background: #eaf2ef; }
-.tree-item.is-library-root.is-active { background: transparent; }
-
-.document-queue { display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; background: #fff; }
-.search-state { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 18px; border-bottom: 1px solid #d9e8e3; color: #285d57; background: #f0f8f5; font-size: 12px; }
-.search-state button { border: 0; padding: 0; color: #0f766e; background: transparent; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; }
-
-.library-stream { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; overflow: hidden; }
-.document-file-scroll { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; overflow: auto; scrollbar-gutter: stable; }
-.document-file-list { display: flex; min-width: 0; flex: 0 0 auto; flex-direction: column; }
-.document-file-list-head,
-.document-file-row {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(220px, 1fr) 148px 82px 76px 132px;
-  align-items: center;
-  column-gap: 10px;
-  box-sizing: border-box;
-}
-.document-file-list-head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  min-height: 34px;
-  padding: 0 12px;
-  border-bottom: 1px solid #dbe5e2;
-  color: #667b76;
-  background: rgba(248, 250, 249, .97);
-  box-shadow: 0 1px 0 rgba(31, 69, 63, .03);
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.35;
-  backdrop-filter: blur(8px);
-}
-.document-file-list-head > span:not(:first-child) { border-left: 1px solid #e2e9e7; padding-left: 10px; }
-.document-file-list-head > span:last-child { padding-left: 0; text-align: center; }
-.document-file-row {
-  width: 100%;
-  min-height: 52px;
-  border: 0;
-  border-bottom: 1px solid #e7ecea;
-  padding: 7px 12px;
-  color: inherit;
-  background: #fff;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: background .15s ease, box-shadow .15s ease;
-}
-.document-file-row:hover { background: #f1f7f5; }
-.document-file-row.active { background: #deeeea; box-shadow: inset 3px 0 #0f766e; }
-.document-file-row.is-moving,
-.document-file-row.is-deleting { opacity: .58; cursor: wait; }
-.document-file-row:focus-visible { outline: 2px solid rgba(15, 118, 110, .45); outline-offset: -2px; }
-.document-file-row > * { min-width: 0; }
-.document-file-name { display: grid; min-width: 0; grid-template-columns: 34px minmax(0, 1fr); align-items: center; gap: 8px; }
-.document-file-icon { display: grid; width: 30px; height: 34px; place-items: center; }
-.document-file-icon > img { width: 30px; height: 30px; }
-.document-file-name strong {
-  min-width: 0;
-  color: #193a36;
-  font-size: 12px;
-  font-weight: 760;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  white-space: normal;
-}
-.document-file-date,
-.document-file-size { overflow: hidden; color: #748782; font-size: 12px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
-.document-file-type { display: grid; min-width: 0; gap: 2px; }
-.document-file-type b { overflow: hidden; color: #496963; font-size: 12px; font-weight: 780; text-overflow: ellipsis; white-space: nowrap; }
-.document-file-type em { overflow: hidden; color: #16806a; font-size: 12px; font-style: normal; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
-.document-file-size { color: #45645e; font-weight: 720; }
-.document-file-actions { display: flex; align-items: center; justify-content: center; gap: 3px; }
-.document-file-actions button {
-  display: grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 1px solid transparent;
-  border-radius: 5px;
-  padding: 0;
-  color: #607772;
-  background: transparent;
-  cursor: pointer;
-  transition: border-color .15s ease, color .15s ease, background .15s ease;
-}
-.document-file-actions button.is-info:not(:disabled):hover,
-.document-file-actions button.is-chat:not(:disabled):hover { border-color: #a9cbc4; color: #0f7067; background: #eff7f5; }
-.document-file-actions button.is-move:not(:disabled):hover { border-color: #c4b587; color: #8a6417; background: #fff9e9; }
-.document-file-actions button.is-delete { color: #a65346; }
-.document-file-actions button.is-delete:not(:disabled):hover { border-color: #e1bbb5; color: #a43f31; background: #fff5f3; }
-.document-loading { display: grid; flex: 1 1 auto; min-height: 220px; box-sizing: border-box; place-items: center; }
-.document-empty { display: grid; flex: 1 1 auto; min-height: 220px; box-sizing: border-box; place-content: center; justify-items: center; gap: 8px; color: #7a8e89; text-align: center; }
-.document-empty strong { color: #385b56; font-size: 14px; }
-.document-empty p { max-width: 40ch; margin: 0 0 6px; font-size: 12px; line-height: 1.6; }
-.document-empty button { display: inline-flex; align-items: center; gap: 7px; border: 0; border-radius: 7px; padding: 10px 14px; color: #fff; background: #d45f1f; font: inherit; font-size: 12px; font-weight: 800; cursor: pointer; box-shadow: 0 7px 15px rgba(212, 95, 31, .17); }
-
-.library-modal-backdrop { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 24px; background: rgba(15, 32, 35, .44); backdrop-filter: blur(3px); }
-.library-modal { width: min(100%, 470px); max-height: calc(100dvh - 48px); overflow: auto; padding: 20px; border: 1px solid rgba(28, 56, 57, .18); border-radius: 12px; background: #fff; box-shadow: 0 22px 56px rgba(15, 39, 42, .26); }
-.library-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 13px; }.library-modal-head > div { display: flex; min-width: 0; align-items: baseline; gap: 9px; }.library-modal-head span { color: #0f766e; font-size: 12px; font-weight: 850; letter-spacing: .04em; }.library-modal-head h2 { margin: 0; color: #173235; font-size: 17px; }.modal-close,.modal-secondary,.modal-primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 6px; padding: 8px 12px; font: inherit; font-size: 12px; font-weight: 780; cursor: pointer; }.modal-close,.modal-secondary { border: 1px solid #cad8d4; color: #536e69; background: #fff; }.modal-primary { border: 0; color: #fff; background: #d45f1f; }
-.document-info-modal { width: min(100%, 680px); }
-.document-info-overview { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; border-bottom: 1px solid #e2eae7; padding: 3px 0 16px; }
-.document-info-icon { display: grid; width: 46px; height: 50px; place-items: center; border-radius: 9px; background: #edf5f2; }
-.document-info-icon > img { width: 34px; height: 34px; }
-.document-info-overview > div { display: grid; min-width: 0; gap: 5px; }
-.document-info-overview strong { overflow-wrap: anywhere; color: #183b36; font-size: 14px; line-height: 1.45; }
-.document-info-overview div span { color: #6f837e; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.document-info-overview em { border-radius: 999px; padding: 5px 9px; color: #137563; background: #e7f4ef; font-size: 11px; font-style: normal; font-weight: 780; white-space: nowrap; }
-.document-info-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; border-bottom: 1px solid #e2eae7; padding: 8px 0; }
-.document-info-grid > div { display: grid; min-width: 0; grid-template-columns: 92px minmax(0, 1fr); gap: 8px; padding: 8px 10px 8px 0; }
-.document-info-grid dt { color: #778a85; font-size: 12px; }
-.document-info-grid dd { min-width: 0; margin: 0; overflow: hidden; color: #294b45; font-size: 12px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.document-info-summary { display: grid; gap: 7px; padding: 14px 0; }
-.document-info-summary strong { color: #284b45; font-size: 12px; }
-.document-info-summary p { max-height: 150px; margin: 0; overflow: auto; border: 1px solid #dde7e4; border-radius: 7px; padding: 10px 11px; color: #536d68; background: #f8faf9; font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
-.document-info-identity { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 9px; border-radius: 7px; padding: 8px 10px; color: #71847f; background: #f4f7f6; font-size: 11px; }
-.document-info-identity code { overflow: hidden; color: #405e58; font: inherit; text-overflow: ellipsis; white-space: nowrap; }
-.document-info-modal > .upload-actions { padding-top: 15px; }
-.upload-modal { display: flex; width: min(100%, 650px); height: min(610px, calc(100dvh - 48px)); flex-direction: column; overflow: hidden; }.upload-modal > .library-modal-head { flex: 0 0 auto; }.upload-form { display: grid; flex: 1 1 auto; min-height: 0; grid-template-rows: auto auto minmax(0, 1fr) auto; gap: 12px; }
-.upload-target-field { display: grid; gap: 6px; color: #566f6a; font-size: 12px; font-weight: 750; }
-.upload-target-field :deep(.n-base-selection) { --n-border: 1px solid #cad8d4 !important; --n-border-active: 1px solid #4d8d84 !important; --n-border-focus: 1px solid #4d8d84 !important; --n-border-hover: 1px solid #7eaaa1 !important; --n-box-shadow-active: 0 0 0 2px rgba(15, 118, 110, .12) !important; --n-box-shadow-focus: 0 0 0 2px rgba(15, 118, 110, .12) !important; --n-color: #f9fbfa !important; --n-height: 40px !important; --n-border-radius: 6px !important; }
-.upload-target-field :deep(.n-base-selection-label) { font-size: 12px; font-weight: 700; }
-.upload-target-field :deep(.n-base-selection-placeholder) { color: #81928e; font-size: 12px; font-weight: 500; }
-.folder-tree-create-action { display: flex; width: 100%; min-height: 36px; align-items: center; gap: 7px; border: 0; padding: 7px 10px; color: #17665d; background: transparent; font: inherit; font-size: 12px; font-weight: 780; text-align: left; cursor: pointer; transition: color .16s ease, background .16s ease; }
-.folder-tree-create-action:not(:disabled):hover { color: #0f554e; background: #edf6f3; }
-.folder-tree-create-action:disabled { opacity: .55; cursor: not-allowed; }
-.folder-create-form { display: grid; gap: 13px; }.folder-name-field { display: grid; gap: 6px; color: #566f6a; font-size: 12px; font-weight: 750; }.folder-name-field input { width: 100%; min-width: 0; box-sizing: border-box; padding: 9px 10px; border: 1px solid #cad8d4; border-radius: 6px; color: #173235; background: #f9fbfa; font: inherit; font-size: 12px; }
-.path-operation-source,
-.path-operation-target { display: grid; min-width: 0; gap: 5px; padding: 10px 11px; border: 1px solid #dce6e3; border-radius: 7px; background: #f8faf9; }
-.path-operation-target { border-color: #bdd8d1; background: #eef7f4; }
-.path-operation-source span,
-.path-operation-target span { color: #71847f; font-size: 12px; font-weight: 700; }
-.path-operation-source strong,
-.path-operation-target strong { overflow-wrap: anywhere; color: #294b46; font-size: 12px; line-height: 1.55; }
-.upload-queue-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; }.upload-queue-head > div { display: grid; gap: 3px; }.upload-queue-head strong { color: #294d47; font-size: 12px; }.upload-queue-head span { color: #7a8d88; font-size: 12px; }
-.upload-picker { display: inline-flex; align-items: center; justify-content: center; border: 1px solid #7eaaa1; border-radius: 6px; padding: 7px 10px; color: #17665d; background: #f2f8f6; font-size: 12px; font-weight: 780; cursor: pointer; }.upload-picker input { display: none; }
-.upload-queue { display: grid; min-height: 0; align-content: start; gap: 6px; margin: 0; padding: 0; overflow: auto; list-style: none; scrollbar-gutter: stable; }.upload-queue li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid #e0e8e5; border-radius: 7px; background: #fbfcfc; }.upload-file-type { display: grid; min-width: 42px; min-height: 32px; place-items: center; border-radius: 5px; color: #3d6862; background: #e7f1ee; font-size: 12px; font-weight: 850; }.upload-queue li > div { display: grid; min-width: 0; gap: 3px; }.upload-queue li strong { overflow: hidden; color: #294842; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.upload-queue li div span { color: #7c8f8a; font-size: 12px; }.upload-queue li button { border: 0; padding: 5px; color: #b9532b; background: transparent; font: inherit; font-size: 12px; font-weight: 750; cursor: pointer; }
-.upload-queue-empty { display: grid; min-height: 0; place-content: center; justify-items: center; gap: 7px; padding: 20px; border: 1px dashed #c8d8d4; border-radius: 8px; color: #7c8e8a; text-align: center; }.upload-queue-empty strong { color: #3b5d57; font-size: 12px; }.upload-queue-empty span { font-size: 12px; }.upload-actions { display: flex; justify-content: flex-end; gap: 7px; padding-top: 2px; }
-
-button:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible { outline: 2px solid rgba(15, 118, 110, .45); outline-offset: 2px; }
-
-@keyframes library-loading-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
-}
-@keyframes folder-refresh-spin {
-  to { transform: rotate(360deg); }
-}
-@keyframes knowledge-robot-duang {
-  0%, 100% { transform: translateY(0) scale(1); }
-  28% { transform: translateY(-4px) scale(.94, 1.08); }
-  52% { transform: translateY(1px) scale(1.08, .9); }
-  70% { transform: translateY(-1px) scale(.98, 1.03); }
-}
-@keyframes knowledge-workspace-duang {
-  0%, 100% { transform: translateY(0) scale(1); }
-  36% { transform: translateY(-10px) scale(.94, 1.06); }
-  58% { transform: translateY(2px) scale(1.08, .9); }
-  72% { transform: translateY(-2px) scale(.99, 1.02); }
-}
-@keyframes knowledge-loading-dot {
-  0%, 100% { opacity: .28; transform: translateY(0); }
-  48% { opacity: 1; transform: translateY(-4px); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .library-loading-stack > i,
-  .knowledge-loading-robot,
-  .knowledge-workspace-robot,
-  .knowledge-loading-dots i { animation: none; }
-}
-
-@media (max-width: 1180px) {
-  .dobby-workspace { --folder-rail-width: 220px; }
-  .document-file-list-head,
-  .document-file-row { grid-template-columns: minmax(180px, 1fr) 142px 70px 66px 132px; column-gap: 8px; }
-}
-@media (max-width: 960px) {
-  .dobby-workspace { --folder-rail-width: 210px; }
-  .file-toolbar { grid-template-columns: minmax(0, 1fr); gap: 9px; }
-  .file-search { width: max-content; }
-  .file-toolbar-actions { justify-content: flex-end; }
-  .document-file-list-head,
-  .document-file-row { grid-template-columns: minmax(170px, 1fr) 142px 64px 132px; }
-  .document-file-list-head > span:nth-child(3),
-  .document-file-row > .document-file-type { display: none; }
-}
-@media (max-width: 760px) {
-  .document-library { height: auto; min-height: calc(100dvh - var(--header-height, 56px)); overflow: visible; }
-  .dobby-workspace { height: auto; overflow: visible; }
-  .knowledge-tabs { padding: 0 18px; }
-  .file-search { width: 100%; grid-template-columns: minmax(0, 1fr) auto; }
-  .file-toolbar-actions { flex-wrap: wrap; justify-content: stretch; }
-  .file-toolbar-actions button { flex: 1 1 120px; }
-  .dobby-workspace-grid { display: block; }
-  .folder-rail { min-height: 280px; max-height: 360px; border-right: 0; border-bottom: 1px solid #e0e8e5; }
-  .document-queue { min-height: 560px; }
-  .document-file-list-head,
-  .document-file-row { grid-template-columns: minmax(150px, 1fr) 80px 132px; }
-  .document-file-list-head > span:nth-child(2),
-  .document-file-row > .document-file-date { display: none; }
-  .library-modal-backdrop { padding: 10px; }
-  .library-modal { max-height: calc(100dvh - 20px); padding: 15px; }
-  .document-info-overview { grid-template-columns: auto minmax(0, 1fr); }
-  .document-info-overview em { grid-column: 2; justify-self: start; }
-  .document-info-grid { grid-template-columns: 1fr; }
-  .upload-modal { height: calc(100dvh - 20px); }
-}
-</style>
+<style scoped src="./styles/DocumentLibraryView.css"></style>

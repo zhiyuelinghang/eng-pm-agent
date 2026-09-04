@@ -12,7 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from .engineering_document_catalog import (
+    reconcile_name_based_catalogue_permissions,
+)
 from .models import (
+    EngineeringDocumentPermission,
     Project,
     ProjectInitializationDraft,
     ProjectInitializationValidationRun,
@@ -28,6 +32,10 @@ from .models import (
     WbsRiskLink,
 )
 from .initialization_integrity import validate_initialization_integrity
+from .personnel_policy import (
+    reconcile_user_management_roles,
+    require_supported_project_position,
+)
 from .security import hash_password
 
 
@@ -491,12 +499,23 @@ def apply_initialization_draft(
             ProjectMemberPosition.project_id == project.id,
         ),
     )
+    # Position permissions are polymorphic and have no FK to project_positions.
+    # Remove the old position grants before recreating the project's positions;
+    # the fixed name-based policy below will rebuild the current defaults.
+    db.execute(
+        delete(EngineeringDocumentPermission).where(
+            EngineeringDocumentPermission.project_id == project.id,
+            EngineeringDocumentPermission.subject_type == "position",
+        ),
+    )
     db.execute(
         delete(ProjectPosition).where(ProjectPosition.project_id == project.id),
     )
-    for membership in db.scalars(
+    previous_memberships = list(db.scalars(
         select(ProjectMember).where(ProjectMember.project_id == project.id),
-    ).all():
+    ).all())
+    affected_user_ids = {membership.user_id for membership in previous_memberships}
+    for membership in previous_memberships:
         db.delete(membership)
     db.flush()
 
@@ -504,6 +523,7 @@ def apply_initialization_draft(
     members_by_user_id: dict[int, ProjectMember] = {}
     positions_by_name: dict[str, ProjectPosition] = {}
     for person in payload.personnel:
+        position_name = require_supported_project_position(person.position_name)
         user = existing_users.get(person.identity_card_no)
         if user is None:
             credential = credentials[person.identity_card_no]
@@ -518,6 +538,7 @@ def apply_initialization_draft(
             db.flush()
             existing_users[person.identity_card_no] = user
             new_usernames.append(user.username)
+        affected_user_ids.add(user.id)
         membership = members_by_user_id.get(user.id)
         if membership is None:
             membership = ProjectMember(
@@ -527,15 +548,15 @@ def apply_initialization_draft(
             db.add(membership)
             db.flush()
             members_by_user_id[user.id] = membership
-        position = positions_by_name.get(person.position_name)
+        position = positions_by_name.get(position_name)
         if position is None:
             position = ProjectPosition(
                 project_id=project.id,
-                position_name=person.position_name,
+                position_name=position_name,
             )
             db.add(position)
             db.flush()
-            positions_by_name[person.position_name] = position
+            positions_by_name[position_name] = position
         db.add(
             ProjectMemberPosition(
                 project_id=project.id,
@@ -546,6 +567,14 @@ def apply_initialization_draft(
                 responsibility_description=person.responsibility_description,
             ),
         )
+
+    db.flush()
+    account_roles = reconcile_user_management_roles(db, affected_user_ids)
+    permission_policy = reconcile_name_based_catalogue_permissions(
+        db,
+        project.id,
+        enable_restricted=True,
+    )
 
     wbs_by_code: dict[str, WbsItem] = {}
     for item in payload.wbs:
@@ -627,9 +656,16 @@ def apply_initialization_draft(
         "project_id": project.id,
         "status": draft.status,
         "created_usernames": new_usernames,
+        "account_roles": account_roles,
+        "permission_policy": permission_policy,
         "counts": {
             "personnel": len({item.identity_card_no for item in payload.personnel}),
-            "positions": len({item.position_name for item in payload.personnel}),
+            "positions": len(
+                {
+                    require_supported_project_position(item.position_name)
+                    for item in payload.personnel
+                },
+            ),
             "position_assignments": len(payload.personnel),
             "wbs": len(payload.wbs),
             "risks": len(payload.risks),

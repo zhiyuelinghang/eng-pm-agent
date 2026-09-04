@@ -14,6 +14,50 @@ from agentscope.app.storage import SessionSource
 
 
 class BackgroundToolContinuationTest(IsolatedAsyncioTestCase):
+    async def test_session_delete_does_not_wait_for_lifecycle_hook(
+        self,
+    ) -> None:
+        hook_started = asyncio.Event()
+        release_hook = asyncio.Event()
+
+        async def slow_session_end_hook(*_args: object) -> None:
+            hook_started.set()
+            await release_hook.wait()
+
+        record = SimpleNamespace(id="session", agent_id="agent")
+        storage = SimpleNamespace(
+            list_all_sessions=AsyncMock(return_value=[record]),
+            delete_session=AsyncMock(return_value=True),
+        )
+        service = SessionService(
+            storage,
+            SimpleNamespace(),
+            session_end_handler=slow_session_end_hook,
+        )
+        service._team_worker_session_ids = AsyncMock(return_value=[])
+        service._purge_team_projections = AsyncMock()
+        service._cancel_runs = AsyncMock()
+        service._purge_bus = AsyncMock()
+
+        try:
+            deleted = await asyncio.wait_for(
+                service.delete_session("user", "agent", "session"),
+                timeout=0.5,
+            )
+            await asyncio.wait_for(hook_started.wait(), timeout=0.5)
+
+            self.assertTrue(deleted)
+            storage.delete_session.assert_awaited_once_with(
+                "user",
+                "agent",
+                "session",
+            )
+            self.assertTrue(service._session_end_tasks)
+        finally:
+            release_hook.set()
+            if service._session_end_tasks:
+                await asyncio.gather(*service._session_end_tasks)
+
     async def test_local_chat_task_keeps_status_running_until_exit(
         self,
     ) -> None:

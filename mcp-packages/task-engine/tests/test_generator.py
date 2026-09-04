@@ -1,16 +1,22 @@
-"""生成器测试：模板、规则解析与模型降级。
+"""生成器测试：模板、规则解析与 AI 模型失败。
 
-规则解析是保底路径，必须永不抛错——这里用各种真实的中文表述压它。
+规则模板与 AI 生成是两个独立入口；AI 失败必须显式抛错。
 """
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from task_engine.domain.models import Assignee, IntervalUnit, RunMode
-from task_engine.generator.llm import FlowGenerator, LLMConfig, extract_json
+from task_engine.generator.llm import (
+    AIFlowGenerationError,
+    FlowGenerator,
+    LLMConfig,
+    extract_json,
+)
 from task_engine.generator.rules import (
     build_rule_based_flow,
     detect_template,
@@ -228,22 +234,39 @@ class TestExtractJson:
             extract_json("[1, 2, 3]")
 
 
-class TestGeneratorFallback:
-    def test_without_api_key_uses_rules(self):
+class TestGeneratorFailure:
+    def test_without_api_key_raises_explicit_error(self):
         generator = FlowGenerator(LLMConfig(api_key=""))
-        flow = generator.generate("每周五检查基坑监测数据", now=MONDAY)
-        assert flow.origin == "rules"
-        assert flow.trigger.run_mode is RunMode.RECURRING
+        with pytest.raises(AIFlowGenerationError, match="未配置模型 API Key"):
+            generator.generate("每周五检查基坑监测数据", now=MONDAY)
 
-    def test_model_failure_degrades_gracefully(self):
+    def test_model_failure_is_not_replaced_by_rules(self):
         # 指向一个不存在的地址，强制失败
         generator = FlowGenerator(
-            LLMConfig(api_key="sk-fake", base_url="http://127.0.0.1:1/v1", timeout_seconds=0.5),
+            LLMConfig(api_key="sk-fake", base_url="http://127.0.0.1:1/v1"),
         )
-        flow = generator.generate("整改现场隐患并闭环", now=MONDAY)
-        assert flow.origin == "rules"
-        assert "模型暂不可用" in flow.origin_note
-        assert len(flow.steps) >= 2  # 用户依然拿到可用的流程
+        with pytest.raises(AIFlowGenerationError, match="请求或响应解析失败"):
+            generator.generate("整改现场隐患并闭环", now=MONDAY)
+
+    def test_async_generation_can_be_cancelled_without_waiting_for_timeout(self):
+        async def scenario() -> None:
+            started = asyncio.Event()
+
+            class SlowGenerator(FlowGenerator):
+                async def _call_model_async(self, *_: object, **__: object):
+                    started.set()
+                    await asyncio.Event().wait()
+
+            generator = SlowGenerator(LLMConfig(api_key="sk-fake"))
+            generation = asyncio.create_task(
+                generator.generate_async("整改现场隐患并完成复核闭环", now=MONDAY),
+            )
+            await started.wait()
+            generation.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await generation
+
+        asyncio.run(scenario())
 
     def test_short_requirement_rejected(self):
         generator = FlowGenerator(LLMConfig(api_key=""))
@@ -261,55 +284,270 @@ class TestGeneratorFallback:
 class TestModelOutputValidation:
     """模型输出必须逐字段校验——它可能返回任何东西。"""
 
-    def _convert(self, raw, **kwargs):
+    @staticmethod
+    def _step(name: str, *, assignee_ref=None, due_offset_days: int = 1):
+        return {
+            "name": name,
+            "node_type": "manual",
+            "assignee_ref": assignee_ref,
+            "due_offset_days": due_offset_days,
+            "deliverable": f"{name}记录",
+            "requires_attachment": False,
+        }
+
+    def _valid_raw(self):
+        return {
+            "title": "隐患整改任务流",
+            "summary": "完成隐患整改及复核闭环",
+            "category": "safety",
+            "priority": "normal",
+            "run_mode": "once",
+            "first_at": "2026-03-03 09:00",
+            "steps": [self._step("执行整改"), self._step("复核闭环")],
+        }
+
+    def _convert(self, raw=None, **kwargs):
         generator = FlowGenerator(LLMConfig(api_key="sk-x"))
-        fallback = build_rule_based_flow("整改隐患", now=MONDAY)
+        payload = self._valid_raw()
+        payload.update(raw or {})
         return generator._to_flow(
-            raw, requirement="整改隐患", now=MONDAY,
+            payload, requirement=kwargs.get("requirement", ""), now=MONDAY,
             assignees=kwargs.get("assignees"), confirmer=None, site=None,
-            watchers=None, fallback=fallback,
+            watchers=None, context=kwargs.get("context"),
         )
 
-    def test_fabricated_assignee_is_dropped(self):
+    def test_fabricated_assignee_is_rejected(self):
+        with pytest.raises(ValueError, match="不存在的责任人"):
+            self._convert(
+                {"steps": [
+                    self._step("执行", assignee_ref="不存在的人"),
+                    self._step("复核", assignee_ref="u1"),
+                ]},
+                assignees=[ZHANG],
+            )
+
+    def test_known_assignee_is_preserved(self):
         flow = self._convert(
-            {"title": "x", "steps": [
-                {"name": "执行", "assignee_ref": "不存在的人"},
-                {"name": "复核", "assignee_ref": "u1"},
+            {"steps": [
+                self._step("执行", assignee_ref="u1"),
+                self._step("复核", assignee_ref="u1"),
             ]},
             assignees=[ZHANG],
         )
-        assert flow.steps[0].assignee is None  # 编造的被丢弃
-        assert flow.steps[1].assignee == ZHANG
+        assert flow.steps[0].assignee == ZHANG
 
-    def test_invalid_category_falls_back(self):
-        flow = self._convert({
-            "title": "x", "category": "不存在的分类",
-            "steps": [{"name": "a"}, {"name": "b"}],
-        })
-        assert flow.category in {"safety", "quality", "document", "risk", "monitoring", "general"}
+    def test_single_project_chat_message_is_an_automatic_flow(self):
+        flow = self._convert(
+            {
+                "category": "automation",
+                "steps": [
+                    {
+                        "name": "发送群内提醒",
+                        "node_type": "project_chat_message",
+                        "action": {
+                            "type": "project_chat_message",
+                            "channel_ref": "17",
+                            "sender_agent_id": "客户端伪造的其他智能体",
+                            "mention_mode": "users",
+                            "mentioned_user_refs": ["99"],
+                            "content": "请补充项目资料。",
+                        },
+                    },
+                ],
+            },
+            context={
+                "current_user": {
+                    "ref": "99",
+                    "username": "admin",
+                    "display_name": "系统管理员",
+                },
+                "chat_channels": [
+                    {
+                        "ref": "17",
+                        "title": "测试项目",
+                        "channel_type": "project",
+                        "member_refs": ["99", "100"],
+                    },
+                ],
+            },
+        )
 
-    def test_past_first_at_is_replaced(self):
-        flow = self._convert({
-            "title": "x", "run_mode": "once", "first_at": "2020-01-01 09:00",
-            "steps": [{"name": "a"}, {"name": "b"}],
-        })
-        assert flow.trigger.first_at > MONDAY
+        assert len(flow.steps) == 1
+        assert flow.steps[0].automated is True
+        assert flow.is_automation is True
+        assert flow.category == "automation"
+        assert flow.scope["action"] == flow.scope["step_actions"]["0"]
+        assert flow.scope["action"]["channel_id"] == 17
+        assert flow.scope["action"]["sender_agent_id"] == "dobby-task-engine"
+        assert flow.scope["action"]["sender_agent_name"] == "Dobby"
+        assert flow.scope["action"]["mentioned_user_ids"] == [99]
+        assert flow.scope["action"]["created_by_user_id"] == 99
+
+    def test_project_chat_message_rejects_unknown_channel(self):
+        with pytest.raises(ValueError, match="不可用的群聊"):
+            self._convert(
+                {
+                    "steps": [
+                        {
+                            "name": "发送群内提醒",
+                            "node_type": "project_chat_message",
+                            "action": {
+                                "type": "project_chat_message",
+                                "channel_ref": "404",
+                                "mention_mode": "none",
+                                "mentioned_user_refs": [],
+                                "content": "请补充项目资料。",
+                            },
+                        },
+                    ],
+                },
+                context={
+                    "current_user": {"ref": "99"},
+                    "chat_channels": [],
+                },
+            )
+
+    def test_project_chat_message_can_target_an_accessible_private_group(self):
+        flow = self._convert(
+            {
+                "category": "automation",
+                "steps": [
+                    {
+                        "name": "发送资料提醒",
+                        "node_type": "project_chat_message",
+                        "action": {
+                            "type": "project_chat_message",
+                            "channel_ref": "23",
+                            "mention_mode": "none",
+                            "mentioned_user_refs": [],
+                            "content": "请及时补充资料。",
+                        },
+                    },
+                ],
+            },
+            requirement="在资料复核群发送资料提醒",
+            context={
+                "current_user": {"ref": "99"},
+                "chat_channels": [
+                    {
+                        "ref": "17",
+                        "title": "测试项目",
+                        "channel_type": "project",
+                        "member_refs": ["99", "100"],
+                    },
+                    {
+                        "ref": "23",
+                        "title": "资料复核群",
+                        "channel_type": "private",
+                        "member_refs": ["99", "100"],
+                    },
+                ],
+            },
+        )
+
+        assert flow.scope["action"]["channel_id"] == 23
+        assert flow.scope["action"]["sender_agent_id"] == "dobby-task-engine"
+
+    def test_explicit_private_group_cannot_be_replaced_by_project_group(self):
+        with pytest.raises(ValueError, match="明确指定的群聊：资料复核群"):
+            self._convert(
+                {
+                    "category": "automation",
+                    "steps": [
+                        {
+                            "name": "发送资料提醒",
+                            "node_type": "project_chat_message",
+                            "action": {
+                                "type": "project_chat_message",
+                                "channel_ref": "17",
+                                "mention_mode": "none",
+                                "mentioned_user_refs": [],
+                                "content": "请及时补充资料。",
+                            },
+                        },
+                    ],
+                },
+                requirement="在资料复核群发送资料提醒",
+                context={
+                    "current_user": {"ref": "99"},
+                    "chat_channels": [
+                        {
+                            "ref": "17",
+                            "title": "测试项目",
+                            "channel_type": "project",
+                            "member_refs": ["99", "100"],
+                        },
+                        {
+                            "ref": "23",
+                            "title": "资料复核群",
+                            "channel_type": "private",
+                            "member_refs": ["99", "100"],
+                        },
+                    ],
+                },
+            )
+
+    def test_unnamed_group_request_must_default_to_project_group(self):
+        with pytest.raises(ValueError, match="未明确群聊名称"):
+            self._convert(
+                {
+                    "category": "automation",
+                    "steps": [
+                        {
+                            "name": "发送资料提醒",
+                            "node_type": "project_chat_message",
+                            "action": {
+                                "type": "project_chat_message",
+                                "channel_ref": "23",
+                                "mention_mode": "none",
+                                "mentioned_user_refs": [],
+                                "content": "请及时补充资料。",
+                            },
+                        },
+                    ],
+                },
+                requirement="在群里发送资料提醒",
+                context={
+                    "current_user": {"ref": "99"},
+                    "chat_channels": [
+                        {
+                            "ref": "17",
+                            "title": "测试项目",
+                            "channel_type": "project",
+                            "member_refs": ["99", "100"],
+                        },
+                        {
+                            "ref": "23",
+                            "title": "资料复核群",
+                            "channel_type": "private",
+                            "member_refs": ["99", "100"],
+                        },
+                    ],
+                },
+            )
+
+    def test_invalid_category_is_rejected(self):
+        with pytest.raises(ValueError, match="任务流分类无效"):
+            self._convert({"category": "不存在的分类"})
+
+    def test_past_first_at_is_rejected(self):
+        with pytest.raises(ValueError, match="必须晚于当前时间"):
+            self._convert({"first_at": "2020-01-01 09:00"})
 
     def test_too_few_steps_raises(self):
         with pytest.raises(ValueError, match="节点数量不足"):
-            self._convert({"title": "x", "steps": [{"name": "只有一个"}]})
+            self._convert({"steps": [self._step("只有一个")]})
 
-    def test_steps_are_capped(self):
-        flow = self._convert({
-            "title": "x",
-            "steps": [{"name": f"节点{i}"} for i in range(50)],
-        })
-        assert len(flow.steps) <= 10
+    def test_too_many_steps_are_rejected(self):
+        with pytest.raises(ValueError, match="超过 10 个"):
+            self._convert({"steps": [self._step(f"节点{i}") for i in range(50)]})
 
-    def test_absurd_offset_is_clamped(self):
-        flow = self._convert({
-            "title": "x",
-            "steps": [{"name": "a", "due_offset_days": 99999}, {"name": "b", "due_offset_days": -5}],
-        })
-        assert flow.steps[0].due_offset_days <= 365
-        assert flow.steps[1].due_offset_days >= 1
+    @pytest.mark.parametrize("offset", [99999, -5])
+    def test_absurd_offset_is_rejected(self, offset):
+        with pytest.raises(ValueError, match="必须在 1 到 365 之间"):
+            self._convert({
+                "steps": [
+                    self._step("执行", due_offset_days=offset),
+                    self._step("复核"),
+                ],
+            })

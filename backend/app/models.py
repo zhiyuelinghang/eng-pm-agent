@@ -922,6 +922,60 @@ class ChatMessage(TimestampMixin, Base):
     )
 
 
+class ChatTaskDraft(TimestampMixin, Base):
+    """Account-private task draft generated from one chat channel context."""
+
+    __tablename__ = "chat_task_drafts"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('generating', 'ready', 'publishing', 'published', "
+            "'dismissed', 'cancelled', 'failed')",
+            name="ck_chat_task_drafts_status",
+        ),
+        UniqueConstraint(
+            "requested_by_user_id",
+            "client_request_id",
+            name="uq_chat_task_drafts_requester_client",
+        ),
+        Index(
+            "ix_chat_task_drafts_project_requester_updated",
+            "project_id",
+            "requested_by_user_id",
+            "updated_at",
+        ),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    channel_id: Mapped[int] = mapped_column(
+        ForeignKey("chat_channels.id", ondelete="CASCADE"),
+        index=True,
+    )
+    requested_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        index=True,
+    )
+    client_request_id: Mapped[str] = mapped_column(String(64))
+    generation_id: Mapped[str] = mapped_column(String(64), unique=True)
+    request_text: Mapped[str] = mapped_column(Text)
+    context_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(
+        String(24),
+        default="generating",
+        server_default="generating",
+    )
+    draft_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    publish_result: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    published_task_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    published_message_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class ChatChannelMember(TimestampMixin, Base):
     __tablename__ = "chat_channel_members"
     __table_args__ = (

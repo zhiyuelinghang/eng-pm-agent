@@ -1,8 +1,9 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import MainLayout from '@/components/layout/MainLayout.vue'
-import AiWorkPlatformView from '@/views/workspace/AiWorkPlatformView.vue'
-import ProjectSetupView from '@/views/workspace/ProjectSetupView.vue'
 import { useAppStore } from '@/stores/app'
+
+const AiWorkPlatformView = () => import('@/views/workspace/AiWorkPlatformView.vue')
+const ProjectSetupView = () => import('@/views/workspace/ProjectSetupView.vue')
 
 const router = createRouter({
   history: createWebHashHistory(),
@@ -25,7 +26,7 @@ const router = createRouter({
         { path: 'docs', name: 'EngineeringDocs', component: () => import('@/views/workspace/DocumentLibraryView.vue'), meta: { title: '工程资料', group: 'workspace', requiresProject: true } },
         { path: 'tools', name: 'BusinessTools', component: () => import('@/views/workspace/BusinessToolsView.vue'), meta: { title: '业务工具', group: 'workspace', requiresProject: true } },
         { path: 'profile', name: 'PersonalSettings', component: () => import('@/views/workspace/PersonalSettingsView.vue'), meta: { title: '个人设置', group: 'workspace' } },
-        { path: 'settings', name: 'ProjectSetup', component: ProjectSetupView, meta: { title: '工程配置', group: 'workspace' } },
+        { path: 'settings', name: 'ProjectSetup', component: ProjectSetupView, meta: { title: '工程配置', group: 'workspace', requiresAdmin: true } },
         { path: 'dashboard', redirect: '/workbench' },
         { path: 'risks', redirect: '/tasks' },
         { path: 'daily-reports', redirect: '/docs' },
@@ -48,7 +49,7 @@ router.beforeEach(async (to) => {
   
   if (loggedIn) {
     const userRole = sessionStorage.getItem('user_role') || 'user'
-    if (userRole === 'user' && to.path.startsWith('/admin')) {
+    if (userRole !== 'admin' && (to.meta.requiresAdmin || to.path.startsWith('/admin'))) {
       return { path: '/workbench' }
     }
 
@@ -60,7 +61,9 @@ router.beforeEach(async (to) => {
         return
       }
       if (store.projectCatalogLoaded && store.projects.length === 0) {
-        return { path: '/settings', query: { projectRequired: '1' } }
+        return userRole === 'admin'
+          ? { path: '/settings', query: { projectRequired: '1' } }
+          : { path: '/profile', query: { projectRequired: '1' } }
       }
     }
   }

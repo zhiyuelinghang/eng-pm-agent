@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+import asyncio
 from unittest.mock import patch
 
 import jwt
@@ -12,29 +13,40 @@ from backend.app.agentscope_client import AgentScopeReply
 from backend.app import chat_api
 from backend.app.chat_api import (
     claim_chat_message_mention,
+    create_chat_connection_token,
     create_chat_message,
     create_private_chat_channel,
+    create_chat_realtime_subscription_token,
     create_chat_realtime_token,
     get_chat_message,
     invoke_mentioned_chat_agents,
     list_chat_channel_members,
     list_chat_messages,
+    list_chat_realtime_subscriptions,
     list_project_chat_channels,
     list_project_chat_participants,
     list_unseen_chat_mention_notices,
 )
 from backend.app.db import Base
 from backend.app.models import (
+    AgentConversation,
     ChatAgentThread,
     ChatMessage,
     ChatMessageMention,
     ChatMessageMentionReceipt,
     ChatRealtimeOutbox,
+    ChatTaskDraft,
     Project,
     ProjectMember,
     User,
 )
-from backend.app.schemas import ChatMessageInput, ChatPrivateChannelInput
+from backend.app.schemas import (
+    ChatMessageInput,
+    ChatPrivateChannelInput,
+    ChatTaskDraftCreateInput,
+    HomeTaskDraftCreateInput,
+    TaskInput,
+)
 
 
 @pytest.fixture()
@@ -385,7 +397,512 @@ def test_assigned_task_assistant_uses_fixed_identity_and_writes_task_draft(
     assert reply.reply_to_id == created["id"]
     assert reply.content == "已生成任务草案，请确认后再布置。"
     assert reply.metadata_json["agent_name"] == "任务助手"
-    assert reply.metadata_json["runtime_status"] == "completed"
+    assert reply.metadata_json["runtime_status"] == "awaiting_permission"
+    assert reply.metadata_json["draft_status"] == "ready"
+    assert reply.metadata_json["requires_confirmation"] is True
+
+
+def test_task_assistant_uses_ai_flow_generator_and_keeps_draft_unpublished(
+    db: Session,
+) -> None:
+    project, member, _, _ = _project_with_members(db)
+    channel_id = list_project_chat_channels(project.id, db, member)["data"][0]["id"]
+    selected_agent = {
+        "id": "task-agent-ai-flow-test",
+        "name": "底层任务智能体",
+        "enabled": True,
+        "published": False,
+        "model_ready": True,
+    }
+    captured: dict[str, object] = {}
+
+    class CatalogOnlyClient:
+        @staticmethod
+        def get_catalog():
+            return {"task_assistant": selected_agent, "business_agents": []}
+
+    async def fake_generate(project_id, payload, _db, user):
+        captured["project_id"] = project_id
+        captured["requirement"] = payload.requirement
+        captured["user_id"] = user.id
+        return {
+            "success": True,
+            "message": "任务流已生成",
+            "data": {
+                "title": "下午五点会议提醒",
+                "summary": "提醒项目成员下楼开会",
+                "task_type": "automation",
+                "risk_level": "low",
+                "assignee_user_id": None,
+                "confirmer_user_id": None,
+                "wbs_item_id": None,
+                "risk_source_id": None,
+                "run_mode": "once",
+                "trigger_date": "2026-09-02",
+                "trigger_time": "17:00",
+                "trigger_rule": "2026-09-02 17:00 执行一次",
+                "trigger_interval_value": 1,
+                "trigger_interval_unit": "week",
+                "cc": "",
+                "steps": [
+                    {
+                        "name": "发送会议提醒",
+                        "node_type": "project_chat_message",
+                        "owner_user_id": None,
+                        "due_at": None,
+                        "material": "",
+                        "action": {
+                            "type": "project_chat_message",
+                            "channel_id": channel_id,
+                            "mention_mode": "all",
+                            "mentioned_user_ids": [],
+                            "content": "请大家下午五点下楼开会。",
+                        },
+                    },
+                ],
+                "generated_by": "ai",
+                "generation_note": "由测试模型生成",
+            },
+        }
+
+    with (
+        patch(
+            "backend.app.chat_api._agentscope_client",
+            return_value=CatalogOnlyClient(),
+        ),
+        patch(
+            "backend.app.chat_api.SessionLocal",
+            new=sessionmaker(bind=db.get_bind(), expire_on_commit=False),
+        ),
+        patch("backend.app.api.generate_task_flow", new=fake_generate),
+    ):
+        created = create_chat_message(
+            channel_id,
+            ChatMessageInput(
+                content="@任务助手 下午5点提醒大家下楼开会。",
+                client_message_id="chat-task-flow-draft-0001",
+                mentioned_agent_ids=[selected_agent["id"]],
+            ),
+            db,
+            member,
+        )["data"]
+        draft = db.scalar(
+            select(ChatMessage).where(ChatMessage.message_type == "task_draft"),
+        )
+        assert draft is not None
+        assert draft.metadata_json["draft_status"] == "generating"
+
+        asyncio.run(
+            chat_api._generate_task_assistant_draft(
+                created["id"],
+                selected_agent["id"],
+                draft.id,
+            ),
+        )
+
+    db.expire_all()
+    draft = db.get(ChatMessage, draft.id)
+    assert draft is not None
+    assert captured["project_id"] == project.id
+    assert captured["user_id"] == member.id
+    assert "本轮明确请求" in str(captured["requirement"])
+    assert draft.metadata_json["draft_status"] == "ready"
+    assert draft.metadata_json["runtime_status"] == "awaiting_permission"
+    assert draft.metadata_json["task_draft"]["action_type"] == (
+        "project_chat_message"
+    )
+    assert draft.metadata_json["task_draft"]["mention_mode"] == "all"
+    assert draft.metadata_json.get("publish_result") is None
+    assert draft.task_ids == []
+
+
+def test_native_task_assistant_mention_does_not_query_agentscope(
+    db: Session,
+) -> None:
+    project, member, _, _ = _project_with_members(db)
+    channel_id = list_project_chat_channels(project.id, db, member)["data"][0]["id"]
+    with patch(
+        "backend.app.chat_api._agentscope_client",
+        side_effect=AssertionError("原生任务助手不应查询 AgentScope"),
+    ):
+        created = create_chat_message(
+            channel_id,
+            ChatMessageInput(
+                content="@任务助手 根据当前讨论生成任务草稿。",
+                client_message_id="native-task-assistant-0001",
+                mentioned_agent_ids=[chat_api.PROJECT_CHAT_TASK_ASSISTANT_ID],
+            ),
+            db,
+            member,
+        )["data"]
+
+    assert created["metadata"]["task_assistant_ids"] == [
+        chat_api.PROJECT_CHAT_TASK_ASSISTANT_ID,
+    ]
+    draft = db.scalar(
+        select(ChatMessage).where(ChatMessage.message_type == "task_draft"),
+    )
+    assert draft is not None
+    assert draft.sender_agent_id == chat_api.PROJECT_CHAT_TASK_ASSISTANT_ID
+    assert draft.metadata_json["draft_status"] == "generating"
+
+
+def test_task_draft_is_visible_to_group_but_only_requester_can_manage(
+    db: Session,
+) -> None:
+    project, requester, colleague, _ = _project_with_members(db)
+    channel_id = list_project_chat_channels(project.id, db, requester)["data"][0][
+        "id"
+    ]
+    create_chat_message(
+        channel_id,
+        ChatMessageInput(
+            content="@任务助手 根据当前讨论生成任务草稿。",
+            client_message_id="task-draft-permission-0001",
+            mentioned_agent_ids=[chat_api.PROJECT_CHAT_TASK_ASSISTANT_ID],
+        ),
+        db,
+        requester,
+        [chat_api._native_task_assistant()],
+    )
+    draft = db.scalar(
+        select(ChatMessage).where(ChatMessage.message_type == "task_draft"),
+    )
+    assert draft is not None
+
+    colleague_messages = list_chat_messages(
+        channel_id,
+        None,
+        100,
+        db,
+        colleague,
+    )["data"]
+    assert draft.id in {message["id"] for message in colleague_messages}
+    assert chat_api._task_draft_for_user_or_403(
+        db,
+        draft.id,
+        requester,
+    )[0].id == draft.id
+    with pytest.raises(HTTPException) as permission_error:
+        chat_api._task_draft_for_user_or_403(
+            db,
+            draft.id,
+            colleague,
+        )
+    assert permission_error.value.status_code == 403
+    assert "只有发起" in str(permission_error.value.detail)
+
+
+def test_private_task_draft_stays_out_of_group_until_publish(
+    db: Session,
+) -> None:
+    project, requester, colleague, _ = _project_with_members(db)
+    channel_id = list_project_chat_channels(project.id, db, requester)["data"][0][
+        "id"
+    ]
+    session_factory = sessionmaker(bind=db.get_bind(), expire_on_commit=False)
+
+    with patch(
+        "backend.app.chat_api._start_private_task_draft_generation",
+    ) as start_generation:
+        created = asyncio.run(
+            chat_api.create_private_chat_task_draft(
+                channel_id,
+                ChatTaskDraftCreateInput(
+                    requirement="@任务助手 明天下午五点提醒大家下楼开会。",
+                    client_request_id="private-task-draft-0001",
+                ),
+                db,
+                requester,
+            ),
+        )["data"]
+
+    start_generation.assert_called_once_with(created["id"])
+    assert created["status"] == "generating"
+    assert created["request_text"] == "明天下午五点提醒大家下楼开会。"
+    assert db.scalar(select(func.count(ChatMessage.id))) == 0
+    private_event = db.scalar(
+        select(ChatRealtimeOutbox)
+        .where(
+            ChatRealtimeOutbox.payload["data"]["type"].as_string()
+            == "chat.task_draft.updated",
+        )
+        .order_by(ChatRealtimeOutbox.id.desc()),
+    )
+    assert private_event is not None
+    assert private_event.payload["channel"] == (
+        f"chat:project_{project.id}:user_{requester.id}"
+    )
+
+    async def fake_generate(project_id, payload, _db, user):
+        assert project_id == project.id
+        assert user.id == requester.id
+        assert "明天下午五点提醒大家下楼开会" in payload.requirement
+        return {
+            "success": True,
+            "message": "任务流已生成",
+            "data": {
+                "title": "下午五点会议提醒",
+                "summary": "提醒项目成员下楼开会",
+                "task_type": "automation",
+                "risk_level": "low",
+                "run_mode": "once",
+                "trigger_date": "2026-09-03",
+                "trigger_time": "17:00",
+                "trigger_interval_value": 1,
+                "trigger_interval_unit": "week",
+                "steps": [
+                    {
+                        "name": "发送会议提醒",
+                        "node_type": "project_chat_message",
+                        "action": {
+                            "type": "project_chat_message",
+                            "channel_id": channel_id,
+                            "mention_mode": "all",
+                            "mentioned_user_ids": [],
+                            "content": "请大家下午五点下楼开会。",
+                        },
+                    },
+                ],
+                "generated_by": "ai",
+            },
+        }
+
+    with (
+        patch(
+            "backend.app.chat_api.SessionLocal",
+            new=session_factory,
+        ),
+        patch("backend.app.api.generate_task_flow", new=fake_generate),
+    ):
+        asyncio.run(chat_api._generate_private_task_draft(created["id"]))
+
+    db.expire_all()
+    draft = db.get(ChatTaskDraft, created["id"])
+    assert draft is not None
+    assert draft.status == "ready"
+    assert draft.draft_payload["title"] == "下午五点会议提醒"
+    assert db.scalar(select(func.count(ChatMessage.id))) == 0
+    assert chat_api.list_private_chat_task_drafts(
+        project.id,
+        True,
+        db,
+        requester,
+    )["data"][0]["id"] == draft.id
+    assert chat_api.list_private_chat_task_drafts(
+        project.id,
+        True,
+        db,
+        colleague,
+    )["data"] == []
+    with pytest.raises(HTTPException) as permission_error:
+        chat_api.get_private_chat_task_draft(draft.id, db, colleague)
+    assert permission_error.value.status_code == 403
+
+    task_payload = TaskInput(
+        title="下午五点会议提醒",
+        task_type="automation",
+        action_type="project_chat_message",
+        run_mode="once",
+        trigger_date="2026-09-03",
+        trigger_time="17:00",
+        target_channel_id=channel_id,
+        mention_mode="all",
+        message_content="请大家下午五点下楼开会。",
+        workflow_steps=[],
+    )
+    with patch(
+        "backend.app.api.create_task",
+        return_value={
+            "success": True,
+            "message": "执行计划已登记",
+            "data": {"id": "task-private-draft-1"},
+        },
+    ):
+        published = chat_api.publish_private_chat_task_draft(
+            draft.id,
+            task_payload,
+            db,
+            requester,
+        )["data"]
+
+    assert published["draft"]["status"] == "published"
+    assert published["message"]["message_type"] == "task_event"
+    assert published["message"]["metadata"]["task_title"] == (
+        "下午五点会议提醒"
+    )
+    colleague_messages = list_chat_messages(
+        channel_id,
+        None,
+        100,
+        db,
+        colleague,
+    )["data"]
+    assert [message["message_type"] for message in colleague_messages] == [
+        "task_event",
+    ]
+
+
+def test_home_agent_task_draft_uses_private_conversation_context(
+    db: Session,
+) -> None:
+    project, requester, _, _ = _project_with_members(db)
+    conversation = AgentConversation(
+        project_id=project.id,
+        user_id=requester.id,
+        agent_id="dobby-main",
+        agent_name="Dobby",
+        conversation_type="general",
+        title="会议安排",
+        agentscope_session_id="home-session-1",
+        status="active",
+    )
+    db.add(conversation)
+    db.commit()
+    db.refresh(conversation)
+    fake_client = SimpleNamespace(
+        list_messages=lambda *args, **kwargs: {
+            "messages": [
+                {
+                    "id": "message-1",
+                    "role": "user",
+                    "content": [{"type": "text", "text": "注入内容"}],
+                    "metadata": {"platform_display_content": "明天下午开协调会"},
+                    "created_at": "2026-09-03T09:00:00+08:00",
+                },
+                {
+                    "id": "message-2",
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "建议通知全体项目成员。"}],
+                    "created_at": "2026-09-03T09:00:05+08:00",
+                },
+            ],
+        },
+    )
+
+    with (
+        patch("backend.app.chat_api._agentscope_client", return_value=fake_client),
+        patch("backend.app.chat_api._start_private_task_draft_generation") as start,
+    ):
+        created = asyncio.run(
+            chat_api.create_home_agent_task_draft(
+                project.id,
+                HomeTaskDraftCreateInput(
+                    requirement="@任务助手 明天下午五点提醒大家开协调会。",
+                    client_request_id="home-task-draft-0001",
+                    conversation_id=conversation.id,
+                ),
+                db,
+                requester,
+            ),
+        )["data"]
+
+    start.assert_called_once_with(created["id"])
+    draft = db.get(ChatTaskDraft, created["id"])
+    assert draft is not None
+    assert draft.request_text == "明天下午五点提醒大家开协调会。"
+    assert draft.context_json == [
+        {
+            "source": "home_agent_reference",
+            "conversation_id": conversation.id,
+        },
+    ]
+    assert db.scalar(select(func.count(ChatMessage.id))) == 0
+
+    with patch("backend.app.chat_api._agentscope_client", return_value=fake_client):
+        snapshot = asyncio.run(
+            chat_api._home_agent_task_context_snapshot(
+                session_id="home-session-1",
+                agent_id="dobby-main",
+                agent_name="Dobby",
+                user_name=requester.real_name,
+            ),
+        )
+    assert [item["content"] for item in snapshot] == [
+        "明天下午开协调会",
+        "建议通知全体项目成员。",
+    ]
+    assert all(item["source"] == "home_agent" for item in snapshot)
+
+    session_factory = sessionmaker(bind=db.get_bind(), expire_on_commit=False)
+
+    async def fake_snapshot(**kwargs):
+        assert kwargs["session_id"] == "home-session-1"
+        return snapshot
+
+    async def fake_generate(project_id, payload, _db, user):
+        assert project_id == project.id
+        assert user.id == requester.id
+        assert "明天下午开协调会" in payload.requirement
+        assert "建议通知全体项目成员" in payload.requirement
+        return {
+            "success": True,
+            "message": "任务流已生成",
+            "data": {
+                "title": "协调会提醒",
+                "summary": "提醒项目成员参加协调会",
+                "task_type": "daily_work",
+                "risk_level": "low",
+                "run_mode": "immediate",
+                "trigger_time": "09:00",
+                "steps": [
+                    {
+                        "name": "发送会议通知",
+                        "node_type": "manual",
+                        "owner_user_id": requester.id,
+                        "material": "会议通知记录",
+                    },
+                ],
+                "generated_by": "ai",
+            },
+        }
+
+    with (
+        patch("backend.app.chat_api.SessionLocal", new=session_factory),
+        patch(
+            "backend.app.chat_api._home_agent_task_context_snapshot",
+            new=fake_snapshot,
+        ),
+        patch("backend.app.api.generate_task_flow", new=fake_generate),
+    ):
+        asyncio.run(chat_api._generate_private_task_draft(draft.id))
+
+    db.expire_all()
+    generated_draft = db.get(ChatTaskDraft, draft.id)
+    assert generated_draft is not None
+    assert generated_draft.status == "ready"
+    assert generated_draft.draft_payload["title"] == "协调会提醒"
+    assert generated_draft.context_json[0]["source"] == "home_agent_reference"
+    assert generated_draft.context_json[1:] == snapshot
+
+
+def test_task_assistant_is_rejected_by_shared_message_route(db: Session) -> None:
+    project, requester, _, _ = _project_with_members(db)
+    channel_id = list_project_chat_channels(project.id, db, requester)["data"][0][
+        "id"
+    ]
+
+    with (
+        patch(
+            "backend.app.chat_api._validate_mentioned_agents",
+            return_value=[chat_api._native_task_assistant()],
+        ),
+        pytest.raises(HTTPException) as route_error,
+    ):
+        asyncio.run(
+            chat_api.create_chat_message_route(
+                channel_id,
+                ChatMessageInput(
+                    content="@任务助手 明天下午五点提醒大家下楼开会。",
+                    mentioned_agent_ids=[chat_api.PROJECT_CHAT_TASK_ASSISTANT_ID],
+                ),
+                db,
+                requester,
+            ),
+        )
+
+    assert route_error.value.status_code == 409
+    assert db.scalar(select(func.count(ChatMessage.id))) == 0
 
 
 def test_unpublished_agent_cannot_be_spoofed_in_mention(db: Session) -> None:
@@ -472,12 +989,23 @@ def test_private_channel_rejects_non_project_participant(db: Session) -> None:
     with pytest.raises(HTTPException) as create_error:
         create_private_chat_channel(
             project.id,
-            ChatPrivateChannelInput(participant_user_ids=[outsider.id]),
+            ChatPrivateChannelInput(
+                title="外部成员协调",
+                participant_user_ids=[outsider.id],
+            ),
             db,
             creator,
         )
 
     assert create_error.value.status_code == 422
+
+
+def test_private_channel_requires_a_non_blank_group_name() -> None:
+    with pytest.raises(ValueError, match="群名称不能为空"):
+        ChatPrivateChannelInput(
+            title="   ",
+            participant_user_ids=[2],
+        )
 
 
 def test_project_and_channel_access_rejects_non_member(db: Session) -> None:
@@ -554,7 +1082,94 @@ def test_removed_project_member_loses_chat_access(db: Session) -> None:
     assert access_error.value.status_code == 403
 
 
-def test_realtime_token_contains_only_authorized_project_and_control_channels(
+def test_login_scoped_realtime_token_has_no_project_channels(
+    db: Session,
+) -> None:
+    _, member, _, _ = _project_with_members(db)
+    realtime_secret = "chat-test-secret-with-32-bytes-minimum"
+    settings = SimpleNamespace(
+        centrifugo_enabled=True,
+        centrifugo_ws_url="ws://127.0.0.1:38431/connection/websocket",
+        effective_centrifugo_token_secret=realtime_secret,
+        centrifugo_token_ttl_seconds=120,
+    )
+
+    with patch("backend.app.chat_api.get_settings", return_value=settings):
+        result = create_chat_connection_token(member)["data"]
+
+    claims = jwt.decode(
+        result["token"],
+        realtime_secret,
+        algorithms=["HS256"],
+        audience="dobby-realtime",
+        issuer="dobby-platform",
+    )
+    assert result["enabled"] is True
+    assert claims["sub"] == str(member.id)
+    assert "channels" not in claims
+    assert "channel" not in claims
+
+
+def test_project_realtime_subscriptions_are_individually_authorized(
+    db: Session,
+) -> None:
+    project, member, _, outsider = _project_with_members(db)
+    realtime_secret = "chat-test-secret-with-32-bytes-minimum"
+    settings = SimpleNamespace(
+        centrifugo_enabled=True,
+        centrifugo_ws_url="ws://127.0.0.1:38431/connection/websocket",
+        effective_centrifugo_token_secret=realtime_secret,
+        centrifugo_token_ttl_seconds=120,
+    )
+
+    with patch("backend.app.chat_api.get_settings", return_value=settings):
+        result = list_chat_realtime_subscriptions(
+            project.id,
+            db,
+            member,
+        )["data"]
+
+    subscriptions = result["subscriptions"]
+    assert result["project_id"] == project.id
+    assert len(subscriptions) == 2
+    channels = [subscription["channel"] for subscription in subscriptions]
+    assert channels[0] == f"chat:project_{project.id}:user_{member.id}"
+    assert channels[1].startswith(f"chat:project_{project.id}:channel_")
+    for subscription in subscriptions:
+        claims = jwt.decode(
+            subscription["token"],
+            realtime_secret,
+            algorithms=["HS256"],
+            audience="dobby-realtime",
+            issuer="dobby-platform",
+        )
+        assert claims["sub"] == str(member.id)
+        assert claims["channel"] == subscription["channel"]
+        assert "channels" not in claims
+
+    with patch("backend.app.chat_api.get_settings", return_value=settings):
+        refreshed = create_chat_realtime_subscription_token(
+            project.id,
+            channels[1],
+            db,
+            member,
+        )["data"]
+        with pytest.raises(HTTPException) as channel_error:
+            create_chat_realtime_subscription_token(
+                project.id,
+                "chat:project_999:channel_999",
+                db,
+                member,
+            )
+        with pytest.raises(HTTPException) as project_error:
+            list_chat_realtime_subscriptions(project.id, db, outsider)
+
+    assert refreshed["channel"] == channels[1]
+    assert channel_error.value.status_code == 403
+    assert project_error.value.status_code == 403
+
+
+def test_legacy_project_realtime_endpoint_uses_login_and_subscription_tokens(
     db: Session,
 ) -> None:
     project, member, _, outsider = _project_with_members(db)
@@ -578,12 +1193,24 @@ def test_realtime_token_contains_only_authorized_project_and_control_channels(
     )
     assert result["enabled"] is True
     assert claims["sub"] == str(member.id)
-    assert claims["channels"] == result["channels"]
-    assert len(claims["channels"]) == 2
-    assert claims["channels"][0] == f"chat:project_{project.id}:user_{member.id}"
-    assert claims["channels"][1].startswith(
+    assert "channels" not in claims
+    assert "channel" not in claims
+    assert len(result["channels"]) == 2
+    assert result["channels"][0] == f"chat:project_{project.id}:user_{member.id}"
+    assert result["channels"][1].startswith(
         f"chat:project_{project.id}:channel_",
     )
+    assert [item["channel"] for item in result["subscriptions"]] == result["channels"]
+    for item in result["subscriptions"]:
+        subscription_claims = jwt.decode(
+            item["token"],
+            realtime_secret,
+            algorithms=["HS256"],
+            audience="dobby-realtime",
+            issuer="dobby-platform",
+        )
+        assert subscription_claims["channel"] == item["channel"]
+        assert "channels" not in subscription_claims
 
     with patch("backend.app.chat_api.get_settings", return_value=settings):
         with pytest.raises(HTTPException) as access_error:
@@ -600,7 +1227,10 @@ def test_realtime_token_includes_private_channel_for_selected_member_only(
     db.commit()
     private_channel = create_private_chat_channel(
         project.id,
-        ChatPrivateChannelInput(participant_user_ids=[invited.id]),
+        ChatPrivateChannelInput(
+            title="令牌测试私聊",
+            participant_user_ids=[invited.id],
+        ),
         db,
         creator,
     )["data"]

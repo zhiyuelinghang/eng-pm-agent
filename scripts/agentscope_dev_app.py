@@ -303,44 +303,6 @@ async def _create_memory_middlewares(
     ]
 
 
-async def _end_memory_session(
-    user_id: str,
-    agent_id: str,
-    session: Any,
-) -> None:
-    """Flush decay/reflection/experience lifecycle before session deletion."""
-
-    platform_context = await _memory_platform_context(user_id, session)
-    settings = await _memory_settings(user_id)
-    await configure_platform_memory_model(
-        user_id,
-        settings,
-        memory_resource_access,
-    )
-    runtime = get_memory_runtime()
-    scope = runtime.scope(
-        project_id=(
-            platform_context.project_id if platform_context is not None else None
-        ),
-        platform_user_id=(
-            platform_context.user_id if platform_context is not None else user_id
-        ),
-        agent_id=agent_id,
-        session_id=session.id,
-        project_name=(
-            platform_context.project_name
-            if platform_context is not None
-            else None
-        ),
-    )
-    await DobbyMemoryMiddleware(
-        runtime,
-        scope,
-        settings,
-        include_knowledge_base=False,
-    ).end_persisted_session(session.state)
-
-
 async def _create_platform_agent_tools(
     user_id: str,
     agent_id: str,
@@ -378,12 +340,30 @@ async def _create_platform_agent_tools(
     except DatabaseInteractionGatewayError as exc:
         logger.warning("Unable to load database interactions: %s", exc)
     platform_context = session.config.platform_context if session else None
+    if (
+        platform_context is not None
+        and platform_context.conversation_type == "general"
+    ):
+        # Homepage task creation is handled by the platform's private draft
+        # workflow. Keeping the legacy SQL write tools here could silently
+        # create records outside the formal task engine.
+        tools = [
+            tool
+            for tool in tools
+            if getattr(tool, "name", "")
+            not in {"dobby_create_task", "dobby_update_task"}
+        ]
     robot_id = (
         (platform_context.weknora_agent_id or "").strip()
         if platform_context is not None
         else ""
     )
-    if robot_id:
+    if (
+        robot_id
+        and platform_context is not None
+        and platform_context.weknora_catalogue_ready
+        and platform_context.weknora_query_enabled
+    ):
         settings = await storage.get_platform_settings(user_id)
         connection = (
             settings.data.weknora_connection if settings is not None else None
@@ -393,6 +373,14 @@ async def _create_platform_agent_tools(
                 WeKnoraProjectKnowledgeTool(
                     connection=connection,
                     robot_id=robot_id,
+                    project_id=platform_context.project_id,
+                    knowledge_base_ids=(
+                        platform_context.weknora_knowledge_base_ids
+                    ),
+                    knowledge_ids=platform_context.weknora_knowledge_ids,
+                    restricted=(
+                        platform_context.weknora_access_mode == "restricted"
+                    ),
                 ),
             )
     return tools
@@ -434,7 +422,6 @@ app = create_app(
         ),
     ),
     extra_agent_middlewares=_create_memory_middlewares,
-    session_end_handler=_end_memory_session,
     extra_agent_tools=_create_platform_agent_tools,
     extra_middlewares=[
         Middleware(

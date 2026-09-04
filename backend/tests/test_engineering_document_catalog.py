@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from backend.app.db import Base
+from backend.app.agent_api_support import _platform_session_context
 from backend.app.engineering_document_catalog import (
     authorized_qa_payload,
     catalogue_node_key,
@@ -20,6 +21,7 @@ from backend.app.engineering_document_catalog import (
     upsert_catalogue_permission,
 )
 from backend.app.models import (
+    AgentConversation,
     EngineeringDocumentNode,
     EngineeringDocumentPermission,
     EngineeringDocumentSyncState,
@@ -27,6 +29,7 @@ from backend.app.models import (
     ProjectMember,
     ProjectMemberPosition,
     ProjectPosition,
+    ProjectSettings,
     User,
 )
 
@@ -387,6 +390,36 @@ def test_position_permission_is_inherited_and_qa_is_limited_to_readable_files(
             {"query": "读取根文件", "knowledge_ids": ["doc-root"]},
         )
     assert getattr(exc_info.value, "status_code", None) == 403
+
+    settings = ProjectSettings(
+        project_id=project.id,
+        weknora_agent_id="robot-1",
+    )
+    conversation = AgentConversation(
+        project_id=project.id,
+        user_id=user.id,
+        agent_id="dobby-main",
+        agent_name="Dobby",
+        conversation_type="general",
+        title="资料查询",
+        agentscope_session_id="catalogue-scope-session",
+    )
+    db.add_all([settings, conversation])
+    db.commit()
+    platform_context = _platform_session_context(
+        user,
+        project,
+        conversation,
+        db,
+        knowledge_query_enabled=True,
+    )
+    assert platform_context["weknora_query_enabled"] is True
+    assert platform_context["weknora_access_mode"] == "restricted"
+    assert platform_context["weknora_knowledge_base_ids"] == ["kb-1"]
+    assert set(platform_context["weknora_knowledge_ids"]) == {
+        "doc-tech",
+        "doc-drawing",
+    }
 
 
 def test_permission_configuration_exposes_project_positions_and_local_tree(

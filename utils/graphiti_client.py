@@ -33,12 +33,13 @@ from . import config as _cfg
 # ============================================================
 
 def _get_db_conn():
-    """Create a fresh psycopg connection for graphiti_events writes."""
+    """Create a fresh psycopg connection for a worker-thread operation."""
     import psycopg
     return psycopg.Connection.connect(
         _cfg.DATABASE_URL,
         autocommit=True,
         prepare_threshold=0,
+        connect_timeout=5,
     )
 
 
@@ -72,13 +73,20 @@ async def _get_graphiti(project_id: str):
             get_runtime_graph_llm_config,
         )
 
-        # Health check: verify Neo4j is reachable
-        driver = GraphDatabase.driver(
-            _cfg.NEO4J_URI,
-            auth=(_cfg.NEO4J_USER, _cfg.NEO4J_PASSWORD),
-        )
-        driver.verify_connectivity()
-        driver.close()
+        # The Neo4j driver exposes a synchronous connectivity probe. Keep it
+        # away from the AgentScope event loop so a network problem cannot
+        # freeze unrelated session and SSE endpoints.
+        def _verify_connectivity() -> None:
+            driver = GraphDatabase.driver(
+                _cfg.NEO4J_URI,
+                auth=(_cfg.NEO4J_USER, _cfg.NEO4J_PASSWORD),
+            )
+            try:
+                driver.verify_connectivity()
+            finally:
+                driver.close()
+
+        await asyncio.to_thread(_verify_connectivity)
 
         runtime = get_runtime_graph_llm_config() or {
             "provider": "openai",
@@ -192,20 +200,30 @@ async def record_event(
     Returns:
         UUID of the newly created event row
     """
-    import psycopg
+    def _record() -> UUID:
+        conn = _get_db_conn()
+        try:
+            cur = conn.execute(
+                """INSERT INTO graphiti_events (project_id, event_type, body, reference_time)
+                   VALUES (%s, %s, %s, %s)
+                   RETURNING id""",
+                (
+                    project_id,
+                    event_type,
+                    body,
+                    reference_time or datetime.now(timezone.utc),
+                ),
+            )
+            row = cur.fetchone()
+            return (
+                row[0]
+                if row
+                else UUID("00000000-0000-0000-0000-000000000000")
+            )
+        finally:
+            conn.close()
 
-    conn = _get_db_conn()
-    try:
-        cur = conn.execute(
-            """INSERT INTO graphiti_events (project_id, event_type, body, reference_time)
-               VALUES (%s, %s, %s, %s)
-               RETURNING id""",
-            (project_id, event_type, body, reference_time or datetime.now(timezone.utc)),
-        )
-        row = cur.fetchone()
-        return row[0] if row else UUID("00000000-0000-0000-0000-000000000000")
-    finally:
-        conn.close()
+    return await asyncio.to_thread(_record)
 
 
 async def record_task_events(
@@ -274,19 +292,22 @@ async def process_pending_events(
     timeout_per_event = timeout_per_event or _cfg.GRAPHITI_EVENT_TIMEOUT_SECONDS
 
     # ── 1. Load pending events ──
-    conn = _get_db_conn()
-    try:
-        cur = conn.execute(
-            """SELECT id, event_type, body, reference_time
-               FROM graphiti_events
-               WHERE project_id = %s AND processed_at IS NULL
-               ORDER BY created_at
-               LIMIT %s""",
-            (project_id, max_events),
-        )
-        rows = cur.fetchall()
-    finally:
-        conn.close()
+    def _load_pending_rows() -> list[tuple]:
+        conn = _get_db_conn()
+        try:
+            cur = conn.execute(
+                """SELECT id, event_type, body, reference_time
+                   FROM graphiti_events
+                   WHERE project_id = %s AND processed_at IS NULL
+                   ORDER BY created_at
+                   LIMIT %s""",
+                (project_id, max_events),
+            )
+            return cur.fetchall()
+        finally:
+            conn.close()
+
+    rows = await asyncio.to_thread(_load_pending_rows)
 
     if not rows:
         return {"processed": 0, "failed": 0, "neo4j_available": True}
@@ -319,14 +340,17 @@ async def process_pending_events(
             )
 
             # Mark processed
-            conn2 = _get_db_conn()
-            try:
-                conn2.execute(
-                    "UPDATE graphiti_events SET processed_at = %s WHERE id = %s",
-                    (datetime.now(timezone.utc), event_id),
-                )
-            finally:
-                conn2.close()
+            def _mark_processed() -> None:
+                conn2 = _get_db_conn()
+                try:
+                    conn2.execute(
+                        "UPDATE graphiti_events SET processed_at = %s WHERE id = %s",
+                        (datetime.now(timezone.utc), event_id),
+                    )
+                finally:
+                    conn2.close()
+
+            await asyncio.to_thread(_mark_processed)
 
             processed += 1
 
@@ -376,40 +400,42 @@ async def graphiti_search(
     limit = limit or _cfg.GRAPHITI_SEARCH_LIMIT
 
     # ── Step 1: PG timeline (always runs) ──
-    conn = _get_db_conn()
-    try:
-        # Timeline: recent events ordered by reference_time DESC
-        cur = conn.execute(
-            """SELECT event_type, body, reference_time
-               FROM graphiti_events
-               WHERE project_id = %s
-               ORDER BY reference_time DESC
-               LIMIT %s""",
-            (project_id, limit),
-        )
-        timeline_rows = cur.fetchall()
+    def _load_timeline_rows() -> tuple[list[tuple], list[tuple]]:
+        conn = _get_db_conn()
+        try:
+            # Timeline: recent events ordered by reference_time DESC
+            cur = conn.execute(
+                """SELECT event_type, body, reference_time
+                   FROM graphiti_events
+                   WHERE project_id = %s
+                   ORDER BY reference_time DESC
+                   LIMIT %s""",
+                (project_id, limit),
+            )
+            timeline = cur.fetchall()
 
-        # Active risks: risk_created without a later risk_resolved (approximate)
-        # PG lacks bi-temporal valid_at/invalid_at, uses event ordering heuristic:
-        # a risk is "active" if the latest event for that risk is risk_created
-        # (no risk_resolved with a later reference_time).
-        cur = conn.execute(
-            """SELECT body
-               FROM graphiti_events AS created
-               WHERE project_id = %s AND event_type = 'risk_created'
-                 AND NOT EXISTS (
-                   SELECT 1 FROM graphiti_events AS resolved
-                   WHERE resolved.project_id = %s
-                     AND resolved.event_type = 'risk_resolved'
-                     AND resolved.reference_time > created.reference_time
-                 )
-               ORDER BY reference_time DESC
-               LIMIT %s""",
-            (project_id, project_id, limit),
-        )
-        risk_rows = cur.fetchall()
-    finally:
-        conn.close()
+            # Active risks: risk_created without a later risk_resolved
+            # (approximate). PG lacks bi-temporal valid_at/invalid_at, so it
+            # uses an event-ordering heuristic.
+            cur = conn.execute(
+                """SELECT body
+                   FROM graphiti_events AS created
+                   WHERE project_id = %s AND event_type = 'risk_created'
+                     AND NOT EXISTS (
+                       SELECT 1 FROM graphiti_events AS resolved
+                       WHERE resolved.project_id = %s
+                         AND resolved.event_type = 'risk_resolved'
+                         AND resolved.reference_time > created.reference_time
+                     )
+                   ORDER BY reference_time DESC
+                   LIMIT %s""",
+                (project_id, project_id, limit),
+            )
+            return timeline, cur.fetchall()
+        finally:
+            conn.close()
+
+    timeline_rows, risk_rows = await asyncio.to_thread(_load_timeline_rows)
 
     # Build PG timeline
     timeline: list[dict] = []

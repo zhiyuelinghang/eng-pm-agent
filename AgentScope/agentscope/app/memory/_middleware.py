@@ -33,6 +33,10 @@ def _input_text(inputs: Any) -> str:
     items = inputs if isinstance(inputs, list) else [inputs]
     for item in reversed(items):
         if isinstance(item, Msg) and item.role == "user":
+            metadata = item.metadata if isinstance(item.metadata, dict) else {}
+            display_content = metadata.get("platform_display_content")
+            if isinstance(display_content, str) and display_content.strip():
+                return display_content.strip()
             return item.get_text_content() or ""
     return ""
 
@@ -230,11 +234,15 @@ class DobbyMemoryMiddleware(MiddlewareBase):
 
         schemas = TOOL_SCHEMAS
         if not self.include_knowledge_base:
+            document_tool_names = {
+                "search_knowledge_base",
+                "search_graph_rag",
+            }
             schemas = [
                 schema
                 for schema in TOOL_SCHEMAS
                 if schema.get("function", {}).get("name")
-                != "search_knowledge_base"
+                not in document_tool_names
             ]
         return [_DobbyMemoryTool(self, schema) for schema in schemas]
 
@@ -503,11 +511,17 @@ class DobbyMemoryMiddleware(MiddlewareBase):
         injected: list[Msg] = []
         if query:
             try:
+                # Keep the automatic path lightweight. Long-term memory is a
+                # model-facing tool now: Dobby decides whether the current
+                # request actually depends on cross-session information and
+                # calls ``search_memory`` only in that case. In particular,
+                # keyword matches and turn counts must not start Mem0 before
+                # the model has interpreted the user's intent.
                 assembly = await self.manager.assemble_context(
                     state,
                     query,
                     system_prompt=getattr(agent, "_system_prompt", None),
-                    mode="auto",
+                    mode="minimal",
                     include_knowledge_base=self.include_knowledge_base,
                 )
                 injected = self._injection_messages(assembly)
@@ -593,14 +607,9 @@ class DobbyMemoryMiddleware(MiddlewareBase):
                 project_id=self.scope.scope_key,
             )
 
-        await self._remember_routed(
-            agent,
-            query,
-            importance=0.5,
-            memory_type="interaction",
-            source="conversation",
-            defer_persistence=True,
-        )
+        # Do not classify and persist every user message implicitly. Dobby
+        # owns that decision through ``add_memory`` so transient questions do
+        # not trigger a second model call or pollute long-term memory.
 
         if _extract_correction_rule(query):
             await record_user_correction(

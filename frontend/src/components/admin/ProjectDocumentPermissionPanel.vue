@@ -1015,7 +1015,7 @@ watch(memberViewerPageCount, pageCount => {
 }
 .position-overview-head > div { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
 .position-overview-head strong { color: #244b47; font-size: 13px; }
-.position-overview-head span { color: #78908c; font-size: 11px; font-variant-numeric: tabular-nums; }
+.position-overview-head span { color: #78908c; font-size: 12px; font-variant-numeric: tabular-nums; }
 .position-overview-head button {
   min-height: 31px;
   padding: 0 9px;
@@ -1026,7 +1026,7 @@ watch(memberViewerPageCount, pageCount => {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   cursor: pointer;
 }
 .position-table-scroll { min-height: 360px; overflow: auto; display: block; flex: 1 1 0; }
@@ -1039,7 +1039,7 @@ watch(memberViewerPageCount, pageCount => {
   border-bottom: 1px solid #dce7e4;
   color: #687f7b;
   background: #f5f8f7;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 700;
   text-align: left;
 }
@@ -1071,7 +1071,7 @@ watch(memberViewerPageCount, pageCount => {
   border-radius: 5px;
   color: #738783;
   background: #eef3f2;
-  font-size: 10px;
+  font-size: 12px;
 }
 .permission-count.assigned { color: #0c675e; background: #dff0ec; }
 .position-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; white-space: nowrap; }
@@ -1083,7 +1083,7 @@ watch(memberViewerPageCount, pageCount => {
   border-radius: 6px;
   color: #0b675e;
   background: #fff;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 650;
   cursor: pointer;
   transition: color .16s ease, background .16s ease, border-color .16s ease;

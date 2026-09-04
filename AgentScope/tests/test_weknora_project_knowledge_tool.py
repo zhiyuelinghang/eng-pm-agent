@@ -117,3 +117,67 @@ async def test_project_knowledge_tool_prefers_public_resource_urls() -> None:
     assert answer == "包含直链图片"
     assert references == []
     assert request["params"] == {"resource_urls": "public"}
+
+
+@pytest.mark.asyncio
+async def test_project_knowledge_tool_applies_document_allowlist() -> None:
+    tool = WeKnoraProjectKnowledgeTool(
+        connection=WeKnoraConnectionConfig(
+            base_url="https://weknora.example.com",
+            api_key="secret",
+        ),
+        robot_id="project-robot",
+        project_id="project-1",
+        knowledge_base_ids=["kb-allowed"],
+        knowledge_ids=["document-allowed"],
+        restricted=True,
+    )
+    request: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        async def aiter_lines(self):
+            yield 'data: {"response_type":"answer","content":"授权回答"}'
+            yield 'data: {"response_type":"references","knowledge_references":[{"knowledge_id":"document-allowed","preview_url":"https://weknora.example.com/public-preview","download_url":"https://weknora.example.com/public-download"},{"knowledge_id":"document-denied"}]}'
+            yield 'data: {"response_type":"complete"}'
+
+    class FakeStream:
+        async def __aenter__(self):
+            return FakeResponse()
+
+        async def __aexit__(self, *args):
+            del args
+            return False
+
+    class FakeClient:
+        def stream(self, method, url, **kwargs):
+            request.update({"method": method, "url": url, **kwargs})
+            return FakeStream()
+
+    answer, references = await tool._ask(FakeClient(), "session-1", "问题")
+
+    assert answer == "授权回答"
+    assert references == [
+        {
+            "knowledge_id": "document-allowed",
+            "preview_url": (
+                "/api/projects/project-1/engineering-documents/knowledge/"
+                "document-allowed/preview"
+            ),
+            "download_url": (
+                "/api/projects/project-1/engineering-documents/knowledge/"
+                "document-allowed/download"
+            ),
+        },
+    ]
+    assert str(request["url"]).endswith("/knowledge-chat/session-1")
+    assert request["json"] == {
+        "query": "问题",
+        "agent_enabled": False,
+        "agent_id": "project-robot",
+        "knowledge_base_ids": ["kb-allowed"],
+        "knowledge_ids": ["document-allowed"],
+        "channel": "api",
+    }

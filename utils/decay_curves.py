@@ -172,16 +172,25 @@ async def record_user_activity(project_id: str) -> None:
     休假/周末不计入衰减计算。
     """
     today = date.today().isoformat()
-    try:
-        conn = _get_db_conn()
-        conn.execute(
-            """INSERT INTO user_activity (project_id, active_on)
-               VALUES (%s, %s) ON CONFLICT DO NOTHING""",
-            (project_id, today),
-        )
-        conn.close()
-    except Exception:
-        pass  # table might not exist yet
+
+    def _record() -> None:
+        conn = None
+        try:
+            conn = _get_db_conn()
+            conn.execute(
+                """INSERT INTO user_activity (project_id, active_on)
+                   VALUES (%s, %s) ON CONFLICT DO NOTHING""",
+                (project_id, today),
+            )
+        except Exception:
+            pass  # table might not exist yet
+        finally:
+            if conn is not None:
+                conn.close()
+
+    # psycopg's connection API is synchronous. Never run it on the AgentScope
+    # event loop, otherwise one slow connection can stall every live chat.
+    await asyncio.to_thread(_record)
 
 
 async def get_active_days_since(project_id: str, since: datetime) -> float:
@@ -195,20 +204,29 @@ async def get_active_days_since(project_id: str, since: datetime) -> float:
     since_date = since.date().isoformat()
     today = date.today().isoformat()
 
-    try:
-        conn = _get_db_conn()
-        cur = conn.execute(
-            """SELECT COUNT(*) FROM user_activity
-               WHERE project_id = %s
-                 AND active_on >= %s AND active_on <= %s""",
-            (project_id, since_date, today),
-        )
-        row = cur.fetchone()
-        conn.close()
-        if row and row[0] and row[0] > 0:
-            return float(row[0])
-    except Exception:
-        pass
+    def _read_active_days() -> float | None:
+        conn = None
+        try:
+            conn = _get_db_conn()
+            cur = conn.execute(
+                """SELECT COUNT(*) FROM user_activity
+                   WHERE project_id = %s
+                     AND active_on >= %s AND active_on <= %s""",
+                (project_id, since_date, today),
+            )
+            row = cur.fetchone()
+            if row and row[0] and row[0] > 0:
+                return float(row[0])
+        except Exception:
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
+        return None
+
+    active_days = await asyncio.to_thread(_read_active_days)
+    if active_days is not None:
+        return active_days
 
     # fallback: wall-clock days
     now = datetime.now(timezone.utc)

@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -40,6 +41,7 @@ from task_engine.domain.models import (
     Trigger,
 )
 from task_engine.engine import TaskEngine
+from task_engine.generator.llm import AIFlowGenerationError
 
 
 @pytest.fixture()
@@ -384,13 +386,115 @@ def _project_chat_channel(
     return channel
 
 
-def test_dobby_generates_one_timed_project_chat_message_node(
+def test_dobby_project_chat_requirement_still_uses_ai_generator(
     monkeypatch: pytest.MonkeyPatch,
     platform_db: Session,
     responsibility_context: tuple[Project, User, User, WbsItem],
 ) -> None:
     project, creator, _, _ = responsibility_context
     channel = _project_chat_channel(platform_db, project, creator)
+    admin = User(
+        username="admin-flow-test",
+        password_hash="hash",
+        role="admin",
+        real_name="系统管理员",
+        identity_card_no="ADMIN_FLOW_TEST",
+    )
+    platform_db.add(admin)
+    platform_db.commit()
+    fixed_now = datetime(2026, 8, 25, 16, 47, tzinfo=ZoneInfo("Asia/Shanghai"))
+    requirement = "今天16:52在当前项目群提醒我补充项目资料"
+
+    class FixedClock:
+        @staticmethod
+        def now() -> datetime:
+            return fixed_now
+
+    class StubAIGenerator:
+        received_requirement = ""
+        received_options: dict[str, object] = {}
+
+        async def generate_async(
+            self,
+            supplied_requirement: str,
+            **options: object,
+        ) -> TaskFlow:
+            self.received_requirement = supplied_requirement
+            self.received_options = options
+            action = {
+                "type": "project_chat_message",
+                "channel_id": channel.id,
+                "sender_agent_id": "dobby-task-engine",
+                "sender_agent_name": "Dobby",
+                "mention_mode": "users",
+                "mentioned_user_ids": [admin.id],
+                "content": "请补充项目资料。",
+                "created_by_user_id": admin.id,
+            }
+            return TaskFlow(
+                title="AI 生成的群聊协同任务",
+                summary="验证群聊需求仍由 AI 解析",
+                category="automation",
+                priority="normal",
+                trigger=Trigger(run_mode=RunMode.ONCE, first_at=fixed_now + timedelta(minutes=5)),
+                steps=(
+                    StepSpec(
+                        name="发送群内提醒",
+                        due_offset_days=0,
+                        instruction="请补充项目资料。",
+                        automated=True,
+                    ),
+                ),
+                origin="ai",
+                origin_note="由测试 AI 生成",
+                scope={
+                    "execution_kind": "automation",
+                    "action": action,
+                    "step_actions": {"0": action},
+                },
+            )
+
+    stub_generator = StubAIGenerator()
+    monkeypatch.setattr(api, "get_engine", lambda: FixedClock())
+    monkeypatch.setattr(api, "get_generator", lambda: stub_generator)
+    result = asyncio.run(
+        api.generate_task_flow(
+            project.id,
+            TaskFlowGenerateInput(requirement=requirement),
+            platform_db,
+            admin,
+        ),
+    )["data"]
+
+    assert stub_generator.received_requirement == requirement
+    context = stub_generator.received_options["context"]
+    assert isinstance(context, dict)
+    assert context["current_user"]["ref"] == str(admin.id)
+    assert context["current_user"]["username"] == "admin-flow-test"
+    assert "sender_agents" not in context
+    assert any(item.ref == str(admin.id) for item in stub_generator.received_options["assignees"])
+    project_channel = next(
+        item for item in context["chat_channels"] if item["ref"] == str(channel.id)
+    )
+    assert str(admin.id) in project_channel["member_refs"]
+    assert result["run_mode"] == "once"
+    assert result["trigger_date"] == "2026-08-25"
+    assert result["trigger_time"] == "16:52"
+    assert result["generated_by"] == "ai"
+    assert result["task_type"] == "automation"
+    assert result["assignee_user_id"] is None
+    assert len(result["steps"]) == 1
+    assert result["steps"][0]["node_type"] == "project_chat_message"
+    assert result["steps"][0]["action"]["channel_id"] == channel.id
+    assert result["steps"][0]["action"]["mentioned_user_ids"] == [admin.id]
+
+
+def test_dobby_generation_exposes_ai_failure_without_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    platform_db: Session,
+    responsibility_context: tuple[Project, User, User, WbsItem],
+) -> None:
+    project, creator, _, _ = responsibility_context
     fixed_now = datetime(2026, 8, 25, 16, 47, tzinfo=ZoneInfo("Asia/Shanghai"))
 
     class FixedClock:
@@ -398,36 +502,133 @@ def test_dobby_generates_one_timed_project_chat_message_node(
         def now() -> datetime:
             return fixed_now
 
-    monkeypatch.setattr(api, "get_engine", lambda: FixedClock())
-    result = api.generate_task_flow(
-        project.id,
-        TaskFlowGenerateInput(
-            requirement=(
-                "创建一个定时单次群发任务：今天16:52由任务智能体在当前项目群"
-                "@全体成员发送“Dobby定时群发测试：看到这条消息说明任务引擎"
-                "触发和群聊发送正常。”"
-            ),
-        ),
-        platform_db,
-        creator,
-    )["data"]
+    class FailingAIGenerator:
+        @staticmethod
+        async def generate_async(*_: object, **__: object) -> TaskFlow:
+            raise AIFlowGenerationError("Dobby AI 请求或响应解析失败（ReadTimeout）：读取超时")
 
-    assert result["run_mode"] == "once"
-    assert result["trigger_date"] == "2026-08-25"
-    assert result["trigger_time"] == "16:52"
-    assert result["generated_by"] == "rules"
-    assert len(result["steps"]) == 1
-    step = result["steps"][0]
-    assert step["node_type"] == "project_chat_message"
-    assert step["action"] == {
-        "type": "project_chat_message",
-        "channel_id": channel.id,
-        "sender_agent_id": "dobby-task-engine",
-        "sender_agent_name": "Dobby（任务引擎）",
-        "mention_mode": "all",
-        "mentioned_user_ids": [],
-        "content": "Dobby定时群发测试：看到这条消息说明任务引擎触发和群聊发送正常。",
-    }
+    monkeypatch.setattr(api, "get_engine", lambda: FixedClock())
+    monkeypatch.setattr(api, "get_generator", lambda: FailingAIGenerator())
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api.generate_task_flow(
+                project.id,
+                TaskFlowGenerateInput(requirement="检查现场临边防护并完成复核归档"),
+                platform_db,
+                creator,
+            ),
+        )
+
+    assert exc_info.value.status_code == 502
+    assert "ReadTimeout" in str(exc_info.value.detail)
+
+
+def test_dobby_generation_can_be_stopped_by_user(
+    monkeypatch: pytest.MonkeyPatch,
+    platform_db: Session,
+    responsibility_context: tuple[Project, User, User, WbsItem],
+) -> None:
+    project, creator, _, _ = responsibility_context
+    fixed_now = datetime(2026, 8, 25, 16, 47, tzinfo=ZoneInfo("Asia/Shanghai"))
+    generation_id = "test-generation-stop"
+
+    class FixedClock:
+        @staticmethod
+        def now() -> datetime:
+            return fixed_now
+
+    async def scenario() -> None:
+        started = asyncio.Event()
+
+        class SlowAIGenerator:
+            @staticmethod
+            async def generate_async(*_: object, **__: object) -> TaskFlow:
+                started.set()
+                await asyncio.Event().wait()
+                raise AssertionError("已停止的模型请求不应继续返回")
+
+        monkeypatch.setattr(api, "get_engine", lambda: FixedClock())
+        monkeypatch.setattr(api, "get_generator", lambda: SlowAIGenerator())
+
+        generate_request = asyncio.create_task(
+            api.generate_task_flow(
+                project.id,
+                TaskFlowGenerateInput(
+                    requirement="检查现场临边防护并完成复核归档",
+                    generation_id=generation_id,
+                ),
+                platform_db,
+                creator,
+            ),
+        )
+        await started.wait()
+
+        stop_result = await api.stop_task_flow_generation(
+            project.id,
+            generation_id,
+            platform_db,
+            creator,
+        )
+        assert stop_result["data"]["stopped"] is True
+
+        with pytest.raises(HTTPException) as exc_info:
+            await generate_request
+        assert exc_info.value.status_code == 409
+        assert "停止" in str(exc_info.value.detail)
+        assert (project.id, generation_id) not in api._active_task_flow_generations
+
+    asyncio.run(scenario())
+
+
+def test_dobby_stop_is_not_lost_when_it_arrives_before_generation(
+    monkeypatch: pytest.MonkeyPatch,
+    platform_db: Session,
+    responsibility_context: tuple[Project, User, User, WbsItem],
+) -> None:
+    project, creator, _, _ = responsibility_context
+    generation_id = "test-stop-before-generation"
+    generator_called = False
+
+    class FixedClock:
+        @staticmethod
+        def now() -> datetime:
+            return datetime(2026, 8, 25, 16, 47, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    class UnexpectedAIGenerator:
+        @staticmethod
+        async def generate_async(*_: object, **__: object) -> TaskFlow:
+            nonlocal generator_called
+            generator_called = True
+            raise AssertionError("提前到达的停止请求必须阻止模型调用")
+
+    monkeypatch.setattr(api, "get_engine", lambda: FixedClock())
+    monkeypatch.setattr(api, "get_generator", lambda: UnexpectedAIGenerator())
+
+    async def scenario() -> None:
+        stop_result = await api.stop_task_flow_generation(
+            project.id,
+            generation_id,
+            platform_db,
+            creator,
+        )
+        assert stop_result["data"]["stopped"] is True
+
+        with pytest.raises(HTTPException) as exc_info:
+            await api.generate_task_flow(
+                project.id,
+                TaskFlowGenerateInput(
+                    requirement="检查现场临边防护并完成复核归档",
+                    generation_id=generation_id,
+                ),
+                platform_db,
+                creator,
+            )
+        assert exc_info.value.status_code == 409
+        assert "停止" in str(exc_info.value.detail)
+
+    asyncio.run(scenario())
+    assert generator_called is False
 
 
 def test_message_automation_registers_minute_schedule_without_wbs(
@@ -537,7 +738,7 @@ def test_message_node_only_flow_is_classified_as_automation(
                         "type": "project_chat_message",
                         "channel_id": channel.id,
                         "sender_agent_id": "dobby-task-engine",
-                        "sender_agent_name": "Dobby（任务引擎）",
+                        "sender_agent_name": "Dobby",
                         "mention_mode": "all",
                         "mentioned_user_ids": [],
                         "content": "任务引擎联调测试。",
@@ -688,6 +889,64 @@ def test_due_message_automation_posts_all_mention_once(
     assert reference_engine.get_task(report.fired[0].task_id).state.value == "done"
 
 
+def test_admin_can_schedule_project_group_message_mentioning_self(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    platform_db: Session,
+    responsibility_context: tuple[Project, User, User, WbsItem],
+) -> None:
+    project, creator, _, _ = responsibility_context
+    channel = _project_chat_channel(platform_db, project, creator)
+    admin = User(
+        username="admin-message-test",
+        password_hash="hash",
+        role="admin",
+        real_name="系统管理员",
+        identity_card_no="ADMIN_MESSAGE_TEST",
+    )
+    platform_db.add(admin)
+    platform_db.commit()
+    reference_engine = TaskEngine(tmp_path / "admin-self-message.db")
+    monkeypatch.setattr(api, "get_engine", lambda: reference_engine)
+
+    registered = api.create_task(
+        project.id,
+        TaskInput(
+            title="提醒我补充项目资料",
+            task_type="automation",
+            action_type="project_chat_message",
+            run_mode="once",
+            trigger_date="2026-08-25",
+            trigger_time="15:35",
+            target_channel_id=channel.id,
+            mention_mode="users",
+            mentioned_user_ids=[admin.id],
+            message_content="请补充项目资料。",
+        ),
+        platform_db,
+        admin,
+    )["data"]
+    plan = reference_engine.get_schedule(registered["schedule_id"])
+    assert plan is not None and plan.next_fire_at is not None
+
+    reference_engine.tick(now=plan.next_fire_at)
+    results = execute_pending_automation_tasks(platform_db, reference_engine)
+
+    assert len(results) == 1
+    assert results[0].ok is True
+    message = platform_db.scalar(select(ChatMessage))
+    assert message is not None
+    assert message.content == "@系统管理员 请补充项目资料。"
+    membership = platform_db.scalar(
+        select(ChatChannelMember).where(
+            ChatChannelMember.channel_id == channel.id,
+            ChatChannelMember.user_id == admin.id,
+            ChatChannelMember.left_at.is_(None),
+        ),
+    )
+    assert membership is not None
+
+
 def test_message_is_a_node_inside_the_original_task_flow(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -752,14 +1011,15 @@ def test_message_is_a_node_inside_the_original_task_flow(
         "processing",
     ]
     assert progressed["workflow_steps"][1]["node_type"] == "project_chat_message"
-    assert progressed["workflow_steps"][1]["action"]["sender_agent_id"] == "task-agent"
+    assert progressed["workflow_steps"][1]["action"]["sender_agent_id"] == "dobby-task-engine"
+    assert progressed["workflow_steps"][1]["action"]["sender_agent_name"] == "Dobby"
     assert progressed["workflow_steps"][2]["owner_user_id"] == str(receiver.id)
 
     message = platform_db.scalar(select(ChatMessage))
     assert message is not None
     assert message.sender_type == "agent"
-    assert message.sender_agent_id == "task-agent"
-    assert message.metadata_json["agent_name"] == "任务智能体"
+    assert message.sender_agent_id == "dobby-task-engine"
+    assert message.metadata_json["agent_name"] == "Dobby"
     assert message.metadata_json["task_engine_step_seq"] == 1
     assert message.content == f"@{receiver.real_name} 请复核刚完成的现场检查。"
 

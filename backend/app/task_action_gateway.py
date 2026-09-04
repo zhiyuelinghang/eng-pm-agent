@@ -27,6 +27,7 @@ from .models import (
     ProjectMember,
     User,
 )
+from .task_engine_gateway import TASK_MESSAGE_AGENT_ID, TASK_MESSAGE_AGENT_NAME
 
 
 @dataclass(slots=True)
@@ -122,7 +123,12 @@ def _project_channel(
     return channel
 
 
-def _sync_project_channel_members(db: Session, channel: ChatChannel) -> None:
+def _sync_project_channel_members(
+    db: Session,
+    channel: ChatChannel,
+    *,
+    additional_user_id: int | None = None,
+) -> None:
     if channel.channel_type != "project":
         return
     user_ids = set(
@@ -134,6 +140,9 @@ def _sync_project_channel_members(db: Session, channel: ChatChannel) -> None:
     )
     if channel.created_by_user_id:
         user_ids.add(channel.created_by_user_id)
+    if additional_user_id:
+        # 管理员可访问项目但不一定存在于 ProjectMember，自动动作仍需能 @ 发起人。
+        user_ids.add(additional_user_id)
     for user_id in user_ids:
         _ensure_channel_member(
             db,
@@ -221,7 +230,15 @@ def _deliver_project_chat_message(
         if action.get("created_by_user_id")
         else None,
     )
-    _sync_project_channel_members(db, channel)
+    _sync_project_channel_members(
+        db,
+        channel,
+        additional_user_id=(
+            int(action["created_by_user_id"])
+            if action.get("created_by_user_id")
+            else None
+        ),
+    )
 
     mention_mode = str(action.get("mention_mode") or "none")
     if mention_mode == "all":
@@ -252,9 +269,7 @@ def _deliver_project_chat_message(
     row = ChatMessage(
         channel_id=channel.id,
         sender_type="agent",
-        sender_agent_id=str(
-            action.get("sender_agent_id") or "dobby-task-engine",
-        )[:128],
+        sender_agent_id=TASK_MESSAGE_AGENT_ID,
         message_type="task_event",
         content=content,
         client_message_id=client_message_id,
@@ -262,7 +277,7 @@ def _deliver_project_chat_message(
         metadata_json={
             "mention_all": mention_mode == "all",
             "automation": True,
-            "agent_name": str(action.get("sender_agent_name") or "Dobby")[:200],
+            "agent_name": TASK_MESSAGE_AGENT_NAME,
             "task_engine_task_id": task.id,
             "task_engine_flow_id": task.flow_id,
             "task_engine_step_seq": step_seq,

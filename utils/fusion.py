@@ -13,6 +13,7 @@ Key design decisions (from 长期短期记忆机制核心设计方案.md §5.3):
 - <system-reminder> trusted channel for injection (Claude Code paradigm)
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -61,18 +62,24 @@ async def _search_experiences_structured(
         [{"content": str, "score": float, "source_type": str, "experience_id": int, "version": int}, ...]
     """
     try:
-        conn = psycopg.Connection.connect(
-            _cfg.DATABASE_URL, autocommit=True, prepare_threshold=0,
-        )
-        with conn:
-            cur = conn.execute(
-                """SELECT id, body_md, bucket, version, importance
-                   FROM experiences WHERE project_id = %s
-                   ORDER BY importance DESC, updated_at DESC
-                   LIMIT %s""",
-                (project_id, limit * 2),  # 多取一些供RRF排序
+        def _load_rows() -> list[tuple]:
+            conn = psycopg.Connection.connect(
+                _cfg.DATABASE_URL,
+                autocommit=True,
+                prepare_threshold=0,
+                connect_timeout=5,
             )
-            rows = cur.fetchall()
+            with conn:
+                cur = conn.execute(
+                    """SELECT id, body_md, bucket, version, importance
+                       FROM experiences WHERE project_id = %s
+                       ORDER BY importance DESC, updated_at DESC
+                       LIMIT %s""",
+                    (project_id, limit * 2),  # 多取一些供RRF排序
+                )
+                return cur.fetchall()
+
+        rows = await asyncio.to_thread(_load_rows)
 
         return [
             {

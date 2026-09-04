@@ -16,6 +16,7 @@
               type="button"
               class="reference-name-button"
               :title="`在知识库中定位 ${reference.fileName}`"
+              :disabled="Boolean(locatingKnowledgeId) || Boolean(downloadingReferenceId)"
               @click="locate(reference)"
             >
               {{ reference.fileName }}
@@ -34,13 +35,27 @@
           </div>
         </div>
         <footer class="reference-actions">
-          <button v-if="reference.knowledgeId" type="button" @click="locate(reference)">
-            <n-icon :size="16"><FileSearch /></n-icon>
-            定位
+          <button
+            v-if="reference.knowledgeId"
+            type="button"
+            :disabled="Boolean(locatingKnowledgeId) || Boolean(downloadingReferenceId)"
+            :aria-busy="locatingKnowledgeId === reference.knowledgeId"
+            @click="locate(reference)"
+          >
+            <n-icon v-if="locatingKnowledgeId === reference.knowledgeId" :size="16" class="reference-action-spinner"><Loader /></n-icon>
+            <n-icon v-else :size="16"><FileSearch /></n-icon>
+            {{ locatingKnowledgeId === reference.knowledgeId ? '定位中…' : '定位' }}
           </button>
-          <button v-if="reference.knowledgeId" type="button" @click="download(reference)">
-            <n-icon :size="16"><Download /></n-icon>
-            下载
+          <button
+            v-if="reference.knowledgeId"
+            type="button"
+            :disabled="downloadingReferenceId !== '' || Boolean(locatingKnowledgeId)"
+            :aria-busy="downloadingReferenceId === reference.id"
+            @click="download(reference)"
+          >
+            <n-icon v-if="downloadingReferenceId === reference.id" :size="16" class="reference-action-spinner"><Loader /></n-icon>
+            <n-icon v-else :size="16"><Download /></n-icon>
+            {{ downloadingReferenceId === reference.id ? '下载中…' : '下载' }}
           </button>
           <a v-if="externalSource(reference.source)" :href="reference.source" target="_blank" rel="noopener noreferrer">
             <n-icon :size="16"><ExternalLink /></n-icon>
@@ -53,8 +68,9 @@
 </template>
 
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import { NIcon, useMessage } from 'naive-ui'
-import { Download, ExternalLink, FileSearch } from '@vicons/tabler'
+import { Download, ExternalLink, FileSearch, Loader } from '@vicons/tabler'
 import DocumentTypeIcon from '@/components/business/DocumentTypeIcon.vue'
 import { downloadWeKnoraKnowledge } from '@/api/weknoraAssets'
 
@@ -83,11 +99,14 @@ type KnowledgeReferenceView = {
 const props = defineProps<{
   projectId: string
   references: KnowledgeReferenceView[]
+  locatingKnowledgeId?: string
 }>()
 const emit = defineEmits<{
   locate: [reference: KnowledgeReferenceView]
 }>()
 const message = useMessage()
+const downloadingReferenceId = ref('')
+const locatingKnowledgeId = computed(() => props.locatingKnowledgeId || '')
 
 function scoreLabel(value: number) {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`
@@ -127,10 +146,14 @@ function locate(reference: KnowledgeReferenceView) {
 }
 
 async function download(reference: KnowledgeReferenceView) {
+  if (downloadingReferenceId.value) return
+  downloadingReferenceId.value = reference.id
   try {
     await downloadWeKnoraKnowledge(props.projectId, reference.knowledgeId, reference.fileName)
   } catch (error: any) {
     message.error(error.message || '资料下载失败。')
+  } finally {
+    downloadingReferenceId.value = ''
   }
 }
 
@@ -162,6 +185,7 @@ function iconKind(fileName: string) {
 .reference-main header > strong,.reference-name-button { min-width: 0; overflow: hidden; color: #294943; font-size: 13px; font-weight: 780; text-overflow: ellipsis; white-space: nowrap; }
 .reference-name-button { border: 0; padding: 0; background: transparent; text-align: left; cursor: pointer; }
 .reference-name-button:hover { color: #0e6e64; text-decoration: underline; text-underline-offset: 3px; }
+.reference-name-button:disabled { opacity:.62; cursor:wait; }
 .reference-score { flex: 0 0 auto; border-radius: 10px; padding: 3px 7px; color: #0f7369; background: #e6f4ef; font-size: 12px; font-weight: 700; }
 .reference-main p { display: -webkit-box; margin: 7px 0 0; overflow: hidden; color: #5c716d; font-size: 12px; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .reference-meta { display: flex; min-width: 0; flex-wrap: wrap; gap: 5px 10px; margin-top: 7px; color: #7c8e8a; font-size: 12px; }
@@ -169,4 +193,8 @@ function iconKind(fileName: string) {
 .reference-actions { display: flex; align-self: center; justify-self: end; gap: 7px; white-space: nowrap; }
 .reference-actions button,.reference-actions a { display: inline-flex; min-height: 30px; flex: 0 0 auto; align-items: center; gap: 5px; border: 1px solid #d2dfdc; border-radius: 6px; padding: 0 9px; color: #315c55; background: #fff; font: inherit; font-size: 12px; line-height: 1; text-decoration: none; white-space: nowrap; cursor: pointer; }
 .reference-actions button:hover,.reference-actions a:hover { border-color: #86aba3; color: #0e6e64; background: #f1f8f5; }
+.reference-actions button:disabled { opacity:.58; cursor:wait; }
+.reference-action-spinner { animation:reference-action-spin .75s linear infinite; }
+@keyframes reference-action-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .reference-action-spinner { animation:none; } }
 </style>

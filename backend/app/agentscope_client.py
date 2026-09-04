@@ -61,6 +61,8 @@ class AgentScopeTeamState:
 class AgentScopeClient:
     """Minimal backend-only client for catalogue and chat operations."""
 
+    _CATALOG_CACHE_SECONDS = 15.0
+
     def __init__(self, settings: Settings) -> None:
         self._base_url = settings.agentscope_base_url.rstrip("/")
         self._service_token = settings.agentscope_service_token.strip()
@@ -74,6 +76,9 @@ class AgentScopeClient:
         # much longer than one request timeout.
         self._request_timeout = settings.agentscope_request_timeout_seconds
         self._poll_interval = settings.agentscope_poll_interval_seconds
+        self._catalog_cache: dict[str, Any] | None = None
+        self._catalog_cached_at = 0.0
+        self._session_sync_payloads: dict[tuple[str, str], str] = {}
 
     @property
     def headers(self) -> dict[str, str]:
@@ -87,6 +92,7 @@ class AgentScopeClient:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         wait_for_response: bool = False,
+        not_found_ok: bool = False,
     ) -> Any:
         timeout: float | httpx.Timeout
         if wait_for_response:
@@ -112,6 +118,8 @@ class AgentScopeClient:
                 f"无法连接 AgentScope：{exc}",
                 status_code=503,
             ) from exc
+        if response.status_code == 404 and not_found_ok:
+            return None
         if response.is_error:
             try:
                 payload = response.json()
@@ -282,8 +290,26 @@ class AgentScopeClient:
             if isinstance(payload, dict):
                 yield payload
 
-    def get_catalog(self) -> dict[str, Any]:
-        return self._request("GET", "/agent/platform/catalog")
+    def get_catalog(self, *, force_refresh: bool = False) -> dict[str, Any]:
+        """Return the agent catalogue without repeating the same control call.
+
+        Agent definitions change far less often than chat turns. A short cache
+        keeps ordinary messages off the control plane while still making admin
+        changes visible within a few seconds.
+        """
+        now = time.monotonic()
+        if (
+            not force_refresh
+            and self._catalog_cache is not None
+            and now - self._catalog_cached_at < self._CATALOG_CACHE_SECONDS
+        ):
+            return self._catalog_cache
+        catalogue = self._request("GET", "/agent/platform/catalog")
+        if not isinstance(catalogue, dict):
+            raise AgentScopeGatewayError("AgentScope 智能体目录返回格式无效。")
+        self._catalog_cache = catalogue
+        self._catalog_cached_at = now
+        return catalogue
 
     @staticmethod
     def _weknora_scope_params(agent_id: str) -> dict[str, str]:
@@ -630,6 +656,7 @@ class AgentScopeClient:
             agent=agent,
             session_id=session_id,
             platform_context=platform_context,
+            name=name,
         )
         return session_id
 
@@ -639,19 +666,52 @@ class AgentScopeClient:
         agent: dict[str, Any],
         session_id: str,
         platform_context: dict[str, Any],
-    ) -> None:
-        """Apply the latest admin-managed runtime policy to a session."""
+        name: str | None = None,
+    ) -> bool:
+        """Apply runtime policy only when its effective payload changed.
+
+        The platform rebuilds authorization context for every turn. Comparing
+        the complete payload preserves that behavior while avoiding an
+        identical network PATCH before every ordinary message.
+        """
         permission_mode = str(agent.get("permission_mode") or "auto")
+        body: dict[str, Any] = {
+            "permission_mode": permission_mode,
+            "knowledge_config": agent.get("knowledge_config"),
+            "platform_context": platform_context,
+        }
+        if name is not None:
+            body["name"] = name
+        cache_key = (str(agent["id"]), session_id)
+        payload_signature = json.dumps(
+            body,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        if self._session_sync_payloads.get(cache_key) == payload_signature:
+            return False
         self._request(
             "PATCH",
             f"/sessions/{session_id}",
             params={"agent_id": str(agent["id"])},
-            json={
-                "permission_mode": permission_mode,
-                "knowledge_config": agent.get("knowledge_config"),
-                "platform_context": platform_context,
-            },
+            json=body,
         )
+        self._session_sync_payloads[cache_key] = payload_signature
+        return True
+
+    def delete_session(self, session_id: str, agent_id: str) -> None:
+        """Delete one AgentScope session and all runtime-owned history."""
+        try:
+            self._request(
+                "DELETE",
+                f"/sessions/{quote(session_id, safe='')}",
+                params={"agent_id": agent_id},
+                not_found_ok=True,
+            )
+        finally:
+            self._session_sync_payloads.pop((str(agent_id), session_id), None)
 
     def list_messages(
         self,
@@ -883,16 +943,6 @@ class AgentScopeClient:
         user_message_id: str | None = None,
         content_blocks: list[dict[str, Any]] | None = None,
     ) -> AgentScopeReply:
-        before = self.list_messages(
-            session_id,
-            agent_id,
-            wait_for_response=True,
-        )
-        existing_ids = {
-            str(message.get("id"))
-            for message in before.get("messages", [])
-            if message.get("id")
-        }
         resolved_user_message_id = user_message_id or uuid4().hex
         self._request(
             "POST",
@@ -918,6 +968,7 @@ class AgentScopeClient:
         last_assistant: dict[str, Any] | None = None
         new_assistants: list[dict[str, Any]] = []
         collaboration_waiting_ids: set[str] = set()
+        turn_input_observed = False
         settled_message_id: str | None = None
         settled_since: float | None = None
         settle_seconds = max(0.6, self._poll_interval * 2)
@@ -932,11 +983,31 @@ class AgentScopeClient:
                 agent_id,
                 wait_for_response=True,
             )
+            messages = messages_payload.get("messages", [])
+            boundary_index = next(
+                (
+                    index
+                    for index, message in enumerate(messages)
+                    if str(message.get("id") or "")
+                    == resolved_user_message_id
+                ),
+                -1,
+            )
+            if boundary_index >= 0:
+                turn_input_observed = True
+                turn_messages = messages[boundary_index + 1 :]
+            elif turn_input_observed:
+                # The endpoint returns only the newest page. A very long turn
+                # can eventually push its input beyond that page; at that
+                # point every newly visible assistant message still belongs
+                # to the current turn.
+                turn_messages = messages
+            else:
+                turn_messages = []
             new_assistants = [
                 message
-                for message in messages_payload.get("messages", [])
+                for message in turn_messages
                 if message.get("role") == "assistant"
-                and str(message.get("id")) not in existing_ids
             ]
             if new_assistants:
                 last_assistant = new_assistants[-1]

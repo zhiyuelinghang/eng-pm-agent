@@ -38,6 +38,24 @@ class PlatformSessionContext(BaseModel):
             "supplied by the authenticated platform service."
         ),
     )
+    weknora_catalogue_ready: bool = False
+    weknora_query_enabled: bool = False
+    weknora_access_mode: Literal["project", "restricted"] = "project"
+    weknora_knowledge_base_ids: list[str] = Field(
+        default_factory=list,
+        max_length=50,
+        description=(
+            "Knowledge bases selected for this project by the authenticated "
+            "platform service. Browser input is never trusted for this scope."
+        ),
+    )
+    weknora_knowledge_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Document allowlist calculated for the current platform user. "
+            "It is required when weknora_access_mode is restricted."
+        ),
+    )
     session_role: Literal["primary", "worker"] = "primary"
     root_session_id: str | None = None
     auto_allowed_tool_names: list[str] = Field(

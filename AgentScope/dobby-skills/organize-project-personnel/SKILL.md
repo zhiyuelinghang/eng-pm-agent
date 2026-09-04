@@ -8,6 +8,12 @@ description: 整理人员与岗位记录，并写入自己负责的初始化草�
 只处理 `section="personnel"`。每条任职包含序号、姓名、身份证号、岗位、证书和
 职责。同一身份证号的不同岗位必须保留多条；不得生成账号或密码。
 
+`position_name` 只能取以下固定岗位之一：项目经理、项目常务副经理、
+项目商务副经理、项目总工、项目技术员、安全员、质量员、施工员、劳务员、
+材料员、机械员、测量员、资料员、标准员、取样员。原始资料出现范围外岗位时，
+必须保留原文岗位，并在 `extraction_notes` 明确记录“岗位不在固定范围”，交由平台
+核验提示用户；禁止擅自改成看起来相近的岗位。
+
 邀请任务只包含相关 `file_id/chunk_id`。先用
 `dobby_list_project_initialization_attachment_chunks` 逐个读取分块，显式指定 fields，并
 使用 `record_id=chunk_id`、`limit=1`、`text_field="content"`、`text_offset=0`、

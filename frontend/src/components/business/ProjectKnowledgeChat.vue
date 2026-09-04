@@ -31,12 +31,14 @@
           <button
             type="button"
             class="conversation-delete"
-            :disabled="deletingConversationId === conversation.id"
-            :aria-label="`删除对话：${conversation.title}`"
-            title="删除对话"
+            :disabled="deletingConversationId !== null"
+            :aria-busy="deletingConversationId === conversation.id"
+            :aria-label="deletingConversationId === conversation.id ? `正在删除对话：${conversation.title}` : `删除对话：${conversation.title}`"
+            :title="deletingConversationId === conversation.id ? '正在删除' : '删除对话'"
             @click.stop="confirmDeleteConversation(conversation)"
           >
-            <n-icon :size="16"><Trash /></n-icon>
+            <n-icon v-if="deletingConversationId === conversation.id" class="conversation-delete-spinner" :size="16"><Loader /></n-icon>
+            <n-icon v-else :size="16"><Trash /></n-icon>
           </button>
         </div>
         <div v-if="loadingHistory" class="conversation-list-empty" role="status">
@@ -160,13 +162,14 @@
           >
             <span v-if="chatMessage.role === 'assistant'" class="knowledge-message-avatar"><n-icon :size="17"><Robot /></n-icon></span>
             <div class="knowledge-message-card">
-              <div v-if="chatMessage.role === 'assistant'" class="knowledge-markdown" v-html="renderMarkdown(chatMessage.content, chatMessage.references)"></div>
+              <div v-if="chatMessage.role === 'assistant'" class="knowledge-markdown" v-html="renderMarkdown(chatMessage.content, displayedMessageReferences(chatMessage))"></div>
               <p v-else>{{ chatMessage.content }}</p>
               <KnowledgeReferenceList
-                v-if="chatMessage.references?.length && store.currentProjectId"
-                :project-id="store.currentProjectId"
-                :references="chatMessage.references"
-                @locate="emit('locate-reference', $event)"
+                v-if="displayedMessageReferences(chatMessage).length && store.currentProjectId"
+              :project-id="store.currentProjectId"
+              :references="displayedMessageReferences(chatMessage)"
+              :locating-knowledge-id="locatingKnowledgeId"
+              @locate="emit('locate-reference', $event)"
               />
               <time>{{ formatMessageTime(chatMessage.createdAt) }}</time>
             </div>
@@ -177,12 +180,13 @@
         <article v-if="answering" class="knowledge-chat-message is-assistant is-pending" :class="{ 'has-content': streamingMessage?.content }" role="status" aria-live="polite">
           <span class="knowledge-message-avatar"><n-icon :size="17"><Robot /></n-icon></span>
           <div class="knowledge-message-card">
-            <div v-if="streamingMessage?.content" class="knowledge-markdown" v-html="renderMarkdown(streamingMessage.content, streamingMessage.references)"></div>
+            <div v-if="streamingMessage?.content" class="knowledge-markdown" v-html="renderMarkdown(streamingMessage.content, displayedMessageReferences(streamingMessage))"></div>
             <p v-else>{{ stopping ? '正在终止本次回答…' : streamStatus }}</p>
             <KnowledgeReferenceList
-              v-if="streamingMessage?.references?.length && store.currentProjectId"
+              v-if="streamingMessage && displayedMessageReferences(streamingMessage).length && store.currentProjectId"
               :project-id="store.currentProjectId"
-              :references="streamingMessage.references"
+              :references="displayedMessageReferences(streamingMessage)"
+              :locating-knowledge-id="locatingKnowledgeId"
               @locate="emit('locate-reference', $event)"
             />
             <span class="streaming-cursor" aria-hidden="true"></span>
@@ -196,18 +200,27 @@
           <strong>{{ conversationScopeLabel(currentScope) }}</strong>
         </div>
         <form class="knowledge-composer" @submit.prevent="sendQuestion">
-          <textarea
-            v-model.trim="question"
-            :disabled="disabled || loadingHistory || loadingMessages || !store.currentProjectId"
-            :placeholder="scopeQuestionPlaceholder"
-            @keydown.enter.exact.prevent="sendQuestion"
-          ></textarea>
-          <button v-if="answering" type="button" class="is-stop" :disabled="stopping" aria-label="终止回答" @click="stopAnswer">
-            <n-icon :size="18"><PlayerStop /></n-icon>
-          </button>
-          <button v-else type="submit" :disabled="disabled || loadingHistory || loadingMessages || !store.currentProjectId || !question" aria-label="发送问题">
-            <n-icon :size="18"><Send /></n-icon>
-          </button>
+          <ChatComposerSurface :busy="answering">
+            <textarea
+              v-model.trim="question"
+              class="chat-composer-input"
+              rows="1"
+              :disabled="disabled || loadingHistory || loadingMessages || !store.currentProjectId"
+              :placeholder="scopeQuestionPlaceholder"
+              @keydown.enter.exact.prevent="sendQuestion"
+            ></textarea>
+            <template #action>
+              <button v-if="answering" type="button" class="chat-composer-action is-stop" :disabled="stopping" aria-label="终止回答" @click="stopAnswer">
+                <n-icon v-if="stopping" :size="17" class="conversation-delete-spinner"><Loader /></n-icon>
+                <n-icon v-else :size="17"><PlayerStop /></n-icon>
+                <span>{{ stopping ? '正在停止…' : '停止' }}</span>
+              </button>
+              <button v-else type="submit" class="chat-composer-action" :disabled="disabled || loadingHistory || loadingMessages || !store.currentProjectId || !question" aria-label="发送问题">
+                <n-icon :size="17"><Send /></n-icon>
+                <span>发送</span>
+              </button>
+            </template>
+          </ChatComposerSurface>
         </form>
       </footer>
     </section>
@@ -216,12 +229,14 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { NIcon, useDialog, useMessage } from 'naive-ui'
-import { ChevronDown, ChevronRight, Database, Folder, MessageCircle, Messages, PlayerStop, Plus, Refresh, Robot, Search, Send, Trash, User } from '@vicons/tabler'
+import { NIcon, useMessage } from 'naive-ui'
+import { ChevronDown, ChevronRight, Database, Folder, Loader, MessageCircle, Messages, PlayerStop, Plus, Refresh, Robot, Search, Send, Trash, User } from '@vicons/tabler'
 import MarkdownIt from 'markdown-it'
 import DocumentTypeIcon from '@/components/business/DocumentTypeIcon.vue'
 import KnowledgeReferenceList from '@/components/business/KnowledgeReferenceList.vue'
-import { fetchWeKnoraResourceBlob } from '@/api/weknoraAssets'
+import ChatComposerSurface from '@/components/chat/ChatComposerSurface.vue'
+import { useAsyncConfirmDialog } from '@/composables/useAsyncConfirmDialog'
+import { fetchWeKnoraKnowledgePreviewBlob, fetchWeKnoraResourceBlob } from '@/api/weknoraAssets'
 import { streamEngineeringKnowledgeAnswer } from '@/api/weknoraStream'
 import {
   useAppStore,
@@ -264,6 +279,7 @@ type KnowledgeReference = {
   id: string
   knowledgeId: string
   knowledgeBaseId?: string
+  chunkId?: string
   fileName: string
   title?: string
   folderPath?: string
@@ -280,6 +296,7 @@ type KnowledgeReference = {
   source?: string
   knowledgeType?: string
   parseStatus?: string
+  resourceHandles?: string[]
 }
 
 type KnowledgeChatMessage = {
@@ -301,7 +318,8 @@ type KnowledgeConversation = {
   loaded: boolean
 }
 
-const props = defineProps<{ focusDocumentId?: string; disabled?: boolean }>()
+const props = defineProps<{ focusDocumentId?: string; locatingKnowledgeId?: string; disabled?: boolean }>()
+const locatingKnowledgeId = computed(() => props.locatingKnowledgeId || '')
 const emit = defineEmits<{
   'document-consumed': []
   'busy-change': [value: boolean]
@@ -310,7 +328,7 @@ const emit = defineEmits<{
 }>()
 const store = useAppStore()
 const message = useMessage()
-const dialog = useDialog()
+const { confirmAsyncAction } = useAsyncConfirmDialog()
 const markdown = new MarkdownIt({ html: false, breaks: true, linkify: true })
 const validateMarkdownLink = markdown.validateLink.bind(markdown)
 markdown.validateLink = (url: string) => (
@@ -341,8 +359,11 @@ let historyLoadVersion = 0
 let messageLoadVersion = 0
 let activeStreamController: AbortController | null = null
 const resourceObjectUrls = ref<Record<string, string>>({})
+const knowledgePreviewObjectUrls = ref<Record<string, string>>({})
 const resourceRequests = new Map<string, Promise<void>>()
+const knowledgePreviewRequests = new Map<string, Promise<void>>()
 const failedResourceHandles = new Set<string>()
+const failedKnowledgePreviewIds = new Set<string>()
 let resourceFetchQueue: Promise<void> = Promise.resolve()
 
 const activeConversation = computed(() => conversations.value.find(item => item.id === activeConversationId.value))
@@ -535,7 +556,7 @@ async function loadConversationMessages(conversation: KnowledgeConversation) {
     const target = conversations.value.find(item => item.id === conversation.id)
     if (!target) return
     target.messages = records.map(mapMessage)
-    for (const chatMessage of target.messages) void hydrateResourceHandles(chatMessage.content)
+    for (const chatMessage of target.messages) hydrateMessageResources(chatMessage)
     target.loaded = true
     void scrollToBottom()
   } catch (error: any) {
@@ -759,16 +780,18 @@ function confirmDeleteConversation(conversation: KnowledgeConversation) {
     message.warning('请先终止当前回答，再删除该对话。')
     return
   }
-  dialog.warning({
+  confirmAsyncAction({
     title: '删除对话',
     content: `确定删除“${conversation.title}”及其全部聊天记录吗？`,
     positiveText: '删除',
     negativeText: '取消',
-    onPositiveClick: () => deleteConversation(conversation),
+    loadingText: '正在删除…',
+    onConfirm: () => deleteConversation(conversation),
   })
 }
 
-async function deleteConversation(conversation: KnowledgeConversation) {
+async function deleteConversation(conversation: KnowledgeConversation): Promise<boolean> {
+  if (deletingConversationId.value !== null) return false
   deletingConversationId.value = conversation.id
   try {
     await store.deleteEngineeringKnowledgeConversation(conversation.id)
@@ -780,9 +803,10 @@ async function deleteConversation(conversation: KnowledgeConversation) {
       if (next) await loadConversationMessages(next)
     }
     message.success('对话及聊天记录已删除。')
+    return true
   } catch (error: any) {
     message.error(error.response?.data?.detail || error.message || '删除对话失败。')
-    throw error
+    return false
   } finally {
     deletingConversationId.value = null
   }
@@ -830,6 +854,7 @@ function normalizeReferences(items?: Array<Record<string, unknown>>): KnowledgeR
     ) || '来源资料'
     const folderPath = textValue(item.folder_path, item.folderPath, item.path, nestedFile.folder_path)
     const contentSnippet = textValue(item.content, item.content_snippet, item.snippet)
+    const resourceHandles = extractResourceHandles(contentSnippet)
     const key = knowledgeId
       ? `knowledge:${knowledgeId}`
       : `file:${knowledgeBaseId}:${fileName.toLocaleLowerCase('zh-CN')}:${folderPath}`
@@ -837,6 +862,7 @@ function normalizeReferences(items?: Array<Record<string, unknown>>): KnowledgeR
       id: key,
       knowledgeId,
       knowledgeBaseId: knowledgeBaseId || undefined,
+      chunkId: chunkId || undefined,
       fileName,
       title: title || undefined,
       folderPath: folderPath || undefined,
@@ -853,6 +879,7 @@ function normalizeReferences(items?: Array<Record<string, unknown>>): KnowledgeR
       source: textValue(item.knowledge_source, item.source, nestedFile.source) || undefined,
       knowledgeType: textValue(item.knowledge_type, item.type) || undefined,
       parseStatus: textValue(item.parse_status, nestedFile.parse_status) || undefined,
+      resourceHandles: resourceHandles.length ? resourceHandles : undefined,
     })
   }
   return [...result.values()].sort((left, right) => (right.score || 0) - (left.score || 0))
@@ -871,6 +898,142 @@ function decodeCitationValue(value: string) {
 function citationAttribute(attributes: string, name: 'doc' | 'chunk_id' | 'kb_id') {
   const match = attributes.match(new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i'))
   return decodeCitationValue(match?.[1] || match?.[2] || '')
+}
+
+type KnowledgeCitation = {
+  fileKey: string
+  chunkId: string
+  knowledgeBaseId: string
+}
+
+function referenceFileKey(value: string) {
+  return value
+    .replace(/\\/g, '/')
+    .split('/')
+    .filter(Boolean)
+    .pop()
+    ?.trim()
+    .toLocaleLowerCase('zh-CN') || ''
+}
+
+function extractKnowledgeCitations(content: string): KnowledgeCitation[] {
+  const citations: KnowledgeCitation[] = []
+  for (const match of content.matchAll(/<kb\b([^>]*)\/?>/gi)) {
+    const attributes = match[1] || ''
+    const fileKey = referenceFileKey(citationAttribute(attributes, 'doc'))
+    if (!fileKey) continue
+    const citation = {
+      fileKey,
+      chunkId: citationAttribute(attributes, 'chunk_id'),
+      knowledgeBaseId: citationAttribute(attributes, 'kb_id'),
+    }
+    if (!citations.some(item => (
+      item.fileKey === citation.fileKey
+      && item.chunkId === citation.chunkId
+      && item.knowledgeBaseId === citation.knowledgeBaseId
+    ))) citations.push(citation)
+  }
+  return citations
+}
+
+function referenceMatchesCitation(
+  fileName: string,
+  chunkId: string,
+  knowledgeBaseId: string,
+  citation: KnowledgeCitation,
+) {
+  if (citation.chunkId && chunkId && citation.chunkId === chunkId) return true
+  if (referenceFileKey(fileName) !== citation.fileKey) return false
+  return !citation.knowledgeBaseId
+    || !knowledgeBaseId
+    || citation.knowledgeBaseId === knowledgeBaseId
+}
+
+function contentMentionsReference(content: string, fileName: string) {
+  const fileKey = referenceFileKey(fileName)
+  return Boolean(fileKey && content.toLocaleLowerCase('zh-CN').includes(fileKey))
+}
+
+function extractResourceHandles(content: string) {
+  return [...new Set(
+    [...content.matchAll(/resource:\/\/([A-Za-z0-9_-]+)/g)]
+      .map(match => match[1])
+      .filter(Boolean),
+  )]
+}
+
+function isImageFileName(fileName: string) {
+  return /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i.test(referenceFileKey(fileName))
+}
+
+function isImageReference(reference: KnowledgeReference) {
+  return isImageFileName(reference.fileName)
+    || /^image(?:\/|$)/i.test(reference.fileType || '')
+}
+
+function citedReferences(
+  content: string,
+  references: KnowledgeReference[] = [],
+) {
+  const citations = extractKnowledgeCitations(content)
+  if (!citations.length) {
+    return references.filter(reference => contentMentionsReference(content, reference.fileName))
+  }
+  const matched: KnowledgeReference[] = []
+  for (const citation of citations) {
+    for (const reference of references) {
+      if (matched.some(item => item.id === reference.id)) continue
+      if (referenceMatchesCitation(
+        reference.fileName,
+        reference.chunkId || '',
+        reference.knowledgeBaseId || '',
+        citation,
+      )) matched.push(reference)
+    }
+  }
+  return matched
+}
+
+function displayedMessageReferences(chatMessage: KnowledgeChatMessage) {
+  return citedReferences(chatMessage.content, chatMessage.references || [])
+}
+
+function referenceImageUrl(reference: KnowledgeReference) {
+  const previewUrl = knowledgePreviewObjectUrls.value[reference.knowledgeId]
+  if (previewUrl) return previewUrl
+  for (const handle of reference.resourceHandles || []) {
+    const resourceUrl = resourceObjectUrls.value[handle]
+    if (resourceUrl) return resourceUrl
+  }
+  return ''
+}
+
+function referenceImageLoadFailed(reference: KnowledgeReference) {
+  const projectId = store.currentProjectId
+  if (!projectId) return false
+  const previewUnavailable = !reference.knowledgeId
+    || failedKnowledgePreviewIds.has(`${projectId}:${reference.knowledgeId}`)
+  const resourceUnavailable = !reference.resourceHandles?.length
+    || reference.resourceHandles.every(handle => failedResourceHandles.has(`${projectId}:${handle}`))
+  return previewUnavailable && resourceUnavailable
+}
+
+function citedRawReferences(
+  content: string,
+  references: Array<Record<string, unknown>> = [],
+) {
+  const citations = extractKnowledgeCitations(content)
+  if (!citations.length) {
+    return mergeRawReferences(references).filter(reference => (
+      contentMentionsReference(content, rawReferenceFilename(reference))
+    ))
+  }
+  return mergeRawReferences(references).filter(reference => citations.some(citation => referenceMatchesCitation(
+    rawReferenceFilename(reference),
+    textValue(reference.chunk_id, reference.id),
+    textValue(reference.knowledge_base_id, reference.knowledgeBaseId),
+    citation,
+  )))
 }
 
 function rawReferenceFilename(item: Record<string, unknown>) {
@@ -1097,7 +1260,7 @@ async function sendQuestion() {
             if (!streamingMessage.value) return
             streamingMessage.value.content = progress.answer
             streamStatus.value = progress.done ? '回答已生成，正在整理引用…' : '正在生成回答…'
-            void hydrateResourceHandles(progress.answer)
+            hydrateMessageResources(streamingMessage.value)
             void scrollToBottom()
           },
           onReferences: references => {
@@ -1105,7 +1268,10 @@ async function sendQuestion() {
               streamingRawReferences.value,
               references,
             )
-            if (streamingMessage.value) streamingMessage.value.references = normalizeReferences(streamingRawReferences.value)
+            if (streamingMessage.value) {
+              streamingMessage.value.references = normalizeReferences(streamingRawReferences.value)
+              hydrateMessageResources(streamingMessage.value)
+            }
             void scrollToBottom()
           },
           onTitle: title => updateConversationTitle(scopedConversation, title),
@@ -1133,7 +1299,10 @@ async function sendQuestion() {
       await updateConversationSession(conversation, answer.sessionId)
     }
     streamingRawReferences.value = mergeRawReferences(answer.references)
-    if (streamingMessage.value) streamingMessage.value.references = normalizeReferences(streamingRawReferences.value)
+    if (streamingMessage.value) {
+      streamingMessage.value.references = normalizeReferences(streamingRawReferences.value)
+      hydrateMessageResources(streamingMessage.value)
+    }
     const answerContent = answer.answer.trim()
     await saveAssistantMessage(
       conversation,
@@ -1215,20 +1384,25 @@ async function saveAssistantMessage(
   references?: Array<Record<string, unknown>>,
   failed = false,
 ) {
+  const usedReferences = citedRawReferences(content, references)
   try {
     const saved = await store.appendEngineeringKnowledgeMessage(
       conversation.id,
-      { role: 'assistant', content, references, failed },
+      { role: 'assistant', content, references: usedReferences, failed },
     )
-    conversation.messages.push(mapMessage(saved))
+    const savedMessage = mapMessage(saved)
+    conversation.messages.push(savedMessage)
+    hydrateMessageResources(savedMessage)
     conversation.updatedAt = saved.created_at
   } catch {
-    conversation.messages.push(createChatMessage(
+    const localMessage = createChatMessage(
       'assistant',
       content,
-      normalizeReferences(references),
+      normalizeReferences(usedReferences),
       failed,
-    ))
+    )
+    conversation.messages.push(localMessage)
+    hydrateMessageResources(localMessage)
     message.error('回答已显示，但这条聊天记录未能写入数据库。')
   }
   void scrollToBottom()
@@ -1283,27 +1457,54 @@ function normalizeMarkdownImageAlt(value: string) {
     .slice(0, 120) || '知识库原图'
 }
 
+function renderInlineKnowledgeImage(reference: KnowledgeReference, index: number) {
+  const fileName = normalizeMarkdownImageAlt(reference.fileName)
+  const escapedFileName = markdown.utils.escapeHtml(fileName)
+  const imageUrl = referenceImageUrl(reference)
+  const imageContent = imageUrl
+    ? `<img src="${markdown.utils.escapeHtml(imageUrl)}" alt="${escapedFileName}" loading="lazy">`
+    : `<span class="knowledge-inline-image-state${referenceImageLoadFailed(reference) ? ' is-failed' : ''}">${referenceImageLoadFailed(reference) ? '图片加载失败' : '图片加载中…'}</span>`
+  return `<figure class="knowledge-inline-image"><div class="knowledge-inline-image-frame">${imageContent}</div><figcaption><span>图片 ${index + 1}</span><strong title="${escapedFileName}">${escapedFileName}</strong></figcaption></figure>`
+}
+
 function renderMarkdown(content: string, references: KnowledgeReference[] = []) {
   const projectId = store.currentProjectId
   const inlineCitations: string[] = []
-  const allowedCitationFilenames = new Set(
-    references.flatMap(reference => [reference.fileName, reference.title || ''])
-      .map(value => value.trim().toLocaleLowerCase('zh-CN'))
-      .filter(Boolean),
-  )
+  const imageReferences = references.filter(isImageReference)
+  const inlineImages: KnowledgeReference[] = []
   let resolved = content
     .replace(/<kb\b[^>]*$/i, '')
     .replace(/<kb\b([^>]*)\/?>/gi, (_original, attributes: string) => {
-      const documentPath = citationAttribute(attributes, 'doc').replace(/\\/g, '/')
-      const filename = documentPath.split('/').filter(Boolean).pop() || ''
-      if (!filename || !allowedCitationFilenames.has(filename.toLocaleLowerCase('zh-CN'))) return ''
+      const citation = {
+        fileKey: referenceFileKey(citationAttribute(attributes, 'doc')),
+        chunkId: citationAttribute(attributes, 'chunk_id'),
+        knowledgeBaseId: citationAttribute(attributes, 'kb_id'),
+      }
+      const reference = references.find(item => referenceMatchesCitation(
+        item.fileName,
+        item.chunkId || '',
+        item.knowledgeBaseId || '',
+        citation,
+      ))
+      if (!reference) return ''
+      if (isImageReference(reference)) {
+        if (inlineImages.some(item => item.id === reference.id)) return ''
+        const token = `DOBBYKBIMAGE${inlineImages.length}TOKEN`
+        inlineImages.push(reference)
+        return `\n\n${token}\n\n`
+      }
       const token = `DOBBYKBREFERENCE${inlineCitations.length}TOKEN`
-      inlineCitations.push(filename)
+      inlineCitations.push(reference.fileName)
       return token
     })
   resolved = resolved.replace(
     /!\[([^\]]*)\]\(resource:\/\/([A-Za-z0-9_-]+)\)/g,
     (_original, alt: string, handle: string) => {
+      const imageReference = imageReferences.find(reference => (
+        reference.resourceHandles?.includes(handle)
+        || referenceFileKey(reference.fileName) === referenceFileKey(alt)
+      ))
+      if (imageReference && inlineImages.some(reference => reference.id === imageReference.id)) return ''
       const url = resourceObjectUrls.value[handle]
       if (url) return `![${normalizeMarkdownImageAlt(alt)}](${url})`
       const failed = projectId && failedResourceHandles.has(`${projectId}:${handle}`)
@@ -1323,6 +1524,15 @@ function renderMarkdown(content: string, references: KnowledgeReference[] = []) 
     rendered = rendered
       .split(`DOBBYKBREFERENCE${index}TOKEN`)
       .join(`<span class="knowledge-inline-citation" title="引用资料：${escapedFilename}">${escapedFilename}</span>`)
+  })
+  inlineImages.forEach((reference, index) => {
+    const token = `DOBBYKBIMAGE${index}TOKEN`
+    const imageHtml = renderInlineKnowledgeImage(reference, index)
+    rendered = rendered
+      .split(`<p>${token}</p>`)
+      .join(imageHtml)
+      .split(token)
+      .join(imageHtml)
   })
   return rendered
 }
@@ -1355,10 +1565,57 @@ async function hydrateResourceHandles(content: string) {
   }
 }
 
+function hydrateMessageResources(chatMessage: KnowledgeChatMessage) {
+  const referenceResourceMarkdown = (chatMessage.references || [])
+    .flatMap(reference => reference.resourceHandles || [])
+    .map(handle => `[](resource://${handle})`)
+    .join('\n')
+  void hydrateResourceHandles(`${chatMessage.content}\n${referenceResourceMarkdown}`)
+  void hydrateKnowledgePreviewImages(chatMessage)
+}
+
+async function hydrateKnowledgePreviewImages(chatMessage: KnowledgeChatMessage) {
+  const projectId = store.currentProjectId
+  if (!projectId) return
+  const imageReferences = displayedMessageReferences(chatMessage).filter(isImageReference)
+  for (const reference of imageReferences) {
+    const knowledgeId = reference.knowledgeId
+    const requestKey = `${projectId}:${knowledgeId}`
+    if (
+      !knowledgeId
+      || knowledgePreviewObjectUrls.value[knowledgeId]
+      || failedKnowledgePreviewIds.has(requestKey)
+      || knowledgePreviewRequests.has(requestKey)
+    ) continue
+    const request = resourceFetchQueue.then(async () => {
+      try {
+        if (projectId !== store.currentProjectId) return
+        const blob = await fetchWeKnoraKnowledgePreviewBlob(projectId, knowledgeId)
+        if (projectId !== store.currentProjectId) return
+        const url = URL.createObjectURL(blob)
+        knowledgePreviewObjectUrls.value = {
+          ...knowledgePreviewObjectUrls.value,
+          [knowledgeId]: url,
+        }
+      } catch {
+        failedKnowledgePreviewIds.add(requestKey)
+        knowledgePreviewObjectUrls.value = { ...knowledgePreviewObjectUrls.value }
+      } finally {
+        knowledgePreviewRequests.delete(requestKey)
+      }
+    })
+    resourceFetchQueue = request
+    knowledgePreviewRequests.set(requestKey, request)
+  }
+}
+
 function releaseResourceUrls() {
   for (const url of Object.values(resourceObjectUrls.value)) URL.revokeObjectURL(url)
+  for (const url of Object.values(knowledgePreviewObjectUrls.value)) URL.revokeObjectURL(url)
   resourceObjectUrls.value = {}
+  knowledgePreviewObjectUrls.value = {}
   failedResourceHandles.clear()
+  failedKnowledgePreviewIds.clear()
 }
 
 function referenceIconKind(fileName: string) {
@@ -1493,6 +1750,7 @@ onBeforeUnmount(() => {
 .conversation-item:hover .conversation-delete,
 .conversation-delete:focus-visible { opacity: 1; }
 .conversation-delete:not(:disabled):hover { color: #b64737; background: #fff1ee; }
+.conversation-delete-spinner { animation: conversation-scope-spin .78s linear infinite; }
 .conversation-list-empty { display: grid; flex: 1 1 auto; min-height: 180px; place-content: center; justify-items: center; gap: 6px; color: #81938f; text-align: center; }
 .conversation-list-empty strong { color: #48635e; font-size: 13px; }
 .conversation-list-empty span { font-size: 12px; }
@@ -1576,19 +1834,21 @@ onBeforeUnmount(() => {
 .knowledge-markdown :deep(li) { margin: 5px 0; }
 .knowledge-markdown :deep(code) { border-radius: 4px; padding: 2px 5px; color: #315b55; background: #eef4f2; font-size: 12px; }
 .knowledge-markdown :deep(img) { display: block; max-width: 100%; height: auto; margin: 12px 0; border: 1px solid #dbe5e2; border-radius: 8px; background: #f7faf9; }
+.knowledge-markdown :deep(.knowledge-inline-image) { display: block; min-width: 0; margin: 13px 0; overflow: hidden; border: 1px solid #d9e4e1; border-radius: 9px; background: #f8fbfa; }
+.knowledge-markdown :deep(.knowledge-inline-image-frame) { display: grid; min-height: 240px; max-height: 520px; place-items: center; overflow: hidden; background: #eef3f1; }
+.knowledge-markdown :deep(.knowledge-inline-image img) { width: 100%; height: auto; max-height: 520px; margin: 0; border: 0; border-radius: 0; object-fit: contain; background: #eef3f1; }
+.knowledge-markdown :deep(.knowledge-inline-image-state) { display: grid; min-height: 240px; place-items: center; color: #71847f; font-size: 12px; }
+.knowledge-markdown :deep(.knowledge-inline-image-state.is-failed) { color: #9c5a4e; }
+.knowledge-markdown :deep(.knowledge-inline-image figcaption) { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; min-height: 42px; padding: 7px 9px; border-top: 1px solid #dfe8e5; background: #fff; }
+.knowledge-markdown :deep(.knowledge-inline-image figcaption span) { border-radius: 10px; padding: 2px 7px; color: #0f7168; background: #eaf4f1; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.knowledge-markdown :deep(.knowledge-inline-image figcaption strong) { min-width: 0; overflow: hidden; color: #294943; font-size: 12px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
 .knowledge-markdown :deep(.knowledge-inline-citation) { display: inline-flex; max-width: min(100%, 340px); align-items: center; margin: 0 3px; border: 1px solid #c9ddd7; border-radius: 10px; padding: 1px 7px; overflow: hidden; color: #0f6f65; background: #eef7f4; font-size: 12px; font-weight: 700; line-height: 1.45; text-overflow: ellipsis; vertical-align: baseline; white-space: nowrap; }
 .streaming-cursor { display: inline-block; width: 7px; height: 15px; margin: 4px 0 -2px 3px; border-radius: 2px; background: #168273; animation: knowledge-cursor-blink .9s steps(1) infinite; }
 
 .knowledge-chat-footer { flex: 0 0 auto; border-top: 1px solid #e3eae8; background: #fff; }
 .knowledge-scope-summary { display: flex; align-items: center; gap: 6px; min-height: 42px; padding: 0 24px; color: #71847f; background: #f3f8f6; font-size: 12px; }
 .knowledge-scope-summary strong { color: #0f7168; font-size: 12px; }
-.knowledge-composer { display: grid; grid-template-columns: minmax(0, 1fr) 48px; gap: 10px; padding: 12px 20px 16px; }
-.knowledge-composer textarea { width: 100%; min-height: 56px; max-height: 128px; box-sizing: border-box; resize: none; border: 1px solid #d1ddda; border-radius: 8px; padding: 16px; outline: 0; color: #294943; background: #fbfcfc; font: inherit; font-size: 13px; line-height: 1.55; }
-.knowledge-composer textarea:focus { border-color: #6c9f95; box-shadow: 0 0 0 3px rgba(15, 118, 110, .09); }
-.knowledge-composer button { display: grid; width: 48px; height: 48px; align-self: end; place-items: center; border: 0; border-radius: 8px; color: #fff; background: #164a46; cursor: pointer; transition: background .18s ease, transform .18s ease; }
-.knowledge-composer button:not(:disabled):hover { transform: translateY(-1px); background: #0f5f59; }
-.knowledge-composer button:not(:disabled):active { transform: translateY(0); }
-.knowledge-composer button.is-stop { background: #ad4935; }
+.knowledge-composer { padding: 12px 20px 16px; }
 button:disabled { opacity: .5; cursor: not-allowed; }
 button:focus-visible,
 input:focus-visible,
@@ -1615,7 +1875,8 @@ textarea:focus-visible { outline: 2px solid rgba(15, 118, 110, .48); outline-off
   .knowledge-chat-message.is-pending .knowledge-message-card,
   .streaming-cursor,
   .conversation-loading-robot,
-  .knowledge-scope-spinner { animation: none; }
+  .knowledge-scope-spinner,
+  .conversation-delete-spinner { animation: none; }
 }
 @media (max-width: 900px) {
   .project-knowledge-chat { grid-template-columns: 220px minmax(0, 1fr); }

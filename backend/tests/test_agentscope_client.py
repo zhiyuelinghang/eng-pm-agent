@@ -27,7 +27,10 @@ from backend.app.agent_api_support import (
     _sse_frame,
 )
 from backend.app.agent_conversations_api import (
+    _adopt_initial_conversation_title,
+    _conversation_title_from_content,
     create_agent_conversation,
+    delete_agent_conversation,
     list_agent_conversations,
     list_agent_conversation_messages,
     stream_agent_conversation_tool_confirmation,
@@ -71,6 +74,66 @@ class AgentScopeClientTest(TestCase):
             },
         )
         self.assertNotIn("X-User-ID", client.headers)
+
+    def test_catalogue_control_call_is_reused_within_short_ttl(self) -> None:
+        client = _client()
+        first = {"agents": [{"id": "global-main"}]}
+        refreshed = {"agents": [{"id": "global-main"}, {"id": "other"}]}
+        client._request = Mock(  # type: ignore[method-assign]
+            side_effect=[first, refreshed],
+        )
+
+        with patch(
+            "backend.app.agentscope_client.time.monotonic",
+            side_effect=[100.0, 110.0, 116.0],
+        ):
+            self.assertIs(client.get_catalog(), first)
+            self.assertIs(client.get_catalog(), first)
+            self.assertIs(client.get_catalog(), refreshed)
+
+        self.assertEqual(client._request.call_count, 2)
+        client._request.assert_called_with("GET", "/agent/platform/catalog")
+
+    def test_identical_session_policy_is_not_patched_twice(self) -> None:
+        client = _client()
+        client._request = Mock(return_value={})  # type: ignore[method-assign]
+        agent = {
+            "id": "global-main",
+            "permission_mode": "explore",
+            "knowledge_config": None,
+        }
+        context = {
+            "user_id": "1",
+            "project_id": "2",
+            "weknora_query_enabled": False,
+        }
+
+        self.assertTrue(
+            client.sync_session(
+                agent=agent,
+                session_id="session-1",
+                platform_context=context,
+                name="测试会话",
+            ),
+        )
+        self.assertFalse(
+            client.sync_session(
+                agent=agent,
+                session_id="session-1",
+                platform_context=dict(context),
+                name="测试会话",
+            ),
+        )
+        self.assertTrue(
+            client.sync_session(
+                agent=agent,
+                session_id="session-1",
+                platform_context={**context, "weknora_query_enabled": True},
+                name="测试会话",
+            ),
+        )
+
+        self.assertEqual(client._request.call_count, 2)
 
     def test_weknora_answer_wait_has_no_read_deadline(self) -> None:
         client = _client()
@@ -370,7 +433,7 @@ class AgentScopeClientTest(TestCase):
 
         self.assertIsNone(before_binding["weknora_agent_id"])
         self.assertEqual(after_binding["weknora_agent_id"], "robot-current")
-        self.assertEqual(db.get.call_count, 2)
+        self.assertEqual(db.get.call_count, 3)
 
     @staticmethod
     def _project_context_fixtures(robot_id: str | None):
@@ -446,7 +509,8 @@ class AgentScopeClientTest(TestCase):
             user_id=2,
             project_id=5,
             agent_id="initializer",
-            conversation_type="business",
+            conversation_type="general",
+            title="测试项目 · 智能协同",
             agentscope_session_id="session-7",
             status="running",
             last_error=None,
@@ -501,7 +565,38 @@ class AgentScopeClientTest(TestCase):
         )
         database.scalars.assert_not_called()
         self.assertEqual(conversation.status, "completed")
+        self.assertEqual(conversation.title, "读取人员表")
         database.commit.assert_called_once()
+
+    def test_conversation_title_uses_first_user_sentence(self) -> None:
+        self.assertEqual(
+            _conversation_title_from_content("请分析本周进度。再列出风险。"),
+            "请分析本周进度。",
+        )
+        self.assertEqual(
+            _conversation_title_from_content(
+                "任务背景：质量检查。\n用户请求：先核对验收资料！然后生成清单。",
+            ),
+            "先核对验收资料！",
+        )
+
+    def test_default_general_title_is_replaced_only_once(self) -> None:
+        conversation = SimpleNamespace(
+            conversation_type="general",
+            title="测试项目 · 智能协同",
+        )
+        initialization = SimpleNamespace(
+            conversation_type="initialization",
+            title="测试项目 · 项目初始化",
+        )
+
+        _adopt_initial_conversation_title(conversation, "第一句话。后续说明。")
+        _adopt_initial_conversation_title(conversation, "第二次发送不能覆盖标题。")
+        _adopt_initial_conversation_title(initialization, "先导入项目资料。再核对。")
+        _adopt_initial_conversation_title(initialization, "不能覆盖初始化标题。")
+
+        self.assertEqual(conversation.title, "第一句话。")
+        self.assertEqual(initialization.title, "先导入项目资料。")
 
     def test_initialization_conversation_list_serializes_conversations(
         self,
@@ -541,25 +636,27 @@ class AgentScopeClientTest(TestCase):
             "initialization",
         )
 
-    def test_initialization_conversation_creation_reuses_existing_row(
+    def test_initialization_conversation_creation_starts_a_new_session(
         self,
     ) -> None:
-        conversation = AgentConversation(
-            id=9,
-            project_id=5,
-            user_id=2,
-            agent_id="initializer",
-            agent_name="Dobby 项目初始化助手",
-            conversation_type="initialization",
-            title="测试项目 · 项目初始化",
-            agentscope_session_id="session-9",
-            status="completed",
-        )
         database = Mock()
-        database.scalar.return_value = conversation
-        user = SimpleNamespace(id=2, role="admin")
+        database.add.side_effect = lambda row: setattr(row, "id", 10)
+        database.get.return_value = None
+        user = SimpleNamespace(
+            id=2,
+            role="admin",
+            username="admin",
+            real_name="平台管理员",
+        )
         project = SimpleNamespace(id=5, name="测试项目")
         gateway = Mock()
+        gateway.get_catalog.return_value = {
+            "project_initializer": {
+                "id": "initializer",
+                "name": "Dobby 项目初始化助手",
+            },
+        }
+        gateway.create_session.return_value = "session-10"
 
         with (
             patch(
@@ -571,6 +668,7 @@ class AgentScopeClientTest(TestCase):
                 "backend.app.agent_conversations_api._agentscope_client",
                 return_value=gateway,
             ),
+            patch("backend.app.agent_conversations_api.audit"),
         ):
             result = create_agent_conversation(
                 project_id=5,
@@ -581,10 +679,11 @@ class AgentScopeClientTest(TestCase):
                 user=user,
             )
 
-        self.assertEqual(result["data"]["id"], 9)
-        gateway.get_catalog.assert_not_called()
-        gateway.create_session.assert_not_called()
-        database.add.assert_not_called()
+        self.assertEqual(result["data"]["id"], 10)
+        self.assertEqual(result["data"]["agentscope_session_id"], "session-10")
+        gateway.get_catalog.assert_called_once()
+        gateway.create_session.assert_called_once()
+        database.add.assert_called_once()
 
     def test_create_session_applies_knowledge_and_permission_config(self) -> None:
         client = _client()
@@ -634,15 +733,110 @@ class AgentScopeClientTest(TestCase):
         self.assertEqual(
             patch_call.kwargs["json"],
             {
+                "name": "测试会话",
                 "permission_mode": "explore",
                 "knowledge_config": agent["knowledge_config"],
                 "platform_context": platform_context,
             },
         )
 
+    def test_delete_session_escapes_id_and_keeps_agent_scope(self) -> None:
+        client = _client()
+        client._request = Mock(return_value=None)  # type: ignore[method-assign]
+
+        client.delete_session("session/with space", "agent-1")
+
+        self.assertEqual(
+            client._request.call_args.args,
+            ("DELETE", "/sessions/session%2Fwith%20space"),
+        )
+        self.assertEqual(
+            client._request.call_args.kwargs,
+            {
+                "params": {"agent_id": "agent-1"},
+                "not_found_ok": True,
+            },
+        )
+
+    def test_delete_session_is_idempotent_when_runtime_row_is_gone(
+        self,
+    ) -> None:
+        client = _client()
+        response = Mock(status_code=404, is_error=True)
+
+        with patch(
+            "backend.app.agentscope_client.httpx.request",
+            return_value=response,
+        ):
+            client.delete_session("missing-session", "agent-1")
+
+    def test_delete_conversation_removes_runtime_session_and_local_row(
+        self,
+    ) -> None:
+        conversation = SimpleNamespace(
+            id=17,
+            user_id=2,
+            project_id=5,
+            agent_id="global-main",
+            conversation_type="general",
+            title="进度风险分析",
+            agentscope_session_id="session-17",
+        )
+        database = Mock()
+        database.get.return_value = conversation
+        user = SimpleNamespace(id=2, role="admin")
+        gateway = Mock()
+
+        with (
+            patch(
+                "backend.app.agent_conversations_api._agentscope_client",
+                return_value=gateway,
+            ),
+            patch("backend.app.agent_conversations_api.audit") as audit,
+        ):
+            result = delete_agent_conversation(
+                conversation_id=17,
+                db=database,
+                user=user,
+            )
+
+        self.assertEqual(result["data"], {"id": 17})
+        gateway.delete_session.assert_called_once_with(
+            "session-17",
+            "global-main",
+        )
+        audit.assert_called_once()
+        database.delete.assert_called_once_with(conversation)
+        database.commit.assert_called_once()
+
+    def test_initialization_conversation_cannot_be_deleted_as_chat_history(
+        self,
+    ) -> None:
+        conversation = SimpleNamespace(
+            id=18,
+            user_id=2,
+            project_id=5,
+            conversation_type="initialization",
+        )
+        database = Mock()
+        database.get.return_value = conversation
+        user = SimpleNamespace(id=2, role="admin")
+
+        with self.assertRaises(HTTPException) as caught:
+            delete_agent_conversation(
+                conversation_id=18,
+                db=database,
+                user=user,
+            )
+
+        self.assertEqual(caught.exception.status_code, 409)
+        database.delete.assert_not_called()
+        database.commit.assert_not_called()
+
     def test_chat_returns_new_finished_assistant_message(self) -> None:
         client = _client()
         before = {"messages": [{"id": "old", "role": "assistant"}]}
+        turn_input = {"id": "user-message", "role": "user"}
         finished = {
             "id": "new",
             "role": "assistant",
@@ -651,9 +845,8 @@ class AgentScopeClientTest(TestCase):
         }
         client.list_messages = Mock(  # type: ignore[method-assign]
             side_effect=[
-                before,
-                {"messages": [*before["messages"], finished]},
-                {"messages": [*before["messages"], finished]},
+                {"messages": [*before["messages"], turn_input, finished]},
+                {"messages": [*before["messages"], turn_input, finished]},
             ],
         )
         client.session_status = Mock(return_value="idle")  # type: ignore[method-assign]
@@ -694,6 +887,7 @@ class AgentScopeClientTest(TestCase):
         self.assertEqual(reply.content, "处理完成")
         self.assertEqual(reply.message_id, "new")
         self.assertEqual(reply.raw_messages, [finished])
+        self.assertEqual(client.list_messages.call_count, 2)
         request_body = client._request.call_args.kwargs["json"]
         self.assertEqual(request_body["input"]["id"], "user-message")
         self.assertEqual(request_body["input"]["metadata"]["source"], "test")
@@ -818,7 +1012,7 @@ class AgentScopeClientTest(TestCase):
 
     def test_chat_waits_for_team_follow_up_before_returning(self) -> None:
         client = _client()
-        before = {"messages": []}
+        turn_input = {"id": "user-message", "role": "user"}
         interim = {
             "id": "interim",
             "role": "assistant",
@@ -833,10 +1027,9 @@ class AgentScopeClientTest(TestCase):
         }
         client.list_messages = Mock(  # type: ignore[method-assign]
             side_effect=[
-                before,
-                {"messages": [interim]},
-                {"messages": [interim, final]},
-                {"messages": [interim, final]},
+                {"messages": [turn_input, interim]},
+                {"messages": [turn_input, interim, final]},
+                {"messages": [turn_input, interim, final]},
             ],
         )
         client.session_status = Mock(return_value="idle")  # type: ignore[method-assign]
@@ -862,6 +1055,7 @@ class AgentScopeClientTest(TestCase):
                 content="协同验证",
                 sender_name="测试用户",
                 metadata={},
+                user_message_id="user-message",
             )
 
         self.assertEqual(reply.message_id, "final")
@@ -876,6 +1070,7 @@ class AgentScopeClientTest(TestCase):
         self,
     ) -> None:
         client = _client()
+        turn_input = {"id": "user-message", "role": "user"}
         final = {
             "id": "final",
             "role": "assistant",
@@ -884,9 +1079,8 @@ class AgentScopeClientTest(TestCase):
         }
         client.list_messages = Mock(  # type: ignore[method-assign]
             side_effect=[
-                {"messages": []},
-                {"messages": [final]},
-                {"messages": [final]},
+                {"messages": [turn_input, final]},
+                {"messages": [turn_input, final]},
             ],
         )
         client.session_status = Mock(return_value="idle")  # type: ignore[method-assign]
@@ -908,6 +1102,7 @@ class AgentScopeClientTest(TestCase):
                 content="协同验证",
                 sender_name="测试用户",
                 metadata={},
+                user_message_id="user-message",
             )
 
         self.assertEqual(reply.message_id, "final")
@@ -947,6 +1142,7 @@ class AgentScopeClientTest(TestCase):
     def test_chat_has_no_wall_clock_deadline(self) -> None:
         client = _client()
         client._request_timeout = 0.01
+        turn_input = {"id": "user-message", "role": "user"}
         finished = {
             "id": "finished-after-long-run",
             "role": "assistant",
@@ -955,13 +1151,12 @@ class AgentScopeClientTest(TestCase):
         }
         client.list_messages = Mock(  # type: ignore[method-assign]
             side_effect=[
-                {"messages": []},
-                {"messages": []},
-                {"messages": []},
-                {"messages": []},
-                {"messages": []},
-                {"messages": [finished]},
-                {"messages": [finished]},
+                {"messages": [turn_input]},
+                {"messages": [turn_input]},
+                {"messages": [turn_input]},
+                {"messages": [turn_input]},
+                {"messages": [turn_input, finished]},
+                {"messages": [turn_input, finished]},
             ],
         )
         client.session_status = Mock(  # type: ignore[method-assign]
@@ -985,6 +1180,7 @@ class AgentScopeClientTest(TestCase):
                 content="执行长任务",
                 sender_name="测试用户",
                 metadata={},
+                user_message_id="user-message",
             )
 
         self.assertEqual(reply.status, "completed")
@@ -996,6 +1192,7 @@ class AgentScopeClientTest(TestCase):
         self,
     ) -> None:
         client = _client()
+        turn_input = {"id": "user-message", "role": "user"}
         interrupted = {
             "id": "interrupted-reply",
             "role": "assistant",
@@ -1013,9 +1210,8 @@ class AgentScopeClientTest(TestCase):
         }
         client.list_messages = Mock(  # type: ignore[method-assign]
             side_effect=[
-                {"messages": []},
-                {"messages": [interrupted]},
-                {"messages": [interrupted]},
+                {"messages": [turn_input, interrupted]},
+                {"messages": [turn_input, interrupted]},
             ],
         )
         client.session_status = Mock(return_value="idle")  # type: ignore[method-assign]
@@ -1037,6 +1233,7 @@ class AgentScopeClientTest(TestCase):
                 content="执行后停止",
                 sender_name="测试用户",
                 metadata={},
+                user_message_id="user-message",
             )
 
         self.assertEqual(reply.status, "interrupted")

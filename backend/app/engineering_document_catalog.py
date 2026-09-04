@@ -27,6 +27,11 @@ from .models import (
     ProjectPosition,
     User,
 )
+from .personnel_policy import (
+    DEFAULT_ENGINEERING_KNOWLEDGE_BASE_NAME,
+    PROJECT_MANAGER_POSITION_NAME,
+    normalize_project_position_name,
+)
 
 
 CATALOG_CAPABILITIES = (
@@ -137,6 +142,105 @@ def get_or_create_sync_state(
     elif agent_id is not None:
         state_row.weknora_agent_id = agent_id
     return state_row
+
+
+def reconcile_name_based_catalogue_permissions(
+    db: Session,
+    project_id: int,
+    *,
+    enable_restricted: bool = False,
+) -> dict[str, Any]:
+    """Apply fixed position defaults by knowledge-base *name*.
+
+    WeKnora knowledge-base IDs are deployment data and may change. The durable
+    rule is therefore expressed with the visible name and is recalculated
+    after every catalogue sync. Database node IDs are only used as the local
+    foreign keys for the current mirror revision.
+    """
+
+    state_row = db.get(EngineeringDocumentSyncState, project_id)
+    if enable_restricted:
+        state_row = get_or_create_sync_state(db, project_id)
+        state_row.access_mode = "restricted"
+    if state_row is None or state_row.access_mode != "restricted":
+        return {
+            "applied": False,
+            "access_mode": state_row.access_mode if state_row else "project",
+            "default_knowledge_base_name": (
+                DEFAULT_ENGINEERING_KNOWLEDGE_BASE_NAME
+            ),
+            "default_knowledge_base_found": False,
+            "grant_count": 0,
+        }
+
+    roots = list(
+        db.scalars(
+            select(EngineeringDocumentNode).where(
+                EngineeringDocumentNode.project_id == project_id,
+                EngineeringDocumentNode.node_type == "knowledge_base",
+            ),
+        ).all(),
+    )
+    default_roots = [
+        root
+        for root in roots
+        if root.name.strip() == DEFAULT_ENGINEERING_KNOWLEDGE_BASE_NAME
+    ]
+    positions = list(
+        db.scalars(
+            select(ProjectPosition).where(ProjectPosition.project_id == project_id),
+        ).all(),
+    )
+
+    desired: dict[tuple[int, int], set[str]] = {}
+    for position in positions:
+        for root in default_roots:
+            desired.setdefault((root.id, position.id), set()).add("can_read")
+        if (
+            normalize_project_position_name(position.position_name)
+            == PROJECT_MANAGER_POSITION_NAME
+        ):
+            for root in roots:
+                desired.setdefault((root.id, position.id), set()).update(
+                    CATALOG_CAPABILITIES,
+                )
+
+    existing = {
+        (permission.node_id, permission.subject_id): permission
+        for permission in db.scalars(
+            select(EngineeringDocumentPermission).where(
+                EngineeringDocumentPermission.project_id == project_id,
+                EngineeringDocumentPermission.subject_type == "position",
+            ),
+        ).all()
+    }
+    created = 0
+    for (node_id, position_id), capabilities in desired.items():
+        permission = existing.get((node_id, position_id))
+        if permission is None:
+            permission = EngineeringDocumentPermission(
+                project_id=project_id,
+                node_id=node_id,
+                subject_type="position",
+                subject_id=position_id,
+                granted_by_user_id=None,
+            )
+            db.add(permission)
+            existing[(node_id, position_id)] = permission
+            created += 1
+        for capability in capabilities:
+            setattr(permission, capability, True)
+        permission.inherit_to_children = True
+    db.flush()
+    return {
+        "applied": True,
+        "access_mode": state_row.access_mode,
+        "default_knowledge_base_name": DEFAULT_ENGINEERING_KNOWLEDGE_BASE_NAME,
+        "default_knowledge_base_found": bool(default_roots),
+        "matched_default_root_count": len(default_roots),
+        "grant_count": len(desired),
+        "created_grant_count": created,
+    }
 
 
 def mark_catalogue_pending(
@@ -605,6 +709,10 @@ def sync_document_catalogue(
         state_row.weknora_agent_id = agent_id
         state_row.last_completed_at = datetime.now(UTC)
         state_row.last_error = None
+        permission_policy = reconcile_name_based_catalogue_permissions(
+            db,
+            project_id,
+        )
         db.commit()
         return {
             **sync_state_view(
@@ -625,6 +733,7 @@ def sync_document_catalogue(
             "file_count": sum(
                 row.node_type == "file" for row in current.values()
             ),
+            "permission_policy": permission_policy,
         }
     except Exception as exc:
         db.rollback()

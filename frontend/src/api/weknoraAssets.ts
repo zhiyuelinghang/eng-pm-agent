@@ -33,6 +33,16 @@ export async function fetchWeKnoraResourceBlob(
   return fetchBlob(projectAssetPath(projectId, `resources/${encodeURIComponent(handle)}`))
 }
 
+export async function fetchWeKnoraKnowledgePreviewBlob(
+  projectId: string,
+  knowledgeId: string,
+): Promise<Blob> {
+  return fetchBlob(projectAssetPath(
+    projectId,
+    `knowledge/${encodeURIComponent(knowledgeId)}/preview`,
+  ))
+}
+
 export async function previewWeKnoraKnowledge(
   projectId: string,
   knowledgeId: string,

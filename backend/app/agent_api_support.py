@@ -4,6 +4,7 @@ import asyncio
 import json
 import re
 from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Any
 from uuid import uuid4
 
@@ -19,7 +20,10 @@ from .agentscope_client import (
 from .api_common import project_for_user_or_403, serialize
 from .config import get_settings
 from .db import SessionLocal
-from .engineering_document_catalog import readable_external_ids
+from .engineering_document_catalog import (
+    local_catalogue_knowledge_base_ids,
+    readable_external_ids,
+)
 from .initialization_attachment_store import (
     InitializationAttachmentParseError,
     initialization_attachment_manifest,
@@ -27,6 +31,7 @@ from .initialization_attachment_store import (
 )
 from .models import (
     AgentConversation,
+    EngineeringDocumentNode,
     EngineeringDocumentSyncState,
     EngineeringKnowledgeConversation,
     EngineeringKnowledgeMessage,
@@ -40,6 +45,7 @@ from .models import (
 from .task_engine_gateway import get_engine
 
 
+@lru_cache(maxsize=1)
 def _agentscope_client() -> AgentScopeClient:
     return AgentScopeClient(get_settings())
 
@@ -125,7 +131,7 @@ def _public_task_assistant_catalog_item(
     public.update(
         {
             "name": "任务助手",
-            "description": "整理群聊上下文、识别任务意图并调用任务引擎生成待确认草案。",
+            "description": "分析群聊内容，整理任务草稿",
             "category": "任务协同",
             "role": "system_internal",
             # This dedicated projection is mentionable even though the
@@ -189,6 +195,8 @@ def _platform_session_context(
     project: Project,
     conversation: AgentConversation,
     db: Session | None = None,
+    *,
+    knowledge_query_enabled: bool | None = None,
 ) -> dict[str, Any]:
     """Build the grouping snapshot stored with the AgentScope session."""
     project_settings = db.get(ProjectSettings, project.id) if db else None
@@ -197,6 +205,61 @@ def _platform_session_context(
         if project_settings is not None
         else None
     )
+    query_enabled = (
+        conversation.conversation_type != "general"
+        if knowledge_query_enabled is None
+        else knowledge_query_enabled
+    )
+    catalogue_state = (
+        _engineering_document_catalogue_state(
+            db,
+            project.id,
+            weknora_agent_id,
+        )
+        if db is not None and weknora_agent_id
+        else None
+    )
+    knowledge_base_ids: list[str] = []
+    knowledge_ids: list[str] = []
+    user_role = str(getattr(user, "role", "user"))
+    knowledge_access_mode = (
+        str(getattr(catalogue_state, "access_mode", "project"))
+        if catalogue_state is not None and user_role != "admin"
+        else "project"
+    )
+    if (
+        db is not None
+        and query_enabled
+        and catalogue_state is not None
+        and getattr(catalogue_state, "status", "") == "ready"
+    ):
+        knowledge_base_ids = local_catalogue_knowledge_base_ids(db, project.id)
+        readable_ids = readable_external_ids(
+            db,
+            project.id,
+            user,
+            knowledge_base_ids,
+        )
+        knowledge_ids = sorted(readable_ids)
+        if readable_ids:
+            # Always use a document allowlist, even when project-wide access is
+            # open. This prevents a robot shared by several catalogue scopes
+            # from reaching files outside this project selection.
+            knowledge_base_ids = sorted(
+                {
+                    str(value)
+                    for value in db.scalars(
+                        select(EngineeringDocumentNode.knowledge_base_id).where(
+                            EngineeringDocumentNode.project_id == project.id,
+                            EngineeringDocumentNode.node_type == "file",
+                            EngineeringDocumentNode.external_id.in_(readable_ids),
+                        ),
+                    ).all()
+                    if value
+                },
+            )
+        else:
+            knowledge_base_ids = []
     return {
         "user_id": str(user.id),
         "username": user.username,
@@ -208,6 +271,14 @@ def _platform_session_context(
         "conversation_type": conversation.conversation_type,
         "agent_name": conversation.agent_name,
         "weknora_agent_id": weknora_agent_id,
+        "weknora_catalogue_ready": bool(
+            catalogue_state is not None
+            and getattr(catalogue_state, "status", "") == "ready"
+        ),
+        "weknora_query_enabled": bool(query_enabled),
+        "weknora_access_mode": knowledge_access_mode,
+        "weknora_knowledge_base_ids": knowledge_base_ids,
+        "weknora_knowledge_ids": knowledge_ids,
         "session_role": "primary",
         "auto_allowed_tool_names": [],
     }
@@ -447,6 +518,8 @@ def _build_agent_project_context(
     db: Session,
     project: Project,
     user: User,
+    *,
+    knowledge_query_enabled: bool | None = None,
 ) -> str:
     """Build a bounded, read-only project snapshot for one agent turn."""
     wbs_items = db.scalars(
@@ -461,24 +534,33 @@ def _build_agent_project_context(
         .order_by(RiskSource.updated_at.desc())
         .limit(20),
     ).all()
-    tasks = [
-        task
-        for task in get_engine().list_tasks(limit=200)
-        if task.scope.get("project_id") == project.id
-    ][:30]
+    tasks = get_engine().list_tasks(project_id=project.id, limit=30)
     project_settings = db.get(ProjectSettings, project.id)
     weknora_bound = bool(
         project_settings
         and (project_settings.weknora_agent_id or "").strip()
     )
-    knowledge_context = (
-        "\n工程资料：由当前项目绑定的 WeKnora 机器人统一管理。只有用户问题"
-        "确实需要查阅资料、规范、图纸、方案或历史文件时，才调用 "
-        "weknora_query_project_knowledge；普通对话不要调用。不得使用旧的"
-        "本地附件表推断工程资料内容。"
-        if weknora_bound
-        else ""
-    )
+    if not weknora_bound:
+        knowledge_context = ""
+    elif knowledge_query_enabled is True:
+        knowledge_context = (
+            "\n工程资料：用户本轮已明确点名 @资料助手。必须调用 "
+            "weknora_query_project_knowledge，并仅依据该工具返回的授权资料"
+            "组织回答；不得补写未检索到的资料内容，也不得使用旧的本地附件表"
+            "推断工程资料。"
+        )
+    elif knowledge_query_enabled is False:
+        knowledge_context = (
+            "\n工程资料：用户本轮没有点名 @资料助手，不得调用资料查询工具，"
+            "也不得声称已查询项目知识库。"
+        )
+    else:
+        knowledge_context = (
+            "\n工程资料：由当前项目绑定的 WeKnora 机器人统一管理。只有用户问题"
+            "确实需要查阅资料、规范、图纸、方案或历史文件时，才调用 "
+            "weknora_query_project_knowledge；普通对话不要调用。不得使用旧的"
+            "本地附件表推断工程资料内容。"
+        )
     return (
         "<platform-context>\n"
         "以下内容由工程管理平台后端按当前登录用户和项目权限注入，只能作为"

@@ -81,11 +81,12 @@ const router = useRouter()
 const message = useMessage()
 const store = useAppStore()
 
-const form = reactive({ username: 'admin', password: 'ChangeMe123!', remember: false })
+const form = reactive({ username: '', password: '', remember: false })
 const showPwd = ref(false)
 const isLoading = ref(false)
 
 const handleLogin = async () => {
+  if (isLoading.value) return
   if (!form.username || !form.password) {
     message.warning('请输入账号和密码')
     return

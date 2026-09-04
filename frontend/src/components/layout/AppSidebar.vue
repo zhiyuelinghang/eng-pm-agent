@@ -49,6 +49,7 @@
 import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { resetRealtimeSession } from '@/services/realtimeSession'
 import { NIcon, useMessage } from 'naive-ui'
 import {
   ChartBar, Folder, Home, ListCheck, Lock, Logout, MessageCircle, Robot, Settings, Tools, UserCircle,
@@ -61,7 +62,8 @@ const hasProjects = computed(() => store.projects.length > 0)
 const currentUserId = computed(() => sessionStorage.getItem('current_user_id') || '')
 const currentMember = computed(() => store.members.find(member => member.id === currentUserId.value))
 const currentUserName = computed(() => sessionStorage.getItem('current_user_name') || currentMember.value?.name || '当前用户')
-const currentUserTitle = computed(() => sessionStorage.getItem('user_role') === 'admin' ? '管理员' : currentMember.value?.title || '普通用户')
+const isManagementUser = computed(() => sessionStorage.getItem('user_role') === 'admin')
+const currentUserTitle = computed(() => isManagementUser.value ? '管理人员' : currentMember.value?.title || '普通用户')
 const userInitial = computed(() => currentUserName.value.trim().slice(0, 1) || '用')
 
 const menus = computed(() => [
@@ -72,10 +74,16 @@ const menus = computed(() => [
   { path: '/docs', title: '工程资料', icon: Folder, badge: store.pendingDailyReports.length + store.pendingFills.length, requiresProject: true },
   { path: '/tools', title: '业务工具', icon: Tools, badge: 0, requiresProject: true },
   { path: '/profile', title: '个人设置', icon: UserCircle, badge: 0, requiresProject: false },
-  { path: '/settings', title: '工程配置', icon: Settings, badge: 0, requiresProject: false },
+  ...(isManagementUser.value
+    ? [{ path: '/settings', title: '工程配置', icon: Settings, badge: 0, requiresProject: false }]
+    : []),
 ])
 
 const handleBlockedMenu = () => {
+  if (!isManagementUser.value) {
+    message.warning('当前账号尚未加入任何项目，请联系管理人员')
+    return
+  }
   message.warning('请先创建项目')
   void router.push({ path: '/settings', query: { projectRequired: '1' } })
 }
@@ -91,6 +99,7 @@ const handleLogout = () => {
   sessionStorage.removeItem('user_role')
   sessionStorage.removeItem('current_user_id')
   sessionStorage.removeItem('current_user_name')
+  resetRealtimeSession()
   router.push('/login')
 }
 </script>

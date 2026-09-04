@@ -335,6 +335,76 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
         self.assertIsNotNone(await toolkit.get_tool("TaskCreate"))
         self.assertIsNotNone(await toolkit.get_tool("AgentInvite"))
 
+    async def test_home_general_session_hides_direct_task_engine_mcp(
+        self,
+    ) -> None:
+        caller = _agent(CALLER_ID, "Dobby")
+        caller.data.mcp_config.allowed_mcp_ids = ["task-engine", "safe-package"]
+        settings = SimpleNamespace(
+            data=SimpleNamespace(
+                global_main_agent_id=CALLER_ID,
+                project_initializer_agent_id=None,
+                task_assistant_agent_id=None,
+            ),
+        )
+        storage = SimpleNamespace(
+            get_team=AsyncMock(return_value=None),
+            get_platform_settings=AsyncMock(return_value=settings),
+        )
+        mcp_registry = SimpleNamespace(
+            get_session_clients=AsyncMock(return_value=[]),
+        )
+        toolkit = await get_toolkit(
+            storage=storage,
+            workspace=SimpleNamespace(
+                list_tools=AsyncMock(return_value=[]),
+                list_skills=AsyncMock(return_value=[]),
+                list_mcps=AsyncMock(return_value=[]),
+            ),
+            workspace_manager=object(),
+            scheduler_manager=object(),
+            background_task_manager=SimpleNamespace(
+                list_tools=AsyncMock(return_value=[]),
+            ),
+            message_bus=object(),
+            middlewares=[],
+            user_id=USER_ID,
+            agent_record=caller,
+            session_record=SimpleNamespace(
+                id="home-session",
+                team_id=None,
+                config=SimpleNamespace(
+                    chat_model_config=None,
+                    platform_context=SimpleNamespace(
+                        conversation_type="general",
+                    ),
+                ),
+            ),
+            resource_access_service=SimpleNamespace(
+                list_resource=AsyncMock(return_value=[caller]),
+            ),
+            mcp_registry_manager=mcp_registry,
+            input_has_attachments=False,
+        )
+
+        self.assertEqual(
+            mcp_registry.get_session_clients.await_args.kwargs["package_ids"],
+            ["safe-package"],
+        )
+        self.assertEqual(
+            mcp_registry.get_session_clients.await_args.kwargs[
+                "excluded_package_ids"
+            ],
+            {"attachment-parser", "task-engine"},
+        )
+        self.assertFalse(
+            any(
+                client.name == "task-engine"
+                for group in toolkit.tool_groups
+                for client in group.mcps
+            ),
+        )
+
     async def _invite_targets(
         self,
         call_config: AgentCallConfig,

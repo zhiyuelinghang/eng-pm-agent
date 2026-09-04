@@ -91,6 +91,27 @@ class _Toolkit:
 
 
 class AttachmentPipelineTest(IsolatedAsyncioTestCase):
+    async def test_attachment_detection_skips_plain_text_turns(self) -> None:
+        plain = UserMsg(name="user", content=[TextBlock(text="你好")])
+        attached = UserMsg(
+            name="user",
+            content=[
+                TextBlock(text="请分析"),
+                DataBlock(
+                    name="说明.txt",
+                    source=Base64Source(
+                        data=base64.b64encode(b"content").decode(),
+                        media_type="text/plain",
+                    ),
+                ),
+            ],
+        )
+
+        self.assertFalse(AttachmentPipeline.has_attachments(plain))
+        self.assertTrue(AttachmentPipeline.has_attachments(attached))
+        self.assertTrue(AttachmentPipeline.has_attachments([plain, attached]))
+        self.assertFalse(AttachmentPipeline.has_attachments(None))
+
     async def test_base64_file_is_replaced_with_complete_parsed_text(self) -> None:
         tool = _ParserTool()
         message = UserMsg(

@@ -136,14 +136,13 @@ claude mcp add task-engine -- python3 /path/to/task-engine/server.py
 |---|---|---|
 | `TASK_ENGINE_DB` | `task_engine.db` | SQLite 数据库路径 |
 | `TASK_ENGINE_TZ` | `Asia/Shanghai` | 时区 |
-| `TASK_ENGINE_AI_KEY` | 空 | 模型 API Key，**留空则使用规则生成** |
+| `TASK_ENGINE_AI_KEY` | 空 | 模型 API Key；留空时 `generate_task_flow` 明确报错 |
 | `TASK_ENGINE_AI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容接口地址 |
 | `TASK_ENGINE_AI_MODEL` | `gpt-4o-mini` | 模型名 |
-| `TASK_ENGINE_AI_TIMEOUT` | `30` | 超时秒数 |
 
 走 OpenAI 兼容接口，因此 OpenAI、通义、DeepSeek、本地 vLLM 都只需改 `BASE_URL` 与 `MODEL`。
 
-**模型不可用绝不阻断用户**：未配 key、调用超时、返回脏数据，都会静默降级到规则生成，用户拿到的始终是一个可编辑的合理流程，只是 `origin` 字段会如实标明来源。
+`generate_task_flow` **只接受 AI 结果，不做静默降级**。未配 key、连接失败、接口返回错误或模型结果校验失败时，调用会直接失败并返回具体原因；生成器本身不设置固定模型读取时限，调用生命周期由宿主控制（Web 端使用显式停止）。需要规则模板时，请显式调用 `create_flow_from_template`。
 
 ## MCP 工具
 

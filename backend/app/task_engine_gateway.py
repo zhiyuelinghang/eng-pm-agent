@@ -12,7 +12,6 @@ Dobby 的 WBS 条目在这里充当「工点」，project_member 充当「责任
 """
 from __future__ import annotations
 
-import re
 from datetime import datetime
 from functools import lru_cache
 from typing import Any
@@ -34,7 +33,6 @@ from task_engine.domain.models import (
 )
 from task_engine.engine import TaskEngine
 from task_engine.generator.llm import FlowGenerator, LLMConfig
-from task_engine.generator.rules import parse_trigger
 from task_engine.store.postgres import PostgresStore
 
 from .config import get_settings
@@ -72,6 +70,8 @@ RISK_TO_PRIORITY = {
     "low": "low",
 }
 PRIORITY_TO_RISK = {v: k for k, v in RISK_TO_PRIORITY.items()}
+TASK_MESSAGE_AGENT_ID = "dobby-task-engine"
+TASK_MESSAGE_AGENT_NAME = "Dobby"
 
 
 # ── 单例 ──────────────────────────────────────────────────
@@ -99,103 +99,6 @@ def get_generator() -> FlowGenerator:
 
 def engine_tz() -> ZoneInfo:
     return ZoneInfo(get_settings().task_engine_tz)
-
-
-def build_project_chat_generation_draft(
-    db: Session,
-    project_id: int,
-    requirement: str,
-    *,
-    now: datetime,
-) -> dict[str, Any] | None:
-    """把明确的群聊发送需求生成为一个平台动作节点。
-
-    通用任务引擎只负责触发与节点流转，不应认识 Dobby 的群聊、智能体或 @ 语义；
-    因此这层宿主适配必须在调用通用流程生成器之前完成。返回值与生成任务流接口一致，
-    前端仍可自由增删、排序或改回人工节点。
-    """
-    text = requirement.strip()
-    target_words = ("群发", "项目群", "群聊", "群里", "群内")
-    send_words = ("发送", "发一条", "发消息", "通知", "提醒")
-    if not any(word in text for word in target_words) or not any(
-        word in text for word in send_words
-    ):
-        return None
-
-    channel = db.scalars(
-        select(ChatChannel)
-        .where(
-            ChatChannel.project_id == project_id,
-            ChatChannel.channel_type == "project",
-            ChatChannel.archived_at.is_(None),
-        )
-        .order_by(ChatChannel.id),
-    ).first()
-    if channel is None:
-        return None
-
-    quoted_parts = re.findall(r'[“"]([^”"]+)[”"]', text)
-    quoted_parts.extend(re.findall(r"[‘']([^’']+)[’']", text))
-    content = max(quoted_parts, key=len).strip() if quoted_parts else ""
-    if not content:
-        tail = re.search(
-            r"(?:群发|发送|发一条|发消息)(?:一条)?(?:消息)?\s*[：:,，]?\s*(.+)$",
-            text,
-        )
-        if tail:
-            content = tail.group(1).strip().rstrip("。")
-    if not content:
-        return None
-
-    trigger = parse_trigger(text, now=now)
-    first_at = trigger.first_at or now
-    mention_mode = (
-        "all"
-        if any(word in text for word in ("@全体", "＠全体", "全体成员", "艾特全体"))
-        else "none"
-    )
-    title_prefix = content.split("：", 1)[0].strip()
-    title = title_prefix if 2 <= len(title_prefix) <= 30 else "群聊定时通知"
-
-    return {
-        "title": title,
-        "task_type": "automation",
-        "risk_level": "low",
-        "assignee_user_id": None,
-        "confirmer_user_id": None,
-        "wbs_item_id": None,
-        "risk_source_id": None,
-        "run_mode": str(trigger.run_mode),
-        "trigger_date": first_at.strftime("%Y-%m-%d"),
-        "trigger_time": first_at.strftime("%H:%M"),
-        "trigger_rule": trigger.describe(),
-        "trigger_interval_value": trigger.interval_value,
-        "trigger_interval_unit": str(trigger.interval_unit),
-        "cc": "",
-        "steps": [
-            {
-                "name": "发送群聊消息",
-                "node_type": "project_chat_message",
-                "owner_user_id": None,
-                "due_at": None,
-                "material": "",
-                "action": {
-                    "type": "project_chat_message",
-                    "channel_id": channel.id,
-                    "sender_agent_id": "dobby-task-engine",
-                    "sender_agent_name": "Dobby（任务引擎）",
-                    "mention_mode": mention_mode,
-                    "mentioned_user_ids": [],
-                    "content": content,
-                },
-            },
-        ],
-        "generated_by": "rules",
-        "generation_note": (
-            "Dobby 已识别为群聊发送动作，并生成 1 个可编辑的自动消息节点；"
-            "未创建 WBS 工程流程节点。"
-        ),
-    }
 
 
 # ── 责任制解析：把 Dobby 的 id 换成引擎要的具体人与工点 ────
@@ -401,6 +304,9 @@ def build_flow(
                 ),
             ).all(),
         )
+        if actor_user_id is not None:
+            # 系统管理员可能不在 ProjectMember 中，但仍是本次动作的合法发起人。
+            project_member_ids.add(actor_user_id)
         available_user_ids = project_member_ids
         if channel is not None and channel.channel_type != "project":
             available_user_ids = set(
@@ -443,8 +349,8 @@ def build_flow(
                 "action": {
                     "type": "project_chat_message",
                     "channel_id": channel.id if channel else None,
-                    "sender_agent_id": "dobby-task-engine",
-                    "sender_agent_name": "Dobby（任务引擎）",
+                    "sender_agent_id": TASK_MESSAGE_AGENT_ID,
+                    "sender_agent_name": TASK_MESSAGE_AGENT_NAME,
                     "mention_mode": payload.mention_mode,
                     "mentioned_user_ids": selected_user_ids,
                     "content": content,
@@ -615,6 +521,8 @@ def build_step_actions(
             ),
         ).all(),
     )
+    if actor_user_id is not None:
+        project_member_ids.add(actor_user_id)
 
     for index, step in enumerate(workflow_steps or []):
         if step.get("node_type") != "project_chat_message":
@@ -626,15 +534,6 @@ def build_step_actions(
         content = str(raw_action.get("content") or "").strip()
         if not content:
             raise ValueError(f"第 {index + 1} 个消息节点未填写消息内容")
-
-        sender_agent_id = str(
-            raw_action.get("sender_agent_id") or "dobby-task-engine",
-        ).strip()
-        sender_agent_name = str(
-            raw_action.get("sender_agent_name") or "Dobby",
-        ).strip()
-        if not sender_agent_id:
-            raise ValueError(f"第 {index + 1} 个消息节点未选择发送智能体")
 
         channel_id = raw_action.get("channel_id")
         try:
@@ -685,8 +584,8 @@ def build_step_actions(
         actions[str(index)] = {
             "type": "project_chat_message",
             "channel_id": channel.id,
-            "sender_agent_id": sender_agent_id[:128],
-            "sender_agent_name": sender_agent_name[:200] or "Dobby",
+            "sender_agent_id": TASK_MESSAGE_AGENT_ID,
+            "sender_agent_name": TASK_MESSAGE_AGENT_NAME,
             "mention_mode": mention_mode,
             "mentioned_user_ids": selected_user_ids,
             "content": content,

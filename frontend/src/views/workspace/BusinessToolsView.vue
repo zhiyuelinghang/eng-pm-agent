@@ -20,6 +20,7 @@
             :key="tool.id"
             type="button"
             :class="{ active: selectedToolId === tool.id }"
+            :disabled="submitting"
             @click="selectTool(tool.id)"
           >
             <span class="tool-list-icon"><n-icon :size="20"><component :is="tool.icon" /></n-icon></span>
@@ -46,13 +47,16 @@
 
         <div ref="threadViewport" class="tool-thread">
           <article v-for="item in activeToolMessages" :key="item.id" :class="['tool-message', item.role]">
-            <div class="tool-message-avatar" aria-hidden="true">{{ item.role === 'assistant' ? '管' : '我' }}</div>
+            <div class="tool-message-avatar" aria-hidden="true">
+              <n-icon v-if="item.role === 'assistant'" :size="17"><Robot /></n-icon>
+              <span v-else>我</span>
+            </div>
             <div class="tool-message-stack">
-              <span v-if="item.role === 'assistant'">{{ selectedTool.name }}</span>
               <div class="tool-message-bubble">
                 <AgentMessageContent
                   :content="item.content"
                   :runtime-trace="item.runtimeTrace"
+                  :confirmation-busy="submitting"
                   @confirm="confirmToolCall"
                 />
                 <div v-if="item.attachments?.length" class="tool-message-files">
@@ -67,12 +71,12 @@
           </article>
 
           <article v-if="activeStreamingTrace" class="tool-message assistant">
-            <div class="tool-message-avatar" aria-hidden="true">管</div>
+            <div class="tool-message-avatar" aria-hidden="true"><n-icon :size="17"><Robot /></n-icon></div>
             <div class="tool-message-stack">
-              <span>{{ selectedTool.name }}</span>
               <div class="tool-message-bubble runtime">
                 <AgentMessageContent
                   :runtime-trace="activeStreamingTrace"
+                  :confirmation-busy="submitting"
                   streaming
                   @confirm="confirmToolCall"
                 />
@@ -92,36 +96,43 @@
         </div>
 
         <form class="tool-composer" @submit.prevent="submitToolMessage">
-          <div class="tool-composer-entry">
-            <div v-if="selectedFiles.length" class="tool-file-queue" aria-label="待发送附件">
-              <span v-for="(file, index) in selectedFiles" :key="`${file.name}-${file.lastModified}`">
-                <n-icon :size="15"><FileText /></n-icon>
-                <b :title="file.name">{{ file.name }}</b>
-                <small>{{ formatFileSize(file.size) }}</small>
-                <button type="button" :aria-label="`移除附件 ${file.name}`" @click="removeFile(index)">×</button>
-              </span>
-            </div>
-            <div class="tool-composer-row">
-              <label class="tool-attach-button" title="添加工程资料或图片">
+          <ChatComposerSurface :busy="submitting" contained>
+            <template v-if="selectedFiles.length" #attachments>
+              <div class="tool-file-queue chat-composer-files" aria-label="待发送附件">
+                <span v-for="(file, index) in selectedFiles" :key="`${file.name}-${file.lastModified}`" class="chat-composer-file">
+                  <n-icon :size="15"><FileText /></n-icon>
+                  <b :title="file.name">{{ file.name }}</b>
+                  <small>{{ formatFileSize(file.size) }}</small>
+                  <button type="button" class="chat-composer-file-remove" :aria-label="`移除附件 ${file.name}`" @click="removeFile(index)">×</button>
+                </span>
+              </div>
+            </template>
+            <textarea
+              v-model="command"
+              class="chat-composer-input"
+              rows="1"
+              :placeholder="selectedTool.placeholder"
+              @keydown.enter.exact.prevent="submitToolMessage"
+            ></textarea>
+            <template #tools>
+              <label class="chat-composer-tool" title="添加工程资料或图片">
                 <input type="file" multiple @change="selectFiles">
-                <n-icon :size="19"><Paperclip /></n-icon>
-                <span>添加附件</span>
+                <n-icon :size="17"><Paperclip /></n-icon>
+                <span>附件</span>
               </label>
-              <textarea
-                v-model="command"
-                :placeholder="selectedTool.placeholder"
-                @keydown.enter.exact.prevent="submitToolMessage"
-              ></textarea>
-            </div>
-          </div>
-          <button v-if="submitting" class="tool-send-button stop" type="button" @click="stopToolMessage">
-            <n-icon :size="18"><PlayerStop /></n-icon>
-            停止
-          </button>
-          <button v-else class="tool-send-button" type="submit" :disabled="!selectedTool.id || !selectedTool.modelReady || (!command.trim() && !selectedFiles.length)">
-            <n-icon :size="18"><Send /></n-icon>
-            发送
-          </button>
+            </template>
+            <template #action>
+              <button v-if="submitting" class="chat-composer-action is-stop" type="button" :disabled="stopping" :aria-busy="stopping" @click="stopToolMessage">
+                <n-icon v-if="stopping" :size="17" class="tool-action-spinner"><Loader /></n-icon>
+                <n-icon v-else :size="17"><PlayerStop /></n-icon>
+                {{ stopping ? '正在停止…' : '停止' }}
+              </button>
+              <button v-else class="chat-composer-action" type="submit" :disabled="!selectedTool.id || !selectedTool.modelReady || (!command.trim() && !selectedFiles.length)">
+                <n-icon :size="17"><Send /></n-icon>
+                发送
+              </button>
+            </template>
+          </ChatComposerSurface>
         </form>
       </section>
     </section>
@@ -131,7 +142,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import { NIcon, useMessage } from 'naive-ui'
-import { ChartBar, CircleCheck, Database, FileText, Paperclip, PlayerStop, Robot, Route, Send, ShieldCheck } from '@vicons/tabler'
+import { ChartBar, CircleCheck, Database, FileText, Loader, Paperclip, PlayerStop, Robot, Route, Send, ShieldCheck } from '@vicons/tabler'
 import type { Component } from 'vue'
 import api, { type ApiEnvelope } from '@/api/client'
 import {
@@ -139,6 +150,7 @@ import {
   streamAgentConversationMessage,
 } from '@/api/agentStream'
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
+import ChatComposerSurface from '@/components/chat/ChatComposerSurface.vue'
 import { useAppStore } from '@/stores/app'
 import {
   applyAgentRuntimeEvents,
@@ -205,6 +217,7 @@ const selectedToolId = ref('')
 const command = ref('')
 const selectedFiles = ref<File[]>([])
 const submitting = ref(false)
+const stopping = ref(false)
 const catalogLoading = ref(false)
 const catalogError = ref('')
 const threadViewport = ref<HTMLElement | null>(null)
@@ -312,6 +325,7 @@ async function ensureConversation(agentId: string) {
 }
 
 function selectTool(agentId: string) {
+  if (submitting.value) return
   selectedToolId.value = agentId
   command.value = ''
   selectedFiles.value = []
@@ -356,6 +370,7 @@ async function submitToolMessage() {
     return
   }
   const files = [...selectedFiles.value]
+  stopping.value = false
   submitting.value = true
   try {
     for (const file of files) await store.uploadAttachment(file, `业务工具/${selectedTool.value.name}`)
@@ -405,16 +420,19 @@ async function submitToolMessage() {
     message.error(error?.response?.data?.detail || error?.message || '智能体处理失败，请检查 AgentScope 状态后重试。')
   } finally {
     submitting.value = false
+    stopping.value = false
   }
 }
 
 async function stopToolMessage() {
   const conversationId = conversationIds.value[selectedTool.value.id]
-  if (!conversationId) return
+  if (!conversationId || !submitting.value || stopping.value) return
+  stopping.value = true
   try {
     await api.post(`/agent-conversations/${conversationId}/interrupt`)
     message.info('已请求停止，正在等待智能体安全结束当前步骤。')
   } catch (error: any) {
+    stopping.value = false
     message.error(error?.response?.data?.detail || '停止智能体失败。')
   }
 }
@@ -428,6 +446,7 @@ async function confirmToolCall(
   const conversationId = conversationIds.value[agentId]
   if (!conversationId) return
   if (submitting.value) return
+  stopping.value = false
   submitting.value = true
   streamingTraces.value = {
     ...streamingTraces.value,
@@ -485,14 +504,20 @@ async function confirmToolCall(
       [agentId]: null,
     }
     submitting.value = false
+    stopping.value = false
   }
 }
 
 onMounted(loadCatalog)
 watch(() => store.currentProjectId, () => {
+  const hadDraft = Boolean(command.value.trim() || selectedFiles.value.length)
+  command.value = ''
+  selectedFiles.value = []
   conversationIds.value = {}
   toolMessages.value = {}
   streamingTraces.value = {}
+  stopping.value = false
+  if (hadDraft) message.info('项目已切换，未发送的文字和附件已清空，避免带入其他项目。')
   if (selectedToolId.value) void loadToolConversation(selectedToolId.value)
 })
 </script>
@@ -532,9 +557,10 @@ watch(() => store.currentProjectId, () => {
 .tool-list button::before { position: absolute; inset: 9px auto 9px 0; width: 3px; border-radius: 0 3px 3px 0; content: ''; background: transparent; }
 .tool-list button:hover { background: #f0f6f3; }
 .tool-list button:active { transform: scale(.99); }
+.tool-list button:disabled { opacity:.66; cursor:wait; transform:none; }
 .tool-list button.active { background: #e9f4f0; box-shadow: inset -1px 0 rgba(15, 118, 110, .12); }
 .tool-list button.active::before { background: #0f766e; }
-.tool-list button:focus-visible, .tool-composer button:focus-visible, .tool-composer textarea:focus-visible { outline: 2px solid #0f766e; outline-offset: -2px; }
+.tool-list button:focus-visible { outline: 2px solid #0f766e; outline-offset: -2px; }
 .tool-list-icon { display: grid; width: 40px; height: 40px; place-items: center; border: 1px solid #cfe1db; border-radius: 8px; color: #0f766e; background: #edf7f4; }
 .tool-list button.active .tool-list-icon { color: #fff; border-color: #0f766e; background: #0f766e; }
 .tool-list-copy { min-width: 0; }
@@ -560,7 +586,6 @@ watch(() => store.currentProjectId, () => {
 .tool-message.user .tool-message-avatar { grid-column: 2; color: #fff; background: #c95622; }
 .tool-message.user .tool-message-stack { grid-column: 1; grid-row: 1; }
 .tool-message-stack { min-width: 0; }
-.tool-message-stack > span { display: block; margin: 0 0 5px 2px; color: #c45528; font-size: 12px; font-weight: 800; }
 .tool-message-bubble { padding: 13px 15px; border: 1px solid #dce7e3; border-radius: 5px 10px 10px; background: #fff; box-shadow: 0 8px 22px rgba(26, 55, 52, .055); }
 .tool-message.user .tool-message-bubble { border-radius: 10px 5px 10px 10px; border-color: #efd5c8; background: #fff8f4; }
 .tool-message-bubble p { max-width: 72ch; margin: 0; color: #385651; font-size: 14px; line-height: 1.65; white-space: pre-line; }
@@ -576,27 +601,14 @@ watch(() => store.currentProjectId, () => {
 .tool-starters { display: flex; max-width: 650px; margin-top: 19px; flex-wrap: wrap; justify-content: center; gap: 7px; }
 .tool-starters button { padding: 7px 9px; border: 1px solid #c9ddd7; border-radius: 6px; color: #0e6c65; background: #fff; font: inherit; font-size: 12px; font-weight: 750; cursor: pointer; transition: transform .18s ease, border-color .18s ease, background .18s ease; }
 .tool-starters button:hover { transform: translateY(-1px); border-color: #0f766e; background: #f2f9f6; }
-.tool-composer { display: grid; grid-template-columns: minmax(0, 1fr) 86px; gap: 8px; padding: 12px 16px 15px; border-top: 1px solid #e1e9e6; background: rgba(252, 253, 253, .96); }
-.tool-composer-entry { min-width: 0; padding: 6px 8px 7px; border: 1px solid #cddbd7; border-radius: 7px; background: #fff; transition: border-color .18s ease, box-shadow .18s ease; }
-.tool-composer-entry:focus-within { border-color: #0f766e; box-shadow: 0 0 0 3px rgba(15, 118, 110, .09); }
-.tool-file-queue { margin: 0 0 6px; padding-bottom: 6px; border-bottom: 1px solid #e6eeeb; }
-.tool-file-queue button { display: grid; width: 20px; height: 20px; place-items: center; border: 0; border-radius: 4px; color: #78908a; background: transparent; font: inherit; cursor: pointer; }
-.tool-file-queue button:hover { color: #b94623; background: #fae8e0; }
-.tool-composer-row { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: end; gap: 8px; }
-.tool-attach-button { display: inline-flex; min-height: 38px; align-items: center; gap: 6px; padding: 0 9px; border-radius: 5px; color: #58716b; background: #f0f5f3; font-size: 12px; font-weight: 750; cursor: pointer; }
-.tool-attach-button:hover { color: #0f766e; background: #e5f1ed; }
-.tool-attach-button input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
-.tool-composer textarea { width: 100%; min-height: 38px; max-height: 92px; box-sizing: border-box; padding: 8px 5px; border: 0; outline: 0; color: #294844; background: transparent; font: inherit; font-size: 14px; line-height: 1.5; resize: none; }
-.tool-send-button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 0; border-radius: 7px; color: #fff; background: #c95622; font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; transition: transform .18s ease, background .18s ease, box-shadow .18s ease; }
-.tool-send-button:hover { transform: translateY(-1px); background: #b94a1b; box-shadow: 0 9px 18px rgba(201, 86, 34, .18); }
-.tool-send-button.stop { background:#3e5f5a; }
-.tool-send-button.stop:hover { background:#304f4a; box-shadow:0 9px 18px rgba(48,79,74,.16); }
-.tool-send-button:active { transform: translateY(1px) scale(.98); }
-.tool-send-button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
+.tool-composer { padding: 16px 18px 18px; border-top: 0; background: linear-gradient(180deg, rgba(252, 253, 253, 0), rgba(252, 253, 253, .98) 34%); }
+.tool-action-spinner { animation:tool-action-spin .75s linear infinite; }
+@keyframes tool-action-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .tool-action-spinner { animation:none; } }
 @media (max-width: 980px) {
   .business-tools-page { height: auto; min-height: calc(100dvh - var(--header-height, 56px)); overflow: visible; }
   .business-tools-shell { min-height: 820px; grid-template-columns: minmax(240px, 34%) minmax(0, 1fr); }
-  .tool-message-bubble p, .tool-composer textarea { font-size: 13px; }
+  .tool-message-bubble p { font-size: 13px; }
 }
 @media (max-width: 720px) {
   .business-tools-page { padding: 10px; }
@@ -613,7 +625,6 @@ watch(() => store.currentProjectId, () => {
   .active-tool-copy p { white-space: normal; }
   .tool-thread { padding-inline: 12px; }
   .tool-empty-state { width: 100%; min-height: 320px; padding-inline: 18px; }
-  .tool-composer { grid-template-columns: 1fr; }
-  .tool-send-button { min-height: 42px; }
+  .tool-composer { padding-inline: 12px; }
 }
 </style>

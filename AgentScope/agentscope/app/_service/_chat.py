@@ -40,7 +40,6 @@ from ..workspace_manager import WorkspaceManagerBase
 from ..middleware import (
     InboxMiddleware,
     StateChangeMiddleware,
-    ToolOffloadMiddleware,
 )
 from ...middleware import TTSMiddleware, RAGMiddleware
 from ...rag import KnowledgeBase
@@ -424,10 +423,12 @@ class ChatService:
 
         # ----------------------------------------------------------------
         # 2. Middlewares — framework-supplied first, then caller extras.
-        # Background-tool completions deliver their results via
-        # ``message_bus.inbox_push + enqueue_wakeup``, so the dispatcher
-        # (any process) wakes an idle session — no in-process retrigger
-        # plumbing is needed here.
+        #
+        # Tool calls intentionally stay inside the active chat run. The
+        # platform already exposes an explicit session cancel action, so an
+        # arbitrary elapsed-time threshold must not turn a live tool call
+        # into a detached background task and prematurely close the agent's
+        # reasoning loop.
         # ----------------------------------------------------------------
         middlewares: list = [
             InboxMiddleware(self._message_bus),
@@ -435,12 +436,6 @@ class ChatService:
                 message_bus=self._message_bus,
                 session_id=session_id,
                 storage=self._storage,
-                user_id=user_id,
-                agent_id=agent_id,
-            ),
-            ToolOffloadMiddleware(
-                bg_manager=self._background_task_manager,
-                message_bus=self._message_bus,
                 user_id=user_id,
                 agent_id=agent_id,
             ),
@@ -540,6 +535,9 @@ class ChatService:
             sub_agent_templates=self._sub_agent_templates,
             mcp_registry_manager=self._mcp_registry_manager,
             skill_registry_manager=self._skill_registry_manager,
+            input_has_attachments=self._attachment_pipeline.has_attachments(
+                input_msg,
+            ),
         )
 
         # ----------------------------------------------------------------

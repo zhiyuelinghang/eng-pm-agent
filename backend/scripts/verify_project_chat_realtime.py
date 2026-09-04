@@ -1,4 +1,4 @@
-"""Verify the real project-chat API and PostgreSQL -> Centrifugo delivery path."""
+"""Verify login-scoped realtime plus dynamic project subscriptions end to end."""
 
 from __future__ import annotations
 
@@ -42,6 +42,34 @@ def _wait_for_connect(websocket) -> None:
     raise TimeoutError("Centrifugo did not confirm the connection")
 
 
+def _wait_for_subscribe(websocket, command_id: int) -> None:
+    for _ in range(10):
+        for frame in _frames(websocket.recv(timeout=5)):
+            if frame.get("id") != command_id:
+                continue
+            if frame.get("error"):
+                raise RuntimeError(
+                    f"Centrifugo rejected the subscription: {frame['error']}",
+                )
+            if frame.get("subscribe") is not None:
+                return
+    raise TimeoutError("Centrifugo did not confirm the subscription")
+
+
+def _wait_for_unsubscribe(websocket, command_id: int) -> None:
+    for _ in range(10):
+        for frame in _frames(websocket.recv(timeout=5)):
+            if frame.get("id") != command_id:
+                continue
+            if frame.get("error"):
+                raise RuntimeError(
+                    f"Centrifugo rejected the unsubscribe: {frame['error']}",
+                )
+            if frame.get("unsubscribe") is not None:
+                return
+    raise TimeoutError("Centrifugo did not confirm the unsubscribe")
+
+
 def _wait_for_message(websocket, message_id: int) -> None:
     for _ in range(20):
         for frame in _frames(websocket.recv(timeout=5)):
@@ -62,18 +90,20 @@ def _wait_for_message(websocket, message_id: int) -> None:
 
 def main() -> int:
     suffix = uuid4().hex[:10]
-    project_id: int | None = None
+    project_ids: list[int] = []
     with SessionLocal() as db:
         admin = db.scalar(
             select(User).where(User.role == "admin").order_by(User.id.asc()),
         )
         if admin is None:
             raise RuntimeError("No platform administrator is available for verification")
-        project = Project(name=f"__chat_realtime_verification_{suffix}")
-        db.add(project)
+        projects = [
+            Project(name=f"__chat_realtime_verification_{suffix}_{index}")
+            for index in (1, 2)
+        ]
+        db.add_all(projects)
         db.commit()
-        db.refresh(project)
-        project_id = project.id
+        project_ids = [project.id for project in projects]
         access_token = create_access_token(admin.id, admin.role)
 
     try:
@@ -83,17 +113,36 @@ def main() -> int:
             headers=headers,
             timeout=10,
         ) as client:
-            channel_response = client.get(f"/projects/{project_id}/chat/channels")
-            channel_response.raise_for_status()
-            channel = channel_response.json()["data"][0]
-
-            token_response = client.get(
-                f"/projects/{project_id}/chat/realtime-token",
-            )
+            token_response = client.get("/chat/realtime-token")
             token_response.raise_for_status()
             realtime = token_response.json()["data"]
             if not realtime["enabled"] or not realtime["token"]:
                 raise RuntimeError("The backend did not enable the realtime token")
+
+            project_access: list[tuple[dict[str, object], dict[str, object]]] = []
+            for project_id in project_ids:
+                channel_response = client.get(
+                    f"/projects/{project_id}/chat/channels",
+                )
+                channel_response.raise_for_status()
+                channel = channel_response.json()["data"][0]
+                subscription_response = client.get(
+                    f"/projects/{project_id}/chat/realtime-subscriptions",
+                )
+                subscription_response.raise_for_status()
+                subscriptions = subscription_response.json()["data"][
+                    "subscriptions"
+                ]
+                channel_subscription = next(
+                    item
+                    for item in subscriptions
+                    if item["channel"].endswith(f":channel_{channel['id']}")
+                )
+                if not channel_subscription["token"]:
+                    raise RuntimeError(
+                        "The backend did not issue a subscription token",
+                    )
+                project_access.append((channel, channel_subscription))
 
             with connect(
                 realtime["ws_url"],
@@ -112,28 +161,60 @@ def main() -> int:
                     ),
                 )
                 _wait_for_connect(websocket)
+                previous_subscription: dict[str, object] | None = None
+                command_id = 2
+                for channel, channel_subscription in project_access:
+                    if previous_subscription is not None:
+                        websocket.send(
+                            json.dumps(
+                                {
+                                    "id": command_id,
+                                    "unsubscribe": {
+                                        "channel": previous_subscription["channel"],
+                                    },
+                                },
+                            ),
+                        )
+                        _wait_for_unsubscribe(websocket, command_id)
+                        command_id += 1
 
-                content = f"realtime-verification-{suffix}"
-                message_response = client.post(
-                    f"/chat/channels/{channel['id']}/messages",
-                    json={
-                        "content": content,
-                        "client_message_id": f"verify-{uuid4().hex}",
-                    },
-                )
-                message_response.raise_for_status()
-                created = message_response.json()["data"]
-                _wait_for_message(websocket, int(created["id"]))
+                    websocket.send(
+                        json.dumps(
+                            {
+                                "id": command_id,
+                                "subscribe": {
+                                    "channel": channel_subscription["channel"],
+                                    "token": channel_subscription["token"],
+                                },
+                            },
+                        ),
+                    )
+                    _wait_for_subscribe(websocket, command_id)
+                    command_id += 1
+
+                    content = f"realtime-verification-{suffix}-{channel['id']}"
+                    message_response = client.post(
+                        f"/chat/channels/{channel['id']}/messages",
+                        json={
+                            "content": content,
+                            "client_message_id": f"verify-{uuid4().hex}",
+                        },
+                    )
+                    message_response.raise_for_status()
+                    created = message_response.json()["data"]
+                    _wait_for_message(websocket, int(created["id"]))
+                    previous_subscription = channel_subscription
 
         print("PROJECT_CHAT_REALTIME_OK")
         return 0
     finally:
-        if project_id is not None:
+        if project_ids:
             with SessionLocal() as db:
-                project = db.get(Project, project_id)
-                if project is not None:
-                    db.delete(project)
-                    db.commit()
+                for project_id in project_ids:
+                    project = db.get(Project, project_id)
+                    if project is not None:
+                        db.delete(project)
+                db.commit()
 
 
 if __name__ == "__main__":

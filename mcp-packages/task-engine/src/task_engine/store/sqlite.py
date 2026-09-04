@@ -510,6 +510,7 @@ class Store:
         confirmer: str | None = None,
         site: str | None = None,
         category: str | None = None,
+        project_id: str | int | None = None,
         open_only: bool = False,
         limit: int = 50,
         offset: int = 0,
@@ -532,6 +533,11 @@ class Store:
         if category:
             clauses.append("t.category = ?")
             params.append(category)
+        if project_id is not None:
+            clauses.append(
+                "CAST(json_extract(t.scope_json, '$.project_id') AS TEXT) = ?",
+            )
+            params.append(str(project_id))
         if confirmer:
             clauses.append("t.confirmer_ref = ?")
             params.append(confirmer)

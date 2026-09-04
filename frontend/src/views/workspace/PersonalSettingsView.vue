@@ -24,12 +24,12 @@
             </header>
             <form class="settings-form account-form" @submit.prevent="saveProfile">
               <label>登录账号<input :value="profile.username" disabled></label>
-              <label>显示名称<input v-model.trim="profile.real_name" required maxlength="100" placeholder="请输入显示名称"></label>
-              <label>岗位 / 职务<input v-model.trim="profile.title" maxlength="100" placeholder="例如：项目现场负责人"></label>
-              <label>所属单位<input v-model.trim="profile.org_name" maxlength="200" placeholder="请输入所属单位"></label>
-              <label>联系电话<input v-model.trim="profile.phone" maxlength="50" inputmode="tel" placeholder="请输入联系电话"></label>
-              <label>邮箱地址<input v-model.trim="profile.email" maxlength="200" type="email" placeholder="用于接收通知与报告"></label>
-              <footer class="form-actions"><span>{{ profileUpdatedAt }}</span><button type="submit" class="primary-action" :disabled="profileSaving"><n-icon :size="17"><DeviceFloppy /></n-icon>{{ profileSaving ? '正在保存…' : '保存个人资料' }}</button></footer>
+              <label>显示名称<input v-model.trim="profile.real_name" required maxlength="100" :disabled="profileSaving" placeholder="请输入显示名称"></label>
+              <label>岗位 / 职务<input v-model.trim="profile.title" maxlength="100" :disabled="profileSaving" placeholder="例如：项目现场负责人"></label>
+              <label>所属单位<input v-model.trim="profile.org_name" maxlength="200" :disabled="profileSaving" placeholder="请输入所属单位"></label>
+              <label>联系电话<input v-model.trim="profile.phone" maxlength="50" inputmode="tel" :disabled="profileSaving" placeholder="请输入联系电话"></label>
+              <label>邮箱地址<input v-model.trim="profile.email" maxlength="200" type="email" :disabled="profileSaving" placeholder="用于接收通知与报告"></label>
+              <footer class="form-actions"><span>{{ profileUpdatedAt }}</span><button type="submit" class="primary-action" :disabled="profileSaving" :aria-busy="profileSaving"><n-icon :size="17" :class="{ 'settings-action-spinner': profileSaving }"><Loader v-if="profileSaving" /><DeviceFloppy v-else /></n-icon>{{ profileSaving ? '正在保存…' : '保存个人资料' }}</button></footer>
             </form>
           </section>
 
@@ -39,11 +39,11 @@
               <em class="security-badge"><n-icon :size="15"><ShieldLock /></n-icon>账号受保护</em>
             </header>
             <form class="settings-form password-form" @submit.prevent="changePassword">
-              <label>当前密码<input v-model="passwordForm.current_password" required type="password" autocomplete="current-password" placeholder="输入当前登录密码"></label>
-              <label>新密码<input v-model="passwordForm.new_password" required minlength="8" type="password" autocomplete="new-password" placeholder="至少 8 位字符"></label>
-              <label>确认新密码<input v-model="passwordForm.confirm_password" required minlength="8" type="password" autocomplete="new-password" placeholder="再次输入新密码"></label>
+              <label>当前密码<input v-model="passwordForm.current_password" required type="password" autocomplete="current-password" :disabled="passwordSaving" placeholder="输入当前登录密码"></label>
+              <label>新密码<input v-model="passwordForm.new_password" required minlength="8" type="password" autocomplete="new-password" :disabled="passwordSaving" placeholder="至少 8 位字符"></label>
+              <label>确认新密码<input v-model="passwordForm.confirm_password" required minlength="8" type="password" autocomplete="new-password" :disabled="passwordSaving" placeholder="再次输入新密码"></label>
               <div class="password-guidance"><n-icon :size="18"><Key /></n-icon><div><strong>建议使用不重复的强密码</strong><span>至少 8 位，建议同时包含字母、数字和符号。</span></div></div>
-              <footer class="form-actions"><span>平台不会以明文保存密码。</span><button type="submit" class="primary-action" :disabled="passwordSaving"><n-icon :size="17"><ShieldLock /></n-icon>{{ passwordSaving ? '正在更新…' : '更新密码' }}</button></footer>
+              <footer class="form-actions"><span>平台不会以明文保存密码。</span><button type="submit" class="primary-action" :disabled="passwordSaving" :aria-busy="passwordSaving"><n-icon :size="17" :class="{ 'settings-action-spinner': passwordSaving }"><Loader v-if="passwordSaving" /><ShieldLock v-else /></n-icon>{{ passwordSaving ? '正在更新…' : '更新密码' }}</button></footer>
             </form>
           </section>
 
@@ -53,11 +53,11 @@
               <em :class="{ configured: activeConnector.configured }">{{ activeConnector.configured ? '已配置' : '尚未配置' }}</em>
             </header>
             <form class="settings-form connector-form" @submit.prevent="saveConnector">
-              <label v-if="activeConnector.key === 'platform'">平台类型<select v-model="activeConnector.platformType"><option>监测平台</option><option>项目管理平台</option><option>资料管理平台</option><option>质量安全检查平台</option></select></label>
-              <label>{{ activeConnector.accountLabel }}<input v-model.trim="activeConnector.account" maxlength="200" :placeholder="activeConnector.accountPlaceholder"></label>
-              <label>登录密码 / 授权码<input v-model="activeConnector.secret" type="password" autocomplete="new-password" :placeholder="activeConnector.hasSecret ? '留空则继续使用已保存的凭据' : '输入密码或授权码'"></label>
+              <label v-if="activeConnector.key === 'platform'">平台类型<select v-model="activeConnector.platformType" :disabled="connectorBusy"><option>监测平台</option><option>项目管理平台</option><option>资料管理平台</option><option>质量安全检查平台</option></select></label>
+              <label>{{ activeConnector.accountLabel }}<input v-model.trim="activeConnector.account" maxlength="200" :disabled="connectorBusy" :placeholder="activeConnector.accountPlaceholder"></label>
+              <label>登录密码 / 授权码<input v-model="activeConnector.secret" type="password" autocomplete="new-password" :disabled="connectorBusy" :placeholder="activeConnector.hasSecret ? '留空则继续使用已保存的凭据' : '输入密码或授权码'"></label>
               <div class="credential-note"><n-icon :size="17"><ShieldLock /></n-icon><p><strong>凭据保护</strong><span>账号标识保存在平台数据库，密码或授权码仅以服务端密文保存，页面不会回显。</span></p></div>
-              <footer class="form-actions"><span>{{ activeConnector.updatedAt ? `更新于 ${activeConnector.updatedAt}` : '尚未保存连接信息' }}</span><div class="connector-action-buttons"><button v-if="activeConnector.configured" type="button" class="secondary-action danger" :disabled="connectorSaving" @click="clearConnector">清除配置</button><button type="submit" class="primary-action" :disabled="connectorSaving || connectorLoading"><n-icon :size="17"><Link /></n-icon>{{ connectorSaving ? '正在保存…' : `保存${activeConnector.label}` }}</button></div></footer>
+              <footer class="form-actions"><span>{{ activeConnector.updatedAt ? `更新于 ${activeConnector.updatedAt}` : '尚未保存连接信息' }}</span><div class="connector-action-buttons"><button v-if="activeConnector.configured" type="button" class="secondary-action danger" :disabled="connectorBusy" :aria-busy="connectorClearing" @click="clearConnector"><n-icon v-if="connectorClearing" :size="16" class="settings-action-spinner"><Loader /></n-icon>{{ connectorClearing ? '正在清除…' : '清除配置' }}</button><button type="submit" class="primary-action" :disabled="connectorBusy" :aria-busy="connectorSaving"><n-icon :size="17" :class="{ 'settings-action-spinner': connectorSaving }"><Loader v-if="connectorSaving" /><Link v-else /></n-icon>{{ connectorSaving ? '正在保存…' : `保存${activeConnector.label}` }}</button></div></footer>
             </form>
           </section>
         </section>
@@ -69,7 +69,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { NIcon, useMessage } from 'naive-ui'
-import { Building, DeviceFloppy, Key, Link, Mail, MessageCircle, ShieldLock, UserCircle } from '@vicons/tabler'
+import { Building, DeviceFloppy, Key, Link, Loader, Mail, MessageCircle, ShieldLock, UserCircle } from '@vicons/tabler'
 import api, { type ApiEnvelope } from '@/api/client'
 
 type ConnectorKey = 'platform' | 'mail' | 'wecom' | 'feishu' | 'dingtalk'
@@ -107,6 +107,7 @@ const profileSaving = ref(false)
 const passwordSaving = ref(false)
 const connectorLoading = ref(false)
 const connectorSaving = ref(false)
+const connectorClearing = ref(false)
 const currentUserName = sessionStorage.getItem('current_user_name') || '当前用户'
 const profile = reactive<UserProfile>({ id: null, username: '', real_name: currentUserName, phone: '', email: '', title: '', org_name: '', role: '', updated_at: '' })
 const passwordForm = reactive({ current_password: '', new_password: '', confirm_password: '' })
@@ -129,9 +130,10 @@ const settingSections = computed(() => [
   })),
 ])
 
-const roleLabel = computed(() => ({ admin: '管理员', user: '普通用户' }[profile.role] || '普通用户'))
+const roleLabel = computed(() => ({ admin: '管理人员', user: '普通用户' }[profile.role] || '普通用户'))
 const profileUpdatedAt = computed(() => profile.updated_at ? `资料更新于 ${formatTime(profile.updated_at)}` : '个人资料尚未更新')
 const activeConnector = computed(() => connectors.find(item => item.key === activeSection.value) || null)
+const connectorBusy = computed(() => connectorLoading.value || connectorSaving.value || connectorClearing.value)
 
 type ApiConnectorConfig = {
   connector_type: ConnectorKey
@@ -166,6 +168,7 @@ async function loadProfile() {
   }
 }
 async function saveProfile() {
+  if (profileSaving.value) return
   if (!profile.real_name.trim()) {
     message.warning('显示名称不能为空。')
     return
@@ -189,6 +192,7 @@ async function saveProfile() {
   }
 }
 async function changePassword() {
+  if (passwordSaving.value) return
   if (passwordForm.new_password.length < 8) {
     message.warning('新密码至少需要 8 位字符。')
     return
@@ -238,6 +242,7 @@ async function loadConnectorSettings() {
   }
 }
 async function saveConnector() {
+  if (connectorBusy.value) return
   const connector = activeConnector.value
   if (!connector) return
   if (!connector.account.trim()) {
@@ -266,9 +271,10 @@ async function saveConnector() {
   }
 }
 async function clearConnector() {
+  if (connectorBusy.value) return
   const connector = activeConnector.value
   if (!connector || !connector.configured) return
-  connectorSaving.value = true
+  connectorClearing.value = true
   try {
     await api.delete(`/me/connectors/${connector.key}`)
     connector.account = ''
@@ -281,7 +287,7 @@ async function clearConnector() {
   } catch (error: any) {
     message.error(error.response?.data?.detail || '个人连接配置清除失败。')
   } finally {
-    connectorSaving.value = false
+    connectorClearing.value = false
   }
 }
 
@@ -306,7 +312,10 @@ watch(activeSection, async () => {
 .password-form { max-width: 620px; }.password-guidance { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 10px; padding: 12px; border: 1px solid #d4e5e0; border-radius: 8px; color: #0f766e; background: #f0f7f5; }.password-guidance > div { display: grid; gap: 3px; }.password-guidance strong { color: #284f49; font-size: 13px; }.password-guidance span { color: #68807b; font-size: 12px; }.password-form .form-actions { grid-column: auto; }
 .connector-settings-section { align-content: start; }
 .connector-form { width: min(760px, 100%); }.credential-note { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 9px; padding: 11px; border-radius: 8px; color: #0f766e; background: #eef6f3; }.credential-note > p { display: grid; gap: 3px; margin: 0; }.credential-note strong { color: #315a54; font-size: 12px; }.credential-note span { color: #70837f; font-size: 12px; line-height: 1.5; }.connector-form .form-actions { grid-column: auto; margin-top: 4px; }
-.connector-action-buttons { display: flex; align-items: center; gap: 8px; }.secondary-action { min-height: 40px; border: 1px solid #cad9d5; border-radius: 7px; padding: 8px 12px; color: #4c6762; background: #fff; font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; }.secondary-action.danger { color: #b54832; border-color: #e6c7c0; }.secondary-action:disabled { opacity: .55; cursor: not-allowed; }
+.connector-action-buttons { display: flex; align-items: center; gap: 8px; }.secondary-action { display:inline-flex; min-height: 40px; align-items:center; justify-content:center; gap:6px; border: 1px solid #cad9d5; border-radius: 7px; padding: 8px 12px; color: #4c6762; background: #fff; font: inherit; font-size: 13px; font-weight: 750; cursor: pointer; }.secondary-action.danger { color: #b54832; border-color: #e6c7c0; }.secondary-action:disabled { opacity: .55; cursor: not-allowed; }
+.settings-action-spinner { animation:settings-action-spin .75s linear infinite; }
+@keyframes settings-action-spin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce) { .settings-action-spinner { animation:none; } }
 button:focus-visible,input:focus-visible,select:focus-visible { outline: 2px solid rgba(15,118,110,.45); outline-offset: 2px; }
 @media (max-width: 900px) { .personal-settings-layout { grid-template-columns: 210px minmax(0,1fr); }.settings-main { padding: 20px; } }
 @media (max-width: 720px) { .personal-settings-page { height: auto; min-height: 100%; overflow: visible; padding: 10px; }.personal-settings-shell { height: auto; min-height: calc(100dvh - var(--header-height,56px) - 20px); overflow: visible; }.personal-settings-layout { display: block; overflow: visible; }.settings-rail { border-right: 0; border-bottom: 1px solid #e0e8e5; }.settings-rail nav { grid-template-columns: repeat(2, minmax(0,1fr)); overflow: visible; }.settings-rail nav button { grid-template-columns: auto; justify-items: center; text-align: center; }.settings-rail nav button small,.rail-profile,.rail-note { display: none; }.settings-main { overflow: visible; padding: 18px; }.account-form { grid-template-columns: 1fr; }.section-head { flex-direction: column; }.form-actions { align-items: stretch; flex-direction: column; }.primary-action { width: 100%; } }

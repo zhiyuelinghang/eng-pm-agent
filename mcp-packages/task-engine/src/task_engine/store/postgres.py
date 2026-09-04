@@ -691,6 +691,7 @@ class PostgresStore:
         confirmer: str | None = None,
         site: str | None = None,
         category: str | None = None,
+        project_id: str | int | None = None,
         open_only: bool = False,
         limit: int = 50,
         offset: int = 0,
@@ -705,6 +706,9 @@ class PostgresStore:
         if category:
             clauses.append("t.category = :category")
             params["category"] = category
+        if project_id is not None:
+            clauses.append("t.scope_json ->> 'project_id' = :project_id")
+            params["project_id"] = str(project_id)
         if confirmer:
             clauses.append("t.confirmer_ref = :confirmer")
             params["confirmer"] = confirmer

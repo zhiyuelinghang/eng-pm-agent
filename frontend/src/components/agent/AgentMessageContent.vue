@@ -67,8 +67,8 @@
               <strong>需要人工确认</strong>
               <span>确认结果会安全转发给发起请求的协同智能体。</span>
             </div>
-            <button type="button" class="deny" @click.prevent="$emit('confirm', entry.reply_id, toolCall, false)">拒绝</button>
-            <button type="button" class="allow" @click.prevent="$emit('confirm', entry.reply_id, toolCall, true)">允许本次</button>
+            <button type="button" class="deny" :disabled="confirmationBusy" @click.prevent="confirmToolCall(entry.reply_id, toolCall, false)"><n-icon v-if="isPendingConfirmation(entry.reply_id, toolCall.id, false)" :size="14"><Loader class="spin" /></n-icon>{{ isPendingConfirmation(entry.reply_id, toolCall.id, false) ? '正在拒绝…' : '拒绝' }}</button>
+            <button type="button" class="allow" :disabled="confirmationBusy" @click.prevent="confirmToolCall(entry.reply_id, toolCall, true)"><n-icon v-if="isPendingConfirmation(entry.reply_id, toolCall.id, true)" :size="14"><Loader class="spin" /></n-icon>{{ isPendingConfirmation(entry.reply_id, toolCall.id, true) ? '正在允许…' : '允许本次' }}</button>
           </div>
         </details>
       </article>
@@ -210,8 +210,8 @@
                 <strong>需要人工确认</strong>
                 <span>请核对工具和参数后决定是否继续。</span>
               </div>
-              <button type="button" class="deny" @click.prevent="$emit('confirm', runtimeMessage.id, block, false)">拒绝</button>
-              <button type="button" class="allow" @click.prevent="$emit('confirm', runtimeMessage.id, block, true)">允许本次</button>
+              <button type="button" class="deny" :disabled="confirmationBusy" @click.prevent="confirmToolCall(runtimeMessage.id, block, false)"><n-icon v-if="isPendingConfirmation(runtimeMessage.id, block.id, false)" :size="14"><Loader class="spin" /></n-icon>{{ isPendingConfirmation(runtimeMessage.id, block.id, false) ? '正在拒绝…' : '拒绝' }}</button>
+              <button type="button" class="allow" :disabled="confirmationBusy" @click.prevent="confirmToolCall(runtimeMessage.id, block, true)"><n-icon v-if="isPendingConfirmation(runtimeMessage.id, block.id, true)" :size="14"><Loader class="spin" /></n-icon>{{ isPendingConfirmation(runtimeMessage.id, block.id, true) ? '正在允许…' : '允许本次' }}</button>
             </div>
           </details>
 
@@ -275,15 +275,15 @@
 
     <div v-else class="agent-markdown" v-html="renderMarkdown(content)"></div>
 
-    <div v-if="streaming && !runtimeTrace?.messages.length" class="agent-starting">
+    <div v-if="streaming && !runtimeTrace?.messages.length" class="agent-starting" role="status" aria-live="polite">
       <span><i></i><i></i><i></i></span>
-      正在建立智能体执行上下文…
+      {{ startingLabel }}
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import {
   AlertTriangle,
@@ -331,16 +331,41 @@ const props = withDefaults(defineProps<{
   runtimeTrace?: AgentRuntimeTrace | null
   streaming?: boolean
   showPlan?: boolean
+  startingLabel?: string
+  confirmationBusy?: boolean
 }>(), {
   content: '',
   runtimeTrace: null,
   streaming: false,
   showPlan: true,
+  startingLabel: '正在分析',
+  confirmationBusy: false,
 })
 
-defineEmits<{
+const emit = defineEmits<{
   confirm: [replyId: string, toolCall: AgentToolCallBlock, confirmed: boolean]
 }>()
+
+const pendingConfirmationKey = ref('')
+const confirmationBusy = computed(() => props.confirmationBusy || Boolean(pendingConfirmationKey.value))
+
+function confirmationKey(replyId: string, toolCallId: string, confirmed: boolean) {
+  return `${replyId}:${toolCallId}:${confirmed ? 'allow' : 'deny'}`
+}
+
+function isPendingConfirmation(replyId: string, toolCallId: string, confirmed: boolean) {
+  return pendingConfirmationKey.value === confirmationKey(replyId, toolCallId, confirmed)
+}
+
+function confirmToolCall(replyId: string, toolCall: AgentToolCallBlock, confirmed: boolean) {
+  if (confirmationBusy.value) return
+  pendingConfirmationKey.value = confirmationKey(replyId, toolCall.id, confirmed)
+  emit('confirm', replyId, toolCall, confirmed)
+}
+
+watch(() => props.confirmationBusy, value => {
+  if (!value) pendingConfirmationKey.value = ''
+})
 
 const markdown = new MarkdownIt({
   html: false,
@@ -810,7 +835,7 @@ function formatNumber(value: number) {
 .agent-tool-detail pre { max-height:240px; margin:0; overflow:auto; border:1px solid #d9e4e1; border-radius:6px; padding:9px 10px; color:#34534e; background:#fff; font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
 .agent-tool-detail pre.error { border-color:#efd4ca; color:#9e452d; background:#fff8f5; }.agent-tool-waiting { margin:0; color:#7c908b; font-size:12px; }
 .agent-confirm { display:flex; align-items:center; gap:7px; border-top:1px solid #efdcb9; padding:10px; background:#fffaf0; }.agent-confirm>div { display:grid; flex:1; gap:2px; }.agent-confirm strong { color:#84520b; font-size:12px; }.agent-confirm span { color:#967549; font-size:12px; }
-.agent-confirm button { border-radius:5px; padding:6px 9px; font:inherit; font-size:12px; font-weight:750; cursor:pointer; }.agent-confirm .deny { border:1px solid #d9cbb7; color:#725f45; background:#fff; }.agent-confirm .allow { border:1px solid #177b6d; color:#fff; background:#177b6d; }
+.agent-confirm button { display:inline-flex; align-items:center; justify-content:center; gap:5px; border-radius:5px; padding:6px 9px; font:inherit; font-size:12px; font-weight:750; cursor:pointer; }.agent-confirm button:disabled { opacity:.58; cursor:wait; }.agent-confirm .deny { border:1px solid #d9cbb7; color:#725f45; background:#fff; }.agent-confirm .allow { border:1px solid #177b6d; color:#fff; background:#177b6d; }
 .agent-hint summary { justify-content:flex-start; }.agent-hint summary span { flex:1; }.agent-hint>.agent-markdown,.agent-hint-blocks { border-top:1px solid #e1ebe8; padding:10px 12px; background:#fff; }.agent-hint-blocks { display:grid; gap:8px; }.agent-hint-blocks img { max-width:100%; max-height:300px; border-radius:6px; }
 .agent-media { margin:0; }.agent-media img { max-width:100%; max-height:360px; border-radius:8px; object-fit:contain; }.agent-media a { color:#0d7469; font-size:12px; }
 .agent-runtime-error { display:flex; align-items:flex-start; gap:8px; border:1px solid #efcfc5; border-radius:7px; padding:9px 10px; color:#a23f25; background:#fff5f1; }.agent-runtime-error>div { display:grid; gap:2px; }.agent-runtime-error strong { font-size:12px; }.agent-runtime-error span { font-size:12px; line-height:1.5; }
@@ -824,7 +849,7 @@ function formatNumber(value: number) {
 .agent-runtime-metrics { display:flex; min-width:0; flex:0 1 auto; align-items:center; gap:10px; margin-left:auto; font-variant-numeric:tabular-nums; }
 .agent-runtime-model { display:block !important; max-width:160px; overflow:hidden; text-overflow:ellipsis; }
 .agent-runtime-usage { flex:0 0 auto; }
-.agent-starting { display:flex; align-items:center; gap:8px; color:#6f8580; font-size:12px; }.agent-starting>span { display:flex; gap:3px; }.agent-starting i { width:5px; height:5px; border-radius:50%; background:#2f8e80; animation:pulse 1.1s ease-in-out infinite; }.agent-starting i:nth-child(2){animation-delay:.15s}.agent-starting i:nth-child(3){animation-delay:.3s}
+.agent-starting { display:inline-flex; min-height:28px; align-items:center; gap:9px; color:#607873; font-size:12px; font-weight:650; }.agent-starting>span { display:flex; align-items:center; gap:4px; }.agent-starting i { width:5px; height:5px; border-radius:50%; background:#258679; animation:pulse 1.1s ease-in-out infinite; }.agent-starting i:nth-child(2){animation-delay:.15s}.agent-starting i:nth-child(3){animation-delay:.3s}
 .spin { animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 @keyframes pulse { 0%,100%{opacity:.3;transform:translateY(0)}50%{opacity:1;transform:translateY(-2px)} }

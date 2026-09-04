@@ -33,7 +33,7 @@ class ServerSession:
                 "PATH": "/usr/bin:/bin",
                 "TASK_ENGINE_DB": str(db_path),
                 "TASK_ENGINE_TZ": "Asia/Shanghai",
-                "TASK_ENGINE_AI_KEY": "",  # 强制走规则路径，测试不依赖网络
+                "TASK_ENGINE_AI_KEY": "",  # 验证 AI 未配置时显式失败，测试不访问网络
             },
         )
         self._next_id = 0
@@ -171,20 +171,16 @@ class TestGenerationTools:
         assert len(payload["templates"]) >= 5
         assert all("key" in t for t in payload["templates"])
 
-    def test_generate_from_requirement(self, session):
-        payload = session.payload("generate_task_flow", {
+    def test_generate_without_ai_config_returns_error(self, session):
+        result = session.call_tool("generate_task_flow", {
             "requirement": "每周五检查基坑监测数据，异常时由监测员复核并归档",
         })
-        flow = payload["flow"]
+        assert result["isError"] is True
+        assert "未配置模型 API Key" in result["structuredContent"]["error"]
 
-        assert flow["trigger"]["run_mode"] == "recurring"
-        assert flow["trigger"]["interval_unit"] == "week"
-        assert len(flow["steps"]) >= 2
-        assert flow["origin"] == "rules"  # 未配 key，走规则路径
-
-    def test_generate_assigns_people(self, session):
-        payload = session.payload("generate_task_flow", {
-            "requirement": "整改现场临边防护缺失问题并闭环",
+    def test_template_assigns_people(self, session):
+        payload = session.payload("create_flow_from_template", {
+            "template": "隐患整改",
             "assignees": [{"ref": "u1", "name": "张三"}, {"ref": "u2", "name": "李四"}],
         })
         steps = payload["flow"]["steps"]
@@ -212,13 +208,8 @@ class TestEndToEndWorkflow:
     """完整走一遍：生成 → 布置 → 办理 → 验收。"""
 
     def test_full_lifecycle(self, session):
-        # 1. 生成任务流——责任制三要素一并给全
-        flow = session.payload("generate_task_flow", {
-            "requirement": "整改现场临边防护缺失并复核闭环",
-            "assignees": PEOPLE,
-            "confirmer": CONFIRMER,
-            "site": SITE,
-        })["flow"]
+        # 1. 用显式模板创建任务流——责任制三要素一并给全
+        flow = ready_flow(session, "隐患整改")
 
         # 2. 立即布置
         task = session.payload("dispatch_task", {"flow_id": flow["id"]})["task"]
@@ -298,12 +289,7 @@ class TestEndToEndWorkflow:
 
 class TestSchedulingTools:
     def test_schedule_and_tick(self, session):
-        flow = session.payload("generate_task_flow", {
-            "requirement": "每周一巡检施工现场安全状况",
-            "assignees": PEOPLE,
-            "confirmer": CONFIRMER,
-            "site": SITE,
-        })["flow"]
+        flow = ready_flow(session)
 
         plan = session.payload("create_schedule", {
             "flow_id": flow["id"],

@@ -65,6 +65,7 @@ async def get_toolkit(
     sub_agent_templates: dict[str, SubAgentTemplate] | None = None,
     mcp_registry_manager: MCPRegistryManager | None = None,
     skill_registry_manager: SkillRegistryManager | None = None,
+    input_has_attachments: bool = True,
 ) -> Toolkit:
     """Assemble the complete :class:`Toolkit` for one chat turn.
 
@@ -310,6 +311,21 @@ time or interval"
     tools = _filter_globally_disabled_tools(tools)
 
     workspace_mcps = await workspace.list_mcps()
+    blocked_mcp_names: set[str] = set()
+    platform_context = getattr(session_record.config, "platform_context", None)
+    if (
+        platform_context is not None
+        and platform_context.conversation_type == "general"
+    ):
+        # Homepage task assignment is an explicit, private platform flow.
+        # Do not expose the direct task-engine MCP to the conversational
+        # Dobby session, otherwise an ordinary message could bypass the draft.
+        blocked_mcp_names.add("task-engine")
+    if not input_has_attachments:
+        # The fixed parser runs as a session-isolated stdio process and can
+        # take seconds to start. Do not launch it for text-only turns: the
+        # attachment pipeline returns immediately when no data blocks exist.
+        blocked_mcp_names.add("attachment-parser")
     platform_session_id = session_record.id
     platform_agent_id = agent_record.id
     if session_record.team_id is not None:
@@ -328,7 +344,12 @@ time or interval"
             user_id=user_id,
             agent_id=agent_record.id,
             session_id=session_record.id,
-            package_ids=agent_record.data.mcp_config.allowed_mcp_ids,
+            package_ids=[
+                package_id
+                for package_id in agent_record.data.mcp_config.allowed_mcp_ids
+                if package_id not in blocked_mcp_names
+            ],
+            excluded_package_ids=blocked_mcp_names,
             platform_agent_id=platform_agent_id,
             platform_session_id=platform_session_id,
         )
@@ -337,8 +358,13 @@ time or interval"
     )
     managed_names = {client.name for client in managed_mcps}
     resolved_mcps = [
-        client for client in workspace_mcps if client.name not in managed_names
-    ] + managed_mcps
+        client
+        for client in workspace_mcps
+        if client.name not in managed_names
+        and client.name not in blocked_mcp_names
+    ] + [
+        client for client in managed_mcps if client.name not in blocked_mcp_names
+    ]
 
     workspace_skills = await workspace.list_skills(agent_id=agent_record.id)
     managed_skills = (

@@ -9,6 +9,12 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from .personnel_policy import (
+    PROJECT_POSITION_NAMES,
+    normalize_project_position_name,
+    project_position_definition,
+)
+
 
 def _record_id(record: Any | None) -> int | None:
     value = getattr(record, "record_id", None) if record is not None else None
@@ -88,7 +94,22 @@ def validate_initialization_integrity(payload: Any) -> list[dict[str, Any]]:
                 )
     assignments: dict[tuple[str, str], list[Any]] = defaultdict(list)
     for person in payload.personnel:
-        assignments[(person.identity_card_no, person.position_name)].append(person)
+        position_name = normalize_project_position_name(person.position_name)
+        assignments[(person.identity_card_no, position_name)].append(person)
+        if project_position_definition(position_name) is None:
+            issues.append(
+                _issue(
+                    "personnel.unsupported_position",
+                    "personnel",
+                    person,
+                    "position_name",
+                    "岗位不在固定范围",
+                    (
+                        f"岗位「{position_name or '空白岗位'}」不受系统支持。"
+                        f"允许岗位：{'、'.join(PROJECT_POSITION_NAMES)}。"
+                    ),
+                ),
+            )
     for (card_no, position_name), records in assignments.items():
         if len(records) > 1:
             for record in records:

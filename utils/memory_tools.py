@@ -32,7 +32,12 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "search_memory",
-            "description": "搜索项目的长期记忆库，查找历史讨论、决策、经验教训。当需要回忆之前讨论过的内容时使用。",
+            "description": (
+                "按需搜索当前用户及当前项目可见的长期记忆。只有当回答依赖跨会话的"
+                "用户偏好、先前讨论、历史决定或未完成事项时才调用；当前消息和当前会话"
+                "上下文足够时不要调用。不得用它查询工程文件、规范或图纸，这类资料只在"
+                "用户明确点名 @资料助手 时由资料流程处理。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -54,7 +59,11 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "add_memory",
-            "description": "主动将一条重要信息写入长期记忆。当用户明确说'记住这个'或对话产生重要结论时使用。",
+            "description": (
+                "由 Dobby 主动保存值得跨会话保留的信息。仅用于用户明确要求记住的内容、"
+                "稳定偏好或已经确认的项目决定；不要保存临时问题、推测、未确认草案或每轮"
+                "对话原文。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -97,7 +106,11 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "search_experiences",
-            "description": "搜索项目经验库，查找类似任务的历史处理方式、踩过的坑、最佳实践。",
+            "description": (
+                "按需搜索项目经验库中的历史处理方式、踩坑记录和最佳实践。只有当前请求"
+                "确实需要借鉴以往执行经验时才调用；普通问答不要调用，也不得替代"
+                "@资料助手查询工程文件。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {

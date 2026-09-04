@@ -860,9 +860,17 @@ def test_system_tool_is_hidden_from_assignment_and_loaded_for_every_agent(
                 session_id="session-a",
                 package_ids=[],
             )
+            deferred = await manager.get_session_clients(
+                user_id="user",
+                agent_id="agent-b",
+                session_id="session-b",
+                package_ids=[],
+                excluded_package_ids={"attachment-parser"},
+            )
 
             assert [client.name for client in first] == ["attachment-parser"]
             assert first[0] is repeated[0]
+            assert deferred == []
             assert len(created) == 1
 
     asyncio.run(scenario())

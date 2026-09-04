@@ -11,6 +11,7 @@ from .api import router
 from .agent_conversations_api import router as agent_conversations_router
 from .agent_context_gateway import router as agent_context_router
 from .chat_api import router as chat_router
+from .collaboration_api import router as collaboration_router
 from .database_interaction_router import router as database_interaction_router
 from .engineering_documents_api import router as engineering_documents_router
 from .database_interactions import bootstrap_declarative_catalog
@@ -25,6 +26,7 @@ from .task_action_gateway import (
     current_task_action,
     execute_pending_automation_tasks,
 )
+from .task_context_api import router as task_context_router
 from .wecom_notification_gateway import (
     deliver_due_notifications,
     enqueue_task_notification,
@@ -143,7 +145,7 @@ def seed_admin() -> None:
                     username="admin",
                     real_name="系统管理员",
                     identity_card_no="SYSTEM_ADMIN",
-                    password_hash=hash_password("ChangeMe123!"),
+                    password_hash=hash_password("dob123"),
                     role="admin",
                 ),
             )
@@ -459,8 +461,10 @@ app.include_router(router)
 app.include_router(agent_conversations_router)
 app.include_router(agent_context_router)
 app.include_router(chat_router)
+app.include_router(collaboration_router)
 app.include_router(database_interaction_router)
 app.include_router(engineering_documents_router)
+app.include_router(task_context_router)
 
 
 @app.get("/health")

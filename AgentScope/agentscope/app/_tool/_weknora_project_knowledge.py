@@ -28,10 +28,9 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
 
     name = "weknora_query_project_knowledge"
     description = (
-        "查询当前工程项目绑定的 WeKnora 机器人。仅当用户的问题需要查阅"
-        "工程资料、图纸方案、规范标准、历史案例或文件内容时调用；普通闲聊、"
-        "平台数据库状态和无需资料依据的问题不要调用。返回答案与资料引用后，"
-        "应由当前 AgentScope 智能体结合用户问题继续组织最终回复。"
+        "查询当前工程项目绑定的 WeKnora 机器人。仅在平台已确认用户本轮明确"
+        "点名 @资料助手时提供此工具。查询范围已由平台后端按当前用户权限锁定，"
+        "不得扩大或改写。返回答案与资料引用后，应结合用户问题组织最终回复。"
     )
     input_schema = {
         "type": "object",
@@ -59,10 +58,31 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
         *,
         connection: WeKnoraConnectionConfig,
         robot_id: str,
+        project_id: str | None = None,
+        knowledge_base_ids: list[str] | None = None,
+        knowledge_ids: list[str] | None = None,
+        restricted: bool = False,
     ) -> None:
         super().__init__()
         self._connection = connection
         self._robot_id = robot_id.strip()
+        self._project_id = (project_id or "").strip()
+        self._scope_supplied = knowledge_base_ids is not None
+        self._knowledge_base_ids = tuple(
+            dict.fromkeys(
+                value.strip()
+                for value in (knowledge_base_ids or [])
+                if value.strip()
+            ),
+        )
+        self._knowledge_ids = tuple(
+            dict.fromkeys(
+                value.strip()
+                for value in (knowledge_ids or [])
+                if value.strip()
+            ),
+        )
+        self._restricted = restricted
 
     async def check_permissions(
         self,
@@ -114,14 +134,19 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
     ) -> tuple[str, list[dict[str, Any]]]:
         answer_parts: list[str] = []
         references: list[dict[str, Any]] = []
+        chat_route = "knowledge-chat" if self._knowledge_ids else "agent-chat"
         async with client.stream(
             "POST",
-            self._url(f"/agent-chat/{quote(session_id, safe='')}"),
+            self._url(f"/{chat_route}/{quote(session_id, safe='')}"),
             params={"resource_urls": "public"},
             json={
                 "query": query,
-                "agent_enabled": True,
+                # WeKnora agent mode may invoke wiki tools outside an explicit
+                # file allowlist. Restricted users therefore use normal RAG.
+                "agent_enabled": not bool(self._knowledge_ids),
                 "agent_id": self._robot_id,
+                "knowledge_base_ids": list(self._knowledge_base_ids),
+                "knowledge_ids": list(self._knowledge_ids),
                 "channel": "api",
             },
         ) as response:
@@ -153,6 +178,45 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
         answer = "".join(answer_parts).strip()
         if not answer:
             raise RuntimeError("WeKnora 未返回可用答案。")
+        allowed_knowledge_ids = set(self._knowledge_ids)
+        allowed_base_ids = set(self._knowledge_base_ids)
+        if allowed_knowledge_ids:
+            references = [
+                item
+                for item in references
+                if str(item.get("knowledge_id") or "")
+                in allowed_knowledge_ids
+            ]
+        elif self._restricted:
+            references = []
+        elif allowed_base_ids:
+            references = [
+                item
+                for item in references
+                if not item.get("knowledge_base_id")
+                or str(item.get("knowledge_base_id")) in allowed_base_ids
+            ]
+        if self._project_id:
+            rewritten: list[dict[str, Any]] = []
+            encoded_project_id = quote(self._project_id, safe="")
+            for raw in references:
+                reference = dict(raw)
+                knowledge_id = str(
+                    reference.get("knowledge_id") or "",
+                ).strip()
+                if knowledge_id:
+                    base = (
+                        f"/api/projects/{encoded_project_id}/"
+                        "engineering-documents/knowledge/"
+                        f"{quote(knowledge_id, safe='')}"
+                    )
+                    # Never expose WeKnora's direct resource address to the
+                    # platform conversation.  These routes re-check the
+                    # current project and user permission on every access.
+                    reference["preview_url"] = f"{base}/preview"
+                    reference["download_url"] = f"{base}/download"
+                rewritten.append(reference)
+            references = rewritten
         return answer, references
 
     async def call(self, query: str) -> ToolChunk:
@@ -162,6 +226,20 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
                 content=[TextBlock(text="资料查询不能为空。")],
                 state=ToolResultState.ERROR,
                 is_last=True,
+            )
+        if self._restricted and not self._knowledge_ids:
+            return ToolChunk(
+                content=[TextBlock(text="当前账号没有可查询的工程资料权限。")],
+                state=ToolResultState.ERROR,
+                is_last=True,
+                metadata={"operation": self.name},
+            )
+        if self._scope_supplied and not self._knowledge_base_ids:
+            return ToolChunk(
+                content=[TextBlock(text="当前项目没有可查询的工程资料。")],
+                state=ToolResultState.ERROR,
+                is_last=True,
+                metadata={"operation": self.name},
             )
 
         headers = {
@@ -219,6 +297,7 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
                 metadata={
                     "operation": self.name,
                     "weknora_robot_id": self._robot_id,
+                    "platform_project_id": self._project_id,
                     "reference_count": len(references),
                 },
             )

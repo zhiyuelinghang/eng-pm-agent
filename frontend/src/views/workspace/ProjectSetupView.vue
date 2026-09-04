@@ -1,31 +1,53 @@
 <template>
   <div class="setup-page">
     <div class="setup-workspace">
-      <aside class="project-navigator" aria-label="项目切换">
-        <div class="project-navigator-head"><h2>项目</h2><button type="button" class="link-button" @click="openProjectCreate">新建项目</button></div>
-        <div class="project-navigator-list">
-          <button v-for="project in store.projects" :key="project.id" class="project-nav-item" :class="{ active: project.id === configProjectId }" @click="selectConfigProject(project.id)">
-            <strong class="project-nav-name">{{ project.name }}</strong>
-          </button>
-          <div v-if="!store.projectCatalogLoaded" class="project-list-loading" aria-label="正在加载项目">
-            <i></i><span></span><small></small>
-          </div>
-          <div v-else-if="!store.projects.length" class="project-list-empty">
-            <span><n-icon :size="18"><ListDetails /></n-icon></span>
-            <strong>暂无项目</strong>
-            <p>创建后会显示在这里，方便切换和继续完善。</p>
-            <button type="button" @click="openProjectCreate"><n-icon :size="15"><Plus /></n-icon>创建第一个项目</button>
-          </div>
-        </div>
-      </aside>
-
       <main v-if="configProjectId" class="project-config-panel">
       <div class="project-config-scroll">
-      <nav class="project-workspace-tabs" aria-label="项目资料工作台">
-        <button v-for="tab in workspaceTabs" :key="tab.key" type="button" :class="{ active: activeWorkspaceTab === tab.key }" @click="selectWorkspaceTab(tab.key)"><strong>{{ tab.label }}</strong><span>{{ tab.hint }}</span></button>
+      <nav class="project-workspace-tabs" aria-label="项目资料工作台" role="tablist">
+        <button v-for="tab in workspaceTabs" :key="tab.key" type="button" role="tab" :aria-selected="activeWorkspaceTab === tab.key" :class="{ active: activeWorkspaceTab === tab.key }" @click="selectWorkspaceTab(tab.key)"><strong>{{ tab.label }}</strong><span>{{ tab.hint }}</span></button>
       </nav>
 
       <section v-if="activeWorkspaceTab === 'agent'" class="material-agent-workspace">
+        <aside class="material-conversation-sidebar" aria-label="配置助手会话">
+          <button
+            type="button"
+            class="material-conversation-new"
+            :disabled="materialAgentLoading || materialAgentStopping"
+            @click="startNewMaterialAgentConversation"
+          >
+            <n-icon :size="18"><Plus /></n-icon>
+            <span>新会话</span>
+          </button>
+          <label class="material-conversation-search">
+            <n-icon :size="16"><Search /></n-icon>
+            <input v-model.trim="materialAgentConversationSearch" type="search" aria-label="搜索配置助手会话" placeholder="搜索会话">
+          </label>
+          <div class="material-conversation-list" aria-live="polite">
+            <div v-if="materialAgentConversationListLoading" class="material-conversation-skeleton" aria-label="正在加载会话">
+              <i v-for="index in 4" :key="index"></i>
+            </div>
+            <template v-else>
+              <button
+                v-for="conversation in filteredMaterialAgentConversations"
+                :key="conversation.id"
+                type="button"
+                class="material-conversation-item"
+                :class="{ active: materialAgentConversationId === conversation.id }"
+                :aria-current="materialAgentConversationId === conversation.id ? 'true' : undefined"
+                :disabled="materialAgentLoading || materialAgentStopping"
+                @click="selectMaterialAgentConversation(conversation.id)"
+              >
+                <strong :title="conversation.title">{{ conversation.title }}</strong>
+                <time>{{ formatMaterialAgentConversationTime(conversation.updated_at || conversation.created_at) }}</time>
+              </button>
+              <div v-if="!filteredMaterialAgentConversations.length" class="material-conversation-empty">
+                <n-icon :size="22"><MessageCircle /></n-icon>
+                <strong>{{ materialAgentConversations.length ? '没有匹配的会话' : '还没有会话' }}</strong>
+                <p>{{ materialAgentConversations.length ? '换一个关键词试试。' : '发送第一条消息后，会话会保存在这里。' }}</p>
+              </div>
+            </template>
+          </div>
+        </aside>
         <div class="material-agent-chat">
           <div
             ref="materialAgentViewport"
@@ -52,13 +74,16 @@
               </div>
             </div>
             <article v-for="item in materialAgentMessages" :key="item.id" :class="['material-agent-message', item.role]">
-              <span>{{ item.role === 'assistant' ? 'D' : '我' }}</span>
+              <span aria-hidden="true">
+                <n-icon v-if="item.role === 'assistant'" :size="16"><Robot /></n-icon>
+                <template v-else>我</template>
+              </span>
               <div>
-                <small>{{ item.role === 'assistant' ? 'Dobby · 项目初始化助手' : '你的指令' }}</small>
                 <AgentMessageContent
                   v-if="item.role === 'assistant'"
                   :content="item.content"
                   :runtime-trace="item.runtimeTrace"
+                  :confirmation-busy="materialAgentLoading || materialAgentStopping"
                   :show-plan="true"
                   @confirm="confirmMaterialAgentToolCall"
                 />
@@ -69,9 +94,8 @@
               </div>
             </article>
             <article v-if="materialAgentPreparation" class="material-agent-message assistant material-agent-preparation">
-              <span>D</span>
+              <span aria-hidden="true"><n-icon :size="16"><Robot /></n-icon></span>
               <div role="status" aria-live="polite">
-                <small>Dobby · 项目初始化助手</small>
                 <strong>{{ materialAgentPreparationTitle }}</strong>
                 <p>{{ materialAgentPreparationDetail }}</p>
                 <div v-if="materialAgentPreparation.total" class="material-agent-preparation-progress" aria-hidden="true">
@@ -80,11 +104,11 @@
               </div>
             </article>
             <article v-if="materialAgentStreamingTrace" class="material-agent-message assistant">
-              <span>D</span>
+              <span aria-hidden="true"><n-icon :size="16"><Robot /></n-icon></span>
               <div>
-                <small>Dobby · 项目初始化助手</small>
                 <AgentMessageContent
                   :runtime-trace="materialAgentStreamingTrace"
+                  :confirmation-busy="materialAgentLoading || materialAgentStopping"
                   :show-plan="false"
                   streaming
                   @confirm="confirmMaterialAgentToolCall"
@@ -171,23 +195,43 @@
           />
           <form class="material-agent-composer" @submit.prevent="sendMaterialAgentMessage">
             <input ref="materialAgentFileInput" class="visually-hidden" type="file" multiple accept=".xls,.xlsx,.csv,.docx,.pptx,.pdf,.txt,.md,.png,.jpg,.jpeg,.bmp,.webp,.tif,.tiff" @change="selectMaterialAgentFiles">
-            <div v-if="materialAgentFiles.length" class="material-agent-file-tray">
-              <div class="material-agent-file-head"><span>已选择 {{ materialAgentFiles.length }} 个附件</span><button type="button" @click="clearMaterialAgentFiles">清空</button></div>
-              <ul>
-                <li v-for="(file, index) in materialAgentFiles" :key="`${file.name}-${file.size}-${file.lastModified}`">
+            <ChatComposerSurface :busy="materialAgentLoading || materialAgentStopping" contained>
+              <template v-if="materialAgentFiles.length" #attachments>
+                <div class="material-agent-file-head">
+                  <span>已选择 {{ materialAgentFiles.length }} 个附件</span>
+                  <button type="button" @click="clearMaterialAgentFiles">清空</button>
+                </div>
+                <ul class="chat-composer-files">
+                  <li v-for="(file, index) in materialAgentFiles" :key="`${file.name}-${file.size}-${file.lastModified}`" class="chat-composer-file">
+                    <n-icon :size="17"><Paperclip /></n-icon>
+                    <strong :title="file.name">{{ file.name }}</strong>
+                    <small>{{ formatFileSize(file.size) }}</small>
+                    <button type="button" class="chat-composer-file-remove" :aria-label="`移除附件 ${file.name}`" @click="removeMaterialAgentFile(index)"><n-icon :size="15"><X /></n-icon></button>
+                  </li>
+                </ul>
+              </template>
+
+              <textarea
+                v-model="materialAgentPrompt"
+                class="chat-composer-input"
+                rows="1"
+                :disabled="materialAgentLoading"
+                placeholder="描述需要补充的工程信息，或添加附件"
+                @keydown.enter.exact.prevent="sendMaterialAgentMessage"
+              ></textarea>
+
+              <template #tools>
+                <button type="button" class="chat-composer-tool" :disabled="materialAgentLoading" @click="openMaterialAgentFilePicker">
                   <n-icon :size="17"><Paperclip /></n-icon>
-                  <span><strong>{{ file.name }}</strong><small>{{ formatFileSize(file.size) }}</small></span>
-                  <button type="button" :aria-label="`移除附件 ${file.name}`" @click="removeMaterialAgentFile(index)"><n-icon :size="15"><X /></n-icon></button>
-                </li>
-              </ul>
-            </div>
-            <div class="material-agent-composer-row">
-              <button type="button" class="material-agent-attach" title="添加项目附件" aria-label="添加项目附件" :disabled="materialAgentLoading" @click="openMaterialAgentFilePicker"><n-icon :size="19"><Paperclip /></n-icon></button>
-              <textarea v-model="materialAgentPrompt" :disabled="materialAgentLoading" placeholder="描述需要补充的工程信息，或添加附件"></textarea>
-              <button v-if="materialAgentLoading || materialAgentStopping" type="button" class="material-agent-stop" :disabled="materialAgentStopping" @click="stopMaterialAgentMessage">{{ materialAgentStopping ? '正在停止…' : '停止分析' }}</button>
-              <button v-else type="submit" class="primary" :disabled="!materialAgentPrompt.trim() && !materialAgentFiles.length">发送给 Dobby</button>
-            </div>
-            <small class="material-agent-composer-hint">支持 XLS/XLSX、DOCX、PPTX、PDF、图片、CSV、TXT、Markdown；原始附件交由 AgentScope 初始化助手解析</small>
+                  <span>附件</span>
+                </button>
+              </template>
+
+              <template #action>
+                <button v-if="materialAgentLoading || materialAgentStopping" type="button" class="chat-composer-action is-stop" :disabled="materialAgentStopping" :aria-busy="materialAgentStopping" @click="stopMaterialAgentMessage"><n-icon v-if="materialAgentStopping" :size="17" class="project-action-spinner"><Loader /></n-icon><n-icon v-else :size="17"><PlayerStop /></n-icon>{{ materialAgentStopping ? '正在停止…' : '停止分析' }}</button>
+                <button v-else type="submit" class="chat-composer-action" :disabled="!materialAgentPrompt.trim() && !materialAgentFiles.length"><n-icon :size="17"><Send /></n-icon>发送</button>
+              </template>
+            </ChatComposerSurface>
           </form>
         </div>
       </section>
@@ -308,7 +352,7 @@
         <section class="manual-config-workspace">
           <aside class="manual-config-tree" aria-label="项目配置目录">
             <div class="manual-config-tree-head"><span>项目配置</span><small>基础信息与业务规则</small></div>
-            <button v-for="section in manualSections" :key="section.key" type="button" :class="{ active: manualSection === section.key }" @click="selectManualSection(section.key)"><n-icon :size="17"><component :is="section.icon" /></n-icon><strong>{{ section.label }}</strong><em>{{ section.count }}</em></button>
+            <button v-for="section in manualSections" :key="section.key" type="button" :aria-current="manualSection === section.key ? 'page' : undefined" :class="{ active: manualSection === section.key }" @click="selectManualSection(section.key)"><n-icon :size="17"><component :is="section.icon" /></n-icon><strong>{{ section.label }}</strong><em>{{ section.count }}</em></button>
           </aside>
 
           <section class="manual-config-list">
@@ -361,16 +405,16 @@
 
               <section v-else-if="['wecom', 'feishu', 'dingtalk'].includes(manualSection)" class="project-connector-direct">
                 <form v-if="activeProjectConnector" class="project-connector-editor" @submit.prevent="saveProjectConnector">
-                  <label>{{ activeProjectConnector.connectionLabel }}<input v-model.trim="activeProjectConnector.connectionId" maxlength="500" :placeholder="activeProjectConnector.connectionPlaceholder"></label>
-                  <label>{{ activeProjectConnector.secretLabel }}<input v-model="activeProjectConnector.secret" type="password" autocomplete="new-password" :placeholder="activeProjectConnector.hasSecret ? '留空则继续使用已保存的凭据' : activeProjectConnector.secretPlaceholder"></label>
+                  <label>{{ activeProjectConnector.connectionLabel }}<input v-model.trim="activeProjectConnector.connectionId" maxlength="500" :disabled="projectConnectorBusy" :placeholder="activeProjectConnector.connectionPlaceholder"></label>
+                  <label>{{ activeProjectConnector.secretLabel }}<input v-model="activeProjectConnector.secret" type="password" autocomplete="new-password" :disabled="projectConnectorBusy" :placeholder="activeProjectConnector.hasSecret ? '留空则继续使用已保存的凭据' : activeProjectConnector.secretPlaceholder"></label>
                   <div class="project-credential-note"><n-icon :size="17"><ShieldLock /></n-icon><p><strong>凭据保护</strong><span>{{ activeProjectConnector.key === 'wecom' ? '群机器人 Webhook 仅以服务端密文保存，页面和接口均不会回显。' : '连接标识保存在项目配置表，密钥仅以服务端密文保存，页面不会回显。' }}</span></p></div>
-                  <footer class="project-connector-actions"><span>{{ activeProjectConnector.updatedAt ? `更新于 ${activeProjectConnector.updatedAt}` : '尚未保存连接信息' }}</span><div><button v-if="activeProjectConnector.key === 'wecom' && activeProjectConnector.configured" type="button" class="secondary" :disabled="projectConnectorSaving || projectConnectorTesting" @click="testProjectConnector">{{ projectConnectorTesting ? '正在测试…' : '测试发送' }}</button><button v-if="activeProjectConnector.configured" type="button" class="secondary danger" :disabled="projectConnectorSaving || projectConnectorTesting" @click="clearProjectConnector">清除配置</button><button type="submit" class="primary" :disabled="projectConnectorSaving || projectConnectorLoading || projectConnectorTesting"><n-icon :size="17"><Link /></n-icon>{{ projectConnectorSaving ? '正在保存…' : `保存${activeProjectConnector.label}配置` }}</button></div></footer>
+                  <footer class="project-connector-actions"><span>{{ activeProjectConnector.updatedAt ? `更新于 ${activeProjectConnector.updatedAt}` : '尚未保存连接信息' }}</span><div><button v-if="activeProjectConnector.key === 'wecom' && activeProjectConnector.configured" type="button" class="secondary" :disabled="projectConnectorBusy" @click="testProjectConnector"><n-icon v-if="projectConnectorTesting" :size="16" class="project-action-spinner"><Loader /></n-icon>{{ projectConnectorTesting ? '正在测试…' : '测试发送' }}</button><button v-if="activeProjectConnector.configured" type="button" class="secondary danger" :disabled="projectConnectorBusy" @click="clearProjectConnector"><n-icon v-if="projectConnectorClearing" :size="16" class="project-action-spinner"><Loader /></n-icon>{{ projectConnectorClearing ? '正在清除…' : '清除配置' }}</button><button type="submit" class="primary" :disabled="projectConnectorBusy"><n-icon :size="17" :class="{ 'project-action-spinner': projectConnectorSaving }"><Loader v-if="projectConnectorSaving" /><Link v-else /></n-icon>{{ projectConnectorSaving ? '正在保存…' : `保存${activeProjectConnector.label}配置` }}</button></div></footer>
                 </form>
               </section>
 
               <section v-else-if="manualSection === 'members'" class="manual-data-panel personnel-browser">
                 <div v-if="filteredMembers.length" class="personnel-card-list">
-                  <article v-for="item in filteredMembers" :key="item.id" class="personnel-card">
+                  <article v-for="item in filteredMembers" :key="item.id" class="personnel-card" :data-config-record-id="item.id" tabindex="-1">
                     <header class="personnel-profile">
                       <span class="personnel-avatar">{{ item.name.slice(0, 1) }}</span>
                       <div><h3>{{ item.name }}</h3><p>账号：{{ item.username }} · 身份证：{{ maskedIdentityCard(item.identityCardNo) }}</p></div>
@@ -403,7 +447,7 @@
                   <table class="manual-table wbs-tree-table">
                     <thead><tr><th>计划层级（WBS）</th><th>计划区间</th><th>工期与负责人</th><th>完成进度</th><th>状态与优先级</th><th>前置工序</th><th>操作</th></tr></thead>
                     <tbody>
-                      <tr v-for="row in visibleManualWbsRows" :key="row.item.id" :class="{ 'wbs-group-row': row.hasChildren }">
+                      <tr v-for="row in visibleManualWbsRows" :key="row.item.id" :data-config-record-id="row.item.id" tabindex="-1" :class="{ 'wbs-group-row': row.hasChildren }">
                         <td><div class="wbs-tree-node" :class="{ root: row.depth === 0 }" :style="{ '--wbs-depth': String(row.depth) }"><button v-if="row.hasChildren" type="button" class="wbs-tree-toggle" :class="{ collapsed: isManualWbsCollapsed(row.item.id) }" :aria-label="isManualWbsCollapsed(row.item.id) ? '展开下级工序' : '收起下级工序'" @click="toggleManualWbs(row.item.id)"><n-icon :size="15"><ChevronDown /></n-icon></button><i v-else></i><span><em>{{ row.item.code }}</em><strong>{{ row.item.name }}</strong><small>{{ formalWbsItemType(row.item) ? `${formalWbsItemType(row.item)} · ` : '' }}第 {{ row.item.level }} 级</small></span></div></td>
                         <td><strong>{{ formatFormalDate(row.item.planStart) || '未排期' }}</strong><small>{{ formatFormalDate(row.item.planEnd) ? `至 ${formatFormalDate(row.item.planEnd)}` : '未设置完成日期' }}</small></td>
                         <td><strong>{{ formatWbsDuration(row.item.durationHours) }}</strong><small>{{ row.item.assignedToText || '未分配负责人' }}</small></td>
@@ -422,7 +466,7 @@
                 <div v-if="filteredQualityMetrics.length" class="quality-data-table-wrap">
                   <table class="manual-table quality-data-table">
                     <thead><tr><th>WBS 工序</th><th>质量验收项</th><th>控制指标</th><th>检查频次</th><th>关联资料</th><th>操作</th></tr></thead>
-                    <tbody><tr v-for="item in filteredQualityMetrics" :key="item.id"><td><code>{{ item.wbsCode || '—' }}</code><strong>{{ item.wbsName || configWbsName(item.wbsId || '', item.wbsCode) || '未匹配工序' }}</strong></td><td>{{ item.acceptanceItem || '未填写' }}</td><td>{{ item.controlIndicator || '未填写' }}</td><td>{{ item.inspectionFrequency || '未设置' }}</td><td>{{ item.relatedDocuments || item.requiredMaterials.join('、') || '未设置' }}</td><td><button type="button" class="row-action" @click="openManualEditor('quality', item)">查看 / 修改</button></td></tr></tbody>
+                    <tbody><tr v-for="item in filteredQualityMetrics" :key="item.id" :data-config-record-id="item.id" tabindex="-1"><td><code>{{ item.wbsCode || '—' }}</code><strong>{{ item.wbsName || configWbsName(item.wbsId || '', item.wbsCode) || '未匹配工序' }}</strong></td><td>{{ item.acceptanceItem || '未填写' }}</td><td>{{ item.controlIndicator || '未填写' }}</td><td>{{ item.inspectionFrequency || '未设置' }}</td><td>{{ item.relatedDocuments || item.requiredMaterials.join('、') || '未设置' }}</td><td><button type="button" class="row-action" @click="openManualEditor('quality', item)">查看 / 修改</button></td></tr></tbody>
                   </table>
                 </div>
                 <div v-else class="manual-empty"><n-icon :size="28"><Shield /></n-icon><strong>{{ manualSearch ? '没有匹配的质量要求' : '还没有质量要求' }}</strong><p>{{ manualSearch ? '可按 WBS 编码、验收项、控制指标或资料名称搜索。' : '点击右上角“新建”，为 WBS 工序配置验收要求。' }}</p></div>
@@ -430,7 +474,7 @@
 
               <section v-else-if="manualSection === 'risks'" class="manual-data-panel risk-browser">
                 <div v-if="filteredRisks.length" class="risk-card-list">
-                  <article v-for="item in filteredRisks" :key="item.id" class="risk-record-card">
+                  <article v-for="item in filteredRisks" :key="item.id" class="risk-record-card" :data-config-record-id="item.id" tabindex="-1">
                     <header><span class="risk-serial">第 {{ String(item.serialNo || 0).padStart(2, '0') }} 项</span><div><h3>{{ item.riskPart || item.name }}</h3><p>{{ item.relatedProcessName || item.type || '未注明相关工序' }}</p></div><span class="risk-level" :class="item.level">{{ formalRiskLevelLabel(item) }}</span><button type="button" class="row-action" @click="openManualEditor('risks', item)">查看 / 修改</button></header>
                     <div class="risk-context single"><span><strong>风险窗口</strong>{{ formatRiskWindow(item) }}</span></div>
                     <dl><div><dt>评价条件</dt><dd>{{ item.evaluationCondition || item.controlMeasures || '未填写' }}</dd></div><div><dt>风险摘要</dt><dd>{{ item.summary || '未填写' }}</dd></div></dl>
@@ -440,7 +484,7 @@
               </section>
 
               <section v-else-if="manualSection === 'mappings'" class="manual-data-panel mapping-browser">
-                <table v-if="filteredMappings.length" class="manual-table"><thead><tr><th>平台</th><th>来源字段</th><th>目标字段</th><th>填报要求</th><th>操作</th></tr></thead><tbody><tr v-for="item in filteredMappings" :key="item.id"><td><strong>{{ item.platformName }}</strong></td><td>{{ sourceFieldLabel(item.sourceField) }}</td><td>{{ item.targetField }}</td><td>{{ item.required ? '必填' : '选填' }} · {{ item.enabled ? '已启用' : '已停用' }}</td><td><button type="button" class="row-action" @click="openManualEditor('mappings', item)">查看 / 修改</button></td></tr></tbody></table>
+                <table v-if="filteredMappings.length" class="manual-table"><thead><tr><th>平台</th><th>来源字段</th><th>目标字段</th><th>填报要求</th><th>操作</th></tr></thead><tbody><tr v-for="item in filteredMappings" :key="item.id" :data-config-record-id="item.id" tabindex="-1"><td><strong>{{ item.platformName }}</strong></td><td>{{ sourceFieldLabel(item.sourceField) }}</td><td>{{ item.targetField }}</td><td>{{ item.required ? '必填' : '选填' }} · {{ item.enabled ? '已启用' : '已停用' }}</td><td><button type="button" class="row-action" @click="openManualEditor('mappings', item)">查看 / 修改</button></td></tr></tbody></table>
                 <div v-else class="manual-empty"><n-icon :size="28"><ArrowsLeftRight /></n-icon><strong>{{ manualSearch ? '没有匹配的字段映射' : '还没有字段映射' }}</strong><p>{{ manualSearch ? '可按平台、来源字段或目标字段搜索。' : '点击右上角“新建”，补充外部平台字段映射规则。' }}</p></div>
               </section>
               <table v-else-if="manualSection === 'monitor'" class="manual-table"><thead><tr><th>配置项</th><th>当前值</th><th>说明</th><th>操作</th></tr></thead><tbody><tr><td><strong>资料目录监控</strong></td><td>{{ monitorForm.enabled ? '已启用' : '未启用' }}</td><td>{{ monitorForm.mainDir || '尚未设置资料接收目录' }}</td><td><button type="button" class="row-action" @click="openManualEditor('monitor')">查看 / 修改</button></td></tr><tr v-for="rule in monitorRules" :key="rule.id"><td><strong>{{ riskLabel(rule.level) }}预警</strong></td><td>提前 {{ rule.days }} 天</td><td>{{ rule.enabled ? '已启用' : '已停用' }}</td><td><button type="button" class="row-action" @click="openManualEditor('monitor')">维护规则</button></td></tr></tbody></table>
@@ -458,7 +502,7 @@
               </article>
               <div v-if="!personnelDetailMember.positions.length" class="personnel-detail-empty">该成员尚未配置项目职务。</div>
             </div>
-            <footer class="personnel-detail-actions"><span>{{ personnelDetailMember.systemRole === 'admin' ? '平台管理员账号' : '普通项目账号' }}</span><button type="button" class="modal-secondary" @click="closePersonnelDetail">关闭</button><button type="button" class="primary" @click="addPersonnelDetailPosition(personnelDetailMember)"><n-icon :size="16"><Plus /></n-icon>添加兼任岗位</button></footer>
+            <footer class="personnel-detail-actions"><span>{{ personnelDetailMember.systemRole === 'admin' ? '管理人员' : '普通用户' }}</span><button type="button" class="modal-secondary" @click="closePersonnelDetail">关闭</button><button type="button" class="primary" @click="addPersonnelDetailPosition(personnelDetailMember)"><n-icon :size="16"><Plus /></n-icon>添加兼任岗位</button></footer>
           </section>
         </div>
 
@@ -471,7 +515,7 @@
                 <label>身份证号<input v-model.trim="editorMemberForm.identityCardNo" required :disabled="Boolean(manualEditor.itemId)" placeholder="用于识别同一平台账号"></label>
                 <label>登录账号<input v-model.trim="editorMemberForm.username" :disabled="Boolean(manualEditor.itemId) || manualEditor.mode === 'edit'" placeholder="留空时按姓名生成拼音"></label>
                 <label v-if="manualEditor.mode === 'create' && !manualEditor.itemId">初始密码<span class="manual-password-field"><input v-model="editorMemberForm.password" required minlength="8" maxlength="12" type="text" autocomplete="new-password" placeholder="自动生成 8–12 位密码"><button type="button" @click="editorMemberForm.password = generateInitializationPassword()">换一个</button></span></label>
-                <label>岗位<input v-model.trim="editorMemberForm.positionName" required placeholder="例如：安全员"></label>
+                <label>岗位<select v-model="editorMemberForm.positionName" required><option disabled value="">请选择固定岗位</option><option v-for="position in PROJECT_POSITION_OPTIONS" :key="position.code" :value="position.name">{{ position.name }}</option></select></label>
                 <label>证书编号<input v-model.trim="editorMemberForm.certificateNo" placeholder="没有可留空"></label>
                 <label class="full-span">岗位职责<textarea v-model.trim="editorMemberForm.responsibilityDescription" rows="4" placeholder="说明此人在该岗位承担的职责"></textarea></label>
                 <p class="manual-member-account-note full-span">身份证号用于识别人员：系统已有账号时只加入当前项目；同一成员可继续添加多个岗位，不会重复创建账号。</p>
@@ -606,8 +650,8 @@
             <div><h2 id="project-create-title">新建工程项目</h2><p>先创建项目，其他工程信息将在初始化阶段逐步补全。</p></div>
           </div>
           <form class="form-stack project-create-form" @submit.prevent="submitProject">
-            <label>项目名称<input v-model.trim="projectForm.name" required maxlength="200" autofocus placeholder="请输入项目名称"></label>
-            <div class="setup-modal-actions"><button type="button" class="modal-secondary" :disabled="submitting" @click="closeProjectCreate">取消</button><button type="submit" class="primary" :disabled="submitting || !projectForm.name.trim()">创建项目</button></div>
+            <label>项目名称<input v-model.trim="projectForm.name" required maxlength="200" autofocus :disabled="submitting" placeholder="请输入项目名称"></label>
+            <div class="setup-modal-actions"><button type="button" class="modal-secondary" :disabled="submitting" @click="closeProjectCreate">取消</button><button type="submit" class="primary" :disabled="submitting || !projectForm.name.trim()" :aria-busy="submitting"><n-icon v-if="submitting" :size="16" class="project-action-spinner"><Loader /></n-icon>{{ submitting ? '正在创建…' : '创建项目' }}</button></div>
           </form>
         </section>
       </div>
@@ -976,7 +1020,7 @@
 
           <footer class="initialization-review-actions">
             <span v-if="materialAgentDraft.status === 'applied'">该版本已经写入正式项目数据。</span>
-            <span v-else-if="!isPlatformAdmin">只有平台管理员可以确认正式入库。</span>
+            <span v-else-if="!isPlatformAdmin">只有管理人员可以确认正式入库。</span>
             <span v-else-if="materialAgentDraft.status === 'collecting'">专业智能体仍在整理草稿，全部相关分区完成后将自动进入统一核验。</span>
             <span v-else-if="materialAgentDraft.status === 'reviewing'">平台正在运行版本化核验规则，完成后才可确认入库。</span>
             <span v-else>确认后将以该草稿整体写入项目基础数据。</span>
@@ -1033,7 +1077,7 @@
 import { computed, nextTick, onBeforeUnmount, reactive, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { NIcon, useMessage } from 'naive-ui'
-import { ArrowsLeftRight, ChevronDown, ChevronUp, Link, ListDetails, MessageCircle, Paperclip, Pencil, Plus, Search, Shield, ShieldLock, Users, X } from '@vicons/tabler'
+import { ArrowsLeftRight, ChevronDown, ChevronUp, Link, ListDetails, Loader, MessageCircle, Paperclip, Pencil, PlayerStop, Plus, Robot, Search, Send, Shield, ShieldLock, Users, X } from '@vicons/tabler'
 import api, { type ApiEnvelope } from '@/api/client'
 import {
   streamAgentConversationConfirmation,
@@ -1042,6 +1086,7 @@ import {
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
 import AgentRuntimeDock from '@/components/agent/AgentRuntimeDock.vue'
 import ProjectDocumentPermissionPanel from '@/components/admin/ProjectDocumentPermissionPanel.vue'
+import ChatComposerSurface from '@/components/chat/ChatComposerSurface.vue'
 import InitializationIssueBadges from '@/components/initialization/InitializationIssueBadges.vue'
 import { useAppStore, type ProjectBaseInfoInput, type ProjectConfigScope } from '@/stores/app'
 import type { DirConfig, Member, MemberPosition, PlatformFieldMapping, QualityMetric, RemindRule, RiskLevel, RiskSource, WbsItem } from '@/types'
@@ -1052,23 +1097,24 @@ import {
   type AgentToolCallBlock,
   type ApiAgentMessage,
 } from '@/types/agentRuntime'
-import type {
-  ApiAgentConversation,
-  ApiInitializationDraft,
-  ApiInitializationFile,
-  ApiProjectConnectorConfig,
-  InitializationAttachment,
-  InitializationCredentialForm,
-  InitializationDraftIssue,
-  InitializationPersonnelReviewGroup,
-  InitializationReviewSectionKey,
-  ManualSection,
-  MaterialAgentMessage,
-  MaterialAgentPreparation,
-  ProjectBaseInfoForm,
-  ProjectConnectorConfig,
-  ProjectConnectorKey,
-  WorkspaceTab,
+import {
+  PROJECT_POSITION_OPTIONS,
+  type ApiAgentConversation,
+  type ApiInitializationDraft,
+  type ApiInitializationFile,
+  type ApiProjectConnectorConfig,
+  type InitializationAttachment,
+  type InitializationCredentialForm,
+  type InitializationDraftIssue,
+  type InitializationPersonnelReviewGroup,
+  type InitializationReviewSectionKey,
+  type ManualSection,
+  type MaterialAgentMessage,
+  type MaterialAgentPreparation,
+  type ProjectBaseInfoForm,
+  type ProjectConnectorConfig,
+  type ProjectConnectorKey,
+  type WorkspaceTab,
 } from './project-setup/types'
 import {
   ACTIVE_MATERIAL_AGENT_STATUSES,
@@ -1212,6 +1258,9 @@ const editorRiskForm = reactive({
 })
 const editorMappingForm = reactive({ platformName: '监管填报平台', sourceField: 'draft_content', targetField: '', transformRule: '', required: false, enabled: true })
 const materialAgentMessages = ref<MaterialAgentMessage[]>([])
+const materialAgentConversations = ref<ApiAgentConversation[]>([])
+const materialAgentConversationSearch = ref('')
+const materialAgentConversationListLoading = ref(false)
 const materialAgentConversationLoading = ref(false)
 const materialAgentPrompt = ref('')
 const materialAgentSending = ref(false)
@@ -1233,6 +1282,13 @@ let materialAgentStreamAbortController: AbortController | null = null
 let materialAgentConfirmAbortController: AbortController | null = null
 let materialAgentReconcileSequence = 0
 let materialConversationLoadSequence = 0
+const filteredMaterialAgentConversations = computed(() => {
+  const keyword = materialAgentConversationSearch.value.trim().toLowerCase()
+  if (!keyword) return materialAgentConversations.value
+  return materialAgentConversations.value.filter(conversation => (
+    `${conversation.title} ${conversation.agent_name}`.toLowerCase().includes(keyword)
+  ))
+})
 const materialAgentPreparationProgress = computed(() => {
   const preparation = materialAgentPreparation.value
   if (!preparation?.total) return 0
@@ -1314,6 +1370,7 @@ const initializationCredentialForms = ref<InitializationCredentialForm[]>([])
 const projectConnectorLoading = ref(false)
 const projectConnectorSaving = ref(false)
 const projectConnectorTesting = ref(false)
+const projectConnectorClearing = ref(false)
 const activeProjectConnectorKey = ref<ProjectConnectorKey>('wecom')
 const projectConnectors = reactive<ProjectConnectorConfig[]>([
   { key: 'wecom', label: '企业微信', description: '配置项目群机器人，用于任务下发、节点流转和逾期提醒。', connectionLabel: '项目群名称', connectionPlaceholder: '例如：项目管理群', secretLabel: '群机器人 Webhook', secretPlaceholder: '粘贴企业微信群机器人的完整 Webhook', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
@@ -1321,6 +1378,12 @@ const projectConnectors = reactive<ProjectConnectorConfig[]>([
   { key: 'dingtalk', label: '钉钉', description: '配置当前项目使用的钉钉应用或项目群机器人。', connectionLabel: '应用 Key / 机器人 Webhook', connectionPlaceholder: '输入应用 Key 或项目群机器人 Webhook', secretLabel: '应用 Secret / 加签密钥', secretPlaceholder: '输入应用密钥或加签密钥', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
 ])
 const activeProjectConnector = computed(() => projectConnectors.find(item => item.key === activeProjectConnectorKey.value))
+const projectConnectorBusy = computed(() => (
+  projectConnectorLoading.value
+  || projectConnectorSaving.value
+  || projectConnectorTesting.value
+  || projectConnectorClearing.value
+))
 const projectBaseInfoCompletedCount = computed(() => {
   const values = [
     projectBaseInfoForm.name,
@@ -1755,12 +1818,61 @@ const canApplyInitializationDraft = computed(() => {
   ))
 })
 
-function selectManualSection(section: ManualSection) {
+function setupQueryValue(value: unknown) {
+  return Array.isArray(value) ? String(value[0] || '') : String(value || '')
+}
+
+function replaceSetupRouteQuery(patch: Record<string, string | undefined>) {
+  const query = { ...route.query }
+  Object.entries(patch).forEach(([key, value]) => {
+    if (value) query[key] = value
+    else delete query[key]
+  })
+  void router.replace({ path: '/settings', query })
+}
+
+async function focusConfigRecordFromRoute() {
+  const recordId = setupQueryValue(route.query.recordId)
+  if (!recordId) return
+  await nextTick()
+  const element = document.querySelector<HTMLElement>(`[data-config-record-id="${CSS.escape(recordId)}"]`)
+  element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  element?.focus({ preventScroll: true })
+}
+
+function syncProjectSetupFromRoute() {
+  const tab = setupQueryValue(route.query.tab)
+  const requestedSection = setupQueryValue(route.query.section) as ManualSection
+  const requestedConversationId = Number(setupQueryValue(route.query.conversationId))
+  const availableSections = new Set(manualSections.value.map(item => item.key))
+  if (setupQueryValue(route.query.createProject) === '1') projectCreateOpen.value = true
+  if (tab === 'manual' || tab === 'project' || availableSections.has(requestedSection)) {
+    activeWorkspaceTab.value = 'manual'
+  } else if (tab === 'agent') {
+    activeWorkspaceTab.value = 'agent'
+  }
+  if (availableSections.has(requestedSection)) {
+    manualSection.value = requestedSection
+    if (['wecom', 'feishu', 'dingtalk'].includes(requestedSection)) activeProjectConnectorKey.value = requestedSection as ProjectConnectorKey
+  }
+  if (
+    activeWorkspaceTab.value === 'agent'
+    && configProjectId.value
+    && Number.isInteger(requestedConversationId)
+    && requestedConversationId > 0
+    && requestedConversationId !== materialAgentConversationId.value
+  ) {
+    void loadMaterialAgentConversation(configProjectId.value, requestedConversationId)
+  }
+  void focusConfigRecordFromRoute()
+}
+
+function selectManualSection(section: ManualSection, syncRoute = true) {
+  activeWorkspaceTab.value = 'manual'
   manualSection.value = section
   manualSearch.value = ''
-  if (section === 'wecom' || section === 'feishu' || section === 'dingtalk') {
-    activeProjectConnectorKey.value = section
-  }
+  if (section === 'wecom' || section === 'feishu' || section === 'dingtalk') activeProjectConnectorKey.value = section
+  if (syncRoute) replaceSetupRouteQuery({ tab: 'manual', section, recordId: undefined })
 }
 
 function syncProjectBaseInfo(projectId = configProjectId.value) {
@@ -2089,6 +2201,7 @@ async function loadConfigProjectScope(projectId = configProjectId.value) {
         .filter(item => item.level > 1 && parentIds.has(item.id))
         .map(item => item.id),
     )
+    await focusConfigRecordFromRoute()
   } catch (error: any) {
     if (sequence === configLoadSequence) message.error(error.response?.data?.detail || '项目配置加载失败。')
   } finally {
@@ -2096,19 +2209,19 @@ async function loadConfigProjectScope(projectId = configProjectId.value) {
   }
 }
 
-function selectConfigProject(projectId: string) {
-  if (projectId !== configProjectId.value) configProjectId.value = projectId
-}
-
-function selectWorkspaceTab(tab: WorkspaceTab) {
+function selectWorkspaceTab(tab: WorkspaceTab, syncRoute = true) {
   activeWorkspaceTab.value = tab
+  if (syncRoute) replaceSetupRouteQuery({ tab, section: tab === 'manual' ? manualSection.value : undefined, recordId: undefined })
   if (tab !== 'agent' || !configProjectId.value) return
   void loadMaterialAgentConversation(configProjectId.value)
   void loadInitializationDraft(configProjectId.value)
 }
 
 watch(() => [store.currentProjectId, store.projects.length] as const, () => {
-  if (!configProjectId.value) configProjectId.value = store.currentProjectId || store.projects[0]?.id || ''
+  const preferredProjectId = store.currentProjectId || store.projects[0]?.id || ''
+  if (preferredProjectId && preferredProjectId !== configProjectId.value) {
+    configProjectId.value = preferredProjectId
+  }
 }, { immediate: true })
 
 watch(configProjectId, projectId => {
@@ -2120,6 +2233,8 @@ watch(configProjectId, projectId => {
   activeWorkspaceTab.value = 'agent'
   manualSection.value = 'overview'
   manualSearch.value = ''
+  materialAgentConversations.value = []
+  materialAgentConversationSearch.value = ''
   materialAgentMessages.value = []
   materialAgentError.value = ''
   materialAgentConversationId.value = null
@@ -2147,7 +2262,14 @@ watch(configProjectId, projectId => {
   void loadConfigProjectScope(projectId)
   void loadMaterialAgentConversation(projectId)
   void loadInitializationDraft(projectId)
+  syncProjectSetupFromRoute()
 }, { immediate: true })
+
+watch(
+  () => [route.query.tab, route.query.section, route.query.recordId, route.query.conversationId, route.query.createProject] as const,
+  syncProjectSetupFromRoute,
+  { immediate: true },
+)
 
 watch(() => store.projectSetupRefreshVersion, () => {
   if (!configProjectId.value) return
@@ -2184,6 +2306,7 @@ async function loadProjectConnectorSettings() {
 }
 
 async function saveProjectConnector() {
+  if (projectConnectorBusy.value) return
   const connector = activeProjectConnector.value
   if (!connector) return
   if (!connector.connectionId.trim()) {
@@ -2216,6 +2339,7 @@ async function saveProjectConnector() {
 }
 
 async function testProjectConnector() {
+  if (projectConnectorBusy.value) return
   const connector = activeProjectConnector.value
   if (connector?.key !== 'wecom' || !connector.configured || !configProjectId.value) return
   projectConnectorTesting.value = true
@@ -2230,9 +2354,10 @@ async function testProjectConnector() {
 }
 
 async function clearProjectConnector() {
+  if (projectConnectorBusy.value) return
   const connector = activeProjectConnector.value
   if (!connector || !connector.configured || !configProjectId.value) return
-  projectConnectorSaving.value = true
+  projectConnectorClearing.value = true
   try {
     await api.delete(`/projects/${configProjectId.value}/connectors/${connector.key}`)
     connector.connectionId = ''
@@ -2244,7 +2369,7 @@ async function clearProjectConnector() {
   } catch (error: any) {
     message.error(error.response?.data?.detail || '项目连接配置清除失败。')
   } finally {
-    projectConnectorSaving.value = false
+    projectConnectorClearing.value = false
   }
 }
 
@@ -2283,9 +2408,11 @@ async function scrollMaterialAgentToEnd(
 
 async function loadMaterialAgentConversation(
   projectId = configProjectId.value,
+  requestedConversationId?: number,
 ): Promise<boolean> {
   if (!projectId) return false
   const sequence = ++materialConversationLoadSequence
+  materialAgentConversationListLoading.value = true
   materialAgentConversationLoading.value = true
   materialAgentError.value = ''
   try {
@@ -2294,7 +2421,13 @@ async function loadMaterialAgentConversation(
       { params: { conversation_type: 'initialization' } },
     )
     if (sequence !== materialConversationLoadSequence || projectId !== configProjectId.value) return false
-    const conversation = [...response.data.data].sort((left, right) => left.id - right.id)[0]
+    materialAgentConversations.value = response.data.data
+    const routeConversationId = Number(setupQueryValue(route.query.conversationId))
+    const preferredConversationId = requestedConversationId
+      || materialAgentConversationId.value
+      || (Number.isInteger(routeConversationId) && routeConversationId > 0 ? routeConversationId : null)
+    const conversation = response.data.data.find(item => item.id === preferredConversationId)
+      || response.data.data[0]
     if (!conversation) {
       materialAgentConversationId.value = null
       materialAgentConversationStatus.value = ''
@@ -2314,11 +2447,19 @@ async function loadMaterialAgentConversation(
       { params: { conversation_type: 'initialization' } },
     )
     if (sequence !== materialConversationLoadSequence || projectId !== configProjectId.value) return false
-    materialAgentMessages.value = messages.data.data.map(mapMaterialAgentMessage)
-    materialAgentConversationStatus.value = (
-      refreshedConversations.data.data.find(item => item.id === conversation.id)?.status
-      || conversation.status
-    )
+    const mappedMessages = messages.data.data.map(mapMaterialAgentMessage)
+    const firstUserMessage = mappedMessages.find(item => item.role === 'user')
+    const firstUserTitle = firstUserMessage
+      ? materialAgentConversationTitle(firstUserMessage.content)
+      : ''
+    materialAgentMessages.value = mappedMessages
+    materialAgentConversations.value = refreshedConversations.data.data.map(item => (
+      item.id === conversation.id && firstUserTitle
+        ? { ...item, title: firstUserTitle }
+        : item
+    ))
+    const refreshedConversation = refreshedConversations.data.data.find(item => item.id === conversation.id)
+    materialAgentConversationStatus.value = refreshedConversation?.status || conversation.status
     materialAgentError.value = ''
     void scrollMaterialAgentToEnd()
     return true
@@ -2329,9 +2470,79 @@ async function loadMaterialAgentConversation(
     return false
   } finally {
     if (sequence === materialConversationLoadSequence) {
+      materialAgentConversationListLoading.value = false
       materialAgentConversationLoading.value = false
     }
   }
+}
+
+function formatMaterialAgentConversationTime(value: string) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN', {
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
+function materialAgentConversationTitle(content: string) {
+  const firstLine = content
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .find(Boolean) || ''
+  const normalized = firstLine.replace(/\s+/g, ' ').trim()
+  const firstSentence = normalized.match(/^.*?[。！？!?]|^.*?\.(?=\s|$)/)?.[0] || normalized
+  if (!firstSentence) return '新对话'
+  return firstSentence.length > 300
+    ? `${firstSentence.slice(0, 299).trimEnd()}…`
+    : firstSentence
+}
+
+function syncMaterialAgentConversationRoute(conversationId?: number) {
+  replaceSetupRouteQuery({
+    tab: 'agent',
+    section: undefined,
+    recordId: undefined,
+    conversationId: conversationId ? String(conversationId) : undefined,
+  })
+}
+
+function resetMaterialAgentConversationView() {
+  cancelMaterialAgentRequests()
+  materialAgentReconcileSequence += 1
+  materialAgentConversationId.value = null
+  materialAgentConversationStatus.value = ''
+  materialAgentMessages.value = []
+  materialAgentPrompt.value = ''
+  materialAgentError.value = ''
+  materialAgentPreparation.value = null
+  materialAgentStreamingTrace.value = null
+  materialAgentFollowOutput.value = true
+  clearMaterialAgentFiles()
+}
+
+function startNewMaterialAgentConversation() {
+  if (materialAgentLoading.value || materialAgentStopping.value) return
+  resetMaterialAgentConversationView()
+  syncMaterialAgentConversationRoute()
+}
+
+async function selectMaterialAgentConversation(conversationId: number) {
+  if (
+    conversationId === materialAgentConversationId.value
+    || materialAgentLoading.value
+    || materialAgentStopping.value
+  ) return
+  resetMaterialAgentConversationView()
+  materialAgentConversationId.value = conversationId
+  syncMaterialAgentConversationRoute(conversationId)
+  await loadMaterialAgentConversation(configProjectId.value, conversationId)
 }
 
 async function loadInitializationDraft(projectId = configProjectId.value) {
@@ -2478,9 +2689,15 @@ async function ensureMaterialAgentConversation(signal?: AbortSignal): Promise<nu
     { conversation_type: 'initialization' },
     { signal },
   )
-  materialAgentConversationId.value = response.data.data.id
-  materialAgentConversationStatus.value = response.data.data.status
-  return response.data.data.id
+  const conversation = response.data.data
+  materialAgentConversationId.value = conversation.id
+  materialAgentConversationStatus.value = conversation.status
+  materialAgentConversations.value = [
+    conversation,
+    ...materialAgentConversations.value.filter(item => item.id !== conversation.id),
+  ]
+  syncMaterialAgentConversationRoute(conversation.id)
+  return conversation.id
 }
 
 async function uploadMaterialAgentFiles(
@@ -2552,7 +2769,21 @@ async function sendMaterialAgentMessage() {
   }
   await scrollMaterialAgentToEnd()
   try {
+    const creatingConversation = materialAgentConversationId.value === null
     const conversationId = await ensureMaterialAgentConversation(controller.signal)
+    const activeConversation = materialAgentConversations.value.find(conversation => conversation.id === conversationId)
+    if (activeConversation) {
+      materialAgentConversations.value = [
+        {
+          ...activeConversation,
+          title: creatingConversation
+            ? materialAgentConversationTitle(content)
+            : activeConversation.title,
+          updated_at: new Date().toISOString(),
+        },
+        ...materialAgentConversations.value.filter(conversation => conversation.id !== conversationId),
+      ]
+    }
     const uploadedFiles = await uploadMaterialAgentFiles(
       conversationId,
       selectedFiles,
@@ -2928,6 +3159,7 @@ async function reconcileMaterialAgentAfterStop(
 
 onBeforeUnmount(() => {
   materialConversationLoadSequence += 1
+  materialAgentConversationListLoading.value = false
   materialAgentConversationLoading.value = false
   materialAgentReconcileSequence += 1
   cancelMaterialAgentRequests()
@@ -2996,18 +3228,27 @@ function clearMaterialAgentFiles() {
 }
 
 async function run(action: () => Promise<unknown>, success: string) {
+  if (submitting.value) return
   submitting.value = true
   try { await action(); await loadConfigProjectScope(); message.success(success) } catch (error: any) { message.error(error.response?.data?.detail || '保存失败，请检查权限和服务连接。') } finally { submitting.value = false }
 }
 function openProjectCreate() { projectCreateOpen.value = true }
-function closeProjectCreate() { if (!submitting.value) projectCreateOpen.value = false }
+function closeProjectCreate() {
+  if (submitting.value) return
+  projectCreateOpen.value = false
+  if (setupQueryValue(route.query.createProject) === '1') {
+    replaceSetupRouteQuery({ createProject: undefined })
+  }
+}
 function submitProject() {
   void run(async () => {
     const project = await store.createProject({ name: projectForm.name })
     configProjectId.value = project.id
     projectForm.name = ''
     projectCreateOpen.value = false
-    if (projectRequiredNotice.value) await router.replace({ path: '/settings' })
+    if (projectRequiredNotice.value || setupQueryValue(route.query.createProject) === '1') {
+      await router.replace({ path: '/settings', query: { tab: 'agent' } })
+    }
   }, '项目已创建')
 }
 function submitMember() {

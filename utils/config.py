@@ -354,7 +354,6 @@ GRAPHITI_SEARCH_TIMEOUT = 10.0            # Neo4j 搜索超时（秒）
 AUTO_HINT_THRESHOLD = float(_env("AUTO_HINT_THRESHOLD", "0.65"))
 AUTO_HINT_TIMEOUT = float(_env("AUTO_HINT_TIMEOUT", "0.5"))
 AUTO_HINT_MAX_CHARS = int(_env("AUTO_HINT_MAX_CHARS", "120"))
-MAX_CONSECUTIVE_MINIMAL = int(_env("MAX_CONSECUTIVE_MINIMAL", "5"))
 COMPRESSION_MAX_CONSECUTIVE = int(_env("COMPRESSION_MAX_CONSECUTIVE", "3"))
 COMPRESSION_QUALITY_THRESHOLD = float(_env("COMPRESSION_QUALITY_THRESHOLD", "0.3"))
 COMPRESSION_MIN_ROUNDS_BETWEEN = int(_env("COMPRESSION_MIN_ROUNDS_BETWEEN", "5"))
@@ -429,6 +428,6 @@ Configuration:
   Embed Server: {EMBED_SERVER_URL}
   Reflection:    threshold={REFLECTION_IMPORTANCE_THRESHOLD}
   Event Merge:  cluster_size={EXPERIENCE_EVENT_MIN_CLUSTER_SIZE}, cooldown={EXPERIENCE_EVENT_COOLDOWN_MINUTES}m
-  Context Scheduling: auto-hint_threshold={AUTO_HINT_THRESHOLD}, consecutive_minimal={MAX_CONSECUTIVE_MINIMAL}
+  Context Scheduling: auto-hint_threshold={AUTO_HINT_THRESHOLD}, retrieval=model-directed
   Compression Guard: max_consecutive={COMPRESSION_MAX_CONSECUTIVE}, quality_threshold={COMPRESSION_QUALITY_THRESHOLD}
 """.strip()

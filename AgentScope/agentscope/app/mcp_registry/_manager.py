@@ -953,18 +953,31 @@ class MCPRegistryManager:
         package_ids: list[str],
         platform_agent_id: str | None = None,
         platform_session_id: str | None = None,
+        excluded_package_ids: Iterable[str] = (),
     ) -> list[MCPClient]:
         """Return session-isolated clients for assigned and system packages.
 
-        Agent assignments apply only to ordinary MCP packages.  Installed
-        system-tool packages are always added for every agent and cannot be
-        disabled by legacy or current agent configuration.
+        Agent assignments apply only to ordinary MCP packages. Installed
+        system-tool packages are added independently of agent configuration;
+        trusted runtime assembly may defer a package that the current turn
+        cannot use (for example, the attachment parser on a text-only turn).
         """
+        excluded_ids = {
+            str(package_id).strip()
+            for package_id in excluded_package_ids
+            if str(package_id).strip()
+        }
         all_records = {
             record.id: record
             for record in await self.list_records()
         }
-        assigned_ids = list(dict.fromkeys(package_ids))
+        assigned_ids = list(
+            dict.fromkeys(
+                package_id
+                for package_id in package_ids
+                if package_id not in excluded_ids
+            ),
+        )
         requested_ids = list(
             dict.fromkeys(
                 [
@@ -973,6 +986,7 @@ class MCPRegistryManager:
                         package_id
                         for package_id in sorted(self.system_tool_package_ids)
                         if package_id in all_records
+                        and package_id not in excluded_ids
                     ),
                 ],
             ),

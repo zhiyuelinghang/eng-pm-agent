@@ -1,8 +1,9 @@
 from datetime import date
 from decimal import Decimal
 from typing import Any, Literal
+from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class LoginRequest(BaseModel):
@@ -178,7 +179,6 @@ class MemberInput(BaseModel):
     real_name: str = Field(min_length=1, max_length=100)
     identity_card_no: str = Field(min_length=1, max_length=30)
     password: str | None = Field(default=None, min_length=8)
-    system_role: Literal["admin", "user"] = "user"
     position_name: str = Field(min_length=1, max_length=100)
     certificate_no: str = Field(default="", max_length=100)
     responsibility_description: str = Field(default="", max_length=10000)
@@ -309,6 +309,12 @@ class TaskInput(BaseModel):
 class TaskFlowGenerateInput(BaseModel):
     requirement: str = Field(min_length=4, max_length=4000)
     template_type: str | None = None
+    generation_id: str = Field(
+        default_factory=lambda: str(uuid4()),
+        min_length=8,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
 
 
 class TaskTransitionInput(BaseModel):
@@ -386,9 +392,31 @@ class ChatMessageInput(BaseModel):
     mentioned_agent_ids: list[str] = Field(default_factory=list, max_length=10)
 
 
+class ChatTaskDraftCreateInput(BaseModel):
+    requirement: str = Field(min_length=4, max_length=4000)
+    client_request_id: str = Field(
+        min_length=8,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+
+
+class HomeTaskDraftCreateInput(ChatTaskDraftCreateInput):
+    conversation_id: int | None = Field(default=None, ge=1)
+
+
 class ChatPrivateChannelInput(BaseModel):
-    title: str | None = Field(default=None, max_length=100)
+    title: str = Field(min_length=1, max_length=100)
     participant_user_ids: list[int] = Field(min_length=1, max_length=50)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def normalize_title(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            value = value.strip()
+        if not value:
+            raise ValueError("群名称不能为空")
+        return value
 
 
 class AgentConversationInput(BaseModel):

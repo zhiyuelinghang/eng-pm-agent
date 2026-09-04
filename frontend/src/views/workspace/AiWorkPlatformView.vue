@@ -3,12 +3,15 @@
     <section v-if="section === 'home'" class="home-console">
       <main class="home-workspace">
         <div class="home-titlebar">
-          <div class="home-mode-tabs">
+          <div class="home-mode-tabs" role="tablist" aria-label="工作首页模式">
             <button
               v-for="mode in homeModeTabs"
               :key="mode.key"
+              type="button"
+              role="tab"
+              :aria-selected="homeMode === mode.key"
               :class="{ active: homeMode === mode.key }"
-              @click="homeMode = mode.key"
+              @click="selectHomeMode(mode.key)"
             >
               {{ mode.label }}
             </button>
@@ -68,6 +71,7 @@
                 <span class="task-empty-kicker">Dobby 已待命</span>
                 <strong class="task-empty-title">{{ homeEmptyText }}</strong>
                 <p class="task-empty-copy">Dobby 会持续同步任务引擎，新节点到达后会显示在这里。</p>
+                <div class="task-empty-actions"><router-link :to="{ path: '/tasks', query: { tab: 'assign' } }">布置新任务</router-link><button type="button" @click="selectHomeMode('quick')">问问 Dobby</button></div>
               </div>
             </div>
             <nav class="home-pagination" aria-label="工作列表分页">
@@ -100,6 +104,7 @@
                 <h2>{{ selectedHomeWorkItem.title }}</h2>
                 <p>{{ selectedHomeWorkItem.owner }} · {{ selectedHomeWorkItem.role }} · {{ selectedHomeWorkItem.deadline }}</p>
               </div>
+              <router-link class="home-work-open-task" :to="taskDetailRoute(selectedHomeWorkItem.id)">处理任务</router-link>
             </header>
 
             <div ref="homeWorkThreadViewport" class="home-work-ai-thread">
@@ -108,9 +113,11 @@
                 :key="messageItem.id"
                 :class="['message-row', messageItem.role]"
               >
-                <div class="message-avatar" aria-hidden="true">{{ messageItem.role === 'assistant' ? '管' : '我' }}</div>
+                <div class="message-avatar" aria-hidden="true">
+                  <n-icon v-if="messageItem.role === 'assistant'" :size="17"><Robot /></n-icon>
+                  <span v-else>我</span>
+                </div>
                 <div class="message-stack">
-                  <div v-if="messageItem.role === 'assistant'" class="message-role">Dobby</div>
                   <div class="message-bubble">
                     <p>{{ messageItem.content }}</p>
                     <div v-if="messageItem.attachments?.length" class="message-attachments" aria-label="消息附件">
@@ -147,32 +154,38 @@
             </div>
 
             <form class="chat-composer home-work-composer" @submit.prevent="dispatchHomeWorkCommand">
-              <div class="composer-entry">
-                <div v-if="homeWorkFiles.length" class="composer-attachment-list" aria-label="待发送附件">
-                  <span v-for="(file, index) in homeWorkFiles" :key="`${file.name}-${file.lastModified}`">
-                    <n-icon :size="16"><FileText /></n-icon>
-                    <b :title="file.name">{{ file.name }}</b>
-                    <small>{{ formatFileSize(file.size) }}</small>
-                    <button type="button" :aria-label="`移除附件 ${file.name}`" @click="removeComposerFile('work', index)">×</button>
-                  </span>
-                </div>
-                <div class="composer-input-row">
-                  <label class="composer-attach-button" title="上传图片、PDF、表格或其他工程资料">
+              <ChatComposerSurface :busy="homeWorkUploading" contained>
+                <template v-if="homeWorkFiles.length" #attachments>
+                  <div class="chat-composer-files" aria-label="待发送附件">
+                    <span v-for="(file, index) in homeWorkFiles" :key="`${file.name}-${file.lastModified}`" class="chat-composer-file">
+                      <n-icon :size="16"><FileText /></n-icon>
+                      <b :title="file.name">{{ file.name }}</b>
+                      <small>{{ formatFileSize(file.size) }}</small>
+                      <button type="button" class="chat-composer-file-remove" :aria-label="`移除附件 ${file.name}`" @click="removeComposerFile('work', index)">×</button>
+                    </span>
+                  </div>
+                </template>
+                <textarea
+                  v-model="homeWorkCommand"
+                  class="chat-composer-input"
+                  rows="1"
+                  :placeholder="`围绕“${selectedHomeWorkItem.title}”继续交互，也可以直接上传资料`"
+                  @keydown.enter.exact.prevent="dispatchHomeWorkCommand"
+                ></textarea>
+                <template #tools>
+                  <label class="chat-composer-tool" title="上传图片、PDF、表格或其他工程资料">
                     <input type="file" multiple @change="selectComposerFiles('work', $event)">
-                    <n-icon :size="18"><Paperclip /></n-icon>
-                    <span>添加附件</span>
+                    <n-icon :size="17"><Paperclip /></n-icon>
+                    <span>附件</span>
                   </label>
-                  <textarea
-                    v-model="homeWorkCommand"
-                    :placeholder="`围绕“${selectedHomeWorkItem.title}”继续交互，也可以直接上传资料`"
-                    @keydown.enter.exact.prevent="dispatchHomeWorkCommand"
-                  ></textarea>
-                </div>
-              </div>
-              <button type="submit" :disabled="homeWorkUploading || (!homeWorkCommand.trim() && !homeWorkFiles.length)">
-                <n-icon :size="17"><Send /></n-icon>
-                {{ homeWorkUploading ? '上传中…' : '发送' }}
-              </button>
+                </template>
+                <template #action>
+                  <button type="submit" class="chat-composer-action" :disabled="homeWorkUploading || (!homeWorkCommand.trim() && !homeWorkFiles.length)">
+                    <n-icon :size="17"><Send /></n-icon>
+                    {{ homeWorkUploading ? '处理中' : '发送' }}
+                  </button>
+                </template>
+              </ChatComposerSurface>
             </form>
           </section>
 
@@ -184,45 +197,113 @@
             <span class="task-empty-kicker">Dobby 已待命</span>
             <strong class="task-empty-title">{{ homeEmptyText }}</strong>
             <p class="task-empty-copy">Dobby 会持续同步任务引擎，新节点到达后会显示在这里。</p>
+            <div class="task-empty-actions"><router-link :to="{ path: '/tasks', query: { tab: 'assign' } }">布置新任务</router-link><button type="button" @click="selectHomeMode('quick')">问问 Dobby</button></div>
           </section>
         </div>
 
-        <section v-else class="home-chat-panel">
-          <div class="chat-head home-chat-head" :class="{ 'is-empty': !homeQuickSession }">
-            <div v-if="homeQuickSession" class="chat-title-block">
-              <h1 :title="homeQuickSessionTitle">{{ homeQuickSessionTitle }}</h1>
-              <div class="chat-subline">
-                <span>{{ homeQuickSessionTime }}</span>
+        <div v-else class="home-chat-workspace">
+          <aside class="home-conversation-rail" aria-label="首页聊天记录">
+            <header class="home-conversation-rail-head">
+              <button
+                type="button"
+                aria-label="新建聊天"
+                title="新建聊天"
+                :disabled="quickUploading"
+                @click="startNewHomeConversation()"
+              >
+                <n-icon :size="18"><Plus /></n-icon>
+                <span>新会话</span>
+              </button>
+            </header>
+
+            <label class="home-conversation-search">
+              <n-icon :size="16"><Search /></n-icon>
+              <input v-model="homeConversationKeyword" type="search" aria-label="搜索聊天记录" placeholder="搜索聊天记录">
+            </label>
+
+            <div class="home-conversation-list" aria-live="polite">
+              <div v-if="homeConversationListLoading" class="home-conversation-loading">
+                <i v-for="index in 4" :key="index"></i>
+              </div>
+              <template v-else>
+                <article
+                  v-for="conversation in filteredHomeAgentConversations"
+                  :key="conversation.id"
+                  :class="{ active: homeAgentConversation?.id === conversation.id }"
+                >
+                  <button
+                    type="button"
+                    class="home-conversation-select"
+                    :aria-current="homeAgentConversation?.id === conversation.id ? 'true' : undefined"
+                    :disabled="quickUploading"
+                    @click="selectHomeConversation(conversation.id)"
+                  >
+                    <strong :title="conversation.title">{{ conversation.title }}</strong>
+                    <span>
+                      <time>{{ formatHomeConversationTime(conversation.updated_at || conversation.created_at) }}</time>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    class="home-conversation-delete"
+                    :aria-busy="homeConversationDeletingId === conversation.id"
+                    :aria-label="homeConversationDeletingId === conversation.id ? `正在删除聊天 ${conversation.title}` : `删除聊天 ${conversation.title}`"
+                    :title="homeConversationDeletingId === conversation.id ? '正在删除' : `删除“${conversation.title}”`"
+                    :disabled="quickUploading || homeConversationDeletingId !== null"
+                    @click.stop="deleteHomeConversation(conversation.id)"
+                  >
+                    <n-icon v-if="homeConversationDeletingId === conversation.id" class="home-conversation-delete-spinner" :size="15"><Loader /></n-icon>
+                    <n-icon v-else :size="15"><Trash /></n-icon>
+                  </button>
+                </article>
+              </template>
+              <div
+                v-if="!homeConversationListLoading && !filteredHomeAgentConversations.length"
+                class="home-conversation-empty"
+              >
+                <n-icon :size="22"><Robot /></n-icon>
+                <strong>{{ homeAgentConversations.length ? '没有匹配的聊天' : '还没有聊天记录' }}</strong>
+                <span>{{ homeAgentConversations.length ? '换个关键词试试' : '发送第一条消息后会显示在这里' }}</span>
               </div>
             </div>
-          </div>
-          <div ref="homeQuickViewport" :class="['messages', 'home-chat-messages', { 'is-empty': !homeQuickChatMessages.length && !homeQuickStreamingTrace }]">
-            <div v-if="!homeQuickChatMessages.length && !homeQuickStreamingTrace" class="home-chat-guide">
-              <div class="home-chat-guide-copy">
-                <strong>从这里开始协同处理</strong>
-                <p>可以围绕当前项目的任务、资料、风险和人员关系展开处理；对话中形成的新工作会同步到智能协同，后续继续跟踪责任人、截止时间和处理进度。</p>
-              </div>
-              <div class="home-chat-guide-items">
-                <span><b>查资料缺口</b>核对日报、监测报告、风险草稿和填报附件</span>
-                <span><b>拆解处理动作</b>生成责任人、截止时间、依赖关系和下一步</span>
-                <span><b>发起多人协同</b>把需要配合的人和事项沉淀到同一会话</span>
-                <span><b>跟踪闭环结果</b>会话产生的工作进入任务管理持续推进</span>
+          </aside>
+
+          <section class="home-chat-panel">
+            <div class="chat-head home-chat-head">
+              <div class="chat-title-block">
+                <h1 :title="homeQuickSessionTitle">{{ homeQuickSessionTitle }}</h1>
+                <div class="chat-subline">
+                  <span>{{ homeQuickSessionTime }}</span>
+                  <span>{{ homeQuickAgentName }}</span>
+                </div>
               </div>
             </div>
+            <div ref="homeQuickViewport" :class="['messages', 'home-chat-messages', { 'is-empty': !homeQuickChatMessages.length && !homeQuickStreamingTrace && !homeConversationMessagesLoading }]">
+              <div v-if="homeConversationMessagesLoading" class="home-chat-loading">
+                <span></span>
+                <strong>正在加载聊天记录</strong>
+              </div>
+              <div v-else-if="!homeQuickChatMessages.length && !homeQuickStreamingTrace" class="home-chat-guide">
+                <div class="home-chat-guide-copy">
+                  <strong>从这里开始协同处理</strong>
+                  <p>直接输入问题开始对话；需要调用其他智能体时，输入 @ 选择。</p>
+                </div>
+              </div>
             <article
               v-for="message in homeQuickChatMessages"
               :key="message.id"
               :class="['message-row', message.role, { 'has-generated': message.generatedTaskIds?.length }]"
             >
               <div class="message-avatar" aria-hidden="true">
-                {{ message.role === 'assistant' ? '管' : '我' }}
+                <n-icon v-if="message.role === 'assistant'" :size="17"><Robot /></n-icon>
+                <span v-else>我</span>
               </div>
               <div class="message-stack">
-                <div v-if="message.role === 'assistant'" class="message-role">{{ homeQuickAgentName }}</div>
                 <div class="message-bubble">
                   <AgentMessageContent
                     :content="message.content"
                     :runtime-trace="message.runtimeTrace"
+                    :confirmation-busy="quickUploading"
                     @confirm="confirmHomeToolCall"
                   />
                   <div v-if="message.attachments?.length" class="message-attachments" aria-label="消息附件">
@@ -244,59 +325,109 @@
                       </div>
                       <span class="status-pill">{{ statusLabel(task.status) }}</span>
                       <div class="mini-track"><i :style="{ width: `${taskProgress(task.status)}%` }"></i></div>
-                      <router-link to="/tasks">跟踪</router-link>
+                      <router-link :to="taskDetailRoute(task.id, 'history')">跟踪</router-link>
                     </article>
                   </div>
                 </div>
               </div>
             </article>
-            <article v-if="homeQuickStreamingTrace" class="message-row assistant">
-              <div class="message-avatar" aria-hidden="true">管</div>
+            <article
+              v-if="homeQuickStreamingTrace"
+              :class="['message-row', 'assistant', { 'is-awaiting-first-event': !homeQuickStreamingTrace.messages.length }]"
+            >
+              <div class="message-avatar" aria-hidden="true"><n-icon :size="17"><Robot /></n-icon></div>
               <div class="message-stack">
-                <div class="message-role">{{ homeQuickAgentName }}</div>
                 <div class="message-bubble">
                   <AgentMessageContent
                     :runtime-trace="homeQuickStreamingTrace"
+                    :confirmation-busy="quickUploading"
                     streaming
                     @confirm="confirmHomeToolCall"
                   />
                 </div>
               </div>
             </article>
-          </div>
-          <form class="chat-composer home-chat-composer" @submit.prevent="dispatchQuickCommand">
-            <div class="composer-entry">
-              <div v-if="quickFiles.length" class="composer-attachment-list" aria-label="待发送附件">
-                <span v-for="(file, index) in quickFiles" :key="`${file.name}-${file.lastModified}`">
-                  <n-icon :size="16"><FileText /></n-icon>
-                  <b :title="file.name">{{ file.name }}</b>
-                  <small>{{ formatFileSize(file.size) }}</small>
-                  <button type="button" :aria-label="`移除附件 ${file.name}`" @click="removeComposerFile('quick', index)">×</button>
-                </span>
-              </div>
-              <div class="composer-input-row">
-                <label class="composer-attach-button" title="上传图片、PDF、表格或其他工程资料">
-                  <input type="file" multiple @change="selectComposerFiles('quick', $event)">
-                  <n-icon :size="18"><Paperclip /></n-icon>
-                  <span>添加附件</span>
-                </label>
+            </div>
+            <form class="chat-composer home-chat-composer" @submit.prevent="dispatchQuickCommand()">
+              <ChatComposerSurface :busy="quickUploading || homeCapabilityDispatching" contained>
+                <template v-if="quickFiles.length" #attachments>
+                  <div class="chat-composer-files" aria-label="待发送附件">
+                    <span v-for="(file, index) in quickFiles" :key="`${file.name}-${file.lastModified}`" class="chat-composer-file">
+                      <n-icon :size="16"><FileText /></n-icon>
+                      <b :title="file.name">{{ file.name }}</b>
+                      <small>{{ formatFileSize(file.size) }}</small>
+                      <button type="button" class="chat-composer-file-remove" :aria-label="`移除附件 ${file.name}`" @click="removeComposerFile('quick', index)">×</button>
+                    </span>
+                  </div>
+                </template>
                 <textarea
                   v-model="quickCommand"
-                  :placeholder="`输入问题，也可以上传资料让${homeQuickAgentName}识别和分析`"
-                  @keydown.enter.exact.prevent="dispatchQuickCommand"
+                  ref="homeQuickComposerInput"
+                  class="chat-composer-input"
+                  rows="1"
+                  :placeholder="`输入消息，或通过 @ 调用资料助手、任务助手`"
+                  :disabled="homeConversationMessagesLoading || homeCapabilityDispatching"
+                  @blur="closeHomeCapabilityMenuLater"
+                  @keydown.esc="homeCapabilityMenuOpen = false"
+                  @keydown.enter.exact.prevent="dispatchQuickCommand()"
                 ></textarea>
-              </div>
-            </div>
-            <button v-if="quickUploading" type="button" class="stop-agent" @click="stopHomeAgent">
-              <n-icon :size="17"><PlayerStop /></n-icon>
-              停止
-            </button>
-            <button v-else type="submit" :disabled="!quickCommand.trim() && !quickFiles.length">
-              <n-icon :size="17"><Send /></n-icon>
-              发送
-            </button>
-          </form>
-        </section>
+                <template #tools>
+                  <label class="chat-composer-tool" title="上传图片、PDF、表格或其他工程资料">
+                    <input type="file" multiple @change="selectComposerFiles('quick', $event)">
+                    <n-icon :size="17"><Paperclip /></n-icon>
+                    <span>附件</span>
+                  </label>
+                  <div class="home-capability-picker" @focusout="closeHomeCapabilityMenuLater">
+                    <button
+                      type="button"
+                      class="chat-composer-tool home-capability-trigger"
+                      aria-label="选择助手"
+                      title="选择助手"
+                      :aria-expanded="homeCapabilityMenuOpen"
+                      @click="homeCapabilityMenuOpen = !homeCapabilityMenuOpen"
+                    >
+                      <n-icon :size="17"><At /></n-icon>
+                      <span>助手</span>
+                    </button>
+                    <div v-if="homeCapabilityMenuOpen" class="home-capability-menu" role="listbox" aria-label="可用助手">
+                      <button
+                        v-for="capability in homeCapabilities"
+                        :key="capability.name"
+                        type="button"
+                        role="option"
+                        @mousedown.prevent
+                        @click="insertHomeCapabilityMention(capability.name)"
+                      >
+                        <span><n-icon :size="18"><component :is="capability.icon" /></n-icon></span>
+                        <span><strong>{{ capability.name }}</strong><small>{{ capability.description }}</small></span>
+                      </button>
+                    </div>
+                  </div>
+                </template>
+                <template #action>
+                  <button v-if="quickUploading" type="button" class="chat-composer-action is-stop" :disabled="quickStopping" :aria-busy="quickStopping" @click="stopHomeAgent">
+                    <n-icon v-if="quickStopping" :size="17" class="task-inline-spinner"><Loader /></n-icon>
+                    <n-icon v-else :size="17"><PlayerStop /></n-icon>
+                    <span>{{ quickStopping ? '正在停止…' : '停止' }}</span>
+                  </button>
+                  <button
+                    v-else
+                    type="submit"
+                    class="chat-composer-action"
+                    :disabled="homeConversationMessagesLoading || homeCapabilityDispatching || (!quickCommand.trim() && !quickFiles.length)"
+                  >
+                    <n-icon :size="17"><Send /></n-icon>
+                    <span>{{ homeCapabilityDispatching ? '准备中' : '发送' }}</span>
+                  </button>
+                </template>
+              </ChatComposerSurface>
+            </form>
+            <HomeTaskDraftDialog
+              ref="homeTaskDraftDialog"
+              :project-id="store.currentProjectId"
+            />
+          </section>
+        </div>
       </main>
     </section>
 
@@ -304,8 +435,8 @@
 
     <section v-else-if="section === 'tasks'" class="task-page task-management-page">
       <header class="task-management-nav">
-        <nav aria-label="任务管理模块">
-          <button v-for="tab in taskManagementTabs" :key="tab.key" type="button" :title="tab.hint" :class="{ active: taskManagementTab === tab.key }" @click="taskManagementTab = tab.key">
+        <nav aria-label="任务管理模块" role="tablist">
+          <button v-for="tab in taskManagementTabs" :key="tab.key" type="button" role="tab" :aria-selected="taskManagementTab === tab.key" :title="tab.hint" :class="{ active: taskManagementTab === tab.key }" @click="selectTaskManagementTab(tab.key)">
             <span><n-icon :size="17"><component :is="tab.icon" /></n-icon>{{ tab.label }}</span>
             <b>{{ tab.count }}</b>
           </button>
@@ -364,6 +495,7 @@
                 <span class="task-empty-kicker">Dobby 已待命</span>
                 <strong class="task-empty-title">{{ taskMineEmptyText }}</strong>
                 <p class="task-empty-copy">Dobby 会持续同步任务引擎，新节点到达后会显示在这里。</p>
+                <div class="task-empty-actions"><button type="button" @click="selectTaskManagementTab('assign')">布置新任务</button><router-link :to="{ path: '/project', query: { tab: 'progress' } }">查看项目状态</router-link></div>
               </div>
             </div>
 
@@ -384,13 +516,16 @@
                 <h2>{{ selectedTaskMineWorkItem.title }}</h2>
                 <p>{{ selectedTaskMineWorkItem.owner }} · {{ selectedTaskMineWorkItem.role }} · {{ selectedTaskMineWorkItem.deadline }}</p>
               </div>
+              <button type="button" class="home-work-open-task" @click="openTaskDisposition(selectedTaskMineWorkItem.id)">处理任务</button>
             </header>
 
             <div ref="taskMineThreadViewport" class="home-work-ai-thread">
               <article v-for="messageItem in taskMineConversationMessages" :key="messageItem.id" :class="['message-row', messageItem.role]">
-                <div class="message-avatar" aria-hidden="true">{{ messageItem.role === 'assistant' ? '管' : '我' }}</div>
+                <div class="message-avatar" aria-hidden="true">
+                  <n-icon v-if="messageItem.role === 'assistant'" :size="17"><Robot /></n-icon>
+                  <span v-else>我</span>
+                </div>
                 <div class="message-stack">
-                  <div v-if="messageItem.role === 'assistant'" class="message-role">Dobby</div>
                   <div class="message-bubble">
                     <p>{{ messageItem.content }}</p>
                     <div v-if="messageItem.attachments?.length" class="message-attachments" aria-label="消息附件">
@@ -413,16 +548,20 @@
             </div>
 
             <form class="chat-composer home-work-composer" @submit.prevent="dispatchTaskMineCommand">
-              <div class="composer-entry">
-                <div v-if="taskMineFiles.length" class="composer-attachment-list" aria-label="待发送附件">
-                  <span v-for="(file, index) in taskMineFiles" :key="`${file.name}-${file.lastModified}`"><n-icon :size="16"><FileText /></n-icon><b :title="file.name">{{ file.name }}</b><small>{{ formatFileSize(file.size) }}</small><button type="button" :aria-label="`移除附件 ${file.name}`" @click="removeComposerFile('task', index)">×</button></span>
-                </div>
-                <div class="composer-input-row">
-                  <label class="composer-attach-button" title="上传任务证明材料或工程资料"><input type="file" multiple @change="selectComposerFiles('task', $event)"><n-icon :size="18"><Paperclip /></n-icon><span>添加附件</span></label>
-                  <textarea v-model="taskMineCommand" :placeholder="`围绕“${selectedTaskMineWorkItem.title}”继续交互，也可以直接上传资料`" @keydown.enter.exact.prevent="dispatchTaskMineCommand"></textarea>
-                </div>
-              </div>
-              <button type="submit" :disabled="taskMineUploading || (!taskMineCommand.trim() && !taskMineFiles.length)"><n-icon :size="17"><Send /></n-icon>{{ taskMineUploading ? '上传中…' : '发送' }}</button>
+              <ChatComposerSurface :busy="taskMineUploading" contained>
+                <template v-if="taskMineFiles.length" #attachments>
+                  <div class="chat-composer-files" aria-label="待发送附件">
+                    <span v-for="(file, index) in taskMineFiles" :key="`${file.name}-${file.lastModified}`" class="chat-composer-file"><n-icon :size="16"><FileText /></n-icon><b :title="file.name">{{ file.name }}</b><small>{{ formatFileSize(file.size) }}</small><button type="button" class="chat-composer-file-remove" :aria-label="`移除附件 ${file.name}`" @click="removeComposerFile('task', index)">×</button></span>
+                  </div>
+                </template>
+                <textarea v-model="taskMineCommand" class="chat-composer-input" rows="1" :placeholder="`围绕“${selectedTaskMineWorkItem.title}”继续交互，也可以直接上传资料`" @keydown.enter.exact.prevent="dispatchTaskMineCommand"></textarea>
+                <template #tools>
+                  <label class="chat-composer-tool" title="上传任务证明材料或工程资料"><input type="file" multiple @change="selectComposerFiles('task', $event)"><n-icon :size="17"><Paperclip /></n-icon><span>附件</span></label>
+                </template>
+                <template #action>
+                  <button type="submit" class="chat-composer-action" :disabled="taskMineUploading || (!taskMineCommand.trim() && !taskMineFiles.length)"><n-icon :size="17"><Send /></n-icon>{{ taskMineUploading ? '处理中' : '发送' }}</button>
+                </template>
+              </ChatComposerSurface>
             </form>
           </section>
 
@@ -434,6 +573,7 @@
             <span class="task-empty-kicker">Dobby 已待命</span>
             <strong class="task-empty-title">{{ taskMineEmptyText }}</strong>
             <p class="task-empty-copy">Dobby 会持续同步任务引擎，新节点到达后会显示在这里。</p>
+            <div class="task-empty-actions"><button type="button" @click="selectTaskManagementTab('assign')">布置新任务</button><router-link :to="{ path: '/project', query: { tab: 'progress' } }">查看项目状态</router-link></div>
           </section>
         </div>
       </main>
@@ -460,7 +600,7 @@
           <label><span>计划名称</span><input v-model.trim="taskScheduleKeyword" placeholder="输入计划名称或触发规则"></label>
           <label><span>计划状态</span><select v-model="taskScheduleStatus"><option value="all">全部状态</option><option value="active">生效中</option><option value="paused">已暂停</option><option value="ended">已结束</option><option value="cancelled">已取消</option></select></label>
           <button type="button" @click="loadTaskSchedules"><n-icon :size="17"><Repeat /></n-icon>刷新</button>
-          <button type="button" class="task-schedule-create" @click="taskManagementTab = 'assign'"><n-icon :size="17"><Plus /></n-icon>布置任务</button>
+          <button type="button" class="task-schedule-create" @click="selectTaskManagementTab('assign')"><n-icon :size="17"><Plus /></n-icon>布置任务</button>
         </form>
         <section class="task-history-results task-schedule-results">
           <div class="task-history-table-head"><span>触发计划</span><span>状态</span><span>下次触发</span><span>已触发</span><span>操作</span></div>
@@ -474,8 +614,8 @@
             <time>{{ schedule.next_fire_at ? formatScheduleDateTime(schedule.next_fire_at) : '—' }}</time>
             <span>{{ schedule.fire_count }} 次</span>
             <div class="task-schedule-actions">
-              <button v-if="schedule.active" type="button" @click="setTaskSchedulePaused(schedule, !schedule.paused)">{{ schedule.paused ? '恢复' : '暂停' }}</button>
-              <button v-if="schedule.active" type="button" class="danger" @click="confirmCancelTaskSchedule(schedule)">取消</button>
+              <button v-if="schedule.active" type="button" :disabled="taskSchedulePendingAction !== null" :aria-busy="taskSchedulePendingAction?.id === schedule.id && taskSchedulePendingAction.kind === 'state'" @click="setTaskSchedulePaused(schedule, !schedule.paused)"><n-icon v-if="taskSchedulePendingAction?.id === schedule.id && taskSchedulePendingAction.kind === 'state'" class="task-schedule-action-spinner" :size="14"><Loader /></n-icon>{{ taskSchedulePendingAction?.id === schedule.id && taskSchedulePendingAction.kind === 'state' ? '处理中…' : schedule.paused ? '恢复' : '暂停' }}</button>
+              <button v-if="schedule.active" type="button" class="danger" :disabled="taskSchedulePendingAction !== null" :aria-busy="taskSchedulePendingAction?.id === schedule.id && taskSchedulePendingAction.kind === 'cancel'" @click="confirmCancelTaskSchedule(schedule)"><n-icon v-if="taskSchedulePendingAction?.id === schedule.id && taskSchedulePendingAction.kind === 'cancel'" class="task-schedule-action-spinner" :size="14"><Loader /></n-icon>{{ taskSchedulePendingAction?.id === schedule.id && taskSchedulePendingAction.kind === 'cancel' ? '正在取消…' : '取消' }}</button>
               <span v-else>—</span>
             </div>
           </article>
@@ -521,14 +661,14 @@
 
               <section id="task-flow-assistant-panel" :class="['task-flow-assistant-panel', { collapsed: !taskFlowAssistantOpen }]">
                 <div class="task-flow-mode-switch" aria-label="任务流生成方式">
-                  <button type="button" :class="{ active: taskCreateMode === 'dobby' }" @click="taskCreateMode = 'dobby'">Dobby 生成</button>
-                  <button type="button" :class="{ active: taskCreateMode === 'template' }" @click="taskCreateMode = 'template'">模板生成</button>
+                  <button type="button" :class="{ active: taskCreateMode === 'dobby' }" :disabled="taskFlowGenerating" @click="taskCreateMode = 'dobby'">Dobby 生成</button>
+                  <button type="button" :class="{ active: taskCreateMode === 'template' }" :disabled="taskFlowGenerating" @click="taskCreateMode = 'template'">模板生成</button>
                 </div>
                 <section v-if="taskCreateMode === 'dobby'" class="task-flow-generator dobby-generator">
-                  <div class="task-flow-section-title"><div><span>Dobby 任务流助手</span><strong>描述你想完成的工作</strong></div><em>自动解析</em></div>
-                  <textarea v-model.trim="taskFlowRequirement" placeholder="例如：每周一检查基坑监测数据；接近预警值时由监测员复核，项目负责人确认，最后归档监测报告。"></textarea>
-                  <div class="task-flow-examples"><button v-for="example in taskFlowExamples" :key="example" type="button" @click="taskFlowRequirement = example">{{ example }}</button></div>
-                  <button type="button" class="task-flow-generate-button" :disabled="taskFlowGenerating || taskFlowRequirement.length < 4" @click="generateTaskFlowWithDobby">{{ taskFlowGenerating ? 'Dobby 正在设计流程…' : '让 Dobby 生成任务流' }}</button>
+                  <div class="task-flow-section-title"><div><span>Dobby 任务流助手</span><strong>描述你想完成的工作</strong></div></div>
+                  <textarea v-model.trim="taskFlowRequirement" :disabled="taskFlowGenerating" placeholder="例如：每周一检查基坑监测数据；接近预警值时由监测员复核，项目负责人确认，最后归档监测报告。"></textarea>
+                  <button v-if="taskFlowGenerating" type="button" class="task-flow-generate-button is-generating" :disabled="taskFlowGenerationStopping" @click="stopTaskFlowGeneration"><span v-if="taskFlowGenerationStopping" class="task-flow-button-spinner" aria-hidden="true"></span><n-icon v-else :size="17"><PlayerStop /></n-icon>{{ taskFlowGenerationStopping ? '正在停止…' : '停止生成' }}</button>
+                  <button v-else type="button" class="task-flow-generate-button" :disabled="taskFlowRequirement.length < 4" @click="generateTaskFlowWithDobby">让 Dobby 生成任务流</button>
                   <p v-if="taskFlowGenerationNote" class="task-flow-generation-note">{{ taskFlowGenerationNote }}</p>
                 </section>
                 <section v-else class="task-flow-generator template-generator">
@@ -539,23 +679,37 @@
                 </section>
               </section>
 
-              <div class="task-flow-editor-head">
-                <div><span>流程节点</span><strong>{{ taskCreateForm.title || '未命名任务流' }}</strong><small>{{ taskFlowSteps.length }} 个节点，将按顺序依次流转</small></div>
-                <div class="task-flow-editor-actions"><em>展开节点后编辑详细配置</em><button type="button" class="task-flow-add-button" @click="addTaskFlowStep"><n-icon :size="16"><Plus /></n-icon>添加节点</button></div>
+              <div class="task-flow-editor-head" :class="{ 'is-generating': taskFlowGenerating }">
+                <div><span>流程节点</span><strong>{{ taskFlowGenerating ? taskFlowGenerationStopping ? '正在停止本次生成' : 'Dobby 正在设计新任务流' : taskCreateForm.title || '未命名任务流' }}</strong><small>{{ taskFlowGenerating ? taskFlowGenerationStopping ? '正在停止生成' : '生成后将显示可编辑节点' : `${taskFlowSteps.length} 个节点，将按顺序依次流转` }}</small></div>
+                <div class="task-flow-editor-actions"><em>{{ taskFlowGenerating ? taskFlowGenerationStopping ? '正在停止' : '正在编排' : '展开节点后编辑详细配置' }}</em><button type="button" class="task-flow-add-button" :disabled="taskFlowGenerating" @click="addTaskFlowStep"><n-icon :size="16"><Plus /></n-icon>添加节点</button></div>
               </div>
 
               <div class="task-flow-node-workspace">
-                <section class="task-flow-node-list" aria-label="流程节点配置">
-                  <div v-if="!taskFlowSteps.length" class="task-flow-node-empty">
-                    <span><n-icon :size="26"><Robot /></n-icon></span>
-                    <strong>还没有流程节点</strong>
-                    <p>让 Dobby 生成、选择标准模板，或手工添加第一个节点。</p>
-                    <button type="button" @click="addTaskFlowStep"><n-icon :size="16"><Plus /></n-icon>添加第一个节点</button>
+                <section class="task-flow-node-list" aria-label="流程节点配置" :aria-busy="taskFlowGenerating">
+                  <div v-if="taskFlowGenerating" class="task-flow-ai-loading" :class="{ 'is-stopping': taskFlowGenerationStopping }" role="status" aria-live="polite">
+                    <div class="task-flow-ai-loading-head">
+                      <span><n-icon :size="26"><Robot /></n-icon></span>
+                      <div><strong>{{ taskFlowGenerationStopping ? '正在停止生成' : 'Dobby 正在设计任务流' }}</strong><p>{{ taskFlowGenerationStopping ? '请稍候' : '正在结合你的描述和当前项目内容编排节点' }}</p></div>
+                    </div>
+                    <div class="task-flow-ai-loading-track" aria-hidden="true">
+                      <span><b>1</b><em>理解需求</em></span>
+                      <span><b>2</b><em>读取项目</em></span>
+                      <span><b>3</b><em>编排节点</em></span>
+                      <span><b>4</b><em>校验结果</em></span>
+                    </div>
+                    <div class="task-flow-ai-loading-bar" aria-hidden="true"><i></i></div>
                   </div>
-                  <article v-for="(step, index) in taskFlowSteps" :id="`task-flow-node-${index}`" :key="step.id" class="task-flow-node-card" :class="{ active: selectedTaskFlowStepIndex === index }" tabindex="-1" @click="selectedTaskFlowStepIndex = index">
+                  <template v-else>
+                    <div v-if="!taskFlowSteps.length" class="task-flow-node-empty">
+                      <span><n-icon :size="26"><Robot /></n-icon></span>
+                      <strong>还没有流程节点</strong>
+                      <p>让 Dobby 生成、选择标准模板，或手工添加第一个节点。</p>
+                      <button type="button" @click="addTaskFlowStep"><n-icon :size="16"><Plus /></n-icon>添加第一个节点</button>
+                    </div>
+                    <article v-for="(step, index) in taskFlowSteps" :id="`task-flow-node-${index}`" :key="step.id" class="task-flow-node-card" :class="{ active: selectedTaskFlowStepIndex === index }" tabindex="-1" @click="selectedTaskFlowStepIndex = index">
                     <header>
                       <span>{{ index + 1 }}</span>
-                      <div class="task-flow-node-heading"><strong>{{ step.name || `节点 ${index + 1}` }}</strong><small>{{ taskFlowStepSummary(step) }}</small></div>
+                      <div class="task-flow-node-heading"><strong>{{ step.name || `节点 ${index + 1}` }}</strong></div>
                       <em v-if="selectedTaskFlowStepIndex === index">当前节点</em>
                       <div class="task-flow-node-actions"><button type="button" :disabled="index === 0" title="上移" aria-label="上移节点" @click.stop="moveTaskFlowStep(index, -1)"><n-icon :size="16"><ChevronUp /></n-icon></button><button type="button" :disabled="index === taskFlowSteps.length - 1" title="下移" aria-label="下移节点" @click.stop="moveTaskFlowStep(index, 1)"><n-icon :size="16"><ChevronDown /></n-icon></button><button type="button" class="danger" title="删除" aria-label="删除节点" @click.stop="removeTaskFlowStep(index)"><n-icon :size="16"><Trash /></n-icon></button><button type="button" title="展开或收起" :aria-expanded="selectedTaskFlowStepIndex === index" @click.stop="selectedTaskFlowStepIndex = selectedTaskFlowStepIndex === index ? -1 : index"><n-icon :size="16"><component :is="selectedTaskFlowStepIndex === index ? ChevronUp : ChevronDown" /></n-icon></button></div>
                     </header>
@@ -568,25 +722,51 @@
                         <label class="form-field task-flow-node-material">交付材料 / 留证<input v-model.trim="step.material" placeholder="填写后引擎将要求上传证明材料"></label>
                       </template>
                       <template v-else>
-                        <label class="form-field">发送智能体<select v-model="step.sender_agent_id" required><option v-for="agent in taskMessageSenderOptions" :key="agent.id" :value="agent.id">{{ agent.name }}</option></select></label>
-                        <label class="form-field">目标群聊<select v-model.number="step.target_channel_id" required @change="handleTaskMessageChannelChange(step)"><option :value="null">请选择群聊</option><option v-for="channel in taskChatChannels" :key="channel.id" :value="channel.id">{{ channel.title }}</option></select></label>
-                        <label class="form-field">提醒对象<select v-model="step.mention_mode"><option value="all">@全体成员</option><option value="users">指定成员</option><option value="none">不提及成员</option></select></label>
+                        <label class="form-field task-flow-node-target">目标群聊<select v-model.number="step.target_channel_id" required @change="handleTaskMessageChannelChange(step)"><option :value="null">请选择群聊</option><optgroup v-if="taskProjectChatChannels.length" label="项目群"><option v-for="channel in taskProjectChatChannels" :key="channel.id" :value="channel.id">{{ channel.title }}</option></optgroup><optgroup v-if="taskPrivateChatChannels.length" label="私密群"><option v-for="channel in taskPrivateChatChannels" :key="channel.id" :value="channel.id">{{ channel.title }}</option></optgroup></select></label>
                         <label class="form-field task-flow-node-message">消息正文<textarea v-model.trim="step.message_content" maxlength="8000" rows="3" required placeholder="填写该节点到达时要发送的消息"></textarea><small>{{ step.message_content.length }} / 8000</small></label>
-                        <fieldset v-if="step.mention_mode === 'users'" class="task-flow-node-recipients"><legend>选择提醒成员</legend><label v-for="member in taskChatMembersForStep(step)" :key="member.user_id"><input v-model="step.mentioned_user_ids" type="checkbox" :value="member.user_id"><span>{{ member.name }}</span></label><p v-if="!taskChatMembersForStep(step).length">当前群聊没有可选成员</p></fieldset>
+                        <section class="task-flow-node-audience" :class="{ 'has-recipient-picker': step.mention_mode === 'users' }" aria-label="提醒对象设置">
+                          <label class="form-field">提醒方式<select v-model="step.mention_mode" @change="handleTaskMentionModeChange(step)"><option value="all">@全体成员</option><option value="users">指定成员</option><option value="none">不提及成员</option></select></label>
+                          <div v-if="step.mention_mode === 'users'" class="form-field task-flow-recipient-picker">
+                            <span>添加成员</span>
+                            <n-select
+                              :value="null"
+                              :options="taskAvailableChatMemberOptions(step)"
+                              :loading="Boolean(step.target_channel_id && taskChatMemberLoadingChannelIds.has(step.target_channel_id))"
+                              :disabled="taskRecipientPickerDisabled(step)"
+                              :placeholder="taskRecipientPickerPlaceholder(step)"
+                              filterable
+                              clear-filter-after-select
+                              size="small"
+                              @update:value="addTaskMentionedUser(step, $event)"
+                            />
+                          </div>
+                          <section v-if="step.mention_mode === 'users'" class="task-flow-selected-recipients" aria-label="已添加的提醒成员">
+                            <div class="task-flow-selected-recipients-head"><strong>提醒成员</strong><span>已添加 {{ taskSelectedChatMembers(step).length }} 人</span></div>
+                            <div v-if="taskSelectedChatMembers(step).length" class="task-flow-recipient-card-list">
+                              <article v-for="member in taskSelectedChatMembers(step)" :key="member.user_id" class="task-flow-recipient-card">
+                                <span class="task-flow-recipient-avatar" aria-hidden="true">{{ member.name.trim().slice(0, 1) }}</span>
+                                <div><strong>{{ member.name }}</strong><small>{{ member.title || '群聊成员' }}</small></div>
+                                <button type="button" :aria-label="`移除提醒成员 ${member.name}`" :title="`移除 ${member.name}`" @click.stop="removeTaskMentionedUser(step, member.user_id)"><n-icon :size="14"><X /></n-icon></button>
+                              </article>
+                            </div>
+                            <p v-else>{{ step.target_channel_id && taskChatMemberLoadingChannelIds.has(step.target_channel_id) ? '正在读取群聊成员…' : '尚未添加成员，请从上方下拉框选择。' }}</p>
+                          </section>
+                        </section>
                       </template>
                     </div>
-                  </article>
+                    </article>
+                  </template>
                 </section>
               </div>
             </main>
 
             <aside class="task-flow-validation" aria-label="任务引擎校验">
               <div class="task-flow-validation-head"><span>引擎校验</span><strong>布置前检查</strong></div>
-              <div class="task-flow-validation-status" :class="{ passed: taskFlowCanSubmit }"><n-icon :size="23"><component :is="taskFlowCanSubmit ? CircleCheck : AlertCircle" /></n-icon><div><strong>{{ taskFlowCanSubmit ? '校验通过' : `还差 ${taskFlowMissingCount} 项` }}</strong><span>{{ taskFlowCanSubmit ? '可以提交给任务引擎' : '补齐后即可布置任务' }}</span></div></div>
-              <ul class="task-flow-validation-list">
+              <div class="task-flow-validation-status" :class="{ passed: !taskFlowGenerating && taskFlowCanSubmit, loading: taskFlowGenerating }"><n-icon :size="23"><component :is="taskFlowGenerating ? taskFlowGenerationStopping ? PlayerStop : Robot : taskFlowCanSubmit ? CircleCheck : AlertCircle" /></n-icon><div><strong>{{ taskFlowGenerating ? taskFlowGenerationStopping ? '正在停止' : 'AI 正在编排' : taskFlowCanSubmit ? '校验通过' : `还差 ${taskFlowMissingCount} 项` }}</strong><span>{{ taskFlowGenerating ? taskFlowGenerationStopping ? '请稍候' : '生成完成后自动刷新校验' : taskFlowCanSubmit ? '可以提交给任务引擎' : '补齐后即可布置任务' }}</span></div></div>
+              <ul class="task-flow-validation-list" :class="{ 'is-muted': taskFlowGenerating }">
                 <li v-for="item in taskFlowValidationItems" :key="item.key" :class="{ ok: item.ok }"><n-icon :size="17"><component :is="item.ok ? CircleCheck : AlertCircle" /></n-icon><div><strong>{{ item.label }}</strong><span>{{ item.detail }}</span></div></li>
               </ul>
-              <details v-if="taskFlowSteps.length" class="task-flow-overview" open>
+              <details v-if="taskFlowSteps.length && !taskFlowGenerating" class="task-flow-overview" open>
                 <summary><span>流程概览</span><em>{{ taskFlowSteps.length }} 个节点</em><n-icon :size="16"><ChevronDown /></n-icon></summary>
                 <ol>
                   <li v-for="(step, index) in taskFlowSteps" :key="`overview-${step.id}`">
@@ -599,35 +779,96 @@
                 </ol>
               </details>
               <div class="task-flow-validation-note"><strong>引擎约束</strong><p>流程中存在“人工处理”节点时，任务引擎要求选择具体负责人、关联工点和确认人；全部为自动动作节点时，关联工点和确认人可以选择“无”。</p></div>
-              <button type="submit" class="task-flow-submit" :disabled="!taskFlowCanSubmit">{{ taskCreateForm.run_mode === 'immediate' ? '校验并布置任务' : '校验并登记计划' }}</button>
-              <button type="button" class="task-flow-back" @click="taskManagementTab = 'mine'">返回我的待办</button>
+              <button type="submit" class="task-flow-submit" :class="{ 'is-submitting': taskFlowSubmitting }" :disabled="taskFlowGenerating || taskFlowSubmitting || !taskFlowCanSubmit" :aria-busy="taskFlowSubmitting"><span v-if="taskFlowSubmitting" class="task-flow-button-spinner" aria-hidden="true"></span>{{ taskFlowSubmitLabel }}</button>
+              <button type="button" class="task-flow-back" :disabled="taskFlowSubmitting" @click="selectTaskManagementTab('mine')">返回我的待办</button>
             </aside>
           </div>
         </form>
       </main>
 
-      <div v-if="taskDispositionOpen && selectedTask" class="task-disposition-backdrop" @click.self="closeTaskDisposition">
+      <div v-if="taskDispositionOpen && selectedTask" class="task-disposition-backdrop" @click.self="closeTaskDisposition()">
         <aside class="task-disposition-drawer" role="dialog" aria-modal="true" aria-labelledby="task-disposition-title">
-          <header><div><span>{{ taskTypeLabel(selectedTask.type) }} · {{ statusLabel(selectedTask.status) }}</span><h2 id="task-disposition-title">{{ selectedTask.title }}</h2><p>{{ taskCurrentOwnerName(selectedTask) }} · 截止 {{ taskCurrentStep(selectedTask)?.due_at || selectedTask.deadline }}</p></div><button type="button" aria-label="关闭任务处置" @click="closeTaskDisposition">关闭</button></header>
+          <header><div><span>{{ taskTypeLabel(selectedTask.type) }} · {{ statusLabel(selectedTask.status) }}</span><h2 id="task-disposition-title">{{ selectedTask.title }}</h2><p>{{ taskCurrentOwnerName(selectedTask) }} · 截止 {{ taskCurrentStep(selectedTask)?.due_at || selectedTask.deadline }}</p></div><button type="button" aria-label="关闭任务处置" @click="closeTaskDisposition()">关闭</button></header>
           <div class="task-disposition-body">
             <section class="task-disposition-ai"><span class="task-disposition-bot"><Robot :size="18" /></span><div><strong>Dobby 处置提示</strong><p>{{ selectedTaskConclusion }}</p><small>依据：{{ selectedTask.triggerReason }}</small></div></section>
-            <section class="task-disposition-flow"><div class="task-disposition-section-title"><span>任务流程</span><strong>{{ selectedTaskCompletedSteps }}/{{ selectedTask.workflowSteps.length || 1 }} 个节点已完成</strong></div><ol><li v-for="(step, index) in selectedTask.workflowSteps" :key="`${selectedTask.id}-dispose-${index}`" :class="step.status"><span>{{ index + 1 }}</span><div><strong>{{ step.name }}</strong><small>{{ step.owner || store.getMemberName(step.owner_user_id || '') || '待指定负责人' }} · {{ step.due_at || '未设置截止时间' }}</small><small v-if="step.reopened" class="task-disposition-reopen-hint">⚠ 该节点被退回，需重新提交材料</small><p v-if="step.note" class="task-disposition-step-note">{{ step.note }}</p><div v-if="step.attachments?.length" class="task-disposition-step-files"><button v-for="attachment in step.attachments" :key="attachment" type="button" class="task-disposition-step-file" @click="downloadTaskAttachment(attachment)"><n-icon :size="14"><Paperclip /></n-icon>{{ taskAttachmentFileName(attachment) }}</button></div></div><em>{{ taskStepLabel(step.status) }}</em><button v-if="selectedTask.status === 'processing' && step.status !== 'completed'" type="button" @click="store.updateTaskStep(selectedTask.id, index, 'completed')">完成节点</button></li></ol></section>
-            <section class="task-disposition-form"><div class="task-disposition-section-title"><span>回复与材料</span><strong>结果将进入任务处理记录</strong></div><textarea v-model.trim="taskDispositionReply" rows="5" placeholder="回复 Dobby，例如：已完成复核，照片符合闭环要求"></textarea><label class="task-disposition-files"><input type="file" multiple @change="handleTaskDispositionFiles"><span><Paperclip :size="16" />选择文件或图片</span><small>{{ taskDispositionFiles.length ? `已选择 ${taskDispositionFiles.length} 个文件` : '支持提交本节点的证明材料' }}</small></label><label class="task-disposition-forward"><span>转交当前节点</span><select v-model="taskDispositionForwardId"><option value="">不转交</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }} · {{ member.title }}</option></select></label></section>
+            <section v-if="taskContextLoadingIds.has(selectedTask.id) || taskContextHasLinks(selectedTaskContext)" class="task-context-links" aria-label="任务来源与关联">
+              <header><span>来源与关联</span><strong>{{ taskContextLoadingIds.has(selectedTask.id) ? '正在读取…' : '可直接跳转' }}</strong></header>
+              <div v-if="selectedTaskContext">
+                <router-link v-for="source in selectedTaskContext.chat_messages" :key="`chat-${source.id}`" :to="taskChatMessageRoute(selectedTask.id, source.channel_id, source.id)">群聊：{{ source.channel_title }}</router-link>
+                <router-link v-for="channel in selectedTaskContext.related_channels" :key="`channel-${channel.id}`" :to="taskChatMessageRoute(selectedTask.id, channel.id)">协同群：{{ channel.title }}</router-link>
+                <router-link v-if="selectedTaskContext.risk" :to="projectSetupRoute('risks', selectedTaskContext.risk.id)">风险源：{{ selectedTaskContext.risk.name }}</router-link>
+                <router-link v-if="selectedTaskContext.wbs" :to="projectSetupRoute('wbs', selectedTaskContext.wbs.id)">WBS：{{ selectedTaskContext.wbs.code }} {{ selectedTaskContext.wbs.name }}</router-link>
+                <router-link v-for="document in selectedTaskContext.documents" :key="`document-${document.id}`" :to="documentsSearchRoute(document.file_name)">资料：{{ document.file_name }}</router-link>
+                <span v-for="sessionItem in selectedTaskContext.collaboration_sessions" :key="`session-${sessionItem.id}`">历史协同：{{ sessionItem.title }}</span>
+              </div>
+            </section>
+            <section class="task-disposition-flow">
+              <div class="task-disposition-section-title"><span>任务流程</span><strong>{{ selectedTaskCompletedSteps }}/{{ selectedTask.workflowSteps.length || 1 }} 个节点已完成</strong></div>
+              <ol>
+                <li v-for="(step, index) in selectedTask.workflowSteps" :key="`${selectedTask.id}-dispose-${index}`" :class="step.status">
+                  <span>{{ index + 1 }}</span>
+                  <div>
+                    <strong>{{ step.name }}</strong>
+                    <small>{{ step.owner || store.getMemberName(step.owner_user_id || '') || '待指定负责人' }} · {{ step.due_at || '未设置截止时间' }}</small>
+                    <small v-if="step.reopened" class="task-disposition-reopen-hint">⚠ 该节点被退回，需重新提交材料</small>
+                    <p v-if="step.note" class="task-disposition-step-note">{{ step.note }}</p>
+                    <div v-if="step.attachments?.length" class="task-disposition-step-files">
+                      <button
+                        v-for="attachment in step.attachments"
+                        :key="attachment"
+                        type="button"
+                        class="task-disposition-step-file"
+                        :disabled="Boolean(taskAttachmentDownloadingReference)"
+                        :aria-busy="taskAttachmentDownloadingReference === attachment"
+                        @click="downloadTaskAttachment(attachment)"
+                      >
+                        <n-icon v-if="taskAttachmentDownloadingReference === attachment" :size="14" class="task-inline-spinner"><Loader /></n-icon>
+                        <n-icon v-else :size="14"><Paperclip /></n-icon>
+                        {{ taskAttachmentDownloadingReference === attachment ? '下载中…' : taskAttachmentFileName(attachment) }}
+                      </button>
+                    </div>
+                  </div>
+                  <em>{{ taskStepLabel(step.status) }}</em>
+                  <button
+                    v-if="selectedTask.status === 'processing' && step.status !== 'completed'"
+                    type="button"
+                    :disabled="Boolean(taskStepUpdatingKey) || taskDispositionSubmitting"
+                    :aria-busy="taskStepUpdatingKey === `${selectedTask.id}:${index}`"
+                    @click="completeTaskStep(selectedTask, index)"
+                  >
+                    <n-icon v-if="taskStepUpdatingKey === `${selectedTask.id}:${index}`" :size="14" class="task-inline-spinner"><Loader /></n-icon>
+                    {{ taskStepUpdatingKey === `${selectedTask.id}:${index}` ? '完成中…' : '完成节点' }}
+                  </button>
+                </li>
+              </ol>
+            </section>
+            <section class="task-disposition-form"><div class="task-disposition-section-title"><span>回复与材料</span><strong>结果将进入任务处理记录</strong></div><textarea v-model.trim="taskDispositionReply" rows="5" :disabled="taskDispositionSubmitting" placeholder="回复 Dobby，例如：已完成复核，照片符合闭环要求"></textarea><label class="task-disposition-files"><input type="file" multiple :disabled="taskDispositionSubmitting" @change="handleTaskDispositionFiles"><span><Paperclip :size="16" />选择文件或图片</span><small>{{ taskDispositionFiles.length ? `已选择 ${taskDispositionFiles.length} 个文件` : '支持提交本节点的证明材料' }}</small></label><label class="task-disposition-forward"><span>转交当前节点</span><select v-model="taskDispositionForwardId" :disabled="taskDispositionSubmitting"><option value="">不转交</option><option v-for="member in store.members" :key="member.id" :value="member.id">{{ member.name }} · {{ member.title }}</option></select></label></section>
           </div>
-          <footer><button type="button" class="task-disposition-history" @click="openTaskHistory(selectedTask.id)">查看处理记录</button><router-link to="/ai">发起讨论</router-link><button v-if="canConfirmSelectedTask" type="button" class="task-disposition-history" :disabled="taskDispositionSubmitting" @click="rejectSelectedTask">退回重做</button><button v-if="canConfirmSelectedTask" type="button" class="task-disposition-submit" :disabled="taskDispositionSubmitting" @click="acceptSelectedTask">{{ taskDispositionSubmitting ? '正在提交…' : '确认通过' }}</button><button v-else type="button" class="task-disposition-submit" :disabled="taskDispositionSubmitting || needsFreshEvidence" @click="submitTaskDisposition">{{ taskDispositionSubmitting ? '正在提交…' : needsFreshEvidence ? '需重新上传材料' : '回复并推进' }}</button></footer>
+          <footer><button type="button" class="task-disposition-history" :disabled="taskDispositionSubmitting" @click="openTaskHistory(selectedTask.id)">查看处理记录</button><router-link :to="taskDiscussionRoute(selectedTask.id)">发起讨论</router-link><button v-if="canConfirmSelectedTask" type="button" class="task-disposition-history" :disabled="taskDispositionSubmitting" @click="rejectSelectedTask"><n-icon v-if="taskDispositionAction === 'reject'" :size="15" class="task-inline-spinner"><Loader /></n-icon>{{ taskDispositionAction === 'reject' ? '正在退回…' : '退回重做' }}</button><button v-if="canConfirmSelectedTask" type="button" class="task-disposition-submit" :disabled="taskDispositionSubmitting" @click="acceptSelectedTask"><n-icon v-if="taskDispositionAction === 'accept'" :size="15" class="task-inline-spinner"><Loader /></n-icon>{{ taskDispositionAction === 'accept' ? '正在通过…' : '确认通过' }}</button><button v-else type="button" class="task-disposition-submit" :disabled="taskDispositionSubmitting || needsFreshEvidence" @click="submitTaskDisposition"><n-icon v-if="taskDispositionAction === 'submit'" :size="15" class="task-inline-spinner"><Loader /></n-icon>{{ taskDispositionAction === 'submit' ? '正在提交…' : needsFreshEvidence ? '需重新上传材料' : '回复并推进' }}</button></footer>
         </aside>
       </div>
-      <div v-if="taskHistoryOpenId && selectedTaskHistoryTask" class="workflow-modal-backdrop" @click.self="closeTaskHistory">
+      <div v-if="taskHistoryOpenId && selectedTaskHistoryTask" class="workflow-modal-backdrop" @click.self="closeTaskHistory()">
         <section class="workflow-modal task-history-modal" role="dialog" aria-modal="true" aria-labelledby="task-history-title">
           <div class="workflow-modal-head">
             <div><h2 id="task-history-title">任务记录 - {{ selectedTaskHistoryTask.title }}</h2></div>
-            <button type="button" class="modal-close" aria-label="关闭处理记录" @click="closeTaskHistory">关闭</button>
+            <button type="button" class="modal-close" aria-label="关闭处理记录" @click="closeTaskHistory()">关闭</button>
           </div>
           <div class="task-history-summary">
             <div><span>当前状态</span><strong>{{ statusLabel(selectedTaskHistoryTask.status) }}</strong></div>
             <div><span>当前责任</span><strong>{{ taskLedgerOwner(selectedTaskHistoryTask) }}</strong></div>
             <div><span>截止时间</span><strong>{{ taskLedgerTypeLabel(selectedTaskHistoryTask) === '自动化动作' ? '—' : formatDateTime(selectedTaskHistoryTask.deadline, 'end') }}</strong></div>
           </div>
+          <section v-if="taskContextLoadingIds.has(selectedTaskHistoryTask.id) || taskContextHasLinks(selectedTaskContext)" class="task-context-links" aria-label="任务来源与关联">
+            <header><span>来源与关联</span><strong>{{ taskContextLoadingIds.has(selectedTaskHistoryTask.id) ? '正在读取…' : '可直接回到原始上下文' }}</strong></header>
+            <div v-if="selectedTaskContext">
+              <router-link v-for="source in selectedTaskContext.chat_messages" :key="`history-chat-${source.id}`" :to="taskChatMessageRoute(selectedTaskHistoryTask.id, source.channel_id, source.id)">群聊：{{ source.channel_title }}</router-link>
+              <router-link v-for="channel in selectedTaskContext.related_channels" :key="`history-channel-${channel.id}`" :to="taskChatMessageRoute(selectedTaskHistoryTask.id, channel.id)">协同群：{{ channel.title }}</router-link>
+              <router-link v-if="selectedTaskContext.risk" :to="projectSetupRoute('risks', selectedTaskContext.risk.id)">风险源：{{ selectedTaskContext.risk.name }}</router-link>
+              <router-link v-if="selectedTaskContext.wbs" :to="projectSetupRoute('wbs', selectedTaskContext.wbs.id)">WBS：{{ selectedTaskContext.wbs.code }} {{ selectedTaskContext.wbs.name }}</router-link>
+              <router-link v-for="document in selectedTaskContext.documents" :key="`history-document-${document.id}`" :to="documentsSearchRoute(document.file_name)">资料：{{ document.file_name }}</router-link>
+              <span v-for="sessionItem in selectedTaskContext.collaboration_sessions" :key="`history-session-${sessionItem.id}`">历史协同：{{ sessionItem.title }}</span>
+            </div>
+          </section>
           <div class="task-history-body">
             <div v-if="taskHistoryLoading" class="task-history-loading">正在加载处理记录…</div>
             <ol v-else-if="(taskHistories[taskHistoryOpenId] || []).length" class="task-history-timeline">
@@ -638,7 +879,7 @@
             </ol>
             <div v-else class="task-history-empty"><strong>暂无处理记录</strong><p>开始处理或更新任务状态后，系统会在这里自动留痕。</p></div>
           </div>
-          <div class="workflow-modal-actions task-history-actions"><button type="button" class="modal-primary" @click="closeTaskHistory">完成查看</button></div>
+          <div class="workflow-modal-actions task-history-actions"><button type="button" class="modal-primary" @click="closeTaskHistory()">完成查看</button></div>
         </section>
       </div>
     </section>
@@ -659,7 +900,7 @@
           :class="{ active: projectStatusTab === tab.key }"
           :aria-selected="projectStatusTab === tab.key"
           role="tab"
-          @click="projectStatusTab = tab.key"
+          @click="selectProjectStatusTab(tab.key)"
         ><strong>{{ tab.label }}</strong><span>{{ tab.hint }}</span></button>
       </nav>
 
@@ -668,7 +909,7 @@
           <article class="project-status-v2-panel project-status-task-panel">
             <header class="project-status-task-title">
               <h2>责任任务</h2>
-              <router-link to="/tasks">查看全部任务</router-link>
+              <router-link :to="{ path: '/tasks', query: { tab: 'history' } }">查看全部任务</router-link>
             </header>
             <div class="project-status-task-layout">
               <dl class="project-status-task-counts">
@@ -695,12 +936,12 @@
               <div class="project-status-v2-table-head"><span>工序编码</span><span>工序名称</span><span>状态</span><span>进度</span><span>计划完成日期</span></div>
               <article v-for="item in projectStatusWbsRows" :key="item.id">
                 <span>{{ item.code || '—' }}</span>
-                <strong>{{ item.name }}</strong>
+                <router-link :to="projectSetupRoute('wbs', item.id)"><strong>{{ item.name }}</strong></router-link>
                 <span :class="['project-status-state', item.status]">{{ item.statusText || wbsStatusLabel(item.status) }}</span>
                 <div class="project-status-progress"><b>{{ Math.round(item.progress) }}%</b><i><em :style="{ width: `${item.progress}%` }" /></i></div>
                 <time>{{ projectDateLabel(item.planEnd) || '未设置' }}</time>
               </article>
-              <div v-if="!projectStatusWbsRows.length" class="project-status-wbs-empty"><strong>尚未配置 WBS</strong><router-link to="/settings">前往工程配置</router-link></div>
+              <div v-if="!projectStatusWbsRows.length" class="project-status-wbs-empty"><strong>尚未配置 WBS</strong><router-link :to="projectSetupRoute('wbs')">前往工程配置</router-link></div>
             </div>
           </article>
         </section>
@@ -709,37 +950,37 @@
           <article class="project-status-v2-panel">
             <header class="project-status-v2-panel-head">
               <div><span>风险源</span><h2>风险源配置汇总</h2><p>展示工程配置页面已维护的风险等级、工序和管控窗口，不推断风险是否触发。</p></div>
-              <router-link class="project-status-v2-link" to="/settings">维护风险源 <ChevronRight :size="15" /></router-link>
+              <router-link class="project-status-v2-link" :to="projectSetupRoute('risks')">维护风险源 <ChevronRight :size="15" /></router-link>
             </header>
             <div v-if="projectStatusRiskRows.length" class="project-status-v2-table project-status-risk-table">
               <div class="project-status-v2-table-head"><span>风险等级</span><span>风险源</span><span>关联工序</span><span>管控窗口</span><span>责任人</span></div>
               <article v-for="risk in projectStatusRiskRows" :key="risk.id">
                 <span :class="['project-status-risk-level', risk.level]">{{ risk.levelText || riskLabel(risk.level) }}</span>
-                <strong>{{ risk.name }}</strong>
+                <router-link :to="projectSetupRoute('risks', risk.id)"><strong>{{ risk.name }}</strong></router-link>
                 <span>{{ risk.relatedProcessName || '未填写' }}</span>
                 <time>{{ projectDateRange(risk.controlStart, risk.controlEnd) }}</time>
                 <span>{{ store.getMemberName(risk.responsibleId) || '未指定' }}</span>
               </article>
             </div>
-            <div v-else class="project-status-v2-empty"><strong>风险源尚未维护</strong><p>这里不显示“无风险”，只说明工程配置中还没有风险源记录。</p><router-link to="/settings">前往工程配置</router-link></div>
+            <div v-else class="project-status-v2-empty"><strong>风险源尚未维护</strong><p>这里不显示“无风险”，只说明工程配置中还没有风险源记录。</p><router-link :to="projectSetupRoute('risks')">前往工程配置</router-link></div>
           </article>
 
           <article class="project-status-v2-panel">
             <header class="project-status-v2-panel-head">
               <div><span>质量要求</span><h2>质量检查要求汇总</h2><p>展示已配置的检查项、控制指标和检查频次，不作为质量问题统计。</p></div>
-              <router-link class="project-status-v2-link" to="/settings">维护质量要求 <ChevronRight :size="15" /></router-link>
+              <router-link class="project-status-v2-link" :to="projectSetupRoute('quality')">维护质量要求 <ChevronRight :size="15" /></router-link>
             </header>
             <div v-if="projectStatusQualityRows.length" class="project-status-v2-table project-status-quality-table">
               <div class="project-status-v2-table-head"><span>关联 WBS</span><span>检查项</span><span>控制指标</span><span>检查频次</span><span>责任人</span></div>
               <article v-for="item in projectStatusQualityRows" :key="item.id">
                 <span>{{ projectQualityWbsLabel(item) }}</span>
-                <strong>{{ item.name || '未命名检查项' }}</strong>
+                <router-link :to="projectSetupRoute('quality', item.id)"><strong>{{ item.name || '未命名检查项' }}</strong></router-link>
                 <span>{{ item.controlIndicator || item.requirement || '未填写' }}</span>
                 <span>{{ item.inspectionFrequency || '未填写' }}</span>
                 <span>{{ store.getMemberName(item.ownerId || '') || '未指定' }}</span>
               </article>
             </div>
-            <div v-else class="project-status-v2-empty"><strong>质量要求尚未配置</strong><p>工程配置中新增质量要求后会自动出现在这里。</p><router-link to="/settings">前往工程配置</router-link></div>
+            <div v-else class="project-status-v2-empty"><strong>质量要求尚未配置</strong><p>工程配置中新增质量要求后会自动出现在这里。</p><router-link :to="projectSetupRoute('quality')">前往工程配置</router-link></div>
           </article>
         </section>
 
@@ -747,7 +988,7 @@
           <article class="project-status-v2-panel project-status-documents-panel">
             <header class="project-status-v2-panel-head">
               <div><span>工程资料</span><h2>资料目录概览</h2><p>{{ projectDocumentSummary.caption }}</p></div>
-              <router-link class="project-status-v2-link" to="/docs">查看工程资料 <ChevronRight :size="15" /></router-link>
+              <router-link class="project-status-v2-link" :to="documentsRoute()">查看工程资料 <ChevronRight :size="15" /></router-link>
             </header>
             <dl class="project-status-document-kpis">
               <div><dt>资料文件</dt><dd><strong>{{ projectDocumentSummary.totalFiles }}</strong><span>份</span></dd></div>
@@ -769,7 +1010,7 @@
                 <div v-if="projectDocumentRecentFiles.length" class="project-status-document-recent">
                   <article v-for="item in projectDocumentRecentFiles" :key="`${item.knowledgeBaseId}:${item.id}`">
                     <div>
-                      <strong :title="item.name">{{ item.name }}</strong>
+                      <router-link :to="documentsSearchRoute(item.name)"><strong :title="item.name">{{ item.name }}</strong></router-link>
                       <small :title="`${item.knowledgeBaseName} / ${item.folderPath || '资料库根目录'}`">{{ projectDocumentTypeLabel(item.fileType, item.name) }} · {{ projectDocumentFileSizeLabel(item.fileSize) }} · {{ projectDocumentFolderLabel(item.folderPath) }}</small>
                     </div>
                     <time>{{ projectDateLabel(item.createdAt) || '日期未记录' }}</time>
@@ -778,7 +1019,7 @@
                 <div v-else class="project-status-document-recent-empty">暂无可展示的最近新增资料</div>
               </section>
             </div>
-            <div v-else class="project-status-v2-empty"><strong>尚无可汇总的资料目录</strong><p>{{ projectDocumentSummary.emptyHint }}</p><router-link to="/docs">前往工程资料</router-link></div>
+            <div v-else class="project-status-v2-empty"><strong>尚无可汇总的资料目录</strong><p>{{ projectDocumentSummary.emptyHint }}</p><router-link :to="documentsRoute()">前往工程资料</router-link></div>
           </article>
         </section>
 
@@ -786,7 +1027,7 @@
           <article class="project-status-v2-panel">
             <header class="project-status-v2-panel-head">
               <div><span>项目基础信息</span><h2>已维护字段</h2><p>项目名称已在右上角项目选择器展示，此处不再重复。</p></div>
-              <router-link class="project-status-v2-link" to="/settings">编辑项目信息 <ChevronRight :size="15" /></router-link>
+              <router-link class="project-status-v2-link" :to="projectSetupRoute('overview')">编辑项目信息 <ChevronRight :size="15" /></router-link>
             </header>
             <dl class="project-status-base-grid"><div v-for="item in projectBaseInfoRows" :key="item.label"><dt>{{ item.label }}</dt><dd :class="{ missing: !item.present }">{{ item.value }}</dd></div></dl>
           </article>
@@ -794,196 +1035,46 @@
           <article class="project-status-v2-panel">
             <header class="project-status-v2-panel-head">
               <div><span>项目成员</span><h2>成员与岗位</h2><p>汇总工程配置中已加入当前项目的成员。</p></div>
-              <router-link class="project-status-v2-link" to="/settings">维护成员 <ChevronRight :size="15" /></router-link>
+              <router-link class="project-status-v2-link" :to="projectSetupRoute('members')">维护成员 <ChevronRight :size="15" /></router-link>
             </header>
             <div v-if="projectStatusMemberRows.length" class="project-status-v2-table project-status-member-table">
               <div class="project-status-v2-table-head"><span>成员</span><span>岗位</span><span>职责</span></div>
               <article v-for="member in projectStatusMemberRows" :key="member.id"><strong>{{ member.name }}</strong><span>{{ member.title || '未配置岗位' }}</span><span>{{ member.role.join('、') || '未填写职责' }}</span></article>
             </div>
-            <div v-else class="project-status-v2-empty"><strong>尚未配置项目成员</strong><p>项目成员及岗位配置后会自动汇总到这里。</p><router-link to="/settings">前往工程配置</router-link></div>
+            <div v-else class="project-status-v2-empty"><strong>尚未配置项目成员</strong><p>项目成员及岗位配置后会自动汇总到这里。</p><router-link :to="projectSetupRoute('members')">前往工程配置</router-link></div>
           </article>
         </section>
       </main>
     </section>
 
-    <section v-else class="page-stack docs-page">
-      <section class="document-intake-panel">
-        <div>
-          <span>资料入库</span>
-          <h2>上传工程资料</h2>
-          <p>文件会归属当前项目，自动识别资料类别；同名文件将保留版本记录和上传留痕。</p>
-        </div>
-        <label class="document-upload-button" :class="{ disabled: documentUploading }">
-          <input type="file" :disabled="documentUploading" @change="uploadDocument">
-          {{ documentUploading ? '正在入库…' : '选择并上传文件' }}
-        </label>
-      </section>
-      <form class="document-search-panel" @submit.prevent="searchDocuments">
-        <input v-model.trim="documentSearchKeyword" placeholder="检索文件名或已提取的文本内容，例如：基坑、监测、验收">
-        <button type="submit" :disabled="documentSearching">{{ documentSearching ? '检索中…' : '检索资料' }}</button>
-      </form>
-      <section v-if="documentSearchKeyword" class="panel document-search-results">
-        <div class="panel-head"><div><h2>资料检索结果</h2><p>{{ documentSearchResults.length }} 条匹配；结果包含文件信息与文本命中片段。</p></div></div>
-        <div class="document-list"><article v-for="item in documentSearchResults" :key="item.id"><span>{{ item.category }}</span><strong>{{ item.fileName }}</strong><p>{{ item.snippet || `版本 V${item.version} · 未提取文本或仅匹配文件名` }}</p><em>V{{ item.version }}</em></article><p v-if="!documentSearching && !documentSearchResults.length" class="empty-document-note">未找到匹配资料。</p></div>
-      </section>
-      <div class="docs-work-grid">
-        <article v-for="item in docWorkItems" :key="item.label" class="doc-work-card">
-          <div>
-            <span>{{ item.label }}</span>
-            <strong>{{ item.title }}</strong>
-            <p>{{ item.desc }}</p>
-          </div>
-          <router-link :to="item.to">{{ item.action }}</router-link>
-        </article>
-      </div>
-      <div class="doc-grid">
-        <article v-for="doc in documentCards" :key="doc.title" class="doc-card">
-          <div class="doc-icon">
-            <n-icon :size="20"><component :is="doc.icon" /></n-icon>
-          </div>
-          <div>
-            <h2>{{ doc.title }}</h2>
-            <p>{{ doc.desc }}</p>
-          </div>
-          <strong>{{ doc.count }}</strong>
-        </article>
-      </div>
-      <section class="panel">
-        <div class="panel-head">
-          <div>
-            <h2>最近资料流</h2>
-            <p>日报、草稿和填报包的最近记录</p>
-          </div>
-        </div>
-        <div class="document-list">
-          <article v-for="item in recentDocuments" :key="item.name">
-            <span>{{ item.type }}</span>
-            <strong>{{ item.name }}</strong>
-            <p>{{ item.desc }}</p>
-            <em>{{ item.state }}</em>
-          </article>
-        </div>
-      </section>
-      <section class="panel document-storage-panel">
-        <div class="panel-head">
-          <div><h2>已入库资料</h2><p>当前项目的文件、类别和版本</p></div>
-          <strong>{{ store.attachments.length }} 个文件</strong>
-        </div>
-        <div class="document-list">
-          <article v-for="item in store.attachments.slice(0, 8)" :key="item.id">
-            <span>{{ item.category }}</span>
-            <strong>{{ item.fileName }}</strong>
-            <p>版本 V{{ item.version }} · {{ formatFileSize(item.fileSize) }}</p>
-            <em>{{ formatDateTime(item.createdAt, 'end') }}</em>
-            <button v-if="item.category === '日报'" type="button" class="document-action" @click="store.parseDailyAttachment(item.id)">登记日报</button>
-          </article>
-          <p v-if="!store.attachments.length" class="empty-document-note">暂无已入库资料，可上传日报、监测记录、现场照片或工程文件。</p>
-        </div>
-      </section>
-      <section class="panel document-review-panel">
-        <div class="panel-head">
-          <div><h2>日报确认队列</h2><p>确认后日报将正式进入项目资料流；任务中心同步保留处理记录。</p></div>
-          <strong>{{ store.pendingDailyReports.length }} 待确认</strong>
-        </div>
-        <div class="document-list">
-          <article v-for="report in store.pendingDailyReports" :key="report.id">
-            <span>日报</span>
-            <strong>{{ report.fileName }}</strong>
-            <p>{{ report.constructionContent || '待补充施工内容' }}</p>
-            <em>匹配置信度 {{ Math.round(report.confidence * 100) }}%</em>
-            <button type="button" class="document-action confirm" @click="store.confirmDailyReport(report.id)">确认入库</button>
-          </article>
-          <p v-if="!store.pendingDailyReports.length" class="empty-document-note">暂无待确认日报。上传后点击“登记日报”即可生成确认任务。</p>
-        </div>
-      </section>
-      <section class="panel document-review-panel">
-        <div class="panel-head">
-          <div><h2>风险草稿与填报</h2><p>将风险材料整理为可审核草稿，确认后生成平台填报包并留存状态。</p></div>
-          <button type="button" class="document-action confirm" @click="draftCreateOpen = true">新建草稿</button>
-        </div>
-        <div class="document-list">
-          <article v-for="draft in store.riskDrafts" :key="draft.id">
-            <span>草稿</span>
-            <strong>{{ draft.title }}</strong>
-            <p>{{ draft.content }}</p>
-            <em>{{ draftStatusLabel(draft.status) }}</em>
-            <div class="document-actions">
-              <button v-if="draft.status === 'draft' || draft.status === 'rejected'" type="button" class="document-action" @click="store.submitDraftReview(draft.id)">提交审核</button>
-              <template v-else-if="draft.status === 'reviewing'">
-                <button type="button" class="document-action confirm" @click="store.confirmDraft(draft.id)">确认</button>
-                <button type="button" class="document-action" @click="store.rejectDraft(draft.id, '请补充材料后重新提交')">退回</button>
-              </template>
-              <button v-else-if="draft.status === 'confirmed'" type="button" class="document-action confirm" @click="createDefaultFillPackage(draft.id, draft.title, draft.content)">生成填报包</button>
-            </div>
-          </article>
-          <p v-if="!store.riskDrafts.length" class="empty-document-note">暂无风险草稿。请先在工程配置中建立风险源，或直接新建草稿。</p>
-        </div>
-        <div v-if="draftCreateOpen" class="workflow-modal-backdrop" @click.self="draftCreateOpen = false">
-          <section class="workflow-modal draft-create-modal" role="dialog" aria-modal="true" aria-labelledby="draft-create-title">
-            <div class="workflow-modal-head">
-              <div><h2 id="draft-create-title">新建风险草稿</h2></div>
-              <button type="button" class="modal-close" aria-label="关闭新建风险草稿窗口" @click="draftCreateOpen = false">关闭</button>
-            </div>
-            <form class="draft-create-form" @submit.prevent="createRiskDraft">
-              <label class="form-field">关联风险源<select v-model="draftCreateForm.risk_source_id" required><option value="">请选择风险源</option><option v-for="risk in store.riskSources" :key="risk.id" :value="risk.id">{{ risk.name }}</option></select></label>
-              <label class="form-field">草稿标题<input v-model.trim="draftCreateForm.title" required placeholder="例如：深基坑支护施工风险上报"></label>
-              <label class="form-field draft-form-content">草稿内容<textarea v-model.trim="draftCreateForm.content" required placeholder="填写风险说明、处置建议和资料依据"></textarea></label>
-              <div class="workflow-modal-actions"><button type="button" class="modal-secondary" @click="draftCreateOpen = false">取消</button><button type="button" class="modal-assist" :disabled="!draftCreateForm.risk_source_id" @click="assistRiskDraft">智能生成</button><button type="submit" class="modal-primary">保存草稿</button></div>
-            </form>
-          </section>
-        </div>
-        <div v-if="store.fillPackages.length" class="document-list fill-package-list">
-          <article v-for="item in store.fillPackages" :key="item.id">
-            <span>填报</span>
-            <strong>{{ item.processName }}</strong>
-            <p>{{ item.platformName }} · {{ item.fields.length }} 个映射字段</p>
-            <em>{{ fillStatusLabel(item.status) }}</em>
-            <div class="document-actions">
-              <button v-if="item.status === 'pending'" type="button" class="document-action" @click="store.startFilling(item.id)">开始填报</button>
-              <button v-if="item.status === 'filling'" type="button" class="document-action confirm" @click="store.markFillDone(item.id)">标记已提交</button>
-            </div>
-          </article>
-        </div>
-      </section>
-    </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, shallowRef, watch, type Component } from 'vue'
-import { useRoute } from 'vue-router'
-import { NIcon, useMessage } from 'naive-ui'
+import { computed, nextTick, onMounted, ref, watch, type Component } from 'vue'
+import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
+import { NIcon, NSelect, useMessage } from 'naive-ui'
 import {
   AlertCircle, At, CalendarEvent, ChartBar, ChevronDown,
   ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Clock, FileText, Folder,
-  ListCheck, MapPin, Notes, Paperclip, Pin, PlayerStop, Plus, Repeat, Robot, Search,
-  Send, Settings, Table, Trash, User, UserPlus,
+  ListCheck, Loader, MapPin, Notes, Paperclip, Pin, PlayerStop, Plus, Repeat, Robot, Search,
+  Send, Settings, Trash, User, UserPlus, X,
 } from '@vicons/tabler'
-import { useAppStore, type AttachmentRecord } from '@/stores/app'
+import { useAppStore } from '@/stores/app'
 import api, { type ApiEnvelope } from '@/api/client'
 import {
-  streamAgentConversationConfirmation,
-  streamAgentConversationMessage,
-} from '@/api/agentStream'
-import {
-  listProjectChatAgents,
   listProjectChatChannels,
   listProjectChatMembers,
-  type ProjectChatAgent,
   type ProjectChatChannel,
   type ProjectChatMember,
 } from '@/api/projectChat'
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
+import ChatComposerSurface from '@/components/chat/ChatComposerSurface.vue'
 import ProjectGroupChat from '@/components/chat/ProjectGroupChat.vue'
-import {
-  applyAgentRuntimeEvents,
-  createEmptyRuntimeTrace,
-  runtimeTraceFromExtraData,
-  type AgentRuntimeTrace,
-  type AgentToolCallBlock,
-  type ApiAgentMessage,
-} from '@/types/agentRuntime'
-import type { DraftStatus, FillStatus, Member, QualityMetric, RiskLevel, Task, TaskStatus } from '@/types'
+import HomeTaskDraftDialog from '@/components/task/HomeTaskDraftDialog.vue'
+import { useAsyncConfirmDialog } from '@/composables/useAsyncConfirmDialog'
+import { useHomeAgentConversations } from '@/composables/useHomeAgentConversations'
+import type { Member, QualityMetric, RiskLevel, Task, TaskStatus } from '@/types'
 
 type ChatMessage = {
   id: string
@@ -991,7 +1082,6 @@ type ChatMessage = {
   content: string
   generatedTaskIds?: string[]
   attachments?: ChatAttachment[]
-  runtimeTrace?: AgentRuntimeTrace | null
 }
 
 type ChatAttachment = {
@@ -1001,17 +1091,6 @@ type ChatAttachment = {
   type: string
 }
 
-type ApiAgentConversation = {
-  id: number
-  project_id: number
-  agent_id: string
-  agent_name: string
-  conversation_type: 'general' | 'business'
-  title: string
-  status: string
-  created_at: string
-  updated_at: string
-}
 type TaskNodeType = 'manual' | 'project_chat_message'
 type TaskMessageMentionMode = 'none' | 'all' | 'users'
 type TaskFlowStepDraft = {
@@ -1021,7 +1100,6 @@ type TaskFlowStepDraft = {
   owner_user_id: string
   due_at: string
   material: string
-  sender_agent_id: string
   target_channel_id: number | null
   mention_mode: TaskMessageMentionMode
   mentioned_user_ids: number[]
@@ -1077,24 +1155,219 @@ type GeneratedTaskFlow = {
       content: string
     }
   }>
-  generated_by: 'ai' | 'rules'
+  generated_by: 'ai'
   generation_note: string
 }
 
 type ProjectStatusTab = 'progress' | 'riskQuality' | 'documents' | 'overview'
 
 const route = useRoute()
+const router = useRouter()
 const store = useAppStore()
 const message = useMessage()
+const { confirmAsyncAction } = useAsyncConfirmDialog()
+const {
+  homeAgentConversations,
+  filteredHomeAgentConversations,
+  homeAgentConversation,
+  homeConversationKeyword,
+  homeConversationListLoading,
+  homeConversationMessagesLoading,
+  homeConversationDeletingId,
+  homeQuickChatMessages,
+  homeQuickStreamingTrace,
+  homeQuickViewport,
+  quickCommand,
+  quickFiles,
+  quickUploading,
+  quickStopping,
+  homeQuickSessionTitle,
+  homeQuickSessionTime,
+  homeQuickAgentName,
+  formatHomeConversationTime,
+  selectHomeConversation,
+  startNewHomeConversation,
+  deleteHomeConversation,
+  dispatchQuickCommand: dispatchGeneralQuickCommand,
+  sendHomeAgentMessage,
+  stopHomeAgent,
+  confirmHomeToolCall,
+} = useHomeAgentConversations()
+
+const homeCapabilities = [
+  {
+    name: '资料助手',
+    description: '查询当前权限范围内的工程资料',
+    icon: Folder,
+  },
+  {
+    name: '任务助手',
+    description: '分析当前对话并整理待确认任务',
+    icon: ListCheck,
+  },
+] as const
+const homeCapabilityMenuOpen = ref(false)
+const homeCapabilityDispatching = ref(false)
+const homeQuickComposerInput = ref<HTMLTextAreaElement | null>(null)
+const homeTaskDraftDialog = ref<InstanceType<typeof HomeTaskDraftDialog> | null>(null)
+
+function closeHomeCapabilityMenuLater() {
+  window.setTimeout(() => {
+    homeCapabilityMenuOpen.value = false
+  }, 120)
+}
+
+async function insertHomeCapabilityMention(name: string) {
+  const mention = `@${name}`
+  const current = quickCommand.value
+  if (/@[^\s@]*$/.test(current)) {
+    quickCommand.value = current.replace(/@[^\s@]*$/, `${mention} `)
+  } else {
+    quickCommand.value = `${current}${current && !/\s$/.test(current) ? ' ' : ''}${mention} `
+  }
+  homeCapabilityMenuOpen.value = false
+  await nextTick()
+  homeQuickComposerInput.value?.focus()
+}
+
+async function dispatchQuickCommand() {
+  const content = quickCommand.value.trim()
+  const invokesKnowledge = content.includes('@资料助手')
+  const invokesTask = content.includes('@任务助手')
+  if (invokesKnowledge && invokesTask) {
+    message.warning('资料查询和任务布置请分两次发送。')
+    return false
+  }
+  if (!invokesTask) return dispatchGeneralQuickCommand()
+  if (homeCapabilityDispatching.value || quickUploading.value) return false
+  if (quickFiles.value.length) {
+    message.warning('请先发送并分析附件，再让任务助手结合对话布置任务。')
+    return false
+  }
+  const requirement = content.replace('@任务助手', '').trim()
+  if (requirement.length < 4) {
+    message.warning('请在 @任务助手 后说明要布置的任务。')
+    return false
+  }
+  const projectId = Number(store.currentProjectId || 0)
+  if (!projectId) {
+    message.warning('请先选择项目。')
+    return false
+  }
+  homeCapabilityDispatching.value = true
+  try {
+    const started = await homeTaskDraftDialog.value?.start(
+      homeAgentConversation.value?.id || null,
+      content,
+    )
+    if (started) quickCommand.value = ''
+    return Boolean(started)
+  } catch (error: any) {
+    message.error(
+      error?.response?.data?.detail
+      || error?.message
+      || '无法启动 Dobby 任务分析。',
+    )
+    return false
+  } finally {
+    homeCapabilityDispatching.value = false
+  }
+}
+
+watch(quickCommand, value => {
+  if (/(^|\s)@$/.test(value)) homeCapabilityMenuOpen.value = true
+})
 
 const section = computed(() => {
   const name = String(route.name || '')
   if (name === 'AiWorkspace') return 'ai'
   if (name === 'TaskManagement') return 'tasks'
   if (name === 'ProjectStatus') return 'project'
-  if (name === 'EngineeringDocs') return 'docs'
   return 'home'
 })
+
+function routeQueryValue(value: unknown) {
+  return Array.isArray(value) ? String(value[0] || '') : String(value || '')
+}
+
+function replaceWorkspaceQuery(patch: Record<string, string | undefined>) {
+  const query = { ...route.query }
+  Object.entries(patch).forEach(([key, value]) => {
+    if (value) query[key] = value
+    else delete query[key]
+  })
+  return router.replace({ path: route.path, query })
+}
+
+function projectSetupRoute(
+  targetSection: 'overview' | 'members' | 'wbs' | 'quality' | 'risks',
+  recordId?: string,
+): RouteLocationRaw {
+  return {
+    path: '/settings',
+    query: { tab: 'manual', section: targetSection, recordId: recordId || undefined },
+  }
+}
+
+function documentsRoute(documentId?: string): RouteLocationRaw {
+  return { path: '/docs', query: { tab: 'files', documentId: documentId || undefined } }
+}
+
+function documentsSearchRoute(fileName: string): RouteLocationRaw {
+  return { path: '/docs', query: { tab: 'files', search: fileName } }
+}
+
+function taskDetailRoute(taskId: string, view: 'disposition' | 'history' = 'disposition'): RouteLocationRaw {
+  return { path: '/tasks', query: { tab: view === 'history' ? 'history' : 'mine', taskId, view } }
+}
+
+function taskDiscussionRoute(taskId: string): RouteLocationRaw {
+  const source = taskContexts.value[taskId]?.chat_messages[0]
+  return {
+    path: '/ai',
+    query: {
+      taskId,
+      channelId: source?.channel_id ? String(source.channel_id) : undefined,
+      messageId: source?.id ? String(source.id) : undefined,
+    },
+  }
+}
+
+function taskChatMessageRoute(taskId: string, channelId: number, messageId?: number): RouteLocationRaw {
+  return {
+    path: '/ai',
+    query: {
+      taskId,
+      channelId: String(channelId),
+      messageId: messageId ? String(messageId) : undefined,
+    },
+  }
+}
+
+function selectHomeMode(mode: 'work' | 'quick') {
+  homeMode.value = mode
+  if (route.path === '/workbench') {
+    return replaceWorkspaceQuery({
+      mode,
+      conversationId: mode === 'quick'
+        ? String(homeAgentConversation.value?.id || '') || undefined
+        : undefined,
+    })
+  }
+  return Promise.resolve()
+}
+
+function selectTaskManagementTab(tab: TaskManagementTab) {
+  taskManagementTab.value = tab
+  if (route.path === '/tasks') {
+    replaceWorkspaceQuery({ tab, taskId: undefined, view: undefined })
+  }
+}
+
+function selectProjectStatusTab(tab: ProjectStatusTab) {
+  projectStatusTab.value = tab
+  if (route.path === '/project') replaceWorkspaceQuery({ tab })
+}
 
 const currentProject = computed(() => store.currentProject)
 const currentUserId = computed(() => sessionStorage.getItem('current_user_id') || store.members[0]?.id || '')
@@ -1236,9 +1509,6 @@ const selectedHomeWorkItemId = ref('')
 const homeWorkCommand = ref('')
 const homeWorkFiles = ref<File[]>([])
 const homeWorkUploading = ref(false)
-const quickFiles = ref<File[]>([])
-const quickUploading = ref(false)
-const homeWorkThreads = ref<Record<string, ChatMessage[]>>({})
 
 function workQueueStatus(task: Task): WorkQueueStatus {
   if (task.status === 'overdue') return 'overdue'
@@ -1352,7 +1622,6 @@ const homeWorkConversationMessages = computed<ChatMessage[]>(() => {
   if (!item) return []
   return [
     { id: `${item.id}-intro`, role: 'assistant', content: homeWorkAssistantIntro.value },
-    ...(homeWorkThreads.value[item.id] ?? []),
   ]
 })
 const homeWorkSuggestions = computed(() => {
@@ -1414,35 +1683,13 @@ function removeComposerFile(mode: 'work' | 'quick' | 'task', index: number) {
   target.value = target.value.filter((_, fileIndex) => fileIndex !== index)
 }
 
-function createChatAttachments(files: File[]): ChatAttachment[] {
-  return files.map(file => ({
-    id: `${file.name}-${file.size}-${file.lastModified}`,
-    name: file.name,
-    size: file.size,
-    type: file.type || 'application/octet-stream',
-  }))
-}
-
-async function uploadComposerFiles(files: File[], category: string) {
-  for (const file of files) await store.uploadAttachment(file, category)
-}
-
-function buildHomeWorkReply(content: string, attachments: ChatAttachment[] = []) {
-  const item = selectedHomeWorkItem.value
-  if (!item) return ''
-  const attachmentLead = attachments.length
-    ? `已收到 ${attachments.length} 个附件（${attachments.map(file => file.name).join('、')}），并归入当前项目资料库。`
-    : ''
-  if (/资料|依据|附件/.test(content)) {
-    return `${attachmentLead}已围绕“${item.title}”整理关联信息：${item.tags.join('、')}。建议先核对关键资料是否完整，再决定是否进入${item.action}。`
-  }
-  if (/协同|责任人|消息/.test(content)) {
-    return `${attachmentLead}建议由${item.owner}继续负责当前事项，我可以根据“${item.title}”生成协同说明，并把截止要求同步给相关人员。`
-  }
-  if (/影响|流程|顺序/.test(content)) {
-    return `${attachmentLead}这项工作当前排在第 ${selectedHomeWorkRank.value} 位。主要影响是：${item.reason.replace(/^原因：/, '')}处理完成后再推进后续任务，可以减少重复确认。`
-  }
-  return `${attachmentLead}我已结合“${item.title}”的当前状态记录你的要求：${content}。下一步可以继续补充依据，或直接进入${item.action}。`
+function taskAgentPrompt(item: HomeWorkItem, content: string) {
+  return [
+    `请在当前项目中围绕任务“${item.title}”（任务 ID：${item.id}）处理下面的请求。`,
+    `当前状态：${item.label}；当前责任：${item.owner}（${item.role}）；${item.deadline}。`,
+    `关联信息：${item.tags.join('、') || '暂无'}。`,
+    `用户请求：${content}`,
+  ].join('\n')
 }
 
 async function dispatchHomeWorkCommand() {
@@ -1452,20 +1699,14 @@ async function dispatchHomeWorkCommand() {
   if (!item || !content || homeWorkUploading.value) return
   homeWorkUploading.value = true
   try {
-    if (files.length) await uploadComposerFiles(files, 'Dobby工作附件')
-    const attachments = createChatAttachments(files)
-    const messages = [...(homeWorkThreads.value[item.id] ?? [])]
-    const timestamp = Date.now()
-    messages.push({ id: `${item.id}-user-${timestamp}`, role: 'user', content, attachments: attachments.length ? attachments : undefined })
-    messages.push({ id: `${item.id}-assistant-${timestamp + 1}`, role: 'assistant', content: buildHomeWorkReply(content, attachments) })
-    homeWorkThreads.value = { ...homeWorkThreads.value, [item.id]: messages }
-    homeWorkCommand.value = ''
-    homeWorkFiles.value = []
+    await selectHomeMode('quick')
     await nextTick()
-    const viewport = homeWorkThreadViewport.value
-    if (viewport) viewport.scrollTop = viewport.scrollHeight
-  } catch {
-    message.error('附件上传失败，请检查文件或网络后重试。')
+    if (!startNewHomeConversation(false)) return
+    const sent = await sendHomeAgentMessage(taskAgentPrompt(item, content), files)
+    if (sent) {
+      homeWorkCommand.value = ''
+      homeWorkFiles.value = []
+    }
   } finally {
     homeWorkUploading.value = false
   }
@@ -1473,7 +1714,7 @@ async function dispatchHomeWorkCommand() {
 
 function dispatchHomeWorkSuggestion(content: string) {
   homeWorkCommand.value = content
-  dispatchHomeWorkCommand()
+  void dispatchHomeWorkCommand()
 }
 
 watch(homeStatus, () => {
@@ -1492,218 +1733,27 @@ watch(selectedHomeWorkItemId, () => {
   homeWorkFiles.value = []
 })
 
-onMounted(() => {
-  void loadHomeAgentConversation()
-})
 watch(() => store.currentProjectId, () => {
-  void loadHomeAgentConversation()
-})
-watch(section, currentSection => {
-  if (currentSection === 'home') {
-    void loadHomeAgentConversation()
-  }
-})
-
-const quickCommand = ref('')
-async function dispatchQuickCommand() {
-  const files = [...quickFiles.value]
-  const content = quickCommand.value.trim() || (files.length ? '请识别并分析我上传的资料' : '')
-  if (!content || quickUploading.value) return
-  quickUploading.value = true
-  try {
-    if (files.length) await uploadComposerFiles(files, 'Dobby问答附件')
-    const attachments = createChatAttachments(files)
-    const optimisticUser: ChatMessage = {
-      id: `hq-u-${Date.now()}`,
-      role: 'user',
-      content,
-      attachments: attachments.length ? attachments : undefined,
-    }
-    homeQuickChatMessages.value = [...homeQuickChatMessages.value, optimisticUser]
-    const conversation = await ensureHomeAgentConversation()
-    homeQuickStreamingTrace.value = createEmptyRuntimeTrace()
-    quickCommand.value = ''
-    quickFiles.value = []
-    const completion: {
-      message: ApiAgentMessage | null
-      runtimeStatus: string
-    } = { message: null, runtimeStatus: 'running' }
-    await streamAgentConversationMessage(conversation.id, content, {
-      onEvents: async runtimeEvents => {
-        homeQuickStreamingTrace.value = applyAgentRuntimeEvents(
-          homeQuickStreamingTrace.value,
-          runtimeEvents,
-        )
-        await nextTick()
-        scrollHomeQuick()
-      },
-      onDone: payload => {
-        completion.message = payload.message
-        completion.runtimeStatus = payload.runtime_status
-      },
-    })
-    if (!completion.message) {
-      throw new Error('AgentScope 已结束事件流，但没有返回最终消息。')
-    }
-    homeQuickChatMessages.value = [
-      ...homeQuickChatMessages.value,
-      mapAgentMessage(completion.message),
-    ]
-    homeQuickStreamingTrace.value = null
-    homeAgentConversation.value = {
-      ...conversation,
-      status: completion.runtimeStatus,
-      updated_at: nowStr(),
-    }
-    store.addLog({
-      id: `log${Date.now()}`,
-      time: nowStr(),
-      operator: '张伟',
-      action: files.length ? '资料问答' : '任务下发',
-      detail: files.length ? `${content}；附件：${files.map(file => file.name).join('、')}` : content,
-      level: 'info',
-    })
-    await nextTick()
-    scrollHomeQuick(true)
-  } catch (error: any) {
-    homeQuickStreamingTrace.value = null
-    if (homeAgentConversation.value) {
-      homeAgentConversation.value = {
-        ...homeAgentConversation.value,
-        status: 'error',
-        updated_at: nowStr(),
-      }
-    }
-    message.error(error?.response?.data?.detail || error?.message || '主智能体处理失败，请检查 AgentScope 配置后重试。')
-  } finally {
-    quickUploading.value = false
-  }
-}
-
-function scrollHomeQuick(smooth = false) {
-  const viewport = homeQuickViewport.value
-  if (!viewport) return
-  viewport.scrollTo({
-    top: viewport.scrollHeight,
-    behavior: smooth ? 'smooth' : 'auto',
-  })
-}
-
-async function stopHomeAgent() {
-  if (!homeAgentConversation.value) return
-  try {
-    await api.post(`/agent-conversations/${homeAgentConversation.value.id}/interrupt`)
-    message.info('已请求停止，正在等待智能体安全结束当前步骤。')
-  } catch (error: any) {
-    message.error(error?.response?.data?.detail || '停止主智能体失败。')
-  }
-}
-
-async function confirmHomeToolCall(
-  replyId: string,
-  toolCall: AgentToolCallBlock,
-  confirmed: boolean,
-) {
-  const conversation = homeAgentConversation.value
-  if (!conversation || quickUploading.value) return
-  quickUploading.value = true
-  homeQuickStreamingTrace.value = createEmptyRuntimeTrace()
-  try {
-    await streamAgentConversationConfirmation(
-      conversation.id,
-      {
-        reply_id: replyId,
-        tool_call: toolCall,
-        confirmed,
-      },
-      {
-        onAccepted: payload => {
-          message.success(
-            payload.message
-            || (
-              confirmed
-                ? `已允许「${toolCall.name}」，智能体正在继续执行。`
-                : `已拒绝「${toolCall.name}」，智能体正在处理确认结果。`
-            ),
-          )
-        },
-        onEvents: async runtimeEvents => {
-          homeQuickStreamingTrace.value = applyAgentRuntimeEvents(
-            homeQuickStreamingTrace.value,
-            runtimeEvents,
-          )
-          await nextTick()
-          scrollHomeQuick()
-        },
-      },
-    )
-    await loadHomeAgentConversation()
-  } catch (error: any) {
-    message.error(
-      error?.response?.data?.detail
-      || error?.message
-      || '提交人工确认失败。',
-    )
-  } finally {
-    homeQuickStreamingTrace.value = null
-    quickUploading.value = false
-  }
-}
-
-const homeAgentConversation = ref<ApiAgentConversation | null>(null)
-const homeQuickChatMessages = ref<ChatMessage[]>([])
-const homeQuickStreamingTrace = shallowRef<AgentRuntimeTrace | null>(null)
-const homeQuickViewport = ref<HTMLElement | null>(null)
-const homeQuickSession = computed(() => homeAgentConversation.value)
-const homeQuickSessionTitle = computed(() => homeQuickSession.value?.title ?? '')
-const homeQuickSessionTime = computed(
-  () => homeQuickSession.value?.updated_at ?? homeQuickSession.value?.created_at ?? '',
-)
-const homeQuickAgentName = computed(
-  () => homeQuickSession.value?.agent_name || '平台主智能体',
-)
-
-function mapAgentMessage(row: ApiAgentMessage): ChatMessage {
-  return {
-    id: String(row.id),
-    role: row.role,
-    content: row.content,
-    runtimeTrace: runtimeTraceFromExtraData(row.extra_data),
-  }
-}
-
-async function loadHomeAgentConversation() {
-  homeAgentConversation.value = null
-  homeQuickChatMessages.value = []
-  homeQuickStreamingTrace.value = null
-  if (!store.currentProjectId) return
-  try {
-    const response = await api.get<ApiEnvelope<ApiAgentConversation[]>>(
-      `/projects/${store.currentProjectId}/agent-conversations`,
-      { params: { conversation_type: 'general' } },
-    )
-    const conversation = response.data.data[0]
-    if (!conversation) return
-    homeAgentConversation.value = conversation
-    const messagesResponse = await api.get<ApiEnvelope<ApiAgentMessage[]>>(
-      `/agent-conversations/${conversation.id}/messages`,
-    )
-    homeQuickChatMessages.value = messagesResponse.data.data.map(mapAgentMessage)
-  } catch (error: any) {
-    message.error(error?.response?.data?.detail || '加载主智能体会话失败。')
-  }
-}
-
-async function ensureHomeAgentConversation() {
-  if (homeAgentConversation.value) return homeAgentConversation.value
-  if (!store.currentProjectId) throw new Error('请先选择项目')
-  const response = await api.post<ApiEnvelope<ApiAgentConversation>>(
-    `/projects/${store.currentProjectId}/agent-conversations`,
-    { conversation_type: 'general' },
+  homeCapabilityMenuOpen.value = false
+  const hadDraft = Boolean(
+    homeWorkCommand.value.trim()
+    || homeWorkFiles.value.length
+    || quickCommand.value.trim()
+    || quickFiles.value.length
+    || taskMineCommand.value.trim()
+    || taskMineFiles.value.length,
   )
-  homeAgentConversation.value = response.data.data
-  return response.data.data
-}
+  homeWorkCommand.value = ''
+  homeWorkFiles.value = []
+  quickCommand.value = ''
+  quickFiles.value = []
+  taskMineCommand.value = ''
+  taskMineFiles.value = []
+  taskDispositionOpen.value = false
+  taskHistoryOpenId.value = ''
+  selectedTaskId.value = ''
+  if (hadDraft) message.info('项目已切换，未发送的文字和附件已清空，避免带入其他项目。')
+})
 
 type TaskManagementTab = 'mine' | 'history' | 'schedules' | 'assign'
 
@@ -1716,39 +1766,75 @@ const taskMineThreadViewport = ref<HTMLElement | null>(null)
 const taskMineCommand = ref('')
 const taskMineFiles = ref<File[]>([])
 const taskMineUploading = ref(false)
-const taskMineThreads = ref<Record<string, ChatMessage[]>>({})
 const selectedTaskId = ref('')
 const taskDispositionOpen = ref(false)
 const taskDispositionReply = ref('')
 const taskDispositionForwardId = ref('')
 const taskDispositionFiles = ref<File[]>([])
 const taskDispositionSubmitting = ref(false)
+const taskDispositionAction = ref<'submit' | 'accept' | 'reject' | ''>('')
+const taskStepUpdatingKey = ref('')
+const taskAttachmentDownloadingReference = ref('')
 const taskHistoryKeyword = ref('')
 const taskHistoryStatus = ref<'all' | TaskStatus>('all')
 const taskHistoryStart = ref('')
 const taskHistoryEnd = ref('')
 const taskHistoryOpenId = ref('')
 type TaskHistoryEntry = { id: string | number; kind?: string; step_seq?: number | null; from_status?: string; to_status?: string; note?: string; created_at: string }
+type TaskContext = {
+  task_id: string
+  risk: { id: string; name: string } | null
+  wbs: { id: string; code: string; name: string } | null
+  chat_messages: Array<{ id: number; channel_id: number; channel_title: string; content: string; created_at: string | null }>
+  collaboration_sessions: Array<{ id: number; title: string; message_id: number | null; content: string }>
+  documents: Array<{ id: string; file_name: string; category: string }>
+  related_channels: Array<{ id: number; title: string }>
+}
 const taskHistories = ref<Record<string, TaskHistoryEntry[]>>({})
+const taskContexts = ref<Record<string, TaskContext>>({})
+const taskContextLoadingIds = ref<Set<string>>(new Set())
 const taskHistoryLoading = ref(false)
 const taskSchedules = ref<TaskSchedule[]>([])
 const taskSchedulesLoading = ref(false)
+const taskSchedulePendingAction = ref<{ id: string; kind: 'state' | 'cancel' } | null>(null)
 const taskScheduleKeyword = ref('')
 const taskScheduleStatus = ref<'all' | 'active' | 'paused' | 'ended' | 'cancelled'>('all')
 const taskChatChannels = ref<ProjectChatChannel[]>([])
-const taskChatAgents = ref<ProjectChatAgent[]>([])
 const taskChatMembersByChannel = ref<Record<number, ProjectChatMember[]>>({})
+const taskChatMemberLoadingChannelIds = ref<Set<number>>(new Set())
 const selectedTaskHistoryTask = computed(() => store.tasks.find(task => task.id === taskHistoryOpenId.value))
+const selectedTaskContext = computed(() => {
+  const taskId = taskHistoryOpenId.value || selectedTaskId.value
+  return taskId ? taskContexts.value[taskId] : undefined
+})
+function taskContextHasLinks(context?: TaskContext) {
+  return Boolean(
+    context
+    && (
+      context.risk
+      || context.wbs
+      || context.chat_messages.length
+      || context.collaboration_sessions.length
+      || context.documents.length
+      || context.related_channels.length
+    ),
+  )
+}
 const taskCreateMode = ref<'dobby' | 'template'>('dobby')
 const taskFlowAssistantOpen = ref(true)
 const taskFlowRequirement = ref('')
 const taskFlowGenerating = ref(false)
+const taskFlowSubmitting = ref(false)
+const taskFlowGenerationStopping = ref(false)
 const taskFlowGenerationNote = ref('')
+const taskFlowGenerationId = ref('')
+const taskFlowGenerationProjectId = ref<string | null>(null)
+let taskFlowGenerationController: AbortController | null = null
+let taskFlowStopRequestedId = ''
 const taskTemplateOptions = ['条件核查', '隐患整改', '资料补全', '风险处置', '报告审核', '自定义'] as const
 const taskTemplateType = ref<(typeof taskTemplateOptions)[number]>('隐患整改')
 const taskTemplateTopic = ref('')
 const selectedTaskFlowStepIndex = ref(-1)
-const taskFlowExamples = ['每周核查基坑监测数据并完成复核归档', '发现临边防护缺失后发起整改并闭环', '补齐日报缺失资料并由资料员复核']
 const taskCreateForm = ref({
   title: '',
   task_type: 'risk_alert' as Task['type'],
@@ -1785,14 +1871,16 @@ const calendarModeLabel = computed(() => {
   return `每周 ${form.trigger_weekdays.map(day => names[day - 1]).join('、') || '未选择'}`
 })
 const taskFlowSteps = ref<TaskFlowStepDraft[]>([])
-const taskMessageSenderOptions = computed(() => {
-  const options = [{ id: 'dobby-task-engine', name: 'Dobby（任务引擎）' }]
-  for (const agent of taskChatAgents.value) {
-    if (!agent.enabled || !agent.published || options.some(item => item.id === agent.id)) continue
-    options.push({ id: agent.id, name: agent.name })
-  }
-  return options
-})
+const taskProjectChatChannels = computed(() => (
+  taskChatChannels.value.filter(channel => channel.channel_type !== 'private')
+))
+const taskPrivateChatChannels = computed(() => (
+  taskChatChannels.value.filter(channel => channel.channel_type === 'private')
+))
+
+function defaultTaskChatChannelId() {
+  return taskChatChannels.value.find(channel => channel.channel_type === 'project')?.id || null
+}
 
 function taskChatMembersForStep(step: TaskFlowStepDraft) {
   return step.target_channel_id
@@ -1800,12 +1888,67 @@ function taskChatMembersForStep(step: TaskFlowStepDraft) {
     : []
 }
 
+function taskSelectedChatMembers(step: TaskFlowStepDraft) {
+  const membersById = new Map(
+    taskChatMembersForStep(step).map(member => [member.user_id, member]),
+  )
+  return step.mentioned_user_ids
+    .map(userId => membersById.get(userId))
+    .filter((member): member is ProjectChatMember => Boolean(member))
+}
+
+function taskAvailableChatMemberOptions(step: TaskFlowStepDraft) {
+  const selectedUserIds = new Set(step.mentioned_user_ids)
+  return taskChatMembersForStep(step)
+    .filter(member => !selectedUserIds.has(member.user_id))
+    .map(member => ({
+      label: member.title ? `${member.name} · ${member.title}` : member.name,
+      value: member.user_id,
+    }))
+}
+
+function taskRecipientPickerPlaceholder(step: TaskFlowStepDraft) {
+  if (!step.target_channel_id) return '请先选择目标群聊'
+  if (taskChatMemberLoadingChannelIds.value.has(step.target_channel_id)) return '正在读取群聊成员…'
+  if (!taskChatMembersForStep(step).length) return '当前群聊没有可选成员'
+  if (!taskAvailableChatMemberOptions(step).length) return '群聊成员已全部添加'
+  return '下拉选择要提醒的成员'
+}
+
+function taskRecipientPickerDisabled(step: TaskFlowStepDraft) {
+  if (!step.target_channel_id) return true
+  if (taskChatMemberLoadingChannelIds.value.has(step.target_channel_id)) return false
+  return !taskAvailableChatMemberOptions(step).length
+}
+
+function addTaskMentionedUser(
+  step: TaskFlowStepDraft,
+  value: string | number | null,
+) {
+  const userId = Number(value)
+  if (!Number.isInteger(userId)) return
+  if (!taskChatMembersForStep(step).some(member => member.user_id === userId)) return
+  if (step.mentioned_user_ids.includes(userId)) return
+  step.mentioned_user_ids = [...step.mentioned_user_ids, userId]
+}
+
+function removeTaskMentionedUser(step: TaskFlowStepDraft, userId: number) {
+  step.mentioned_user_ids = step.mentioned_user_ids.filter(item => item !== userId)
+}
+
 function taskFlowStepSummary(step: TaskFlowStepDraft) {
   if (step.node_type === 'project_chat_message') {
-    const sender = taskMessageSenderOptions.value.find(item => item.id === step.sender_agent_id)?.name || '未选择发送智能体'
     const channel = taskChatChannels.value.find(item => item.id === step.target_channel_id)?.title || '未选择群聊'
-    const mention = step.mention_mode === 'all' ? '@全体成员' : step.mention_mode === 'users' ? `提醒 ${step.mentioned_user_ids.length} 人` : '普通消息'
-    return `${sender} · ${channel} · ${mention}`
+    const selectedNames = taskSelectedChatMembers(step).map(member => member.name)
+    const selectedMention = selectedNames.length
+      ? `@${selectedNames.join('、')}`
+      : `提醒 ${step.mentioned_user_ids.length} 人`
+    const mention = step.mention_mode === 'all'
+      ? '@全体成员'
+      : step.mention_mode === 'users'
+        ? selectedMention
+        : '普通消息'
+    return `${channel} · ${mention}`
   }
   return `${memberNameById(step.owner_user_id)} · ${step.due_at || '未设置截止日期'} · ${step.material || '未设置交付物'}`
 }
@@ -1842,8 +1985,7 @@ const taskFlowValidationItems = computed(() => {
   const namedSteps = taskFlowSteps.value.filter(step => step.name.trim()).length
   const assignedSteps = manualSteps.filter(step => step.owner_user_id).length
   const configuredMessageSteps = messageSteps.filter(step => (
-    !!step.sender_agent_id
-    && !!step.target_channel_id
+    !!step.target_channel_id
     && !!step.message_content.trim()
     && (step.mention_mode !== 'users' || step.mentioned_user_ids.length > 0)
   )).length
@@ -1866,6 +2008,15 @@ const taskFlowValidationItems = computed(() => {
 })
 const taskFlowCanSubmit = computed(() => taskFlowValidationItems.value.every(item => item.ok))
 const taskFlowMissingCount = computed(() => taskFlowValidationItems.value.filter(item => !item.ok).length)
+const taskFlowSubmitLabel = computed(() => {
+  if (taskFlowSubmitting.value) {
+    return taskCreateForm.value.run_mode === 'immediate' ? '正在布置任务…' : '正在登记计划…'
+  }
+  if (taskFlowGenerating.value) {
+    return taskFlowGenerationStopping.value ? '正在停止 AI 生成' : '等待 AI 生成完成'
+  }
+  return taskCreateForm.value.run_mode === 'immediate' ? '校验并布置任务' : '校验并登记计划'
+})
 
 async function loadTaskSchedules() {
   if (!store.currentProjectId) {
@@ -1889,14 +2040,17 @@ async function loadTaskChatChannels() {
   if (!store.currentProjectId) {
     taskChatChannels.value = []
     taskChatMembersByChannel.value = {}
+    taskChatMemberLoadingChannelIds.value = new Set()
     return
   }
   try {
     taskChatChannels.value = await listProjectChatChannels(store.currentProjectId)
     for (const step of taskFlowSteps.value) {
       if (step.node_type !== 'project_chat_message') continue
-      if (!taskChatChannels.value.some(channel => channel.id === step.target_channel_id)) {
-        step.target_channel_id = taskChatChannels.value[0]?.id || null
+      if (step.target_channel_id === null) {
+        step.target_channel_id = defaultTaskChatChannelId()
+      } else if (!taskChatChannels.value.some(channel => channel.id === step.target_channel_id)) {
+        step.target_channel_id = null
       }
       if (step.target_channel_id) void loadTaskChatMembers(step.target_channel_id)
     }
@@ -1906,29 +2060,34 @@ async function loadTaskChatChannels() {
 }
 
 async function loadTaskChatMembers(channelId: number | null) {
-  if (!channelId || taskChatMembersByChannel.value[channelId]) return
+  if (
+    !channelId
+    || taskChatMembersByChannel.value[channelId]
+    || taskChatMemberLoadingChannelIds.value.has(channelId)
+  ) return
+  taskChatMemberLoadingChannelIds.value = new Set([
+    ...taskChatMemberLoadingChannelIds.value,
+    channelId,
+  ])
   try {
     taskChatMembersByChannel.value[channelId] = await listProjectChatMembers(channelId)
   } catch (error: any) {
     taskChatMembersByChannel.value[channelId] = []
     message.error(error.response?.data?.detail || '群聊成员加载失败。')
-  }
-}
-
-async function loadTaskChatAgents() {
-  try {
-    taskChatAgents.value = await listProjectChatAgents()
-  } catch (error: any) {
-    taskChatAgents.value = []
-    message.error(error.response?.data?.detail || '可用智能体加载失败。')
+  } finally {
+    const loadingIds = new Set(taskChatMemberLoadingChannelIds.value)
+    loadingIds.delete(channelId)
+    taskChatMemberLoadingChannelIds.value = loadingIds
   }
 }
 
 async function loadTaskPlanningContext() {
-  await Promise.all([loadTaskSchedules(), loadTaskChatChannels(), loadTaskChatAgents()])
+  await Promise.all([loadTaskSchedules(), loadTaskChatChannels()])
 }
 
 async function setTaskSchedulePaused(schedule: TaskSchedule, paused: boolean) {
+  if (taskSchedulePendingAction.value !== null) return
+  taskSchedulePendingAction.value = { id: schedule.id, kind: 'state' }
   try {
     await api.post(`/task-schedules/${schedule.id}/pause`, null, {
       params: { paused },
@@ -1937,26 +2096,41 @@ async function setTaskSchedulePaused(schedule: TaskSchedule, paused: boolean) {
     await loadTaskSchedules()
   } catch (error: any) {
     message.error(error.response?.data?.detail || '执行计划状态更新失败。')
+  } finally {
+    taskSchedulePendingAction.value = null
   }
 }
 
-async function cancelTaskSchedule(schedule: TaskSchedule) {
+async function cancelTaskSchedule(schedule: TaskSchedule): Promise<boolean> {
+  if (taskSchedulePendingAction.value !== null) return false
+  taskSchedulePendingAction.value = { id: schedule.id, kind: 'cancel' }
   try {
     await api.delete(`/task-schedules/${schedule.id}`)
     message.success('执行计划已取消。')
     await loadTaskSchedules()
+    return true
   } catch (error: any) {
     message.error(error.response?.data?.detail || '执行计划取消失败。')
+    return false
+  } finally {
+    taskSchedulePendingAction.value = null
   }
 }
 
 function confirmCancelTaskSchedule(schedule: TaskSchedule) {
-  if (!window.confirm(`确认取消执行计划“${schedule.title}”吗？取消后不会再次触发。`)) return
-  void cancelTaskSchedule(schedule)
+  if (taskSchedulePendingAction.value !== null) return
+  confirmAsyncAction({
+    title: '取消执行计划',
+    content: `确认取消执行计划“${schedule.title}”吗？取消后不会再次触发。`,
+    positiveText: '取消计划',
+    negativeText: '返回',
+    loadingText: '正在取消…',
+    onConfirm: () => cancelTaskSchedule(schedule),
+  })
 }
 
 watch(taskManagementTab, tab => {
-  if (tab === 'assign') void Promise.all([loadTaskChatChannels(), loadTaskChatAgents()])
+  if (tab === 'assign') void loadTaskChatChannels()
   if (tab === 'schedules') void loadTaskSchedules()
   if (tab === 'mine' || tab === 'history') void store.loadProjectData()
 })
@@ -1964,10 +2138,13 @@ watch(taskManagementTab, tab => {
 watch(
   () => store.currentProjectId,
   () => {
+    if (taskFlowGenerating.value) void stopTaskFlowGeneration()
     taskSchedules.value = []
     taskChatChannels.value = []
-    taskChatAgents.value = []
     taskChatMembersByChannel.value = {}
+    taskChatMemberLoadingChannelIds.value = new Set()
+    taskContexts.value = {}
+    taskContextLoadingIds.value = new Set()
     if (section.value === 'tasks') void loadTaskPlanningContext()
   },
 )
@@ -2018,7 +2195,7 @@ function taskLedgerOwner(task: Task) {
   if (automatedStep?.action) {
     const name = automatedStep.action.sender_agent_name?.trim() || ''
     if (automatedStep.action.sender_agent_id === 'dobby-task-engine' || /^Dobby(?:\s*自动执行|\s*任务引擎|（任务引擎）)?$/.test(name) || (!name && task.type === 'automation')) {
-      return 'Dobby（任务引擎）'
+      return 'Dobby'
     }
     return name || '自动执行'
   }
@@ -2164,7 +2341,6 @@ const taskMineConversationMessages = computed<ChatMessage[]>(() => {
   const intro = `我正在跟进“${item.title}”。${reason} 当前涉及${item.owner}（${item.role}），你可以直接让我核对依据、整理协同内容或继续推进。`
   return [
     { id: `${item.id}-intro`, role: 'assistant', content: intro },
-    ...(taskMineThreads.value[item.id] ?? []),
   ]
 })
 
@@ -2176,18 +2352,6 @@ const taskMineSuggestions = computed(() => {
   return ['整理需要确认的关键结论', '检查关联资料是否齐全', '生成协同处理说明']
 })
 
-function buildTaskMineReply(content: string, attachments: ChatAttachment[] = []) {
-  const item = selectedTaskMineWorkItem.value
-  if (!item) return ''
-  const attachmentLead = attachments.length
-    ? `已收到 ${attachments.length} 个附件（${attachments.map(file => file.name).join('、')}），并归入当前项目资料库。`
-    : ''
-  if (/资料|依据|附件/.test(content)) return `${attachmentLead}已围绕“${item.title}”整理关联信息：${item.tags.join('、')}。建议先核对关键资料是否完整，再决定是否进入${item.action}。`
-  if (/协同|责任人|消息/.test(content)) return `${attachmentLead}建议由${item.owner}继续负责当前事项，我可以根据“${item.title}”生成协同说明，并把截止要求同步给相关人员。`
-  if (/影响|流程|顺序/.test(content)) return `${attachmentLead}主要影响是：${item.reason.replace(/^原因：/, '')}处理完成后再推进后续任务，可以减少重复确认。`
-  return `${attachmentLead}我已结合“${item.title}”的当前状态记录你的要求：${content}。下一步可以继续补充依据，或直接进入${item.action}。`
-}
-
 async function dispatchTaskMineCommand() {
   const item = selectedTaskMineWorkItem.value
   const files = [...taskMineFiles.value]
@@ -2195,20 +2359,14 @@ async function dispatchTaskMineCommand() {
   if (!item || !content || taskMineUploading.value) return
   taskMineUploading.value = true
   try {
-    if (files.length) await uploadComposerFiles(files, 'Dobby工作附件')
-    const attachments = createChatAttachments(files)
-    const messages = [...(taskMineThreads.value[item.id] ?? [])]
-    const timestamp = Date.now()
-    messages.push({ id: `${item.id}-user-${timestamp}`, role: 'user', content, attachments: attachments.length ? attachments : undefined })
-    messages.push({ id: `${item.id}-assistant-${timestamp + 1}`, role: 'assistant', content: buildTaskMineReply(content, attachments) })
-    taskMineThreads.value = { ...taskMineThreads.value, [item.id]: messages }
+    homeMode.value = 'quick'
+    await router.push({ path: '/workbench', query: { mode: 'quick', taskId: item.id } })
+    await nextTick()
+    if (!startNewHomeConversation(false)) return
+    const sent = await sendHomeAgentMessage(taskAgentPrompt(item, content), files)
+    if (!sent) return
     taskMineCommand.value = ''
     taskMineFiles.value = []
-    await nextTick()
-    const viewport = taskMineThreadViewport.value
-    if (viewport) viewport.scrollTop = viewport.scrollHeight
-  } catch {
-    message.error('附件上传失败，请检查文件或网络后重试。')
   } finally {
     taskMineUploading.value = false
   }
@@ -2239,16 +2397,49 @@ watch(selectedTaskMineWorkItemId, () => {
   taskMineFiles.value = []
 })
 
-function openTaskDisposition(taskId: string) {
+async function loadTaskContext(taskId: string) {
+  if (
+    !store.currentProjectId
+    || taskContexts.value[taskId]
+    || taskContextLoadingIds.value.has(taskId)
+  ) return
+  taskContextLoadingIds.value = new Set(taskContextLoadingIds.value).add(taskId)
+  try {
+    const response = await api.get<ApiEnvelope<TaskContext>>(
+      `/projects/${store.currentProjectId}/tasks/${taskId}/context`,
+    )
+    taskContexts.value = { ...taskContexts.value, [taskId]: response.data.data }
+  } catch (error: any) {
+    if (Number(error.response?.status || 0) !== 404) {
+      message.warning(error.response?.data?.detail || '任务关联信息暂时无法加载。')
+    }
+  } finally {
+    const pending = new Set(taskContextLoadingIds.value)
+    pending.delete(taskId)
+    taskContextLoadingIds.value = pending
+  }
+}
+
+function openTaskDisposition(taskId: string, syncRoute = true) {
   selectedTaskId.value = taskId
   taskDispositionReply.value = ''
   taskDispositionForwardId.value = ''
   taskDispositionFiles.value = []
   taskDispositionOpen.value = true
+  taskHistoryOpenId.value = ''
+  void loadTaskContext(taskId)
+  if (syncRoute && route.path === '/tasks') {
+    taskManagementTab.value = 'mine'
+    replaceWorkspaceQuery({ tab: 'mine', taskId, view: 'disposition' })
+  }
 }
 
-function closeTaskDisposition() {
+function closeTaskDisposition(syncRoute = true) {
   taskDispositionOpen.value = false
+  selectedTaskId.value = ''
+  if (syncRoute && route.path === '/tasks') {
+    replaceWorkspaceQuery({ taskId: undefined, view: undefined })
+  }
 }
 
 function handleTaskDispositionFiles(event: Event) {
@@ -2257,11 +2448,12 @@ function handleTaskDispositionFiles(event: Event) {
 
 async function submitTaskDisposition() {
   const task = selectedTask.value
-  if (!task) return
+  if (!task || taskDispositionSubmitting.value) return
   if (!taskDispositionReply.value && !taskDispositionForwardId.value && !taskDispositionFiles.value.length) {
     message.warning('请填写回复、选择材料或指定转交人。')
     return
   }
+  taskDispositionAction.value = 'submit'
   taskDispositionSubmitting.value = true
   try {
     const attachmentRefs = taskDispositionFiles.value.map(file => file.name)
@@ -2301,12 +2493,14 @@ async function submitTaskDisposition() {
     message.error(error.response?.data?.detail || '任务处置提交失败，请稍后重试。')
   } finally {
     taskDispositionSubmitting.value = false
+    taskDispositionAction.value = ''
   }
 }
 
 async function acceptSelectedTask() {
   const task = selectedTask.value
-  if (!task) return
+  if (!task || taskDispositionSubmitting.value) return
+  taskDispositionAction.value = 'accept'
   taskDispositionSubmitting.value = true
   try {
     await store.updateTaskStatus(
@@ -2320,12 +2514,14 @@ async function acceptSelectedTask() {
     message.error(error.response?.data?.detail || '验收提交失败，请稍后重试。')
   } finally {
     taskDispositionSubmitting.value = false
+    taskDispositionAction.value = ''
   }
 }
 
 async function rejectSelectedTask() {
   const task = selectedTask.value
-  if (!task) return
+  if (!task || taskDispositionSubmitting.value) return
+  taskDispositionAction.value = 'reject'
   taskDispositionSubmitting.value = true
   try {
     await store.updateTaskStatus(
@@ -2339,6 +2535,21 @@ async function rejectSelectedTask() {
     message.error(error.response?.data?.detail || '退回提交失败，请稍后重试。')
   } finally {
     taskDispositionSubmitting.value = false
+    taskDispositionAction.value = ''
+  }
+}
+
+async function completeTaskStep(task: Task, stepIndex: number) {
+  const key = `${task.id}:${stepIndex}`
+  if (taskStepUpdatingKey.value || taskDispositionSubmitting.value) return
+  taskStepUpdatingKey.value = key
+  try {
+    await store.updateTaskStep(task.id, stepIndex, 'completed')
+    message.success('节点已完成。')
+  } catch (error: any) {
+    message.error(error.response?.data?.detail || '节点状态更新失败，请稍后重试。')
+  } finally {
+    taskStepUpdatingKey.value = ''
   }
 }
 
@@ -2353,15 +2564,19 @@ function taskAttachmentFileName(reference: string) {
 }
 
 async function downloadTaskAttachment(reference: string) {
+  if (taskAttachmentDownloadingReference.value) return
   const attachment = taskAttachmentRecord(reference)
   if (!attachment) {
     message.warning('未找到对应附件记录。')
     return
   }
+  taskAttachmentDownloadingReference.value = reference
   try {
     await store.downloadAttachment(attachment.id, attachment.fileName)
   } catch (error: any) {
     message.error(error.response?.data?.detail || '附件下载失败，请稍后重试。')
+  } finally {
+    taskAttachmentDownloadingReference.value = ''
   }
 }
 
@@ -2372,8 +2587,16 @@ function clearTaskHistoryFilters() {
   taskHistoryEnd.value = ''
 }
 
-async function openTaskHistory(taskId: string) {
+async function openTaskHistory(taskId: string, syncRoute = true) {
   taskHistoryOpenId.value = taskId
+  taskDispositionOpen.value = false
+  selectedTaskId.value = ''
+  if (syncRoute && route.path === '/tasks') {
+    taskManagementTab.value = 'history'
+    replaceWorkspaceQuery({ tab: 'history', taskId, view: 'history' })
+  }
+  void loadTaskContext(taskId)
+  if (taskHistories.value[taskId]) return
   taskHistoryLoading.value = true
   try {
     taskHistories.value = { ...taskHistories.value, [taskId]: await store.getTaskHistory(taskId) }
@@ -2385,9 +2608,54 @@ async function openTaskHistory(taskId: string) {
   }
 }
 
-function closeTaskHistory() {
+function closeTaskHistory(syncRoute = true) {
   taskHistoryOpenId.value = ''
+  if (syncRoute && route.path === '/tasks') {
+    replaceWorkspaceQuery({ taskId: undefined, view: undefined })
+  }
 }
+
+let routeContextSequence = 0
+async function syncAiWorkspaceFromRoute() {
+  const sequence = ++routeContextSequence
+  if (section.value === 'home') {
+    const mode = routeQueryValue(route.query.mode)
+    if (mode === 'work' || mode === 'quick') homeMode.value = mode
+    return
+  }
+  if (section.value === 'project') {
+    const tab = routeQueryValue(route.query.tab) as ProjectStatusTab
+    if (projectStatusTabs.some(item => item.key === tab)) projectStatusTab.value = tab
+    return
+  }
+  if (section.value !== 'tasks') return
+  const tab = routeQueryValue(route.query.tab) as TaskManagementTab
+  if (taskManagementTabs.value.some(item => item.key === tab)) taskManagementTab.value = tab
+  const taskId = routeQueryValue(route.query.taskId)
+  if (!taskId) {
+    taskDispositionOpen.value = false
+    taskHistoryOpenId.value = ''
+    return
+  }
+  if (!store.tasks.some(task => task.id === taskId)) await store.loadProjectData()
+  if (sequence !== routeContextSequence) return
+  if (!store.tasks.some(task => task.id === taskId)) {
+    message.warning('链接中的任务不属于当前项目，已返回任务列表。')
+    replaceWorkspaceQuery({ taskId: undefined, view: undefined })
+    return
+  }
+  if (routeQueryValue(route.query.view) === 'history' || taskManagementTab.value === 'history') {
+    await openTaskHistory(taskId, false)
+  } else {
+    openTaskDisposition(taskId, false)
+  }
+}
+
+watch(
+  () => [section.value, route.query.mode, route.query.tab, route.query.taskId, route.query.view] as const,
+  () => void syncAiWorkspaceFromRoute(),
+  { immediate: true },
+)
 function todayDateString(offsetDays = 0) {
   const value = new Date()
   value.setDate(value.getDate() + offsetDays)
@@ -2405,8 +2673,7 @@ function createTaskFlowStepDraft(
     owner_user_id: '',
     due_at: '',
     material: '',
-    sender_agent_id: 'dobby-task-engine',
-    target_channel_id: taskChatChannels.value[0]?.id || null,
+    target_channel_id: defaultTaskChatChannelId(),
     mention_mode: 'all',
     mentioned_user_ids: [],
     message_content: '',
@@ -2471,8 +2738,7 @@ function applyGeneratedTaskFlow(flow: GeneratedTaskFlow) {
       owner_user_id: step.owner_user_id ? String(step.owner_user_id) : '',
       due_at: step.due_at?.slice(0, 10) || (nodeType === 'manual' ? todayDateString(index + 1) : ''),
       material: step.material || '',
-      sender_agent_id: action?.sender_agent_id || 'dobby-task-engine',
-      target_channel_id: action?.channel_id || taskChatChannels.value[0]?.id || null,
+      target_channel_id: action?.channel_id ?? null,
       mention_mode: action?.mention_mode || 'none',
       mentioned_user_ids: action?.mentioned_user_ids || [],
       message_content: action?.content || '',
@@ -2489,17 +2755,71 @@ function applyGeneratedTaskFlow(flow: GeneratedTaskFlow) {
 
 async function generateTaskFlowWithDobby() {
   if (!store.currentProjectId || taskFlowRequirement.value.length < 4) return
+  const projectId = store.currentProjectId
+  const generationId = globalThis.crypto?.randomUUID?.() || `flow-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const controller = new AbortController()
+  taskFlowGenerationId.value = generationId
+  taskFlowGenerationProjectId.value = projectId
+  taskFlowGenerationController = controller
+  taskFlowGenerationStopping.value = false
   taskFlowGenerating.value = true
   taskFlowGenerationNote.value = ''
   try {
-    const response = await api.post<ApiEnvelope<GeneratedTaskFlow>>(`/projects/${store.currentProjectId}/tasks/generate-flow`, { requirement: taskFlowRequirement.value }, { timeout: 35_000 })
-    applyGeneratedTaskFlow(response.data.data)
-    message.success(response.data.data.generated_by === 'ai' ? 'Dobby 已生成任务流' : '已生成可编辑的模板任务流')
+    const response = await api.post<ApiEnvelope<GeneratedTaskFlow>>(
+      `/projects/${projectId}/tasks/generate-flow`,
+      { requirement: taskFlowRequirement.value, generation_id: generationId },
+      { timeout: 0, signal: controller.signal },
+    )
+    if (store.currentProjectId === projectId) {
+      applyGeneratedTaskFlow(response.data.data)
+      message.success('Dobby AI 已生成任务流')
+    }
   } catch (error: any) {
-    taskFlowGenerationNote.value = error.response?.data?.detail || '生成失败，请检查后端服务或模型配置后重试。'
+    const stopped = taskFlowStopRequestedId === generationId
+      || error?.code === 'ERR_CANCELED'
+      || (error?.response?.status === 409 && String(error.response?.data?.detail || '').includes('停止'))
+    if (stopped) {
+      taskFlowGenerationNote.value = '已停止本次 AI 生成。'
+    } else {
+      taskFlowGenerationNote.value = error.response?.data?.detail || '生成失败，请检查后端服务或模型配置后重试。'
+      message.error(taskFlowGenerationNote.value)
+    }
+  } finally {
+    if (taskFlowGenerationController === controller) taskFlowGenerationController = null
+    if (taskFlowGenerationId.value === generationId) {
+      taskFlowGenerationId.value = ''
+      taskFlowGenerationProjectId.value = null
+      taskFlowGenerating.value = false
+      taskFlowGenerationStopping.value = false
+    }
+    if (taskFlowStopRequestedId === generationId) taskFlowStopRequestedId = ''
+  }
+}
+
+async function stopTaskFlowGeneration() {
+  const projectId = taskFlowGenerationProjectId.value
+  const generationId = taskFlowGenerationId.value
+  if (!projectId || !generationId || !taskFlowGenerating.value || taskFlowGenerationStopping.value) return
+
+  taskFlowStopRequestedId = generationId
+  taskFlowGenerationStopping.value = true
+  let stopAcknowledged = false
+  try {
+    const response = await api.post<ApiEnvelope<{ stopped: boolean }>>(
+      `/projects/${projectId}/tasks/generate-flow/${encodeURIComponent(generationId)}/stop`,
+    )
+    stopAcknowledged = true
+    taskFlowGenerationNote.value = response.data.data.stopped
+      ? '已停止本次 AI 生成。'
+      : '本次 AI 生成已经结束。'
+    message.info(response.data.message)
+  } catch (error: any) {
+    taskFlowStopRequestedId = ''
+    taskFlowGenerationStopping.value = false
+    taskFlowGenerationNote.value = error.response?.data?.detail || error.message || '停止生成失败。'
     message.error(taskFlowGenerationNote.value)
   } finally {
-    taskFlowGenerating.value = false
+    if (stopAcknowledged && taskFlowGenerationId.value === generationId) taskFlowGenerationController?.abort()
   }
 }
 
@@ -2520,8 +2840,7 @@ async function focusTaskFlowStep(index: number) {
 function handleTaskFlowStepTypeChange(step: TaskFlowStepDraft) {
   if (step.node_type === 'project_chat_message') {
     step.name = step.name.startsWith('新节点') ? '发送群聊消息' : step.name
-    step.sender_agent_id ||= 'dobby-task-engine'
-    step.target_channel_id ||= taskChatChannels.value[0]?.id || null
+    step.target_channel_id ||= defaultTaskChatChannelId()
     step.message_content ||= '请大家及时查看并处理当前项目事项。'
     step.owner_user_id = ''
     step.material = ''
@@ -2529,6 +2848,14 @@ function handleTaskFlowStepTypeChange(step: TaskFlowStepDraft) {
     return
   }
   step.mentioned_user_ids = []
+}
+
+function handleTaskMentionModeChange(step: TaskFlowStepDraft) {
+  if (step.mention_mode !== 'users') {
+    step.mentioned_user_ids = []
+    return
+  }
+  if (step.target_channel_id) void loadTaskChatMembers(step.target_channel_id)
 }
 
 function handleTaskMessageChannelChange(step: TaskFlowStepDraft) {
@@ -2582,7 +2909,7 @@ function resetTaskFlowCreator() {
 }
 
 async function createManualTask() {
-  if (!taskFlowCanSubmit.value) return
+  if (taskFlowSubmitting.value || taskFlowGenerating.value || !taskFlowCanSubmit.value) return
   const form = taskCreateForm.value
   const manualSteps = taskFlowSteps.value.filter(step => step.node_type === 'manual')
   const requiredMaterials = Array.from(new Set(manualSteps.map(step => step.material.trim()).filter(Boolean)))
@@ -2597,8 +2924,6 @@ async function createManualTask() {
       ? {
           type: 'project_chat_message' as const,
           channel_id: step.target_channel_id as number,
-          sender_agent_id: step.sender_agent_id,
-          sender_agent_name: taskMessageSenderOptions.value.find(item => item.id === step.sender_agent_id)?.name || 'Dobby',
           mention_mode: step.mention_mode,
           mentioned_user_ids: step.mentioned_user_ids,
           content: step.message_content.trim(),
@@ -2609,6 +2934,7 @@ async function createManualTask() {
     status: 'pending' as const,
   })) as Task['workflowSteps']
   const triggerParts = [taskTriggerSummary.value, form.cc ? `抄送：${form.cc}` : ''].filter(Boolean)
+  taskFlowSubmitting.value = true
   try {
     await store.createTask({
       title: form.title,
@@ -2637,98 +2963,20 @@ async function createManualTask() {
     if (form.run_mode !== 'immediate') {
       message.success(`计划已登记：${taskTriggerSummary.value}`)
       resetTaskFlowCreator()
-      taskManagementTab.value = 'schedules'
+      selectTaskManagementTab('schedules')
     } else {
       message.success('任务流已创建，可在执行记录中查看。')
-      taskManagementTab.value = 'history'
+      selectTaskManagementTab('history')
       resetTaskFlowCreator()
     }
   } catch (error: any) {
     message.error(error.response?.data?.detail || '任务流创建失败，请检查填写内容后重试。')
+  } finally {
+    taskFlowSubmitting.value = false
   }
 }
 
-const documentCards = computed(() => [
-  { title: '日报解析', desc: '施工内容、风险和进度记录', count: store.dailyReports.length, icon: FileText },
-  { title: '风险草稿', desc: '待审核的风险上报内容', count: store.riskDrafts.length, icon: Notes },
-  { title: '填报包', desc: '字段与附件映射到平台', count: store.fillPackages.length, icon: Table },
-  { title: '目录监控', desc: store.dirConfig.enabled ? '文件目录监听中' : '目录监听未启用', count: `${store.dirConfig.scanInterval}m`, icon: Folder },
-])
-const documentUploading = ref(false)
-const documentSearchKeyword = ref('')
-const documentSearchResults = ref<AttachmentRecord[]>([])
-const documentSearching = ref(false)
-const draftCreateOpen = ref(false)
-const draftCreateForm = ref({ risk_source_id: '', title: '', content: '' })
-async function uploadDocument(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
-  documentUploading.value = true
-  try { await store.uploadAttachment(file) } finally { documentUploading.value = false; input.value = '' }
-}
-async function searchDocuments() {
-  documentSearching.value = true
-  try { documentSearchResults.value = await store.searchDocuments(documentSearchKeyword.value) } finally { documentSearching.value = false }
-}
-async function createRiskDraft() {
-  if (!draftCreateForm.value.risk_source_id || !draftCreateForm.value.title || !draftCreateForm.value.content) return
-  await store.createRiskDraft(draftCreateForm.value)
-  draftCreateForm.value = { risk_source_id: '', title: '', content: '' }
-  draftCreateOpen.value = false
-}
-async function assistRiskDraft() {
-  if (!draftCreateForm.value.risk_source_id) return
-  await store.assistRiskDraft(draftCreateForm.value.risk_source_id)
-  draftCreateOpen.value = false
-}
-function createDefaultFillPackage(draftId: string, title: string, content: string) {
-  return store.createFillPackage(draftId, { platform_name: '监管填报平台', process_name: title, fields: [{ name: '风险说明', value: content }], attachments: [] })
-}
 function formatFileSize(bytes: number) { return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB` }
-const totalMissingItems = computed(() => store.riskDrafts.reduce((sum, item) => sum + item.missingItems.length, 0))
-const docWorkItems = computed(() => {
-  const daily = store.pendingDailyReports[0]
-  const draft = store.pendingDrafts[0]
-  const fill = store.pendingFills[0]
-  const missingDraft = store.riskDrafts.find(item => item.missingItems.length > 0)
-  return [
-    {
-      label: '日报待确认',
-      title: daily ? daily.fileName : '暂无待确认日报',
-      desc: daily ? `匹配 WBS：${store.getWbsName(daily.matchedWbsId ?? '')}，置信度 ${Math.round(daily.confidence * 100)}%。` : '新的日报解析完成后会出现在这里。',
-      action: daily ? '处理任务' : '查看任务',
-      to: '/tasks',
-    },
-    {
-      label: '草稿待审核',
-      title: draft ? draft.title : '暂无待审核草稿',
-      desc: draft ? `上报类型：${draft.hazardType}，截止 ${draft.deadline}。` : '风险草稿生成后需要资料负责人确认。',
-      action: draft ? '去审核' : '查看草稿',
-      to: '/tasks',
-    },
-    {
-      label: '材料缺项',
-      title: totalMissingItems.value ? `${totalMissingItems.value} 项资料未齐` : '当前材料齐全',
-      desc: missingDraft ? `${missingDraft.title}：${missingDraft.missingItems.slice(0, 2).join('、')}` : '后续缺项会按草稿和填报包自动归集。',
-      action: '补充资料',
-      to: '/ai',
-    },
-    {
-      label: '待填报包',
-      title: fill ? fill.processName : '暂无待填报包',
-      desc: fill ? `${fill.platformName}，截止 ${fill.deadline}。` : '草稿确认后会生成平台填报包。',
-      action: fill ? '启动填报' : '查看填报',
-      to: '/tasks',
-    },
-  ]
-})
-const recentDocuments = computed(() => [
-  ...store.dailyReports.map(item => ({ type: '日报', name: item.fileName, desc: item.constructionContent, state: statusLabel(item.status as TaskStatus) })),
-  ...store.riskDrafts.map(item => ({ type: '草稿', name: item.title, desc: item.hazardType, state: draftStatusLabel(item.status) })),
-  ...store.fillPackages.map(item => ({ type: '填报', name: item.processName, desc: item.platformName, state: fillStatusLabel(item.status) })),
-].slice(0, 6))
-
 function projectBaseInfoRow(label: string, rawValue?: string | null) {
   const value = String(rawValue || '').trim()
   return { label, value: value || '未填写', present: Boolean(value) }
@@ -2780,14 +3028,6 @@ function wbsStatusLabel(status: string) {
   return ({ not_started: '未开始', in_progress: '进行中', done: '已完成', delayed: '已延期' } as Record<string, string>)[status] || status
 }
 
-function qualityStatusLabel(status: string) {
-  return ({ pending: '待配置', processing: '进行中', passed: '已通过', failed: '未通过' } as Record<string, string>)[status] || status
-}
-
-function dailyStatusLabel(status: string) {
-  return ({ pending_confirm: '待确认', confirmed: '已确认', failed: '解析失败', reparse: '待重新解析' } as Record<string, string>)[status] || status
-}
-
 function projectTaskStatusLabel(status: TaskStatus) {
   return ({ pending: '待处理', processing: '进行中', need_more_info: '待补充', waiting_confirm: '待确认', done: '已完成', overdue: '逾期', cancelled: '已取消' } as Record<TaskStatus, string>)[status]
 }
@@ -2806,29 +3046,10 @@ function taskClosureTone(task: Task) {
   return 'open'
 }
 
-function taskPhaseLabel(task: Task) {
-  const currentStep = task.workflowSteps.find(step => step.status !== 'completed')
-  return currentStep?.phase || task.workflowSteps[0]?.phase || (task.status === 'done' ? '归档' : '处理中')
-}
-
 function taskMaterialLabel(task: Task) {
   const currentStep = task.workflowSteps.find(step => step.status !== 'completed')
   const material = currentStep?.material || currentStep?.note || task.workflowSteps[task.workflowSteps.length - 1]?.material
   return material || (task.missingCount > 0 ? `待补齐 ${task.missingCount} 项资料` : '暂无待补充材料')
-}
-
-function taskRelationLabel(task: Task) {
-  const wbsNames = task.linkedWbsIds.map(id => store.getWbsName(id)).filter(Boolean)
-  const riskName = task.linkedRiskId ? store.getRiskName(task.linkedRiskId) : ''
-  return [wbsNames.join('、'), riskName].filter(Boolean).join(' · ') || '未关联'
-}
-
-function statusTimeLabel(value: string) {
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return value || '刚刚'
-  const delta = Date.now() - timestamp
-  if (delta >= 0 && delta < 86400000) return '今天 ' + new Date(timestamp).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
-  return new Date(timestamp).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
 }
 
 function taskTypeLabel(type: Task['type']) {
@@ -2909,25 +3130,6 @@ function statusLabel(status: TaskStatus | string) {
   } as Record<string, string>)[status] ?? status
 }
 
-function draftStatusLabel(status: DraftStatus) {
-  return ({
-    draft: '草稿',
-    reviewing: '审核中',
-    confirmed: '已确认',
-    rejected: '已退回',
-    packaged: '已生成填报包',
-  } as Record<DraftStatus, string>)[status]
-}
-
-function fillStatusLabel(status: FillStatus) {
-  return ({
-    pending: '待填报',
-    filling: '填报中',
-    submitted: '已提交',
-    failed: '填报失败',
-  } as Record<FillStatus, string>)[status]
-}
-
 function nowStr() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
@@ -2935,4 +3137,7 @@ function nowStr() {
 </script>
 
 <style scoped src="./styles/AiWorkPlatformView.base.css"></style>
+<style scoped src="./styles/AiWorkPlatformView.home-conversations.css"></style>
+<style scoped src="./styles/AiWorkPlatformView.connectivity.css"></style>
 <style scoped src="./styles/AiWorkPlatformView.tasks.css"></style>
+<style scoped src="./styles/AiWorkPlatformView.project-status.css"></style>

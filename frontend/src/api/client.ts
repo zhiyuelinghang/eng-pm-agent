@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { resetRealtimeSession } from '@/services/realtimeSession'
 
 export type ApiEnvelope<T> = { success: boolean; data: T; message: string }
 
@@ -18,6 +19,7 @@ api.interceptors.response.use(
       const requestToken = String(error.config?.headers?.Authorization || '').replace(/^Bearer\s+/i, '')
       // 登录切换期间，旧请求可能比新登录响应更晚返回；不能用旧请求的 401 清掉新令牌。
       if (!requestToken || requestToken === sessionStorage.getItem('access_token')) {
+        resetRealtimeSession()
         sessionStorage.removeItem('access_token')
         sessionStorage.removeItem('logged_in')
       }

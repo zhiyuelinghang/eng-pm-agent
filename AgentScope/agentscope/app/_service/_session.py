@@ -140,6 +140,7 @@ class SessionService:
         self._workspace_manager = workspace_manager
         self._mcp_registry_manager = mcp_registry_manager
         self._session_end_handler = session_end_handler
+        self._session_end_tasks: set[asyncio.Task[None]] = set()
         self._projection = SessionProjection(message_bus)
 
     # ------------------------------------------------------------------
@@ -399,19 +400,6 @@ class SessionService:
         await self._purge_team_projections(user_id, agent_id, session_id)
 
         await self._cancel_runs(all_sids)
-        if self._session_end_handler is not None:
-            for record in ending_records:
-                try:
-                    await self._session_end_handler(
-                        user_id,
-                        record.agent_id,
-                        record,
-                    )
-                except Exception:
-                    logger.exception(
-                        "Session end hook failed for session %s",
-                        record.id,
-                    )
         if self._mcp_registry_manager is not None:
             await asyncio.gather(
                 *(
@@ -425,7 +413,52 @@ class SessionService:
             session_id,
         )
         await self._purge_bus(all_sids)
+        self._schedule_session_end_hooks(user_id, ending_records)
         return deleted
+
+    def _schedule_session_end_hooks(
+        self,
+        user_id: str,
+        records: list[Any],
+    ) -> None:
+        """Run optional lifecycle maintenance without blocking deletion.
+
+        The durable session records have already been copied into ``records``.
+        Hooks may perform model calls, memory consolidation, or external I/O;
+        none of those best-effort jobs may delay or veto deletion of the user's
+        chat history.
+        """
+        if self._session_end_handler is None:
+            return
+        for record in records:
+            task = asyncio.create_task(
+                self._run_session_end_hook(user_id, record),
+                name=f"session-end:{record.id}",
+            )
+            self._session_end_tasks.add(task)
+            task.add_done_callback(self._session_end_tasks.discard)
+
+    async def _run_session_end_hook(
+        self,
+        user_id: str,
+        record: Any,
+    ) -> None:
+        """Execute one best-effort session-end hook and contain failures."""
+        if self._session_end_handler is None:
+            return
+        try:
+            await self._session_end_handler(
+                user_id,
+                record.agent_id,
+                record,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "Session end hook failed for session %s",
+                record.id,
+            )
 
     async def delete_team(self, user_id: str, team_id: str) -> bool:
         """Cancel, delete and bus-purge a team.

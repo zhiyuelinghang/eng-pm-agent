@@ -10,8 +10,7 @@
   "env": {
     "TASK_ENGINE_TZ": "Asia/Shanghai",
     "TASK_ENGINE_AI_BASE_URL": "https://api.openai.com/v1",
-    "TASK_ENGINE_AI_MODEL": "gpt-4o-mini",
-    "TASK_ENGINE_AI_TIMEOUT": "30"
+    "TASK_ENGINE_AI_MODEL": "gpt-4o-mini"
   },
   "platform_capabilities": ["dobby_task_engine_store"],
   "startup_timeout": 30,
