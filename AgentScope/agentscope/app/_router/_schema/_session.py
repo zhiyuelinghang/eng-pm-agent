@@ -90,6 +90,9 @@ class CreateSessionRequest(BaseModel):
     """Request body for creating a new session."""
 
     agent_id: str = Field(description="Agent this session belongs to.")
+    permission_mode: PermissionMode | None = Field(
+        default=None, description="Initial permission mode, validated before saving.",
+    )
     workspace_id: str | None = Field(
         default=None,
         description=(
@@ -140,6 +143,9 @@ class CreateSessionResponse(BaseModel):
     """Response body after creating a session."""
 
     session_id: str = Field(description="Server-assigned session identifier.")
+    configuration_applied: bool = Field(
+        default=False, description="Whether the initial permission policy was applied.",
+    )
 
 
 class UpdateSessionRequest(BaseModel):

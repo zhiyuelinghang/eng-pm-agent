@@ -180,7 +180,7 @@ class AgentScopeClientTest(TestCase):
         }
 
         with patch(
-            "backend.app.agentscope_client.httpx.request",
+            "backend.app.agentscope_client.httpx.Client.request",
             return_value=response,
         ) as request:
             result = client.ask_weknora_agent(
@@ -773,6 +773,43 @@ class AgentScopeClientTest(TestCase):
             },
         )
 
+    def test_create_session_skips_patch_only_when_runtime_confirms_policy(self) -> None:
+        client = _client()
+        client._request = Mock(return_value={
+            "session_id": "session-fast", "configuration_applied": True,
+        })
+        agent = {"id": "main", "model_ready": True, "permission_mode": "explore"}
+        context = {"user_id": "1", "project_id": "2"}
+        client.create_session(
+            agent=agent, workspace_id="workspace", name="测试会话",
+            platform_context=context,
+        )
+        self.assertEqual(client._request.call_count, 1)
+        self.assertEqual(client._request.call_args.kwargs["json"]["permission_mode"], "explore")
+        self.assertFalse(client.sync_session(
+            agent=agent, session_id="session-fast", name="测试会话",
+            platform_context=context,
+        ))
+        self.assertTrue(client.sync_session(
+            agent=agent, session_id="session-fast", name="测试会话",
+            platform_context={**context, "project_id": "3"},
+        ))
+        self.assertEqual(client._request.call_count, 2)
+
+    def test_control_requests_share_transport_and_close_it(self) -> None:
+        client = _client()
+        with patch("backend.app.agentscope_client.httpx.Client") as factory:
+            response = factory.return_value.request.return_value
+            response.status_code = 200
+            response.is_error = False
+            response.json.return_value = {}
+            client._request("GET", "/first")
+            client._request("GET", "/second")
+            factory.assert_called_once_with()
+            self.assertEqual(factory.return_value.request.call_count, 2)
+            client.close()
+            factory.return_value.close.assert_called_once_with()
+
     def test_delete_session_escapes_id_and_keeps_agent_scope(self) -> None:
         client = _client()
         client._request = Mock(return_value=None)  # type: ignore[method-assign]
@@ -798,7 +835,7 @@ class AgentScopeClientTest(TestCase):
         response = Mock(status_code=404, is_error=True)
 
         with patch(
-            "backend.app.agentscope_client.httpx.request",
+            "backend.app.agentscope_client.httpx.Client.request",
             return_value=response,
         ):
             client.delete_session("missing-session", "agent-1")

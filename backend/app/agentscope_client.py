@@ -125,6 +125,22 @@ class AgentScopeClient:
         self._catalog_cache: dict[str, Any] | None = None
         self._catalog_cached_at = 0.0
         self._session_sync_payloads: dict[tuple[str, str], str] = {}
+        self._http_client: httpx.Client | None = None
+        self._http_client_lock = threading.Lock()
+
+    def _transport(self) -> httpx.Client:
+        # The gateway is shared across request threads. Reuse the connection
+        # pool and TLS context instead of rebuilding them for every local call.
+        with self._http_client_lock:
+            if self._http_client is None:
+                self._http_client = httpx.Client()
+            return self._http_client
+
+    def close(self) -> None:
+        with self._http_client_lock:
+            if self._http_client is not None:
+                self._http_client.close()
+                self._http_client = None
 
     @property
     def headers(self) -> dict[str, str]:
@@ -151,7 +167,7 @@ class AgentScopeClient:
         else:
             timeout = min(self._request_timeout, 30.0)
         try:
-            response = httpx.request(
+            response = self._transport().request(
                 method,
                 f"{self._base_url}{path}",
                 headers=self.headers,
@@ -189,7 +205,7 @@ class AgentScopeClient:
         files: dict[str, tuple[str, bytes, str]],
     ) -> Any:
         try:
-            response = httpx.post(
+            response = self._transport().post(
                 f"{self._base_url}{path}",
                 headers=self.headers,
                 params=params,
@@ -220,7 +236,7 @@ class AgentScopeClient:
         params: dict[str, Any],
     ) -> tuple[bytes, str, str]:
         try:
-            response = httpx.get(
+            response = self._transport().get(
                 f"{self._base_url}{path}",
                 headers=self.headers,
                 params=params,
@@ -691,6 +707,7 @@ class AgentScopeClient:
             )
         body: dict[str, Any] = {
             "agent_id": agent["id"],
+            "permission_mode": str(agent.get("permission_mode") or "auto"),
             "workspace_id": workspace_id,
             "name": name,
             "knowledge_config": agent.get("knowledge_config"),
@@ -698,6 +715,16 @@ class AgentScopeClient:
         }
         created = self._request("POST", "/sessions/", json=body)
         session_id = str(created["session_id"])
+        if created.get("configuration_applied") is True:
+            policy = {
+                key: body[key]
+                for key in ("permission_mode", "knowledge_config", "platform_context", "name")
+            }
+            self._session_sync_payloads[(str(agent["id"]), session_id)] = (
+                self._session_policy_signature(policy)
+            )
+            return session_id
+        # Older runtimes do not apply permission_mode during creation.
         self.sync_session(
             agent=agent,
             session_id=session_id,
@@ -705,6 +732,12 @@ class AgentScopeClient:
             name=name,
         )
         return session_id
+
+    @staticmethod
+    def _session_policy_signature(body: dict[str, Any]) -> str:
+        return json.dumps(
+            body, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
+        )
 
     def sync_session(
         self,
@@ -729,13 +762,7 @@ class AgentScopeClient:
         if name is not None:
             body["name"] = name
         cache_key = (str(agent["id"]), session_id)
-        payload_signature = json.dumps(
-            body,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        )
+        payload_signature = self._session_policy_signature(body)
         if self._session_sync_payloads.get(cache_key) == payload_signature:
             return False
         self._request(

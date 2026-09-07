@@ -4,6 +4,8 @@ from sqlalchemy.engine import Connection
 
 
 def upgrade_workspace(connection: Connection) -> None:
+    from .chat_membership_policy import upgrade_chat_membership
+    upgrade_chat_membership(connection)
     from .workspace_models import ChatKnowledgeFolder, ProjectAnnouncement, ProjectPlatform, UserPlatformAccount
 
     for table in (ProjectPlatform.__table__, UserPlatformAccount.__table__, ProjectAnnouncement.__table__, ChatKnowledgeFolder.__table__):

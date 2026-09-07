@@ -843,6 +843,8 @@ class ChatChannel(TimestampMixin, Base):
         default="topic",
         server_default="topic",
     )
+    auto_sync_members: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    membership_revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     last_message_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

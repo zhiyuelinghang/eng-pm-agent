@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from task_engine.domain.models import StepState, TaskInstance
 from task_engine.engine import TaskEngine
+from .chat_membership_policy import chat_auto_sync, realtime_channel_name
 from .chat_names import default_group_title
 
 from .models import (
@@ -41,7 +42,7 @@ class ActionExecutionResult:
 
 
 def _realtime_channel(channel: ChatChannel) -> str:
-    return f"chat:project_{channel.project_id}:channel_{channel.id}"
+    return realtime_channel_name(channel)
 
 
 def _realtime_user_channel(project_id: int, user_id: int) -> str:
@@ -130,27 +131,16 @@ def _sync_project_channel_members(
     *,
     additional_user_id: int | None = None,
 ) -> None:
-    if channel.channel_type not in {"project", "topic"}:
+    if not chat_auto_sync(channel):
         return
-    user_ids = set(
-        db.scalars(
-            select(ProjectMember.user_id).where(
-                ProjectMember.project_id == channel.project_id,
-            ),
-        ).all(),
-    )
-    if channel.created_by_user_id:
-        user_ids.add(channel.created_by_user_id)
-    if additional_user_id:
-        # 管理员可访问项目但不一定存在于 ProjectMember，自动动作仍需能 @ 发起人。
-        user_ids.add(additional_user_id)
-    for user_id in user_ids:
-        _ensure_channel_member(
-            db,
-            channel,
-            user_id,
-            role="owner" if user_id == channel.created_by_user_id else "member",
-        )
+    from .chat_api import _sync_project_channel_members as sync_members
+    owner_id = db.scalar(select(ChatChannelMember.user_id).where(
+        ChatChannelMember.channel_id == channel.id, ChatChannelMember.member_role == "owner",
+        ChatChannelMember.left_at.is_(None),
+    ))
+    actor = db.get(User, additional_user_id or owner_id or channel.created_by_user_id)
+    if actor is not None:
+        sync_members(db, channel, actor)
     db.flush()
 
 

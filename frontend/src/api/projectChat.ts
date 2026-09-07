@@ -58,6 +58,7 @@ export type ProjectChatMember = {
   user_id: number
   name: string
   title: string
+  positions?: string[]
   member_role: 'owner' | 'member'
   muted: boolean
 }
@@ -66,6 +67,7 @@ export type ProjectChatParticipant = {
   user_id: number
   name: string
   title: string
+  positions?: string[]
 }
 
 export type ProjectChatAgent = {
@@ -199,7 +201,7 @@ type ProjectChatEvent =
       message: ProjectChatMessage
     }
   | {
-      type: 'chat.channel.created'
+      type: 'chat.channel.created' | 'chat.channel.updated'
       project_id: number
       channel_id: number
     }
@@ -524,13 +526,13 @@ function broadcastRealtimeStatus(hub: ProjectChatRealtimeHub) {
 
 function broadcastRealtimeEvent(hub: ProjectChatRealtimeHub, event: ProjectChatEvent) {
   if (activeRealtimeHub !== hub || event.project_id !== Number(hub.projectId)) return
-  if (event.type === 'chat.channel.created') {
+  if ((event.type === 'chat.channel.created' || event.type === 'chat.channel.updated')) {
     void syncRealtimeProject(hub, hub.projectId, true).catch(() => undefined)
   }
   hub.subscribers.forEach(subscriber => {
     if (event.type === 'chat.message.created') {
       subscriber.onMessage(event.message)
-    } else if (event.type === 'chat.channel.created') {
+    } else if ((event.type === 'chat.channel.created' || event.type === 'chat.channel.updated')) {
       subscriber.onChannelsChanged?.()
     } else if (event.type === 'chat.mention.created') {
       subscriber.onMention?.(event.message)

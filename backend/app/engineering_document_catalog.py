@@ -15,6 +15,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
+from .chat_membership_policy import auto_sync_condition
 from .agentscope_client import AgentScopeClient
 from .config import get_settings
 from .db import SessionLocal
@@ -859,7 +860,7 @@ def _restricted_catalogue_access_snapshot(
         ChatChannel.project_id == project_id, ChatChannel.archived_at.is_(None),
         ChatChannelMember.user_id == user.id, ChatChannelMember.left_at.is_(None),
     )).all())
-    member_channels.update(db.scalars(select(ChatChannel.id).where(ChatChannel.project_id == project_id, ChatChannel.channel_type.in_(("project", "topic")), ChatChannel.archived_at.is_(None))).all())
+    member_channels.update(db.scalars(select(ChatChannel.id).where(ChatChannel.project_id == project_id, auto_sync_condition(), ChatChannel.archived_at.is_(None))).all())
     capabilities: dict[int, dict[str, bool]] = {}
     for row in rows:
         node_id = int(row["id"])

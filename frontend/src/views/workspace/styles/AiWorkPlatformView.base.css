@@ -299,6 +299,28 @@
   min-width: 0;
 }
 
+.home-work-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.home-work-title-row .home-work-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.home-work-title-row .home-chip {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.task-mine-workbench .home-status-tabs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .home-chip-row {
   display: flex;
   margin-bottom: 5px;

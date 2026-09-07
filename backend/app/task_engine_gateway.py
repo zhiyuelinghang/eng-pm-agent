@@ -35,6 +35,7 @@ from task_engine.engine import TaskEngine
 from task_engine.generator.llm import FlowGenerator, LLMConfig
 from task_engine.store.postgres import PostgresStore
 
+from .chat_membership_policy import chat_auto_sync
 from .config import get_settings
 from .db import engine as database_engine
 from .models import ChatChannel, ChatChannelMember, ProjectMember, User, WbsItem
@@ -308,7 +309,7 @@ def build_flow(
             # 系统管理员可能不在 ProjectMember 中，但仍是本次动作的合法发起人。
             project_member_ids.add(actor_user_id)
         available_user_ids = project_member_ids
-        if channel is not None and channel.channel_type != "project":
+        if channel is not None and not chat_auto_sync(channel):
             available_user_ids = set(
                 db.scalars(
                     select(ChatChannelMember.user_id).where(
@@ -318,7 +319,7 @@ def build_flow(
                 ).all(),
             )
             if (
-                channel.channel_type == "private"
+                not chat_auto_sync(channel)
                 and actor_user_id not in available_user_ids
             ):
                 raise ValueError("目标私聊对当前用户不可见")
@@ -549,7 +550,7 @@ def build_step_actions(
             raise ValueError(f"第 {index + 1} 个消息节点的目标群聊无效")
 
         available_user_ids = project_member_ids
-        if channel.channel_type != "project":
+        if not chat_auto_sync(channel):
             available_user_ids = set(
                 db.scalars(
                     select(ChatChannelMember.user_id).where(
@@ -559,7 +560,7 @@ def build_step_actions(
                 ).all(),
             )
             if (
-                channel.channel_type == "private"
+                not chat_auto_sync(channel)
                 and actor_user_id not in available_user_ids
             ):
                 raise ValueError(f"第 {index + 1} 个消息节点的目标私聊不可见")

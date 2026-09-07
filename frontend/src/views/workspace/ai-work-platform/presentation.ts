@@ -85,9 +85,9 @@ export type GeneratedTaskFlow = {
   generation_note: string
 }
 
-export type WorkQueueStatus = 'pending' | 'overdue' | 'processing'
+export type WorkQueueStatus = 'unfinished' | 'done'
 export type WorkQueueCategory = 'decision' | 'upload' | 'generated'
-export type WorkQueueTone = 'danger' | 'upload' | 'warning' | 'info'
+export type WorkQueueTone = 'danger' | 'upload' | 'warning' | 'info' | 'success'
 export type HomeWorkItem = {
   id: string
   rank: number
@@ -107,9 +107,20 @@ export type HomeWorkItem = {
 }
 
 export function workQueueStatus(task: Task): WorkQueueStatus {
-  if (task.status === 'overdue') return 'overdue'
-  if (task.status === 'processing') return 'processing'
-  return 'pending'
+  return task.status === 'done' ? 'done' : 'unfinished'
+}
+
+export function isUserWorkQueueTask(task: Task, userId: string) {
+  if (!userId || task.status === 'cancelled') return false
+  if (task.status === 'done') {
+    return task.responsibleId === userId
+      || task.confirmatorId === userId
+      || task.workflowSteps.some(step => step.owner_user_id === userId && step.status === 'completed')
+  }
+  const currentStep = task.workflowSteps.find(step => step.status !== 'completed')
+  return task.responsibleId === userId
+    || currentStep?.owner_user_id === userId
+    || (task.status === 'waiting_confirm' && task.confirmatorId === userId)
 }
 
 export function workQueueCategory(task: Task): WorkQueueCategory {
@@ -119,10 +130,9 @@ export function workQueueCategory(task: Task): WorkQueueCategory {
 }
 
 export function workQueueLabel(task: Task) {
-  if (task.status === 'need_more_info') return '需补充资料'
-  if (task.status === 'waiting_confirm') return '待我验收'
+  if (task.status === 'done') return '已完成'
+  if (task.status === 'cancelled') return '已取消'
   if (task.status === 'overdue') return '已逾期'
-  if (task.status === 'processing') return '执行中'
   return '待处理'
 }
 

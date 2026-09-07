@@ -16,6 +16,7 @@ from .chat_api import (_ensure_active_channel_member, _queue_chat_message_publis
                        chat_channel_for_user_or_403, chat_message_view, ensure_project_chat_channel,
                        _sync_project_channel_members)
 from .db import get_db
+from .chat_membership_policy import auto_sync_condition
 from .engineering_document_catalog import add_local_folder, add_pending_local_file, find_catalogue_node
 from .models import ChatChannel, ChatChannelMember, ChatMessage, EngineeringDocumentNode, User
 from .personnel_policy import DEFAULT_ENGINEERING_KNOWLEDGE_BASE_NAME
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/api", tags=["chat-workspace"])
 def chat_unread_counts(project_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
     project_for_user_or_403(db, project_id, user)
     ensure_project_chat_channel(db, project_id, user)
-    for channel in db.scalars(select(ChatChannel).where(ChatChannel.project_id == project_id, ChatChannel.channel_type == "topic", ChatChannel.archived_at.is_(None))).all():
+    for channel in db.scalars(select(ChatChannel).where(ChatChannel.project_id == project_id, auto_sync_condition(), ChatChannel.archived_at.is_(None))).all():
         _sync_project_channel_members(db, channel, user)
     db.commit()
     rows = db.execute(select(ChatChannel.id, func.count(ChatMessage.id)).join(

@@ -2952,9 +2952,10 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         )
         tool_name = "mcp__sample-package__import"
 
-        await create_session(
+        response = await create_session(
             body=CreateSessionRequest(
                 agent_id="fixed",
+                permission_mode="explore",
                 platform_context=PlatformSessionContext(
                     user_id="1",
                     username="admin",
@@ -2978,11 +2979,41 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             ),
         )
 
+        self.assertTrue(response.configuration_applied)
         state = storage.upsert_session.await_args.kwargs["state"]
+        self.assertEqual(state.permission_context.mode.value, "explore")
         rule = state.permission_context.allow_rules[tool_name][0]
         self.assertEqual(rule.tool_name, tool_name)
         self.assertEqual(rule.behavior.value, "allow")
         self.assertEqual(rule.source, "platformSession")
+
+    async def test_create_session_auto_policy_requires_enabled_reviewer(self) -> None:
+        fixed = _record("fixed", "fixed-model", fixed_model=True)
+        access = SimpleNamespace(
+            resolve_agent=AsyncMock(return_value=fixed),
+            get_resource=AsyncMock(return_value=object()),
+        )
+        storage = SimpleNamespace(upsert_session=AsyncMock(
+            return_value=SimpleNamespace(id="session-id"),
+        ))
+        reviewer = SimpleNamespace(get_config=AsyncMock(
+            return_value=SimpleNamespace(data=SimpleNamespace(enabled=False)),
+        ))
+        arguments = dict(
+            body=CreateSessionRequest(agent_id="fixed", permission_mode="auto"),
+            user_id=USER_ID, storage=storage,
+            workspace_manager=SimpleNamespace(assign_workspace_id=lambda **_: "workspace-id"),
+            access=access, permission_review_service=reviewer,
+            principal=AgentScopePrincipal(kind="management", subject=USER_ID),
+        )
+        with self.assertRaises(HTTPException) as failure:
+            await create_session(**arguments)
+        self.assertEqual(failure.exception.status_code, 422)
+        storage.upsert_session.assert_not_awaited()
+        reviewer.get_config.return_value.data.enabled = True
+        result = await create_session(**arguments)
+        self.assertTrue(result.configuration_applied)
+        self.assertEqual(storage.upsert_session.await_args.kwargs["state"].permission_context.mode.value, "auto")
 
     async def test_fixed_agent_model_is_resynchronised_on_session_update(
         self,

@@ -1,0 +1,7 @@
+.chat-title-field { position: relative; min-width: 0; }
+.chat-title-field > input { box-sizing: border-box; width: 100%; padding-right: 38px; }
+.chat-title-field > input[aria-invalid="true"] { border-color: #bb5d4d; }
+.chat-title-loading { position: absolute; z-index: 2; right: 13px; top: 50%; width: 15px; height: 15px; box-sizing: border-box; margin-top: -7.5px; border: 2px solid #cce1da; border-top-color: #0b756e; border-radius: 50%; pointer-events: none; animation: chat-title-spin 700ms linear infinite; }
+.chat-title-error { margin: 0; color: #a34837; font-size: 12px; font-weight: 400; line-height: 1.5; }
+@keyframes chat-title-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .chat-title-loading { animation: none; } }

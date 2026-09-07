@@ -300,6 +300,9 @@ async def create_session(
     storage: StorageBase = Depends(get_storage),
     workspace_manager: WorkspaceManagerBase = Depends(get_workspace_manager),
     access: ResourceAccessService = Depends(get_resource_access_service),
+    permission_review_service: PermissionReviewService = Depends(
+        get_permission_review_service,
+    ),
 ) -> CreateSessionResponse:
     """Create (or resume) a session for a given agent and workspace.
 
@@ -370,10 +373,22 @@ async def create_session(
     )
 
     session_state = None
-    if body.platform_context is not None:
+    if body.permission_mode is not None or body.platform_context is not None:
+        permission_context = AgentState().permission_context
+        if body.permission_mode is not None:
+            if body.permission_mode == PermissionMode.AUTO:
+                reviewer_config = await permission_review_service.get_config(user_id)
+                if not reviewer_config.data.enabled:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail="Auto permission mode requires an enabled built-in permission reviewer.",
+                    )
+            permission_context = permission_context.model_copy(
+                update={"mode": body.permission_mode},
+            )
         session_state = AgentState(
             permission_context=apply_platform_tool_allow_rules(
-                AgentState().permission_context,
+                permission_context,
                 body.platform_context,
             ),
         )
@@ -397,7 +412,10 @@ async def create_session(
         ),
         state=session_state,
     )
-    return CreateSessionResponse(session_id=session_record.id)
+    return CreateSessionResponse(
+        session_id=session_record.id,
+        configuration_applied=body.permission_mode is not None,
+    )
 
 
 @session_router.delete(

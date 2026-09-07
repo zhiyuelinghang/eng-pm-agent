@@ -31,6 +31,7 @@ from .api_common import (
 from .config import get_settings
 from .db import SessionLocal, get_db
 from .chat_names import default_group_title
+from .chat_membership_policy import chat_auto_sync, auto_sync_condition, realtime_channel_name
 from .models import (
     AgentConversation,
     ChatAgentThread,
@@ -43,6 +44,8 @@ from .models import (
     ChatTaskDraft,
     Project,
     ProjectMember,
+    ProjectMemberPosition,
+    ProjectPosition,
     User,
 )
 from .schemas import (
@@ -176,7 +179,7 @@ def _task_assistant_platform_context(
 def chat_realtime_channel(channel: ChatChannel) -> str:
     """Return an ASCII-only channel name suitable for Centrifugo."""
 
-    return f"chat:project_{channel.project_id}:channel_{channel.id}"
+    return realtime_channel_name(channel)
 
 
 def chat_realtime_user_channel(project_id: int, user_id: int) -> str:
@@ -227,14 +230,29 @@ def _sync_project_channel_members(
     channel: ChatChannel,
     current_user: User,
 ) -> None:
+    # Member synchronization and ownership transfers share the channel lock.
+    channel = db.scalar(select(ChatChannel).where(ChatChannel.id == channel.id).with_for_update().execution_options(populate_existing=True))
+    if not chat_auto_sync(channel):
+        return
     project_user_ids = _project_member_user_ids(db, channel.project_id)
     project_user_ids.add(current_user.id)
+    memberships = db.scalars(select(ChatChannelMember).where(
+        ChatChannelMember.channel_id == channel.id,
+    ).execution_options(populate_existing=True)).all()
+    owner_id = next((member.user_id for member in memberships
+                     if member.member_role == "owner" and member.left_at is None
+                     and member.user_id in project_user_ids), None)
+    if owner_id is None and channel.created_by_user_id in project_user_ids:
+        owner_id = channel.created_by_user_id
+    for membership in memberships:
+        if membership.user_id != owner_id:
+            membership.member_role = "member"
     for user_id in project_user_ids:
         _ensure_active_channel_member(
             db,
             channel,
             user_id,
-            role="owner" if user_id == channel.created_by_user_id else "member",
+            role="owner" if user_id == owner_id else "member",
         )
 
     memberships = db.scalars(
@@ -302,10 +320,10 @@ def chat_channel_for_user_or_403(
     project_for_user_or_403(db, channel.project_id, user)
     if channel.archived_at is not None:
         raise HTTPException(status_code=410, detail="群聊已归档")
-    if channel.channel_type in {"project", "topic"}:
+    if chat_auto_sync(channel):
         _sync_project_channel_members(db, channel, user)
         db.flush()
-    if channel.channel_type == "private":
+    if not chat_auto_sync(channel):
         membership = db.scalar(
             select(ChatChannelMember.id).where(
                 ChatChannelMember.channel_id == channel.id,
@@ -422,7 +440,7 @@ def chat_channel_view(db: Session, row: ChatChannel) -> dict[str, Any]:
         "title": row.title,
         "summary": row.summary,
         "channel_type": row.channel_type,
-        "all_members": row.channel_type in {"project", "topic"},
+        "all_members": chat_auto_sync(row),
         "member_count": int(member_count),
         "last_message": chat_message_view(db, last_message) if last_message else None,
         "last_message_at": row.last_message_at.isoformat() if row.last_message_at else None,
@@ -641,6 +659,20 @@ def _group_chat_agent_content(
     )
 
 
+def _project_member_positions(db: Session, project_id: int) -> dict[int, list[str]]:
+    positions: dict[int, list[str]] = {}
+    rows = db.execute(select(ProjectMember.user_id, ProjectPosition.position_name)
+        .join(ProjectMemberPosition, ProjectMemberPosition.project_member_id == ProjectMember.id)
+        .join(ProjectPosition, ProjectPosition.id == ProjectMemberPosition.position_id)
+        .where(ProjectMember.project_id == project_id, ProjectMemberPosition.project_id == project_id,
+               ProjectPosition.project_id == project_id)
+        .order_by(ProjectMemberPosition.serial_no, ProjectPosition.id)).all()
+    for user_id, name in rows:
+        if name not in positions.setdefault(user_id, []):
+            positions[user_id].append(name)
+    return positions
+
+
 @router.get("/projects/{project_id}/chat/participants")
 def list_project_chat_participants(
     project_id: int,
@@ -654,12 +686,14 @@ def list_project_chat_participants(
         .where(ProjectMember.project_id == project_id)
         .order_by(User.real_name.asc(), User.id.asc()),
     ).scalars().all()
+    positions = _project_member_positions(db, project_id)
     return ok(
         [
             {
                 "user_id": member.id,
                 "name": member.real_name,
-                "title": member.title or member.org_name or "项目成员",
+                "title": "、".join(positions.get(member.id, [])),
+                "positions": positions.get(member.id, []),
             }
             for member in rows
         ],
@@ -756,7 +790,7 @@ def list_project_chat_channels(
             ChatChannel.project_id == project_id,
             ChatChannel.archived_at.is_(None),
             or_(
-                ChatChannel.channel_type.in_(("project", "topic")),
+                auto_sync_condition(),
                 ChatChannelMember.id.is_not(None),
             ),
         )
@@ -775,7 +809,7 @@ def list_chat_channel_members(
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     channel = chat_channel_for_user_or_403(db, channel_id, user)
-    if channel.channel_type in {"project", "topic"}:
+    if chat_auto_sync(channel):
         _sync_project_channel_members(db, channel, user)
         db.commit()
     rows = db.execute(
@@ -787,13 +821,15 @@ def list_chat_channel_members(
         )
         .order_by(User.real_name.asc()),
     ).all()
+    positions = _project_member_positions(db, channel.project_id)
     return ok(
         [
             {
                 "id": membership.id,
                 "user_id": member.id,
                 "name": member.real_name,
-                "title": member.title or member.org_name or "项目成员",
+                "title": "、".join(positions.get(member.id, [])),
+                "positions": positions.get(member.id, []),
                 "member_role": membership.member_role,
                 "muted": membership.muted,
             }
@@ -866,7 +902,7 @@ def list_unseen_chat_mention_notices(
             ChatChannel.project_id == project_id,
             ChatChannel.archived_at.is_(None),
             or_(
-                ChatChannel.channel_type != "private",
+                auto_sync_condition(),
                 active_private_membership.c.id.is_not(None),
             ),
         )
@@ -899,7 +935,7 @@ def _validate_mentioned_users(
     unique_ids = list(dict.fromkeys(user_ids))
     if not unique_ids:
         return []
-    if channel.channel_type == "private":
+    if not chat_auto_sync(channel):
         valid_user_ids = set(
             db.scalars(
                 select(ChatChannelMember.user_id).where(
@@ -927,7 +963,7 @@ def _mention_all_users(
 ) -> list[User]:
     """Resolve every active channel member without imposing a mention quota."""
 
-    if channel.channel_type in {"project", "topic"}:
+    if chat_auto_sync(channel):
         _sync_project_channel_members(db, channel, current_user)
         db.flush()
     return db.scalars(
@@ -1237,7 +1273,7 @@ def _visible_chat_realtime_channels(
             ChatChannel.project_id == project_id,
             ChatChannel.archived_at.is_(None),
             or_(
-                ChatChannel.channel_type.in_(("project", "topic")),
+                auto_sync_condition(),
                 ChatChannelMember.id.is_not(None),
             ),
         )

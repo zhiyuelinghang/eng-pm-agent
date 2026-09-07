@@ -18,6 +18,7 @@ from task_engine.engine import TaskEngine
 from task_engine.generator.llm import AIFlowGenerationError
 from task_engine.serialize import schedule_json
 
+from .chat_membership_policy import chat_auto_sync
 from .api_common import (
     ModelType,
     audit,
@@ -1828,7 +1829,7 @@ async def generate_task_flow(
             )
             .order_by(ChatChannel.id.asc()),
         ).all()
-        if channel.channel_type != "private" or channel.id in private_channel_ids
+        if chat_auto_sync(channel) or channel.id in private_channel_ids
     ]
     channel_member_refs: dict[int, set[str]] = {
         channel.id: set() for channel in chat_channels
@@ -1889,7 +1890,7 @@ async def generate_task_flow(
                         "channel_type": channel.channel_type,
                         "member_refs": sorted(
                             channel_member_refs[channel.id]
-                            if channel.channel_type == "private"
+                            if not chat_auto_sync(channel)
                             else project_member_refs,
                         ),
                     }

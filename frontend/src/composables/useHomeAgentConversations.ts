@@ -32,6 +32,7 @@ export type HomeChatMessage = {
   attachments?: HomeChatAttachment[]
   runtimeTrace?: AgentRuntimeTrace | null
   taskDraftId?: number
+  sendError?: string
 }
 
 export type HomeAgentConversation = {
@@ -120,6 +121,7 @@ export function useHomeAgentConversations() {
   const quickFiles = ref<File[]>([])
   const quickUploading = ref(false)
   const quickStopping = ref(false)
+  const quickPreparationLabel = ref('')
   const pendingTaskDraftId = ref(0)
 
   let listSequence = 0
@@ -346,7 +348,7 @@ export function useHomeAgentConversations() {
     }
   }
 
-  async function ensureHomeAgentConversation(content: string, projectId: number) {
+  async function ensureHomeAgentConversation(content: string, projectId: number, signal: AbortSignal) {
     const current = homeAgentConversation.value
     if (current?.project_id === projectId && current.conversation_type === 'general') {
       return current
@@ -357,12 +359,14 @@ export function useHomeAgentConversations() {
         conversation_type: 'general',
         title: firstUserSentenceTitle(content),
       },
+      { signal },
     )
     const created = response.data.data
     if (projectId !== Number(store.currentProjectId)) {
       throw new Error('项目已切换，本次会话已停止显示。')
     }
     homeAgentConversation.value = created
+    loadedConversationId = created.id
     homeAgentConversations.value = [
       created,
       ...homeAgentConversations.value.filter(item => item.id !== created.id),
@@ -375,8 +379,9 @@ export function useHomeAgentConversations() {
     agentName: string,
     content: string,
     projectId: number,
+    signal: AbortSignal,
   ) {
-    const target = (await loadHomeDirectAgents()).find(
+    const target = (await loadHomeDirectAgents(signal)).find(
       agent => agent.name === agentName && agent.enabled && agent.published,
     )
     if (!target) throw new Error(`管理中心没有发布可用的「${agentName}」。`)
@@ -386,6 +391,7 @@ export function useHomeAgentConversations() {
       && current.conversation_type === 'business'
       && current.agent_id === target.id
     ) return current
+    signal.throwIfAborted()
     const response = await api.post<ApiEnvelope<HomeAgentConversation>>(
       `/projects/${projectId}/agent-conversations`,
       {
@@ -393,9 +399,14 @@ export function useHomeAgentConversations() {
         agent_id: target.id,
         title: firstUserSentenceTitle(content),
       },
+      { signal },
     )
     const created = response.data.data
+    if (projectId !== Number(store.currentProjectId)) {
+      throw new Error('项目已切换，本次会话已停止显示。')
+    }
     homeAgentConversation.value = created
+    loadedConversationId = created.id
     homeAgentConversations.value = [
       created,
       ...homeAgentConversations.value.filter(item => item.id !== created.id),
@@ -404,18 +415,23 @@ export function useHomeAgentConversations() {
     return created
   }
 
-  async function loadHomeDirectAgents() {
+  async function loadHomeDirectAgents(signal?: AbortSignal) {
+    const revision = stateRevision
     const response = await api.get<ApiEnvelope<{
       business_agents: HomeDirectAgent[]
-    }>>('/agents/catalog')
+    }>>('/agents/catalog', { signal })
+    if (revision !== stateRevision) return []
     homeDirectAgents.value = response.data.data.business_agents.filter(
       agent => agent.enabled && agent.published,
     )
     return homeDirectAgents.value
   }
 
-  async function uploadComposerFiles(files: File[]) {
-    for (const file of files) await store.uploadAttachment(file, 'Dobby问答附件')
+  async function uploadComposerFiles(files: File[], signal: AbortSignal) {
+    for (const file of files) {
+      signal.throwIfAborted()
+      await store.uploadAttachment(file, 'Dobby问答附件')
+    }
   }
 
   async function dispatchQuickCommand(directAgentName?: string) {
@@ -433,30 +449,42 @@ export function useHomeAgentConversations() {
       return false
     }
     const revision = stateRevision
+    const draft = quickCommand.value
+    const controller = new AbortController()
+    streamAbortController = controller
+    let streamStarted = false
     quickStopping.value = false
     quickUploading.value = true
+    quickPreparationLabel.value = files.length ? '正在上传附件…' : '正在连接会话…'
+    const optimisticUser: HomeChatMessage = {
+      id: `hq-u-${Date.now()}`,
+      role: 'user',
+      content,
+      attachments: files.length ? createChatAttachments(files) : undefined,
+    }
+    homeQuickChatMessages.value = [...homeQuickChatMessages.value, optimisticUser]
+    homeQuickStreamingTrace.value = createEmptyRuntimeTrace()
+    quickCommand.value = ''
+    quickFiles.value = []
     try {
-      if (files.length) await uploadComposerFiles(files)
+      await nextTick()
+      scrollHomeQuick()
+      controller.signal.throwIfAborted()
+      if (files.length) await uploadComposerFiles(files, controller.signal)
+      controller.signal.throwIfAborted()
+      quickPreparationLabel.value = '正在连接会话…'
       const conversation = directAgentName
-        ? await ensureDirectAgentConversation(directAgentName, content, projectId)
-        : await ensureHomeAgentConversation(content, projectId)
+        ? await ensureDirectAgentConversation(directAgentName, content, projectId, controller.signal)
+        : await ensureHomeAgentConversation(content, projectId, controller.signal)
       if (revision !== stateRevision) return false
-      const optimisticUser: HomeChatMessage = {
-        id: `hq-u-${Date.now()}`,
-        role: 'user',
-        content,
-        attachments: files.length ? createChatAttachments(files) : undefined,
-      }
-      homeQuickChatMessages.value = [...homeQuickChatMessages.value, optimisticUser]
-      homeQuickStreamingTrace.value = createEmptyRuntimeTrace()
-      quickCommand.value = ''
-      quickFiles.value = []
+      controller.signal.throwIfAborted()
+      quickPreparationLabel.value = ''
       touchConversation(conversation, { status: 'running', updated_at: nowText() })
       const completion: {
         message: ApiAgentMessage | null
         runtimeStatus: string
       } = { message: null, runtimeStatus: 'running' }
-      streamAbortController = new AbortController()
+      streamStarted = true
       await streamAgentConversationMessage(
         conversation.id,
         content,
@@ -475,7 +503,7 @@ export function useHomeAgentConversations() {
             completion.runtimeStatus = payload.runtime_status
           },
         },
-        streamAbortController.signal,
+        controller.signal,
       )
       if (revision !== stateRevision) return false
       if (!completion.message) {
@@ -510,7 +538,27 @@ export function useHomeAgentConversations() {
     } catch (error: any) {
       if (revision !== stateRevision) return false
       homeQuickStreamingTrace.value = null
-      if (homeAgentConversation.value) {
+      if (!streamStarted) {
+        // Restore only into an empty composer; never overwrite the next draft.
+        if (!quickCommand.value && !quickFiles.value.length) {
+          quickCommand.value = draft
+          quickFiles.value = files
+          homeQuickChatMessages.value = homeQuickChatMessages.value.filter(
+            item => item.id !== optimisticUser.id,
+          )
+        } else {
+          homeQuickChatMessages.value = homeQuickChatMessages.value.map(item => (
+            item.id === optimisticUser.id
+              ? { ...item, sendError: controller.signal.aborted ? '已取消发送' : '未发送成功，请重新发送' }
+              : item
+          ))
+        }
+        if (controller.signal.aborted) {
+          message.info('已取消发送。')
+          return false
+        }
+      }
+      if (streamStarted && homeAgentConversation.value) {
         touchConversation(homeAgentConversation.value, {
           status: 'error',
           updated_at: nowText(),
@@ -523,10 +571,11 @@ export function useHomeAgentConversations() {
       )
       return false
     } finally {
-      streamAbortController = null
+      if (streamAbortController === controller) streamAbortController = null
       if (revision === stateRevision) {
         quickUploading.value = false
         quickStopping.value = false
+        quickPreparationLabel.value = ''
       }
     }
   }
@@ -551,10 +600,15 @@ export function useHomeAgentConversations() {
 
   async function stopHomeAgent() {
     if (
-      !homeAgentConversation.value
-      || !quickUploading.value
+      !quickUploading.value
       || quickStopping.value
     ) return
+    if (quickPreparationLabel.value) {
+      quickStopping.value = true
+      streamAbortController?.abort()
+      return
+    }
+    if (!homeAgentConversation.value) return
     quickStopping.value = true
     try {
       await api.post(`/agent-conversations/${homeAgentConversation.value.id}/interrupt`)
@@ -708,6 +762,7 @@ export function useHomeAgentConversations() {
       loadedConversationId = 0
       quickUploading.value = false
       quickStopping.value = false
+      quickPreparationLabel.value = ''
       homeAgentConversations.value = []
       homeDirectAgents.value = []
       homeAgentConversation.value = null
@@ -762,6 +817,7 @@ export function useHomeAgentConversations() {
     quickFiles,
     quickUploading,
     quickStopping,
+    quickPreparationLabel,
     pendingTaskDraftId,
     homeQuickSession,
     homeQuickSessionTitle,

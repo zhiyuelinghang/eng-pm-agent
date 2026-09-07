@@ -28,7 +28,7 @@
           >
             <span class="channel-copy">
               <strong :title="channelDisplayTitle(channel)">{{ channelDisplayTitle(channel) }}</strong>
-              <span v-if="channel.all_members || channel.channel_type !== 'private'" class="group-all-mark" aria-label="全体成员">ALL</span>
+              <span v-if="channel.all_members ?? channel.channel_type !== 'private'" class="group-all-mark" aria-label="全体成员">ALL</span>
               <span v-if="unread.counts[String(channel.id)]" class="group-unread" :aria-label="`${unread.counts[String(channel.id)]} 条未读消息`">{{ unread.counts[String(channel.id)] > 99 ? '99+' : unread.counts[String(channel.id)] }}</span>
               <span v-if="channel.last_message_at" class="channel-meta">
                 <time>{{ compactTime(channel.last_message_at) }}</time>
@@ -60,6 +60,7 @@
           <n-icon :size="16"><Wifi v-if="realtimeStatus === 'connected'" /><WifiOff v-else /></n-icon>
           <span>{{ connectionLabel }}</span>
         </div>
+        <div class="group-mobile-settings"><ProjectChatSettings compact v-if="activeChannel" :key="activeChannel.id" :channel="activeChannel" :members="members" :current-user-id="currentUserId" :project-id="store.currentProjectId" @changed="handleGroupSettingsChanged" @uploaded="handleFileUploaded" /></div>
       </header>
 
       <div v-if="pageError" class="chat-alert" role="alert">
@@ -268,48 +269,10 @@
         </form>
       </footer>
     </main>
-
-    <aside class="chat-context" aria-label="群聊信息">
-      <section class="context-section group-summary">
-        <div class="context-eyebrow">{{ currentProjectName }}</div>
-        <h2>{{ displayChannelTitle }} <span v-if="activeChannel && activeChannel.channel_type !== 'private'" class="group-all-mark">ALL</span></h2>
-        <p>{{ activeChannel?.summary || '项目成员共享的实时协同群聊' }}</p>
-        <dl>
-          <div><dt>消息范围</dt><dd>群成员</dd></div>
-          <div><dt>成员</dt><dd>{{ members.length }} 人</dd></div>
-          <div><dt>消息记录</dt><dd>持续保存</dd></div>
-        </dl>
-      </section>
-
-      <section class="context-section member-section">
-        <header>
-          <div>
-            <span class="context-eyebrow">参与人</span>
-            <h3>{{ activeChannel?.channel_type === 'private' ? '私聊成员' : '项目成员' }}</h3>
-          </div>
-          <span>{{ members.length }}</span>
-        </header>
-        <div class="member-list">
-          <article v-for="member in members" :key="member.user_id" class="member-row">
-            <div class="member-avatar">{{ member.name.slice(0, 1) }}</div>
-            <div class="participant-picker-summary">
-              <strong>{{ member.name }}<em v-if="member.user_id === currentUserId">我</em></strong>
-              <small>{{ member.title }}</small>
-            </div>
-            <span v-if="member.member_role === 'owner'" class="owner-label">群主</span>
-          </article>
-        </div>
-      </section>
-
-      <section class="context-section agent-boundary">
-        <div class="boundary-icon"><n-icon :size="20"><Robot /></n-icon></div>
-        <div>
-          <h3>智能体按需参与</h3>
-          <p>输入 @ 可选择项目成员或已发布智能体。提及人员会定向提醒；只有明确提及智能体时，平台才传递当前项目与必要群聊上下文。</p>
-        </div>
-      </section>
-    </aside>
+    <aside class="chat-context" aria-label="群成员与设置"><ProjectChatSettings v-if="activeChannel" :key="activeChannel.id" :channel="activeChannel" :members="members" :current-user-id="currentUserId" :project-id="store.currentProjectId" @changed="handleGroupSettingsChanged" @uploaded="handleFileUploaded" /></aside>
   </section>
+
+
 
   <n-modal
     v-model:show="privateChatDialogOpen"
@@ -317,7 +280,8 @@
     :mask-closable="!creatingPrivateChat"
     @after-enter="focusPrivateChatTitle"
   >
-    <section class="private-chat-dialog" role="dialog" aria-modal="true" aria-labelledby="private-chat-dialog-title">
+    <!-- 当前 VFocusTrap 通过 DIV 根节点定位弹窗，保留此根节点以免输入焦点被移走。 -->
+    <div class="private-chat-dialog" role="dialog" aria-modal="true" aria-labelledby="private-chat-dialog-title">
       <header>
         <div>
           <span>智能协同</span>
@@ -332,6 +296,7 @@
       <div class="private-chat-form">
         <div class="private-chat-name">
           <label for="private-chat-title">群名称 <em>必填</em></label>
+          <div class="chat-title-field">
           <input
             id="private-chat-title"
             ref="privateChatTitleInput"
@@ -341,67 +306,28 @@
             required
             aria-required="true"
             placeholder="请输入不重复的群名称"
+            :aria-invalid="Boolean(privateTitleError)"
+            :aria-describedby="privateTitleError ? 'private-chat-title-error' : undefined"
+            @blur="checkPrivateTitle"
           >
+            <span v-if="checkingPrivateTitle" class="chat-title-loading" role="status" aria-label="正在检测群名称"></span>
+          </div>
+          <p v-if="privateTitleError" id="private-chat-title-error" class="chat-title-error" role="alert">{{ privateTitleError }}</p>
         </div>
 
-        <label class="group-all-choice"><input v-model="allGroupMembers" type="checkbox">全体项目成员 <span class="group-all-mark">ALL</span></label>
-        <section v-if="!allGroupMembers" class="participant-picker" aria-label="选择群成员">
-          <div class="participant-picker-head">
-            <div>
+        <GroupMemberTable v-model:selected-ids="selectedParticipantIds" v-model:search="participantSearch" :rows="selectableParticipants" label="参与人" selectable :loading="loadingParticipants" :disabled="creatingPrivateChat">
+          <template #toolbar>
+            <div class="participant-selection-controls">
               <strong>选择参与人</strong>
               <span>已选 {{ selectedParticipantIds.length }} 人</span>
-            </div>
-            <div class="participant-search" @click="focusParticipantSearch">
-              <n-icon :size="17"><Search /></n-icon>
-              <input
-                id="private-chat-participant-search"
-                ref="participantSearchInput"
-                v-model="participantSearch"
-                type="search"
-                aria-label="搜索参与人"
-                placeholder="搜索姓名或岗位"
-              >
-            </div>
-          </div>
-
-          <div v-if="loadingParticipants" class="participant-loading">正在加载项目成员…</div>
-          <div v-else-if="filteredParticipants.length" class="participant-results">
-            <div class="participant-list" role="list" aria-label="可选项目成员">
-              <div class="participant-list-head" aria-hidden="true">
-                <span>选择</span>
-                <span>姓名</span>
-                <span>岗位</span>
-              </div>
-              <label
-                v-for="participant in pagedParticipants"
-                :key="participant.user_id"
-                :class="['participant-option', { selected: selectedParticipantIds.includes(participant.user_id) }]"
-                role="listitem"
-              >
-                <input v-model="selectedParticipantIds" type="checkbox" :value="participant.user_id">
-                <strong>{{ participant.name }}</strong>
-                <span>{{ participant.title }}</span>
+              <label class="participant-sync-choice" :title="allParticipantsSelected ? '自动同步后续项目人员变更' : '全选项目成员后可启用自动同步'">
+                <input v-model="autoSyncMembers" type="checkbox" :disabled="!allParticipantsSelected || loadingParticipants || creatingPrivateChat">
+                自动同步
               </label>
+              <span v-if="allGroupMembers" class="group-all-mark">ALL</span>
             </div>
-            <nav class="participant-pagination" aria-label="参与人分页">
-              <span>{{ participantRangeStart }}–{{ participantRangeEnd }} / {{ filteredParticipants.length }}</span>
-              <div>
-                <button
-                  type="button"
-                  :disabled="participantPage <= 1"
-                  @click="setParticipantPage(participantPage - 1)"
-                >上一页</button>
-                <em>第 {{ participantPage }} / {{ participantPageCount }} 页</em>
-                <button
-                  type="button"
-                  :disabled="participantPage >= participantPageCount"
-                  @click="setParticipantPage(participantPage + 1)"
-                >下一页</button>
-              </div>
-            </nav>
-          </div>
-          <div v-else class="participant-empty">没有符合条件的项目成员</div>
-        </section>
+          </template>
+        </GroupMemberTable>
 
         <p v-if="privateChatError" class="private-chat-error" role="alert">{{ privateChatError }}</p>
       </div>
@@ -416,7 +342,7 @@
           </button>
         </div>
       </footer>
-    </section>
+    </div>
   </n-modal>
 
   <n-modal
@@ -425,7 +351,7 @@
     :close-on-esc="!isTaskDraftPublishing"
     :mask-closable="false"
   >
-    <section
+    <div
       v-if="activePrivateTaskDraft || creatingTaskDraft || taskDraftStartError"
       class="task-draft-dialog"
       role="dialog"
@@ -675,12 +601,14 @@
           </button>
         </div>
       </footer>
-    </section>
+    </div>
   </n-modal>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useGroupMemberSelection } from '@/composables/useGroupMemberSelection'
+import { useChatTitleValidation } from '@/composables/useChatTitleValidation'
 import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
 import { NIcon, NModal, useMessage } from 'naive-ui'
 import dayjs from 'dayjs'
@@ -722,6 +650,8 @@ import ChatComposerSurface from '@/components/chat/ChatComposerSurface.vue'
 import ChatAgentRunControls from '@/components/chat/ChatAgentRunControls.vue'
 import ChatGroupFileUpload from '@/components/chat/ChatGroupFileUpload.vue'
 import ChatMessageFiles from '@/components/chat/ChatMessageFiles.vue'
+import ProjectChatSettings from '@/components/chat/ProjectChatSettings.vue'
+import GroupMemberTable from '@/components/chat/GroupMemberTable.vue'
 import { useChatUnreadStore } from '@/stores/chatUnread'
 import {
   useProjectChatComposer,
@@ -731,7 +661,14 @@ import { useAppStore } from '@/stores/app'
 
 const store = useAppStore()
 const unread = useChatUnreadStore()
-const allGroupMembers = ref(false)
+async function handleGroupSettingsChanged(channel: ProjectChatChannel) {
+  if (channel.project_id !== Number(store.currentProjectId)) return
+  channels.value = channels.value.map(row => row.id === channel.id ? channel : row)
+  try {
+    const loaded = await listProjectChatMembers(channel.id)
+    if (channel.id === activeChannelId.value && channel.project_id === Number(store.currentProjectId)) members.value = loaded
+  } catch (error) { notice.error(errorDetail(error, '群成员刷新失败，请重新打开群聊。')) }
+}
 function handleFileUploaded(item: ProjectChatMessage) {
   if (item.channel_id === activeChannelId.value) mergeMessages([item], true)
   void unread.refresh(store.currentProjectId)
@@ -788,12 +725,13 @@ const privateChatDialogOpen = ref(false)
 const privateChatTitle = ref('')
 const privateChatTitleInput = ref<HTMLInputElement | null>(null)
 const participantSearch = ref('')
-const participantSearchInput = ref<HTMLInputElement | null>(null)
-const participantPage = ref(1)
 const selectedParticipantIds = ref<number[]>([])
 const loadingParticipants = ref(false)
 const creatingPrivateChat = ref(false)
 const privateChatError = ref('')
+const { checking: checkingPrivateTitle, error: privateTitleError, check: checkPrivateTitle } = useChatTitleValidation(
+  privateChatTitle, () => store.currentProjectId, () => undefined, () => privateChatDialogOpen.value,
+)
 const pulsingMentionIds = ref<Set<number>>(new Set())
 const mentionNotices = ref<ProjectChatMessage[]>([])
 const locatingMentionNotice = ref(false)
@@ -871,6 +809,10 @@ const activeMentionNoticeDescription = computed(() => {
 })
 const currentProjectName = computed(() => store.currentProject?.name || '当前项目')
 const currentUserId = computed(() => Number(sessionStorage.getItem('current_user_id') || 0))
+const selectableParticipantIds = computed(() => projectParticipants.value
+  .filter(participant => participant.user_id !== currentUserId.value)
+  .map(participant => participant.user_id))
+const { autoSyncMembers, allParticipantsSelected, allGroupMembers } = useGroupMemberSelection(selectableParticipantIds, selectedParticipantIds)
 const canSend = computed(() => Boolean(activeChannel.value && draft.value.trim() && !sending.value))
 const filteredChannels = computed(() => {
   const keyword = channelSearch.value.trim().toLowerCase()
@@ -886,36 +828,11 @@ const displayChannelTitle = computed(() => {
   return activeChannel.value ? channelDisplayTitle(activeChannel.value) : '群聊'
 })
 const channelScopeLabel = computed(() => (
-  activeChannel.value?.channel_type === 'private'
+  activeChannel.value && !(activeChannel.value.all_members ?? activeChannel.value.channel_type !== 'private')
     ? '仅所选成员可见'
     : currentProjectName.value
 ))
-const filteredParticipants = computed(() => {
-  const keyword = participantSearch.value.trim().toLowerCase()
-  return projectParticipants.value.filter(participant => {
-    if (participant.user_id === currentUserId.value) return false
-    if (!keyword) return true
-    return `${participant.name} ${participant.title}`.toLowerCase().includes(keyword)
-  })
-})
-const PARTICIPANTS_PER_PAGE = 10
-const participantPageCount = computed(() => Math.max(
-  1,
-  Math.ceil(filteredParticipants.value.length / PARTICIPANTS_PER_PAGE),
-))
-const pagedParticipants = computed(() => {
-  const start = (participantPage.value - 1) * PARTICIPANTS_PER_PAGE
-  return filteredParticipants.value.slice(start, start + PARTICIPANTS_PER_PAGE)
-})
-const participantRangeStart = computed(() => (
-  filteredParticipants.value.length
-    ? (participantPage.value - 1) * PARTICIPANTS_PER_PAGE + 1
-    : 0
-))
-const participantRangeEnd = computed(() => Math.min(
-  participantPage.value * PARTICIPANTS_PER_PAGE,
-  filteredParticipants.value.length,
-))
+const selectableParticipants = computed(() => projectParticipants.value.filter(person => person.user_id !== currentUserId.value))
 const mentionOptions = computed<MentionOption[]>(() => [
   {
     key: 'all',
@@ -954,6 +871,8 @@ const canCreatePrivateChat = computed(() => (
   privateChatTitle.value.trim().length > 0
   && (allGroupMembers.value || selectedParticipantIds.value.length > 0)
   && !creatingPrivateChat.value
+  && !loadingParticipants.value
+  && !privateTitleError.value
 ))
 const taskDraftPeople = computed(() => {
   const people = new Map<number, ProjectChatParticipant>()
@@ -1676,19 +1595,11 @@ function focusPrivateChatTitle() {
   privateChatTitleInput.value?.focus()
 }
 
-function focusParticipantSearch() {
-  participantSearchInput.value?.focus()
-}
-
-function setParticipantPage(page: number) {
-  participantPage.value = Math.min(Math.max(1, page), participantPageCount.value)
-}
 
 function openPrivateChatDialog() {
-  allGroupMembers.value = false
+  autoSyncMembers.value = false
   privateChatTitle.value = ''
   participantSearch.value = ''
-  participantPage.value = 1
   selectedParticipantIds.value = []
   privateChatError.value = ''
   privateChatDialogOpen.value = true
@@ -1770,7 +1681,13 @@ async function refreshChannelListFromRealtime(projectId: string, generation: num
     const rows = await listProjectChatChannels(projectId)
     if (generation !== loadGeneration) return
     channels.value = rows
-    const activeStillVisible = rows.some(channel => channel.id === activeChannelId.value)
+    const selectedId = activeChannelId.value
+    const activeStillVisible = rows.some(channel => channel.id === selectedId)
+    if (activeStillVisible && selectedId) {
+      const loadedMembers = await listProjectChatMembers(selectedId)
+      if (generation !== loadGeneration) return
+      if (activeChannelId.value === selectedId) members.value = loadedMembers
+    }
     if (!activeStillVisible && rows[0]) await activateChannel(rows[0].id)
     stopRealtime()
     realtimeStatus.value = 'connecting'
@@ -2019,10 +1936,6 @@ watch(
 
 watch(contextTask, () => void applyTaskContextDraft())
 watch([() => messages.value[messages.value.length - 1]?.id, loadingMessages], () => void markVisibleMessagesRead(), { flush: 'post' })
-watch(participantSearch, () => { participantPage.value = 1 })
-watch(participantPageCount, pageCount => {
-  if (participantPage.value > pageCount) participantPage.value = pageCount
-})
 
 onBeforeUnmount(() => {
   loadGeneration += 1
@@ -2038,3 +1951,4 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped src="./ProjectGroupChat.css"></style>
+<style scoped src="./ChatTitleField.css"></style>

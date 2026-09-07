@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .chat_membership_policy import chat_auto_sync
 from .api_common import get_current_user, ok, project_for_user_or_403
 from .db import get_db
 from .models import (
@@ -90,7 +91,7 @@ def task_context(
     channels = {
         channel.id: channel
         for channel in all_channels
-        if channel.channel_type != "private" or channel.id in private_memberships
+        if chat_auto_sync(channel) or channel.id in private_memberships
     }
     chat_rows = list(
         db.scalars(

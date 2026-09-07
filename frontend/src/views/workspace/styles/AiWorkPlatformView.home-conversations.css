@@ -385,6 +385,12 @@
   }
 }
 
+.home-message-send-error {
+  margin: 8px 0 0;
+  color: #b42318;
+  font-size: 12px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .home-conversation-loading i,
   .home-chat-loading > span {

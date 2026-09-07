@@ -19,7 +19,7 @@
         </div>
 
         <div v-if="homeMode === 'work'" class="home-workbench" :class="{ 'is-announcements': homeStatus === 'announcements' }">
-          <aside class="home-queue-pane" aria-label="Dobby 推送的待处理工作">
+          <aside class="home-queue-pane" aria-label="我的任务列表">
             <div class="home-controlbar">
               <div class="home-status-tabs" role="tablist" aria-label="工作处理状态">
                 <button
@@ -52,10 +52,10 @@
                   <n-icon :size="22"><component :is="item.icon" /></n-icon>
                 </span>
                 <span class="home-work-main">
-                  <span class="home-chip-row">
-                    <span class="home-chip" :class="item.tone">{{ item.label }}</span>
+                  <span class="home-work-title-row">
+                    <strong class="home-work-title" :title="item.title">{{ item.title }}</strong>
+                    <span v-if="item.workflowStatus === 'unfinished'" class="home-chip" :class="item.tone">{{ item.label }}</span>
                   </span>
-                  <strong class="home-work-title">{{ item.title }}</strong>
                   <span class="home-work-reason">{{ item.reason }}</span>
                   <span class="home-work-meta">
                     <span><n-icon :size="14"><User /></n-icon>{{ item.owner }}</span>
@@ -70,8 +70,7 @@
                 </div>
                 <span class="task-empty-kicker">Dobby 已待命</span>
                 <strong class="task-empty-title">{{ homeEmptyText }}</strong>
-                <p class="task-empty-copy">Dobby 会持续同步任务引擎，新节点到达后会显示在这里。</p>
-                <div class="task-empty-actions"><router-link :to="{ path: '/tasks', query: { tab: 'assign' } }">布置新任务</router-link><button type="button" @click="selectHomeMode('quick')">问问 Dobby</button></div>
+                <p class="task-empty-copy">{{ homeStatus === 'done' ? '任务完成后会保存在这里，方便回看处理记录。' : 'Dobby 会持续同步任务引擎，新节点到达后会显示在这里。' }}</p>
               </div>
             </div>
             <nav v-if="homeStatus !== 'announcements'" class="home-pagination" aria-label="工作列表分页">
@@ -101,11 +100,11 @@
           <section v-else-if="selectedHomeWorkItem" class="home-work-ai" aria-label="当前工作的 Dobby 交互">
             <header class="home-work-ai-head">
               <div class="home-work-ai-title">
-                <span class="home-ai-presence"><n-icon :size="16"><Robot /></n-icon>Dobby 正在跟进</span>
+                <span class="home-ai-presence"><n-icon :size="16"><Robot /></n-icon>{{ selectedHomeWorkItem.workflowStatus === 'done' ? '任务已完成' : 'Dobby 正在跟进' }}</span>
                 <h2>{{ selectedHomeWorkItem.title }}</h2>
                 <p>{{ selectedHomeWorkItem.owner }} · {{ selectedHomeWorkItem.role }} · {{ selectedHomeWorkItem.deadline }}</p>
               </div>
-              <router-link class="home-work-open-task" :to="taskDetailRoute(selectedHomeWorkItem.id)">处理任务</router-link>
+              <router-link class="home-work-open-task" :to="taskDetailRoute(selectedHomeWorkItem.id, selectedHomeWorkItem.workflowStatus === 'done' ? 'history' : 'disposition')">{{ selectedHomeWorkItem.workflowStatus === 'done' ? '查看记录' : '处理任务' }}</router-link>
             </header>
 
             <div ref="homeWorkThreadViewport" class="home-work-ai-thread">
@@ -142,16 +141,6 @@
                 </div>
               </section>
 
-              <div class="home-work-suggestions" aria-label="快捷提问">
-                <button
-                  v-for="suggestion in homeWorkSuggestions"
-                  :key="suggestion"
-                  type="button"
-                  @click="dispatchHomeWorkSuggestion(suggestion)"
-                >
-                  {{ suggestion }}
-                </button>
-              </div>
             </div>
 
             <form class="chat-composer home-work-composer" @submit.prevent="dispatchHomeWorkCommand">
@@ -197,8 +186,7 @@
             </div>
             <span class="task-empty-kicker">Dobby 已待命</span>
             <strong class="task-empty-title">{{ homeEmptyText }}</strong>
-            <p class="task-empty-copy">Dobby 会持续同步任务引擎，新节点到达后会显示在这里。</p>
-            <div class="task-empty-actions"><router-link :to="{ path: '/tasks', query: { tab: 'assign' } }">布置新任务</router-link><button type="button" @click="selectHomeMode('quick')">问问 Dobby</button></div>
+            <p class="task-empty-copy">{{ homeStatus === 'done' ? '任务完成后会保存在这里，方便回看处理记录。' : 'Dobby 会持续同步任务引擎，新节点到达后会显示在这里。' }}</p>
           </section>
         </div>
 
@@ -314,6 +302,7 @@
                       <small>{{ formatFileSize(attachment.size) }}</small>
                     </span>
                   </div>
+                  <p v-if="message.sendError" class="home-message-send-error" role="status">{{ message.sendError }}</p>
                   <div v-if="message.generatedTaskIds?.length" class="generated-work">
                     <div class="generated-work-head">
                       <span>已生成工作</span>
@@ -341,6 +330,7 @@
                 <div class="message-bubble">
                   <AgentMessageContent
                     :runtime-trace="homeQuickStreamingTrace"
+                    :starting-label="quickPreparationLabel || '正在处理请求…'"
                     :confirmation-busy="quickUploading"
                     streaming
                     @confirm="confirmHomeToolCall"
@@ -446,9 +436,9 @@
 
       <main v-if="taskManagementTab === 'mine'" class="task-mine-view">
         <div class="home-workbench task-mine-workbench">
-          <aside class="home-queue-pane" aria-label="我的待办列表">
+          <aside class="home-queue-pane" aria-label="我的任务列表">
             <div class="home-controlbar">
-              <div class="home-status-tabs" role="tablist" aria-label="我的待办状态">
+              <div class="home-status-tabs" role="tablist" aria-label="我的任务完成情况">
                 <button
                   v-for="tab in taskMineStatusTabs"
                   :key="tab.key"
@@ -479,8 +469,10 @@
                   <n-icon :size="22"><component :is="item.icon" /></n-icon>
                 </span>
                 <span class="home-work-main">
-                  <span class="home-chip-row"><span class="home-chip" :class="item.tone">{{ item.label }}</span></span>
-                  <strong class="home-work-title">{{ item.title }}</strong>
+                  <span class="home-work-title-row">
+                    <strong class="home-work-title" :title="item.title">{{ item.title }}</strong>
+                    <span v-if="item.workflowStatus === 'unfinished'" class="home-chip" :class="item.tone">{{ item.label }}</span>
+                  </span>
                   <span class="home-work-reason">{{ item.reason }}</span>
                   <span class="home-work-meta">
                     <span><n-icon :size="14"><User /></n-icon>{{ item.owner }}</span>
@@ -495,12 +487,11 @@
                 </div>
                 <span class="task-empty-kicker">Dobby 已待命</span>
                 <strong class="task-empty-title">{{ taskMineEmptyText }}</strong>
-                <p class="task-empty-copy">Dobby 会持续同步任务引擎，新节点到达后会显示在这里。</p>
-                <div class="task-empty-actions"><button type="button" @click="selectTaskManagementTab('assign')">布置新任务</button><router-link :to="{ path: '/project', query: { tab: 'progress' } }">查看项目状态</router-link></div>
+                <p class="task-empty-copy">{{ taskMineStatus === 'done' ? '任务完成后会保存在这里，方便回看处理记录。' : 'Dobby 会持续同步任务引擎，新节点到达后会显示在这里。' }}</p>
               </div>
             </div>
 
-            <nav class="home-pagination" aria-label="我的待办分页">
+            <nav class="home-pagination" aria-label="我的任务分页">
               <span>{{ taskMinePageRangeText }}</span>
               <div>
                 <button type="button" :disabled="taskMinePageIndex === 0" aria-label="上一页" @click="goTaskMinePage(-1)"><n-icon :size="17"><ChevronLeft /></n-icon></button>
@@ -513,11 +504,11 @@
           <section v-if="selectedTaskMineWorkItem" class="home-work-ai" aria-label="当前任务的 Dobby 交互">
             <header class="home-work-ai-head">
               <div class="home-work-ai-title">
-                <span class="home-ai-presence"><n-icon :size="16"><Robot /></n-icon>Dobby 正在跟进</span>
+                <span class="home-ai-presence"><n-icon :size="16"><Robot /></n-icon>{{ selectedTaskMineWorkItem.workflowStatus === 'done' ? '任务已完成' : 'Dobby 正在跟进' }}</span>
                 <h2>{{ selectedTaskMineWorkItem.title }}</h2>
                 <p>{{ selectedTaskMineWorkItem.owner }} · {{ selectedTaskMineWorkItem.role }} · {{ selectedTaskMineWorkItem.deadline }}</p>
               </div>
-              <button type="button" class="home-work-open-task" @click="openTaskDisposition(selectedTaskMineWorkItem.id)">处理任务</button>
+              <button type="button" class="home-work-open-task" @click="selectedTaskMineWorkItem.workflowStatus === 'done' ? openTaskHistory(selectedTaskMineWorkItem.id) : openTaskDisposition(selectedTaskMineWorkItem.id)">{{ selectedTaskMineWorkItem.workflowStatus === 'done' ? '查看记录' : '处理任务' }}</button>
             </header>
 
             <div ref="taskMineThreadViewport" class="home-work-ai-thread">
@@ -543,9 +534,6 @@
                 </div>
               </section>
 
-              <div class="home-work-suggestions" aria-label="快捷提问">
-                <button v-for="suggestion in taskMineSuggestions" :key="suggestion" type="button" @click="dispatchTaskMineSuggestion(suggestion)">{{ suggestion }}</button>
-              </div>
             </div>
 
             <form class="chat-composer home-work-composer" @submit.prevent="dispatchTaskMineCommand">
@@ -573,8 +561,7 @@
             </div>
             <span class="task-empty-kicker">Dobby 已待命</span>
             <strong class="task-empty-title">{{ taskMineEmptyText }}</strong>
-            <p class="task-empty-copy">Dobby 会持续同步任务引擎，新节点到达后会显示在这里。</p>
-            <div class="task-empty-actions"><button type="button" @click="selectTaskManagementTab('assign')">布置新任务</button><router-link :to="{ path: '/project', query: { tab: 'progress' } }">查看项目状态</router-link></div>
+            <p class="task-empty-copy">{{ taskMineStatus === 'done' ? '任务完成后会保存在这里，方便回看处理记录。' : 'Dobby 会持续同步任务引擎，新节点到达后会显示在这里。' }}</p>
           </section>
         </div>
       </main>
@@ -582,7 +569,7 @@
       <main v-else-if="taskManagementTab === 'history'" class="task-history-view">
         <form class="task-history-search" @submit.prevent>
           <label><span>任务名称</span><input v-model.trim="taskHistoryKeyword" placeholder="输入名称、类型或触发原因"></label>
-          <label><span>任务状态</span><select v-model="taskHistoryStatus"><option value="all">全部状态</option><option value="pending">待处理</option><option value="processing">处理中</option><option value="need_more_info">待补充资料</option><option value="waiting_confirm">待确认</option><option value="overdue">已逾期</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></label>
+          <label><span>任务状态</span><select v-model="taskHistoryStatus"><option value="all">全部状态</option><option value="unfinished">未完成</option><option value="done">已完成</option><option value="cancelled">已取消</option></select></label>
           <label><span>开始日期</span><input v-model="taskHistoryStart" type="date"></label>
           <label><span>结束日期</span><input v-model="taskHistoryEnd" type="date"></label>
           <button type="button" @click="clearTaskHistoryFilters">清除筛选</button>
@@ -590,7 +577,7 @@
         <section class="task-history-results">
           <div class="task-history-table-head"><span>任务</span><span>状态</span><span>当前责任</span><span>最近更新</span><span>闭环结果</span><span></span></div>
           <article v-for="task in filteredHistoryTasks" :key="task.id">
-            <div><strong>{{ task.title }}</strong><small>{{ taskLedgerTypeLabel(task) }} · {{ task.triggerReason || '无补充说明' }}</small></div><span class="task-ledger-status" :class="task.status">{{ statusLabel(task.status) }}</span><span>{{ taskLedgerOwner(task) }}</span><time>{{ formatDateTime(taskLedgerTimestamp(task)) }}</time><em :class="taskClosureTone(task)">{{ taskClosureLabel(task) }}</em><button type="button" @click="openTaskHistory(task.id)">查看记录</button>
+            <div><strong>{{ task.title }}</strong><small>{{ taskLedgerTypeLabel(task) }} · {{ task.triggerReason || '无补充说明' }}</small></div><span class="task-ledger-status" :class="task.status === 'done' || task.status === 'cancelled' || task.status === 'overdue' ? task.status : 'pending'">{{ workQueueLabel(task) }}</span><span>{{ taskLedgerOwner(task) }}</span><time>{{ formatDateTime(taskLedgerTimestamp(task)) }}</time><em :class="taskClosureTone(task)">{{ taskClosureLabel(task) }}</em><button type="button" @click="openTaskHistory(task.id)">查看记录</button>
           </article>
           <div v-if="!filteredHistoryTasks.length" class="task-history-no-result"><Notes :size="30" /><strong>没有匹配的任务记录</strong><p>调整名称、状态或日期范围后再试。</p></div>
         </section>
@@ -723,7 +710,7 @@
                         <label class="form-field task-flow-node-material">交付材料 / 留证<input v-model.trim="step.material" placeholder="填写后引擎将要求上传证明材料"></label>
                       </template>
                       <template v-else>
-                        <label class="form-field task-flow-node-target">目标群聊<select v-model.number="step.target_channel_id" required @change="handleTaskMessageChannelChange(step)"><option :value="null">请选择群聊</option><option v-for="channel in taskChatChannels" :key="channel.id" :value="channel.id">{{ channel.title }}{{ channel.channel_type !== 'private' ? ' · ALL' : '' }}</option></select></label>
+                        <label class="form-field task-flow-node-target">目标群聊<select v-model.number="step.target_channel_id" required @change="handleTaskMessageChannelChange(step)"><option :value="null">请选择群聊</option><option v-for="channel in taskChatChannels" :key="channel.id" :value="channel.id">{{ channel.title }}{{ (channel.all_members ?? channel.channel_type !== 'private') ? ' · ALL' : '' }}</option></select></label>
                         <label class="form-field task-flow-node-message">消息正文<textarea v-model.trim="step.message_content" maxlength="8000" rows="3" required placeholder="填写该节点到达时要发送的消息"></textarea><small>{{ step.message_content.length }} / 8000</small></label>
                         <section class="task-flow-node-audience" :class="{ 'has-recipient-picker': step.mention_mode === 'users' }" aria-label="提醒对象设置">
                           <label class="form-field">提醒方式<select v-model="step.mention_mode" @change="handleTaskMentionModeChange(step)"><option value="all">@全体成员</option><option value="users">指定成员</option><option value="none">不提及成员</option></select></label>
@@ -781,7 +768,7 @@
               </details>
               <div class="task-flow-validation-note"><strong>引擎约束</strong><p>流程中存在“人工处理”节点时，任务引擎要求选择具体负责人、关联工点和确认人；全部为自动动作节点时，关联工点和确认人可以选择“无”。</p></div>
               <button type="submit" class="task-flow-submit" :class="{ 'is-submitting': taskFlowSubmitting }" :disabled="taskFlowGenerating || taskFlowSubmitting || !taskFlowCanSubmit" :aria-busy="taskFlowSubmitting"><span v-if="taskFlowSubmitting" class="task-flow-button-spinner" aria-hidden="true"></span>{{ taskFlowSubmitLabel }}</button>
-              <button type="button" class="task-flow-back" :disabled="taskFlowSubmitting" @click="selectTaskManagementTab('mine')">返回我的待办</button>
+              <button type="button" class="task-flow-back" :disabled="taskFlowSubmitting" @click="selectTaskManagementTab('mine')">返回我的任务</button>
             </aside>
           </div>
         </form>
@@ -1086,7 +1073,7 @@ import {
   projectDocumentFileSizeLabel, projectDocumentFolderLabel, projectDocumentTypeLabel,
   projectTaskStatusLabel, riskLabel, statusLabel, taskClosureLabel, taskClosureTone,
   taskMaterialLabel, taskProgress, taskSourceLabel, taskStepLabel, taskTypeLabel,
-  wbsStatusLabel, workQueueCategory, workQueueDeadline, workQueueLabel, workQueueStatus,
+  wbsStatusLabel, workQueueCategory, workQueueDeadline, workQueueLabel, workQueueStatus, isUserWorkQueueTask,
   type ChatMessage, type GeneratedTaskFlow, type HomeWorkItem, type TaskFlowStepDraft,
   type TaskMessageMentionMode, type TaskNodeType, type TaskRunMode, type TaskSchedule,
   type TriggerCalendarMode, type TriggerEndMode, type TriggerIntervalUnit,
@@ -1116,6 +1103,7 @@ const {
   quickFiles,
   quickUploading,
   quickStopping,
+  quickPreparationLabel,
   pendingTaskDraftId,
   homeQuickSessionTitle,
   homeQuickSessionTime,
@@ -1439,7 +1427,7 @@ const homeModeTabs = [
   { key: 'work' as const, label: 'Dobby推推' },
   { key: 'quick' as const, label: '问问Dobby' },
 ]
-const homeStatus = ref<WorkQueueStatus | 'announcements'>('pending')
+const homeStatus = ref<WorkQueueStatus | 'announcements'>('unfinished')
 const homePageIndex = ref(0)
 const homePageSize = 5
 const homeWorkThreadViewport = ref<HTMLElement | null>(null)
@@ -1457,14 +1445,6 @@ function workQueueTags(task: Task) {
   return Array.from(new Set(tags.filter(Boolean))).slice(0, 4)
 }
 
-function isCurrentUserTask(task: Task) {
-  if (['done', 'cancelled'].includes(task.status) || !currentUserId.value) return false
-  const currentStep = task.workflowSteps.find(step => step.status !== 'completed')
-  return task.responsibleId === currentUserId.value
-    || currentStep?.owner_user_id === currentUserId.value
-    || (task.status === 'waiting_confirm' && task.confirmatorId === currentUserId.value)
-}
-
 const homeWorkItems = computed<HomeWorkItem[]>(() => {
   const statusRank: Record<TaskStatus, number> = {
     overdue: 0,
@@ -1476,9 +1456,14 @@ const homeWorkItems = computed<HomeWorkItem[]>(() => {
     cancelled: 6,
   }
   return store.tasks
-    .filter(isCurrentUserTask)
+    .filter(task => isUserWorkQueueTask(task, currentUserId.value))
     .slice()
-    .sort((left, right) => statusRank[left.status] - statusRank[right.status] || (left.deadline || '9999').localeCompare(right.deadline || '9999'))
+    .sort((left, right) => {
+      if (left.status === 'done' && right.status === 'done') {
+        return (Date.parse(taskLedgerTimestamp(right)) || 0) - (Date.parse(taskLedgerTimestamp(left)) || 0)
+      }
+      return statusRank[left.status] - statusRank[right.status] || (left.deadline || '9999').localeCompare(right.deadline || '9999')
+    })
     .map((task, index) => {
       const currentStep = task.workflowSteps.find(step => step.status !== 'completed') ?? task.workflowSteps[task.workflowSteps.length - 1]
       const confirmationTask = task.status === 'waiting_confirm'
@@ -1497,10 +1482,10 @@ const homeWorkItems = computed<HomeWorkItem[]>(() => {
         owner: confirmationTask ? store.getMemberName(ownerId) : currentStep?.owner || store.getMemberName(ownerId),
         role: confirmationTask ? '任务验收人' : currentStep?.name || '当前责任节点',
         deadline: workQueueDeadline(task.deadline),
-        action: task.status === 'need_more_info' ? '补充资料' : confirmationTask ? '验收确认' : task.status === 'processing' ? '继续处理' : '开始处理',
+        action: task.status === 'done' ? '查看记录' : task.status === 'need_more_info' ? '补充资料' : confirmationTask ? '验收确认' : task.status === 'processing' ? '继续处理' : '开始处理',
         to: '/tasks',
-        tone: task.status === 'overdue' ? 'danger' : category === 'upload' ? 'upload' : task.status === 'processing' ? 'warning' : 'info',
-        icon: category === 'upload' ? Folder : confirmationTask ? Notes : task.status === 'processing' ? FileText : ListCheck,
+        tone: task.status === 'done' ? 'success' : task.status === 'overdue' ? 'danger' : 'info',
+        icon: task.status === 'done' ? CircleCheck : category === 'upload' ? Folder : confirmationTask ? Notes : task.status === 'processing' ? FileText : ListCheck,
       }
     })
 })
@@ -1522,7 +1507,8 @@ const homeWorkAssistantIntro = computed(() => {
   const item = selectedHomeWorkItem.value
   if (!item) return ''
   const reason = item.reason.replace(/^(原因|结果)：/, '')
-  const statusText = homeStatus.value === 'overdue' ? '已逾期工作' : homeStatus.value === 'processing' ? '执行中工作' : '待处理工作'
+  if (item.workflowStatus === 'done') return `“${item.title}”已完成。你可以查看处理记录、核对交付资料或整理完成情况。`
+  const statusText = item.label === '已逾期' ? '已逾期工作' : '待处理工作'
   return `我已把“${item.title}”列为第 ${selectedHomeWorkRank.value} 项${statusText}。${reason} 当前涉及${item.owner}（${item.role}），你可以直接让我核对依据、整理协同内容或继续推进。`
 })
 const homeWorkConversationMessages = computed<ChatMessage[]>(() => {
@@ -1532,17 +1518,6 @@ const homeWorkConversationMessages = computed<ChatMessage[]>(() => {
     { id: `${item.id}-intro`, role: 'assistant', content: homeWorkAssistantIntro.value },
   ]
 })
-const homeWorkSuggestions = computed(() => {
-  const item = selectedHomeWorkItem.value
-  if (!item) return []
-  if (item.category === 'upload') {
-    return ['列出还缺哪些资料', '生成资料催办消息', '判断对后续流程的影响']
-  }
-  if (item.category === 'generated') {
-    return ['说明 AI 生成依据', '拆解下一步协同动作', '生成给责任人的消息']
-  }
-  return ['整理需要确认的关键结论', '检查关联资料是否齐全', '生成协同处理说明']
-})
 const homePageRangeText = computed(() => {
   const total = filteredHomeWorkItems.value.length
   if (!total) return '0 / 0'
@@ -1550,16 +1525,18 @@ const homePageRangeText = computed(() => {
   const end = Math.min(start + homePageSize - 1, total)
   return `第 ${start}-${end} 项，共 ${total} 项`
 })
+const workStatusTabs = computed(() => [
+  { key: 'unfinished' as const, label: '未完成', count: homeWorkItems.value.filter(item => item.workflowStatus === 'unfinished').length },
+  { key: 'done' as const, label: '已完成', count: homeWorkItems.value.filter(item => item.workflowStatus === 'done').length },
+])
 const homeStatusTabs = computed(() => [
-  { key: 'pending' as const, label: '待处理', count: homeWorkItems.value.filter(item => item.workflowStatus === 'pending').length },
-  { key: 'overdue' as const, label: '已逾期', count: homeWorkItems.value.filter(item => item.workflowStatus === 'overdue').length },
+  ...workStatusTabs.value,
   { key: 'announcements' as const, label: '公告', count: undefined },
 ])
 const homeEmptyText = computed(() => ({
   announcements: '当前项目暂无公告',
-  pending: '当前没有需要立即处理的任务',
-  overdue: '当前没有已逾期任务',
-  processing: '当前没有执行中的任务',
+  unfinished: '当前没有未完成的任务',
+  done: '当前暂无已完成任务',
 })[homeStatus.value])
 function clampHomePageIndex() {
   homePageIndex.value = Math.min(homePageIndex.value, homePageCount.value - 1)
@@ -1621,10 +1598,6 @@ async function dispatchHomeWorkCommand() {
   }
 }
 
-function dispatchHomeWorkSuggestion(content: string) {
-  homeWorkCommand.value = content
-  void dispatchHomeWorkCommand()
-}
 
 watch(homeStatus, () => {
   homePageIndex.value = 0
@@ -1667,7 +1640,7 @@ watch(() => store.currentProjectId, () => {
 type TaskManagementTab = 'mine' | 'history' | 'schedules' | 'assign'
 
 const taskManagementTab = ref<TaskManagementTab>('mine')
-const taskMineStatus = ref<WorkQueueStatus>('pending')
+const taskMineStatus = ref<WorkQueueStatus>('unfinished')
 const taskMinePageIndex = ref(0)
 const taskMinePageSize = 5
 const selectedTaskMineWorkItemId = ref('')
@@ -1685,7 +1658,7 @@ const taskDispositionAction = ref<'submit' | 'accept' | 'reject' | ''>('')
 const taskStepUpdatingKey = ref('')
 const taskAttachmentDownloadingReference = ref('')
 const taskHistoryKeyword = ref('')
-const taskHistoryStatus = ref<'all' | TaskStatus>('all')
+const taskHistoryStatus = ref<'all' | WorkQueueStatus | 'cancelled'>('all')
 const taskHistoryStart = ref('')
 const taskHistoryEnd = ref('')
 const taskHistoryOpenId = ref('')
@@ -2175,11 +2148,7 @@ function taskLedgerDateKey(task: Task) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
-const taskMineStatusTabs = computed(() => [
-  { key: 'pending' as const, label: '待处理', count: homeWorkItems.value.filter(item => item.workflowStatus === 'pending').length },
-  { key: 'overdue' as const, label: '已逾期', count: homeWorkItems.value.filter(item => item.workflowStatus === 'overdue').length },
-  { key: 'processing' as const, label: '执行中', count: homeWorkItems.value.filter(item => item.workflowStatus === 'processing').length },
-])
+const taskMineStatusTabs = workStatusTabs
 const filteredTaskMineWorkItems = computed(() => homeWorkItems.value.filter(item => item.workflowStatus === taskMineStatus.value))
 const taskMinePageCount = computed(() => Math.max(1, Math.ceil(filteredTaskMineWorkItems.value.length / taskMinePageSize)))
 const pagedTaskMineWorkItems = computed(() => {
@@ -2195,9 +2164,8 @@ const taskMinePageRangeText = computed(() => {
   return `第 ${start}-${end} 项，共 ${total} 项`
 })
 const taskMineEmptyText = computed(() => ({
-  pending: '当前没有需要立即处理的任务',
-  overdue: '当前没有已逾期任务',
-  processing: '当前没有执行中的任务',
+  unfinished: '当前没有未完成的任务',
+  done: '当前暂无已完成任务',
 })[taskMineStatus.value])
 const taskLedgerTasks = computed(() => [...store.tasks].sort((left, right) => (
   Date.parse(taskLedgerTimestamp(right)) || 0
@@ -2207,7 +2175,10 @@ const taskLedgerTasks = computed(() => [...store.tasks].sort((left, right) => (
 const filteredHistoryTasks = computed(() => taskLedgerTasks.value.filter(task => {
   const keyword = taskHistoryKeyword.value.toLowerCase()
   const searchMatched = !keyword || `${task.title} ${task.triggerReason} ${taskLedgerTypeLabel(task)}`.toLowerCase().includes(keyword)
-  const statusMatched = taskHistoryStatus.value === 'all' || task.status === taskHistoryStatus.value
+  const statusMatched = taskHistoryStatus.value === 'all'
+    || (taskHistoryStatus.value === 'cancelled'
+      ? task.status === 'cancelled'
+      : task.status !== 'cancelled' && workQueueStatus(task) === taskHistoryStatus.value)
   const date = taskLedgerDateKey(task)
   return searchMatched && statusMatched && (!taskHistoryStart.value || date >= taskHistoryStart.value) && (!taskHistoryEnd.value || date <= taskHistoryEnd.value)
 }))
@@ -2220,7 +2191,7 @@ const filteredTaskSchedules = computed(() => taskSchedules.value.filter(schedule
   return searchMatched && (taskScheduleStatus.value === 'all' || taskScheduleStatus.value === scheduleState)
 }))
 const taskManagementTabs = computed(() => [
-  { key: 'mine' as const, label: '我的待办', hint: '当前轮到我处理的责任节点', count: homeWorkItems.value.length, icon: ListCheck },
+  { key: 'mine' as const, label: '我的任务', hint: '查看我的未完成任务与已完成记录', count: homeWorkItems.value.filter(item => item.workflowStatus === 'unfinished').length, icon: ListCheck },
   { key: 'history' as const, label: '执行记录', hint: '全部任务实例及其执行结果', count: taskLedgerTasks.value.length, icon: Notes },
   { key: 'schedules' as const, label: '计划列表', hint: '单次、间隔与日历触发规则', count: taskSchedules.value.length, icon: Clock },
   { key: 'assign' as const, label: '布置任务', hint: '通过 Dobby、模板或手工创建流程', count: 'AI', icon: Plus },
@@ -2241,19 +2212,14 @@ const taskMineConversationMessages = computed<ChatMessage[]>(() => {
   const item = selectedTaskMineWorkItem.value
   if (!item) return []
   const reason = item.reason.replace(/^(原因|结果)：/, '')
-  const intro = `我正在跟进“${item.title}”。${reason} 当前涉及${item.owner}（${item.role}），你可以直接让我核对依据、整理协同内容或继续推进。`
+  const intro = item.workflowStatus === 'done'
+    ? `“${item.title}”已完成。你可以查看处理记录、核对交付资料或整理完成情况。`
+    : `我正在跟进“${item.title}”。${reason} 当前涉及${item.owner}（${item.role}），你可以直接让我核对依据、整理协同内容或继续推进。`
   return [
     { id: `${item.id}-intro`, role: 'assistant', content: intro },
   ]
 })
 
-const taskMineSuggestions = computed(() => {
-  const item = selectedTaskMineWorkItem.value
-  if (!item) return []
-  if (item.category === 'upload') return ['列出还缺哪些资料', '生成资料催办消息', '判断对后续流程的影响']
-  if (item.category === 'generated') return ['说明 AI 生成依据', '拆解下一步协同动作', '生成给责任人的消息']
-  return ['整理需要确认的关键结论', '检查关联资料是否齐全', '生成协同处理说明']
-})
 
 async function dispatchTaskMineCommand() {
   const item = selectedTaskMineWorkItem.value
@@ -2275,10 +2241,6 @@ async function dispatchTaskMineCommand() {
   }
 }
 
-function dispatchTaskMineSuggestion(content: string) {
-  taskMineCommand.value = content
-  void dispatchTaskMineCommand()
-}
 
 function goTaskMinePage(direction: number) {
   taskMinePageIndex.value = Math.min(Math.max(taskMinePageIndex.value + direction, 0), taskMinePageCount.value - 1)

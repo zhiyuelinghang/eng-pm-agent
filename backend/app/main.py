@@ -9,10 +9,12 @@ from sqlalchemy import select
 
 from .api import router
 from .agent_conversations_api import router as agent_conversations_router
+from .agent_api_support import _agentscope_client
 from .agent_context_gateway import router as agent_context_router
 from .chat_api import router as chat_router
 from .workspace_api import router as workspace_router
 from .chat_workspace_api import router as chat_workspace_router
+from .chat_management_api import router as chat_management_router
 from .collaboration_api import router as collaboration_router
 from .database_interaction_router import router as database_interaction_router
 from .engineering_documents_api import router as engineering_documents_router
@@ -454,6 +456,9 @@ async def lifespan(_: FastAPI):
         await tick_task
     with suppress(asyncio.CancelledError):
         await notification_task
+    if _agentscope_client.cache_info().currsize:
+        _agentscope_client().close()
+        _agentscope_client.cache_clear()
 
 
 settings = get_settings()
@@ -465,6 +470,7 @@ app.include_router(agent_context_router)
 app.include_router(chat_router)
 app.include_router(workspace_router)
 app.include_router(chat_workspace_router)
+app.include_router(chat_management_router)
 app.include_router(collaboration_router)
 app.include_router(database_interaction_router)
 app.include_router(engineering_documents_router)

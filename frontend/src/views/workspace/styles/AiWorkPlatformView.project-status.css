@@ -11,7 +11,7 @@
 
 .project-status-v2-summary {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   overflow: hidden;
   border: 1px solid #dfe8e5;
   border-radius: 8px;
@@ -60,7 +60,7 @@
 .project-status-v2-summary article.neutral .project-status-v2-metric-icon { background: #f0f3f2; color: #6d807b; }
 
 .project-status-v2 .project-status-tabs {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   border-color: #dfe8e5;
   border-radius: 8px;
   box-shadow: 0 7px 20px rgba(24, 54, 51, .035);
@@ -365,7 +365,8 @@
   .project-status-v2-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; }
   .project-status-v2-summary article { border-right: 1px solid #e8eeec; border-bottom: 1px solid #e8eeec; }
   .project-status-v2-summary article:nth-child(2n) { border-right: 0; }
-  .project-status-v2-summary article:last-child { grid-column: 1 / -1; border-right: 0; border-bottom: 0; }
+  .project-status-v2-summary article:nth-last-child(-n+2) { border-bottom: 0; }
+  .project-status-v2-summary article:last-child { border-right: 0; }
   .project-status-task-layout { grid-template-columns: 1fr; padding-top: 0; }
   .project-status-task-counts { padding: 5px 0 14px; }
   .project-status-task-table { border-top: 1px solid #dfe7e5; border-left: 0; }
@@ -400,6 +401,7 @@
   .project-status-v2-summary { grid-template-columns: 1fr; }
   .project-status-v2-summary article,
   .project-status-v2-summary article:nth-child(2n),
+  .project-status-v2-summary article:nth-last-child(-n+2),
   .project-status-v2-summary article:last-child { grid-column: auto; border-right: 0; border-bottom: 1px solid #e8eeec; }
   .project-status-v2-summary article:last-child { border-bottom: 0; }
   .project-status-v2 .project-status-tabs button { min-height: 78px; padding: 14px 10px; }
@@ -417,13 +419,14 @@
 .home-workbench.is-announcements { display: flex; flex-direction: column; gap: 12px; }
 .is-announcements .home-queue-pane { flex: 0 0 auto; }
 .is-announcements .announcement-panel { flex: 1; }
-.project-status-v2-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.project-status-v2-summary article:nth-child(-n+3) { border-bottom: 1px solid #dfe8e5; }
 .meeting-status-list, .meeting-material-tags { padding: 20px; display: grid; gap: 12px; font-size: 14px; }
 .meeting-status-list article { padding: 14px; background: #f5f8f6; border-radius: 6px; }
 .meeting-status-list article > span { margin-left: 15px; color: #ad692d; }
 .meeting-status-list p, .meeting-status-empty { color: #64776d; line-height: 1.7; font-size: 14px; }
 .meeting-status-empty { padding: 20px; }
 .meeting-material-tags span { color: #9c6330; }
-@media (max-width: 800px) { .project-status-v2-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 500px) { .project-status-v2-summary { grid-template-columns: 1fr; } }
+
+@media (min-width: 981px) {
+  .project-status-v2-summary article:nth-child(-n+3) { border-bottom: 1px solid #e8eeec; }
+  .project-status-v2-summary article:nth-child(3n) { border-right: 0; }
+}
