@@ -61,6 +61,39 @@ if not exist "%ROOT%scripts\dobby_process_control.ps1" (
     goto FAILED
 )
 
+if not exist "%ROOT%utils\config.py" (
+    echo [失败] 缺少 Dobby 记忆与上下文运行模块：utils\config.py。
+    goto FAILED
+)
+
+if not exist "%ROOT%start-centrifugo.bat" (
+    echo [失败] 缺少群聊实时服务启动入口：start-centrifugo.bat。
+    goto FAILED
+)
+
+if not exist "%ROOT%安装群聊实时服务.bat" (
+    echo [失败] 缺少群聊实时服务安装入口。
+    goto FAILED
+)
+
+if not exist "%ROOT%scripts\install_centrifugo.ps1" (
+    echo [失败] 缺少 Centrifugo 安装脚本。
+    goto FAILED
+)
+
+if not exist "%ROOT%backend\scripts\generate_centrifugo_config.py" (
+    echo [失败] 缺少群聊实时服务配置生成脚本。
+    goto FAILED
+)
+
+if not exist "%ROOT%runtime\centrifugo\centrifugo.exe" (
+    echo [失败] 首次部署内容不完整，缺少群聊实时服务运行程序：
+    echo %ROOT%runtime\centrifugo\centrifugo.exe
+    echo 请重新解压完整的 dobby-server-first-install.zip。
+    echo “安装群聊实时服务.bat”仅作为损坏修复或手动升级入口。
+    goto FAILED
+)
+
 if not exist "%ROOT%.env" (
     if not exist "%ROOT%.env.example" (
         echo [失败] 缺少 .env 和 .env.example。

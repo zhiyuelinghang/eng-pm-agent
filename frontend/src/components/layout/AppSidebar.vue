@@ -27,7 +27,7 @@
         <router-link v-else :to="item.path" class="nav-item" @click="handleMenuClick(item.path)">
           <n-icon :size="16" class="nav-icon"><component :is="item.icon" /></n-icon>
           <span class="nav-label">{{ item.title }}</span>
-          <span v-if="item.badge && item.badge > 0" class="nav-badge">{{ item.badge > 9 ? '9+' : item.badge }}</span>
+          <span v-if="item.badge && item.badge > 0" class="nav-badge" :aria-label="`${item.badge} 项与我相关的未处理事项`">{{ item.badge > 99 ? '99+' : item.badge }}</span>
         </router-link>
       </template>
     </nav>
@@ -46,9 +46,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { useChatUnreadStore } from '@/stores/chatUnread'
 import { resetRealtimeSession } from '@/services/realtimeSession'
 import { NIcon, useMessage } from 'naive-ui'
 import {
@@ -57,6 +58,7 @@ import {
 
 const router = useRouter()
 const store = useAppStore()
+const unread = useChatUnreadStore()
 const message = useMessage()
 const hasProjects = computed(() => store.projects.length > 0)
 const currentUserId = computed(() => sessionStorage.getItem('current_user_id') || '')
@@ -65,12 +67,25 @@ const currentUserName = computed(() => sessionStorage.getItem('current_user_name
 const isManagementUser = computed(() => sessionStorage.getItem('user_role') === 'admin')
 const currentUserTitle = computed(() => isManagementUser.value ? '管理人员' : currentMember.value?.title || '普通用户')
 const userInitial = computed(() => currentUserName.value.trim().slice(0, 1) || '用')
+const myTasks = computed(() => store.tasks.filter(task => {
+  if (['done', 'cancelled'].includes(task.status)) return false
+  const step = task.workflowSteps.find(item => item.status !== 'completed')
+  return task.responsibleId === currentUserId.value || step?.owner_user_id === currentUserId.value
+    || (task.status === 'waiting_confirm' && task.confirmatorId === currentUserId.value)
+}))
+const myTodoCount = computed(() => myTasks.value.filter(task => task.status !== 'processing').length)
+let unreadTimer: number | undefined
+function refreshUnread() { if (document.visibilityState === 'visible') { void unread.refresh(store.currentProjectId); void unread.refreshTasks(store.currentProjectId) } }
+watch(() => store.currentProjectId, id => { unread.reset(id); refreshUnread() }, { immediate: true })
+watch(myTasks, () => void unread.refreshTasks(store.currentProjectId))
+onMounted(() => { unreadTimer = window.setInterval(refreshUnread, 10000); document.addEventListener('visibilitychange', refreshUnread) })
+onBeforeUnmount(() => { window.clearInterval(unreadTimer); document.removeEventListener('visibilitychange', refreshUnread); unread.reset() })
 
 const menus = computed(() => [
-  { path: '/workbench', title: '工作首页', icon: Home, badge: store.overdueTasks.length + store.waitingConfirmTasks.length, requiresProject: true },
-  { path: '/ai', title: '智能协同', icon: MessageCircle, badge: store.pendingDrafts.length, requiresProject: true },
-  { path: '/tasks', title: '任务管理', icon: ListCheck, badge: store.pendingTasks.length + store.processingTasks.length, requiresProject: true },
+  { path: '/workbench', title: '工作首页', icon: Home, badge: unread.taskCounts?.home_todo ?? myTodoCount.value, requiresProject: true },
   { path: '/project', title: '项目状态', icon: ChartBar, badge: 0, requiresProject: true },
+  { path: '/ai', title: '智能协同', icon: MessageCircle, badge: unread.total, requiresProject: true },
+  { path: '/tasks', title: '任务管理', icon: ListCheck, badge: unread.taskCounts?.tasks ?? myTasks.value.length, requiresProject: true },
   { path: '/docs', title: '工程资料', icon: Folder, badge: store.pendingDailyReports.length + store.pendingFills.length, requiresProject: true },
   { path: '/tools', title: '业务工具', icon: Tools, badge: 0, requiresProject: true },
   { path: '/profile', title: '个人设置', icon: UserCircle, badge: 0, requiresProject: false },
@@ -93,6 +108,7 @@ const handleMenuClick = (path: string) => {
 }
 
 const handleLogout = () => {
+  unread.reset()
   store.resetSession()
   sessionStorage.removeItem('logged_in')
   sessionStorage.removeItem('access_token')

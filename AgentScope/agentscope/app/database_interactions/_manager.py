@@ -99,6 +99,15 @@ class DatabaseInteractionManager:
             },
         )
 
+    async def resolve_knowledge_scope(
+        self, *, session_id: str, actor_agent_id: str,
+    ) -> dict[str, Any]:
+        """Fetch current platform membership and document permissions."""
+        return await self._request(
+            "GET", "/agent-tools/knowledge-scope",
+            params={"agentscope_session_id": session_id, "actor_agent_id": actor_agent_id},
+        )
+
     async def list_runtime(
         self,
         *,
@@ -115,6 +124,19 @@ class DatabaseInteractionManager:
                 "legacy_allowed_names": legacy_allowed_names,
             },
         )
+
+    async def preview_interaction(
+        self, *, session_id: str, actor_agent_id: str, platform_agent_id: str,
+        interaction_key: str, arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        result = await self._request("POST", "/database-interactions/preview", payload={
+            "agentscope_session_id": session_id, "actor_agent_id": actor_agent_id,
+            "platform_agent_id": platform_agent_id, "interaction_key": interaction_key,
+            "arguments": arguments,
+        })
+        if not isinstance(result, dict):
+            raise DatabaseInteractionGatewayError(502, "业务变更预览返回了无效结果。")
+        return result
 
     async def execute_interaction(
         self,

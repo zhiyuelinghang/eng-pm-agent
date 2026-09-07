@@ -465,11 +465,20 @@
 					"system_internal": "Used only by internal system flows and never shown in the business-tool catalogue."
 				}
 			},
+			"agentLevel": {
+				"label": "Agent level",
+				"management": "Management agent",
+				"worker": "Worker agent",
+				"managementDescription": "May coordinate authorised agents and use cross-session shared memory.",
+				"workerDescription": "Executes bounded tasks without long-term-memory tools."
+			},
 			"globalMainNotice": "This agent is selected as the main agent in Platform Settings. Switch it there; its role and enabled state cannot be changed here.",
 			"enabled": "Allow platform execution",
 			"published": "Publish to platform",
 			"allowGlobalMainCall": "Allow calls from platform main agent",
 			"allowGlobalMainCallDescription": "Only enabled agents with this option enter the platform main agent's collaboration pool. Ordinary agents still use their own allowlists.",
+			"projectKnowledge": "Enable project knowledge queries",
+			"projectKnowledgeDescription": "Mounts the WeKnora project tool only for this agent; current user, project, and document allowlists are still checked every turn.",
 			"catalogDescription": "Platform description",
 			"descriptionPlaceholder": "Explain what this agent offers to business users.",
 			"category": "Business category",

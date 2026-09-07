@@ -14,11 +14,16 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .agentscope_client import AgentScopeGatewayError, AgentScopeReply
+from .agentscope_client import (
+    AgentScopeGatewayError,
+    AgentScopeReply,
+)
+from .agentscope_stream_completion import AgentScopeCompletionRelay
 from .agent_api_support import (
     INITIALIZATION_FILE_MAX_BYTES,
     INITIALIZATION_FILE_SUFFIXES,
     _agent_conversation_or_404,
+    _adopt_initial_conversation_title,
     _agentscope_client,
     _agentscope_platform_messages,
     _annotate_collaboration_event,
@@ -35,7 +40,6 @@ from .agent_api_support import (
     _public_agent_catalog_item,
     _public_initialization_file,
     _public_task_assistant_catalog_item,
-    _ready_project_weknora_agent_id,
     _raise_agentscope_http_error,
     _record_agent_turn_error,
     _sse_frame,
@@ -64,46 +68,10 @@ from .system_attachment_parser import (
     SystemAttachmentParserError,
     parse_uploaded_attachment,
 )
+from .runtime_observability import RuntimeStageTracker, runtime_stage_event
 
 
 router = APIRouter(prefix="/api", tags=["agent-conversations"])
-
-
-def _conversation_title_from_content(content: str) -> str:
-    """Use the first sentence the user actually wrote as the chat title."""
-    request = re.search(
-        r"(?:^|\n)用户请求[：:]\s*(.*)$",
-        str(content or ""),
-        flags=re.DOTALL,
-    )
-    source = request.group(1) if request else str(content or "")
-    first_line = next(
-        (line.strip() for line in source.splitlines() if line.strip()),
-        "",
-    )
-    normalized = re.sub(r"\s+", " ", first_line).strip()
-    if not normalized:
-        return "新对话"
-    sentence = re.match(
-        r"^.*?[。！？!?]|^.*?\.(?=\s|$)",
-        normalized,
-    )
-    title = sentence.group(0) if sentence else normalized
-    if len(title) > 300:
-        return title[:299].rstrip() + "…"
-    return title
-
-
-def _adopt_initial_conversation_title(
-    conversation: AgentConversation,
-    content: str,
-) -> None:
-    default_suffix = {
-        "general": " · 智能协同",
-        "initialization": " · 项目初始化",
-    }.get(conversation.conversation_type)
-    if default_suffix and conversation.title.endswith(default_suffix):
-        conversation.title = _conversation_title_from_content(content)
 
 
 def _turn_platform_context(
@@ -113,46 +81,45 @@ def _turn_platform_context(
     conversation: AgentConversation,
     content: str,
 ) -> tuple[dict[str, Any], bool | None]:
-    """Resolve explicitly invoked home capabilities for one agent turn."""
+    """Build a fresh authorization envelope for one agent turn."""
     if conversation.conversation_type != "general":
         return (
             _platform_session_context(user, project, conversation, db),
             None,
         )
-    if "@任务助手" in content:
+    explicit_agents = list(
+        dict.fromkeys(
+            re.findall(r"(?:^|\s)@([^\s@，。！？；：,.!?;:]+)", content),
+        ),
+    )
+    if len(explicit_agents) > 1:
+        raise HTTPException(
+            status_code=422,
+            detail="每条消息最多只能明确提及一个智能体",
+        )
+    if explicit_agents == ["任务助手"]:
         raise HTTPException(
             status_code=409,
             detail="任务助手需要先生成私有草稿，请通过首页任务助手入口发起。",
         )
-    knowledge_query_enabled = "@资料助手" in content
-    if knowledge_query_enabled:
-        _ready_project_weknora_agent_id(db, project.id)
+    if explicit_agents:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"明确 @{explicit_agents[0]} 必须直接进入目标智能体会话，"
+                "不能经过 Dobby 路由。"
+            ),
+        )
+    # Discovery does not need a project-document snapshot. A knowledge agent
+    # resolves the current document allowlist only when its tool is called.
     platform_context = _platform_session_context(
         user,
         project,
         conversation,
         db,
-        knowledge_query_enabled=knowledge_query_enabled,
+        knowledge_query_enabled=False,
     )
-    if knowledge_query_enabled:
-        knowledge_base_ids = platform_context.get(
-            "weknora_knowledge_base_ids",
-        ) or []
-        knowledge_ids = platform_context.get("weknora_knowledge_ids") or []
-        if not knowledge_base_ids:
-            raise HTTPException(
-                status_code=403,
-                detail="当前项目没有你可查询的工程资料。",
-            )
-        if (
-            platform_context.get("weknora_access_mode") == "restricted"
-            and not knowledge_ids
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail="当前账号没有可查询的工程资料权限。",
-            )
-    return platform_context, knowledge_query_enabled
+    return platform_context, None
 
 
 @router.get("/agents/catalog")
@@ -205,6 +172,7 @@ def list_agent_conversations(
     statement = select(AgentConversation).where(
         AgentConversation.project_id == project_id,
         AgentConversation.user_id == user.id,
+        AgentConversation.conversation_type != "group_chat",
     )
     if conversation_type:
         statement = statement.where(
@@ -694,7 +662,10 @@ def create_agent_conversation_message(
     assistant = _finalize_agent_reply(
         conversation.id,
         reply,
-        {"turn_started_at": user_message["created_at"]},
+        {
+            "turn_started_at": user_message["created_at"],
+            "platform_user_request": payload.content,
+        },
     )
     if assistant is None:
         raise HTTPException(status_code=409, detail="平台智能体会话已被删除")
@@ -723,6 +694,12 @@ def stream_agent_conversation_message(
     user: User = Depends(get_current_user),
 ) -> StreamingResponse:
     """Relay one authorized AgentScope turn as structured SSE events."""
+    stage_tracker = RuntimeStageTracker()
+    total_stage = stage_tracker.start("total", "总耗时")
+    authorization_stage = stage_tracker.start(
+        "platform_authorization",
+        "平台鉴权与项目边界",
+    )
     conversation = _agent_conversation_or_404(db, conversation_id, user)
     project = project_for_user_or_403(db, conversation.project_id, user)
     if not conversation.agentscope_session_id:
@@ -730,6 +707,8 @@ def stream_agent_conversation_message(
             status_code=409,
             detail="智能体会话尚未完成初始化",
         )
+    stage_tracker.finish(authorization_stage)
+    context_stage = stage_tracker.start("context_build", "上下文与权限白名单")
     _adopt_initial_conversation_title(conversation, payload.content)
     platform_context, knowledge_query_enabled = _turn_platform_context(
         db,
@@ -738,26 +717,32 @@ def stream_agent_conversation_message(
         conversation,
         payload.content,
     )
+    stage_tracker.finish(context_stage)
 
     client = _agentscope_client()
     try:
+        catalog_stage = stage_tracker.start("agent_catalog", "智能体目录读取")
         catalog = client.get_catalog()
         selected_agent = _catalog_agent_for_conversation(
             catalog,
             conversation,
         )
+        stage_tracker.finish(catalog_stage)
+        sync_stage = stage_tracker.start("session_sync", "AgentScope 会话同步")
         client.sync_session(
             agent=selected_agent,
             session_id=conversation.agentscope_session_id,
             platform_context=platform_context,
             name=conversation.title,
         )
+        stage_tracker.finish(sync_stage)
     except AgentScopeGatewayError as exc:
         conversation.status = "error"
         conversation.last_error = str(exc)
         db.commit()
         _raise_agentscope_http_error(exc)
 
+    payload_stage = stage_tracker.start("request_payload", "请求与附件上下文装配")
     initialization_files = _initialization_files_for_message(
         db,
         conversation,
@@ -779,6 +764,7 @@ def stream_agent_conversation_message(
         + payload.content
         + "\n</user-request>"
     )
+    stage_tracker.finish(payload_stage)
     user_message_id = uuid4().hex
     agent_id = conversation.agent_id
     session_id = conversation.agentscope_session_id
@@ -829,6 +815,10 @@ def stream_agent_conversation_message(
     async def relay() -> Any:
         chat_task: asyncio.Task[AgentScopeReply] | None = None
         event_task: asyncio.Task[dict[str, Any]] | None = None
+        completion_relay = AgentScopeCompletionRelay(
+            client=client,
+            user_message_id=user_message_id,
+        )
         trace_summary: dict[str, Any] = {
             "model_names": [],
             "tasks_context": None,
@@ -836,8 +826,22 @@ def stream_agent_conversation_message(
             "collaborations": [],
             "subagent_hitl": [],
             "turn_started_at": user_message["created_at"],
+            "platform_user_request": payload.content,
             "turn_finished_at": None,
+            "stages": stage_tracker.snapshot(),
         }
+        execution_stage = stage_tracker.start(
+            "agent_execution",
+            "智能体持续执行",
+        )
+        dispatch_stage = stage_tracker.start(
+            "agentscope_dispatch",
+            "AgentScope 装配与首个事件",
+        )
+        first_output_stage = stage_tracker.start(
+            "model_first_output",
+            "模型首个可见输出",
+        )
         try:
             # Start the turn immediately and acknowledge the browser before
             # opening the observability stream. AgentScope keeps a replay log
@@ -853,9 +857,20 @@ def stream_agent_conversation_message(
                     sender_name=sender_name,
                     metadata=metadata,
                     user_message_id=user_message_id,
+                    completion=completion_relay.completion,
                 ),
             )
             yield _sse_frame("accepted", accepted_payload)
+            for stage in stage_tracker.snapshot():
+                yield _sse_frame(
+                    "agent_event",
+                    {
+                        "type": "CUSTOM",
+                        "name": "runtime_stage_updated",
+                        "created_at": datetime.now(UTC).isoformat(),
+                        "value": stage,
+                    },
+                )
 
             async with client.event_stream(session_id, agent_id) as events:
                 event_task = asyncio.create_task(anext(events))
@@ -882,15 +897,48 @@ def stream_agent_conversation_message(
                         except StopAsyncIteration:
                             event_task = None
                         else:
-                            runtime_event = (
-                                await _annotate_collaboration_event(
-                                    client,
-                                    session_id=session_id,
-                                    agent_id=agent_id,
-                                    runtime_event=runtime_event,
-                                )
-                            )
                             event_type = str(runtime_event.get("type") or "")
+                            if dispatch_stage.finished_at is None:
+                                stage_tracker.finish(dispatch_stage)
+                                yield _sse_frame(
+                                    "agent_event",
+                                    runtime_stage_event(dispatch_stage),
+                                )
+                            if (
+                                first_output_stage.finished_at is None
+                                and event_type
+                                in {
+                                    "TEXT_BLOCK_DELTA",
+                                    "THINKING_BLOCK_DELTA",
+                                    "TOOL_CALL_START",
+                                    "REQUIRE_USER_CONFIRM",
+                                }
+                            ):
+                                stage_tracker.finish(first_output_stage)
+                                yield _sse_frame(
+                                    "agent_event",
+                                    runtime_stage_event(first_output_stage),
+                                )
+                            if event_type == "REPLY_END":
+                                # AgentScope publishes the correlated durable
+                                # completion immediately after this event. Hold
+                                # REPLY_END for that brief interval so team
+                                # state can be annotated without another HTTP
+                                # status probe.
+                                completion_relay.hold_reply_end(runtime_event)
+                                event_task = asyncio.create_task(anext(events))
+                                continue
+                            if completion_relay.handles(runtime_event):
+                                reply_end = completion_relay.consume(
+                                    runtime_event,
+                                )
+                                if reply_end is not None:
+                                    yield _sse_frame(
+                                        "agent_event",
+                                        reply_end,
+                                    )
+                                event_task = asyncio.create_task(anext(events))
+                                continue
                             if event_type == "MODEL_CALL_START":
                                 model_name = str(
                                     runtime_event.get("model_name") or "",
@@ -982,6 +1030,14 @@ def stream_agent_conversation_message(
                             event_task = asyncio.create_task(anext(events))
 
                     if chat_task in completed:
+                        pending_reply_end = (
+                            completion_relay.flush_reply_end()
+                        )
+                        if pending_reply_end is not None:
+                            yield _sse_frame(
+                                "agent_event",
+                                pending_reply_end,
+                            )
                         reply = chat_task.result()
                         break
 
@@ -990,6 +1046,18 @@ def stream_agent_conversation_message(
                     with suppress(asyncio.CancelledError):
                         await event_task
 
+            if dispatch_stage.finished_at is None:
+                stage_tracker.finish(dispatch_stage, status="completed")
+            if first_output_stage.finished_at is None:
+                stage_tracker.finish(first_output_stage, status="no_visible_output")
+            stage_tracker.finish(execution_stage)
+            stage_tracker.finish(total_stage)
+            trace_summary["stages"] = stage_tracker.snapshot()
+            for stage in (dispatch_stage, first_output_stage, execution_stage, total_stage):
+                yield _sse_frame(
+                    "agent_event",
+                    runtime_stage_event(stage),
+                )
             persisted = await asyncio.to_thread(
                 _finalize_agent_reply,
                 conversation_id,
@@ -1019,6 +1087,15 @@ def stream_agent_conversation_message(
                 )
             raise
         except Exception as exc:  # noqa: BLE001
+            for stage in (
+                dispatch_stage,
+                first_output_stage,
+                execution_stage,
+                total_stage,
+            ):
+                if stage.finished_at is None:
+                    stage_tracker.finish(stage, status="error")
+            trace_summary["stages"] = stage_tracker.snapshot()
             if event_task is not None and not event_task.done():
                 event_task.cancel()
             if chat_task is not None and not chat_task.done():

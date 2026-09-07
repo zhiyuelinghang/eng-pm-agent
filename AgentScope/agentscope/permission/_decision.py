@@ -30,6 +30,9 @@ class PermissionDecision:
     suggested_rules: list[PermissionRule] | None = None
     """Optional list of suggested permission rules for user to apply."""
 
+    confirmation_preview: dict[str, Any] | None = None
+    """Authoritative operation preview displayed with this invocation's consent."""
+
     bypass_immune: bool = False
     """Whether this decision is immune to being silenced by allow rules
     ("bypass-immune").

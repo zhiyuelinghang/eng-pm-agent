@@ -23,7 +23,7 @@ interface AgentCollaborationPanelProps {
 }
 
 const EMPTY_CONFIG: AgentCallConfig = {
-	scope: 'all',
+	scope: 'none',
 	allowed_agent_ids: [],
 };
 

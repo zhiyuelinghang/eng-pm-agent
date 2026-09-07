@@ -2070,9 +2070,9 @@ def _normalise_platform_agent_data(data: AgentData) -> AgentData:
     """Apply invariants implied by an agent's platform role."""
     platform_config = data.platform_config
     updates = {}
-    if platform_config.role == "global_main" and data.call_config.scope != "all":
+    if platform_config.role == "global_main" and data.call_config.scope != "none":
         updates["call_config"] = data.call_config.model_copy(
-            update={"scope": "all"},
+            update={"scope": "none"},
         )
     if platform_config.role == "system_internal" and platform_config.published:
         updates["platform_config"] = platform_config.model_copy(
@@ -2133,20 +2133,24 @@ async def _synchronise_global_main_agent_roles(
             else ("business" if current_role == "global_main" else current_role)
         )
         if record.id == selected_agent_id:
-            desired_scope = "all"
+            desired_scope = "none"
+            desired_level = "management"
         elif current_role == "global_main":
             # A former main must not retain its platform-wide privilege.
             # Keep any explicit IDs so the admin can reuse the old whitelist.
             desired_scope = "selected"
+            desired_level = record.data.platform_config.agent_level
         else:
             desired_scope = record.data.call_config.scope
+            desired_level = record.data.platform_config.agent_level
         if (
             desired_role == current_role
+            and desired_level == record.data.platform_config.agent_level
             and desired_scope == record.data.call_config.scope
         ):
             continue
         platform_config = record.data.platform_config.model_copy(
-            update={"role": desired_role},
+            update={"role": desired_role, "agent_level": desired_level},
         )
         call_config = record.data.call_config.model_copy(
             update={"scope": desired_scope},
@@ -2169,6 +2173,8 @@ async def _synchronise_project_initializer_role(
     storage: StorageBase,
     global_config_id: str,
     selected_agent_id: str | None,
+    *,
+    agent_level: str = "management",
 ) -> None:
     """Keep the selected initializer hidden with an explicit allowlist."""
     if selected_agent_id is None:
@@ -2180,6 +2186,7 @@ async def _synchronise_project_initializer_role(
     call_config = record.data.call_config
     if (
         platform_config.role == "system_internal"
+        and platform_config.agent_level == agent_level
         and not platform_config.published
         and call_config.scope == "selected"
     ):
@@ -2191,6 +2198,7 @@ async def _synchronise_project_initializer_role(
                     "platform_config": platform_config.model_copy(
                         update={
                             "role": "system_internal",
+                            "agent_level": agent_level,
                             "published": False,
                         },
                     ),
@@ -2215,6 +2223,7 @@ async def _synchronise_task_assistant_role(
         storage,
         global_config_id,
         selected_agent_id,
+        agent_level="worker",
     )
 
 
@@ -2300,9 +2309,12 @@ def _catalog_item(agent: AgentView) -> PlatformAgentCatalogItem:
         description=description,
         category=config.category.strip() or "通用",
         role=config.role,
+        agent_level=config.agent_level,
         enabled=config.enabled,
         published=config.published,
         invitable=bool(agent.data.invite_config.invitable),
+        allow_global_main_call=config.allow_global_main_call,
+        project_knowledge_enabled=config.project_knowledge_enabled,
         model_ready=(
             agent.data.model_policy.mode == "fixed"
             and agent.data.model_policy.chat_model_config is not None

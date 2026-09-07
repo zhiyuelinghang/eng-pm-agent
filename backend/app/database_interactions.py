@@ -95,7 +95,7 @@ _SENSITIVE_FIELD_PARTS = (
     "storage_path",
 )
 _SYSTEM_MANAGED_FIELDS = frozenset({"created_at", "updated_at"})
-_DECLARATIVE_CATALOG_VERSION = 19
+_DECLARATIVE_CATALOG_VERSION = 20
 _MAX_BATCH_RECORD_IDS = 12
 _MAX_JSON_PAGE_ITEMS = 20
 _MAX_TEXT_PAGE_CHARS = 6000
@@ -1134,6 +1134,12 @@ def _declared_interaction_schema(
     join_rules: list[dict[str, Any]],
     context_bindings: list[dict[str, str]],
 ) -> dict[str, Any]:
+    if seed.runtime_policy.get("handler") == "project_basic_info_status":
+        return {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
     if seed.runtime_policy.get("handler") == "project_initialization_validation":
         return {
             "type": "object",
@@ -1757,7 +1763,10 @@ def delete_agent_assignments(db: Session, agent_id: str) -> None:
 
 def _conversation_allowed(interaction: DatabaseInteraction, context: Any) -> bool:
     allowed = set(interaction.allowed_conversation_types or [])
-    return not allowed or context.conversation.conversation_type in allowed
+    conversation_type = context.conversation.conversation_type
+    if conversation_type == "group_chat":
+        conversation_type = "business"
+    return not allowed or conversation_type in allowed
 
 
 def _write_allowed(interaction: DatabaseInteraction, context: Any) -> bool:
@@ -2330,6 +2339,21 @@ def execute_table_interaction(
                         "has_more": next_offset < total,
                         "next_offset": next_offset if next_offset < total else None,
                     }
+            db.add(
+                OperationLog(
+                    project_id=getattr(context.project, "id", None),
+                    operator_id=getattr(context.user, "id", None),
+                    action="agent_database_read",
+                    detail=(
+                        f"智能体 {actor_agent_id or 'unknown'} 在平台会话 "
+                        f"{getattr(context.conversation, 'id', 'unknown')} 通过数据库交互"
+                        f"「{interaction.display_name}」读取结构化数据"
+                    ),
+                    target_type=policy.table_name,
+                    target_id=None,
+                ),
+            )
+            db.commit()
             return data, f"已读取 {len(data)} 条{policy.display_name}数据"
 
         primary_key_names = {column.name for column in primary_keys}
@@ -2446,7 +2470,11 @@ def execute_table_interaction(
                 project_id=getattr(context.project, "id", None),
                 operator_id=getattr(context.user, "id", None),
                 action=f"agent_database_{action}",
-                detail=f"智能体通过数据库交互「{interaction.display_name}」执行结构化操作",
+                detail=(
+                    f"智能体 {actor_agent_id or 'unknown'} 在平台会话 "
+                    f"{getattr(context.conversation, 'id', 'unknown')} 通过数据库交互"
+                    f"「{interaction.display_name}」执行结构化操作"
+                ),
                 target_type=policy.table_name,
                 target_id=target_id if isinstance(target_id, int) else None,
             ),

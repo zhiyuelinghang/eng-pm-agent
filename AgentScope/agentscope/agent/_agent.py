@@ -1669,7 +1669,25 @@ class Agent:
 
                 if tool_call.id in confirmed_tool_calls:
                     confirmation = confirmed_tool_calls[tool_call.id]
+                    if confirmation.tool_call.confirmation_revision != tool_call.confirmation_revision:
+                        # Keep the current ASK intact when an older card is
+                        # replayed; its approval does not cover this revision.
+                        confirmed_tool_calls.pop(tool_call.id)
+                        continue
                     if confirmation.confirmed:
+                        changed = (
+                            tool_call.name != confirmation.tool_call.name
+                            or tool_call.input != confirmation.tool_call.input
+                        )
+                        # Editing a pending operation invalidates its preview
+                        # and approval. Run the normal permission gate again.
+                        if changed:
+                            tool_call.name = confirmation.tool_call.name
+                            tool_call.input = confirmation.tool_call.input
+                            tool_call.confirmation_preview = None
+                            self._update_tool_call_state(tool_call.id, ToolCallState.PENDING)
+                            confirmed_tool_calls.pop(tool_call.id)
+                            continue
                         # Update state and wait for execution in the next step
                         self._update_tool_call_state(
                             tool_call.id,
@@ -2229,6 +2247,8 @@ class Agent:
             )
 
             tool_call.suggested_rules = decision.suggested_rules or []
+            tool_call.confirmation_preview = decision.confirmation_preview
+            tool_call.confirmation_revision += 1
             yield RequireUserConfirmEvent(
                 reply_id=self.state.reply_id,
                 tool_calls=[tool_call],

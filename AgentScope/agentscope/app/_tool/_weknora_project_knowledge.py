@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import quote
 
@@ -28,8 +29,9 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
 
     name = "weknora_query_project_knowledge"
     description = (
-        "查询当前工程项目绑定的 WeKnora 机器人。仅在平台已确认用户本轮明确"
-        "点名 @资料助手时提供此工具。查询范围已由平台后端按当前用户权限锁定，"
+        "查询当前工程项目绑定的 WeKnora 机器人。仅向用户明确点名或"
+        "Dobby 动态调用的受权资料助手提供。查询范围已由平台后端按当前用户"
+        "权限锁定，"
         "不得扩大或改写。返回答案与资料引用后，应结合用户问题组织最终回复。"
     )
     input_schema = {
@@ -59,14 +61,21 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
         connection: WeKnoraConnectionConfig,
         robot_id: str,
         project_id: str | None = None,
+        platform_user_id: str | None = None,
+        platform_conversation_id: str | None = None,
         knowledge_base_ids: list[str] | None = None,
         knowledge_ids: list[str] | None = None,
         restricted: bool = False,
+        scope_resolver: Callable[[], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         super().__init__()
         self._connection = connection
         self._robot_id = robot_id.strip()
         self._project_id = (project_id or "").strip()
+        self._platform_user_id = (platform_user_id or "").strip()
+        self._platform_conversation_id = (
+            platform_conversation_id or ""
+        ).strip()
         self._scope_supplied = knowledge_base_ids is not None
         self._knowledge_base_ids = tuple(
             dict.fromkeys(
@@ -83,6 +92,7 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
             ),
         )
         self._restricted = restricted
+        self._scope_resolver = scope_resolver
 
     async def check_permissions(
         self,
@@ -98,6 +108,23 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
     def _url(self, path: str) -> str:
         prefix = self._connection.api_prefix.rstrip("/")
         return f"{self._connection.base_url}{prefix}/{path.lstrip('/')}"
+
+    def _audit_metadata(self, reference_count: int = 0) -> dict[str, Any]:
+        """Return the immutable platform identity and permission boundary."""
+
+        return {
+            "operation": self.name,
+            "weknora_robot_id": self._robot_id,
+            "platform_user_id": self._platform_user_id,
+            "platform_project_id": self._project_id,
+            "platform_conversation_id": self._platform_conversation_id,
+            "knowledge_access_mode": (
+                "restricted" if self._restricted else "project"
+            ),
+            "knowledge_base_ids": list(self._knowledge_base_ids),
+            "knowledge_ids": list(self._knowledge_ids),
+            "reference_count": reference_count,
+        }
 
     @staticmethod
     def _payload_detail(payload: object) -> str:
@@ -226,20 +253,23 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
                 content=[TextBlock(text="资料查询不能为空。")],
                 state=ToolResultState.ERROR,
                 is_last=True,
+                metadata=self._audit_metadata(),
             )
+        if self._scope_resolver is not None:
+            return await self._call_with_current_scope(query)
         if self._restricted and not self._knowledge_ids:
             return ToolChunk(
                 content=[TextBlock(text="当前账号没有可查询的工程资料权限。")],
                 state=ToolResultState.ERROR,
                 is_last=True,
-                metadata={"operation": self.name},
+                metadata=self._audit_metadata(),
             )
         if self._scope_supplied and not self._knowledge_base_ids:
             return ToolChunk(
                 content=[TextBlock(text="当前项目没有可查询的工程资料。")],
                 state=ToolResultState.ERROR,
                 is_last=True,
-                metadata={"operation": self.name},
+                metadata=self._audit_metadata(),
             )
 
         headers = {
@@ -294,12 +324,7 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
                 ],
                 state=ToolResultState.SUCCESS,
                 is_last=True,
-                metadata={
-                    "operation": self.name,
-                    "weknora_robot_id": self._robot_id,
-                    "platform_project_id": self._project_id,
-                    "reference_count": len(references),
-                },
+                metadata=self._audit_metadata(len(references)),
             )
         except (httpx.HTTPError, RuntimeError, ValueError) as exc:
             logger.warning("WeKnora project knowledge query failed: %s", exc)
@@ -311,5 +336,49 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
                 ],
                 state=ToolResultState.ERROR,
                 is_last=True,
-                metadata={"operation": self.name},
+                metadata=self._audit_metadata(),
+            )
+
+    async def _call_with_current_scope(self, query: str) -> ToolChunk:
+        """Keep concurrent calls isolated and fail closed on revoked access."""
+        try:
+            scope = await self._scope_resolver()
+            if (
+                str(scope.get("user_id")) != self._platform_user_id
+                or str(scope.get("project_id")) != self._project_id
+                or not scope.get("weknora_query_enabled")
+                or not scope.get("weknora_catalogue_ready")
+                or not scope.get("weknora_agent_id")
+            ):
+                raise RuntimeError("当前会话的项目资料授权不可用，请刷新后重试。")
+            scoped_tool = WeKnoraProjectKnowledgeTool(
+                connection=self._connection,
+                robot_id=scope["weknora_agent_id"],
+                project_id=str(scope["project_id"]),
+                platform_user_id=str(scope["user_id"]),
+                platform_conversation_id=str(scope["conversation_id"]),
+                knowledge_base_ids=scope.get("weknora_knowledge_base_ids") or [],
+                knowledge_ids=scope.get("weknora_knowledge_ids") or [],
+                restricted=True,
+            )
+            result = await scoped_tool.call(query)
+            if result.state != ToolResultState.SUCCESS:
+                return result
+            current = await self._scope_resolver()
+            if (
+                any(current.get(key) != scope.get(key) for key in (
+                    "user_id", "project_id", "conversation_id", "weknora_agent_id",
+                    "weknora_query_enabled", "weknora_catalogue_ready",
+                ))
+                or not set(scope.get("weknora_knowledge_ids") or []).issubset(
+                    current.get("weknora_knowledge_ids") or [],
+                )
+            ):
+                raise RuntimeError("查询期间资料权限发生变化，本次结果已丢弃，请重新查询。")
+            return result
+        except (RuntimeError, ValueError, httpx.HTTPError) as exc:
+            return ToolChunk(
+                content=[TextBlock(text=f"项目资料权限校验失败：{exc}")],
+                state=ToolResultState.ERROR, is_last=True,
+                metadata=self._audit_metadata(),
             )

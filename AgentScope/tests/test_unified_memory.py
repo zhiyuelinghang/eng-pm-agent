@@ -10,6 +10,7 @@ from agentscope.app.memory._model import (
     configure_platform_memory_model,
 )
 from agentscope.app.memory._middleware import DobbyMemoryMiddleware
+from agentscope.app.memory._policy import agent_can_use_shared_memory
 from agentscope.app.memory._runtime import MemoryRuntime, MemoryScope
 from agentscope.app.memory._scope_router import route_memory_content
 from agentscope.app.storage import ChatModelConfig, MemorySettingsData
@@ -25,6 +26,22 @@ from utils.memory_manager import MemoryManager
 
 
 class MemoryScopeTest(TestCase):
+    def test_only_management_agents_receive_shared_memory(self) -> None:
+        management = SimpleNamespace(
+            data=SimpleNamespace(
+                platform_config=SimpleNamespace(agent_level="management"),
+            ),
+        )
+        worker = SimpleNamespace(
+            data=SimpleNamespace(
+                platform_config=SimpleNamespace(agent_level="worker"),
+            ),
+        )
+
+        self.assertTrue(agent_can_use_shared_memory(management))
+        self.assertFalse(agent_can_use_shared_memory(worker))
+        self.assertFalse(agent_can_use_shared_memory(None))
+
     def test_unrelated_turns_never_force_memory_retrieval(self) -> None:
         state: dict[str, object] = {}
 

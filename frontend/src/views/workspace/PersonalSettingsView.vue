@@ -47,15 +47,17 @@
             </form>
           </section>
 
+          <ProjectPlatformPanel v-else-if="activeSection === 'platform'" :project-id="store.currentProjectId" />
           <section v-else-if="activeConnector" class="settings-section connector-settings-section">
             <header class="section-head">
               <div><span>外部账号</span><h2>{{ activeConnector.label }}</h2><p>{{ activeConnector.description }}</p></div>
               <em :class="{ configured: activeConnector.configured }">{{ activeConnector.configured ? '已配置' : '尚未配置' }}</em>
             </header>
             <form class="settings-form connector-form" @submit.prevent="saveConnector">
-              <label v-if="activeConnector.key === 'platform'">平台类型<select v-model="activeConnector.platformType" :disabled="connectorBusy"><option>监测平台</option><option>项目管理平台</option><option>资料管理平台</option><option>质量安全检查平台</option></select></label>
-              <label>{{ activeConnector.accountLabel }}<input v-model.trim="activeConnector.account" maxlength="200" :disabled="connectorBusy" :placeholder="activeConnector.accountPlaceholder"></label>
-              <label>登录密码 / 授权码<input v-model="activeConnector.secret" type="password" autocomplete="new-password" :disabled="connectorBusy" :placeholder="activeConnector.hasSecret ? '留空则继续使用已保存的凭据' : '输入密码或授权码'"></label>
+              <label>{{ activeConnector.accountLabel }}<input v-model.trim="activeConnector.account" required :type="activeConnector.key === 'mail' ? 'email' : 'text'" maxlength="200" :disabled="connectorBusy" :placeholder="activeConnector.accountPlaceholder"></label>
+              <label v-if="activeConnector.key === 'mail'">邮件用途<select v-model="activeConnector.sendingEnabled" :disabled="connectorBusy"><option :value="false">仅接收通知（无需密码）</option><option :value="true">启用邮件发送</option></select></label>
+              <label v-if="activeConnector.key !== 'mail' || activeConnector.sendingEnabled">登录密码 / 授权码<input v-model="activeConnector.secret" type="password" autocomplete="new-password" :required="activeConnector.key === 'mail' && activeConnector.sendingEnabled && !activeConnector.hasSecret" :disabled="connectorBusy" :placeholder="activeConnector.hasSecret ? '留空则继续使用已保存的凭据' : '输入密码或授权码'"></label>
+              <p v-else>只接收通知时填写邮箱即可；保存后会清除已有的发信凭据。</p>
               <div class="credential-note"><n-icon :size="17"><ShieldLock /></n-icon><p><strong>凭据保护</strong><span>账号标识保存在平台数据库，密码或授权码仅以服务端密文保存，页面不会回显。</span></p></div>
               <footer class="form-actions"><span>{{ activeConnector.updatedAt ? `更新于 ${activeConnector.updatedAt}` : '尚未保存连接信息' }}</span><div class="connector-action-buttons"><button v-if="activeConnector.configured" type="button" class="secondary-action danger" :disabled="connectorBusy" :aria-busy="connectorClearing" @click="clearConnector"><n-icon v-if="connectorClearing" :size="16" class="settings-action-spinner"><Loader /></n-icon>{{ connectorClearing ? '正在清除…' : '清除配置' }}</button><button type="submit" class="primary-action" :disabled="connectorBusy" :aria-busy="connectorSaving"><n-icon :size="17" :class="{ 'settings-action-spinner': connectorSaving }"><Loader v-if="connectorSaving" /><Link v-else /></n-icon>{{ connectorSaving ? '正在保存…' : `保存${activeConnector.label}` }}</button></div></footer>
             </form>
@@ -71,6 +73,8 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { NIcon, useMessage } from 'naive-ui'
 import { Building, DeviceFloppy, Key, Link, Loader, Mail, MessageCircle, ShieldLock, UserCircle } from '@vicons/tabler'
 import api, { type ApiEnvelope } from '@/api/client'
+import { useAppStore } from '@/stores/app'
+import ProjectPlatformPanel from '@/components/business/ProjectPlatformPanel.vue'
 
 type ConnectorKey = 'platform' | 'mail' | 'wecom' | 'feishu' | 'dingtalk'
 type SettingsSection = 'account' | 'security' | ConnectorKey
@@ -86,6 +90,7 @@ type UserProfile = {
   updated_at: string
 }
 type ConnectorConfig = {
+  sendingEnabled?: boolean
   key: ConnectorKey
   label: string
   description: string
@@ -101,6 +106,7 @@ type ConnectorConfig = {
 }
 
 const message = useMessage()
+const store = useAppStore()
 const activeSection = ref<SettingsSection>('account')
 const settingsMainRef = ref<HTMLElement | null>(null)
 const profileSaving = ref(false)
@@ -136,6 +142,7 @@ const activeConnector = computed(() => connectors.find(item => item.key === acti
 const connectorBusy = computed(() => connectorLoading.value || connectorSaving.value || connectorClearing.value)
 
 type ApiConnectorConfig = {
+  sending_enabled: boolean
   connector_type: ConnectorKey
   account_identifier: string
   platform_type: string | null
@@ -222,6 +229,7 @@ async function loadConnectorSettings() {
     connector.configured = false
     connector.hasSecret = false
     connector.updatedAt = ''
+    connector.sendingEnabled = false
     if (connector.key === 'platform') connector.platformType = '监测平台'
   }
   try {
@@ -233,6 +241,7 @@ async function loadConnectorSettings() {
       connector.platformType = value.platform_type || connector.platformType
       connector.configured = Boolean(value.configured)
       connector.hasSecret = Boolean(value.has_secret)
+      connector.sendingEnabled = Boolean(value.sending_enabled)
       connector.updatedAt = formatTime(value.updated_at || '')
     }
   } catch (error: any) {
@@ -254,13 +263,15 @@ async function saveConnector() {
     const response = await api.put<ApiEnvelope<ApiConnectorConfig>>(`/me/connectors/${connector.key}`, {
       account_identifier: connector.account,
       platform_type: connector.key === 'platform' ? connector.platformType : null,
-      secret: connector.secret || null,
+      secret: connector.key === 'mail' && !connector.sendingEnabled ? null : connector.secret || null,
+      sending_enabled: connector.key === 'mail' ? Boolean(connector.sendingEnabled) : null,
     })
     const saved = response.data.data
     connector.account = saved.account_identifier
     connector.platformType = saved.platform_type || connector.platformType
     connector.configured = saved.configured
     connector.hasSecret = saved.has_secret
+    connector.sendingEnabled = saved.sending_enabled
     connector.updatedAt = formatTime(saved.updated_at || '')
     connector.secret = ''
     message.success(`${connector.label}已保存到平台。`)
@@ -282,6 +293,7 @@ async function clearConnector() {
     connector.configured = false
     connector.hasSecret = false
     connector.updatedAt = ''
+    connector.sendingEnabled = false
     if (connector.key === 'platform') connector.platformType = '监测平台'
     message.success(`${connector.label}已清除。`)
   } catch (error: any) {

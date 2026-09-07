@@ -32,6 +32,13 @@ there is no separate "team tool factory" helper.
 """
 from ._agent_create import AgentCreate, DEFAULT_SUB_AGENT_TEMPLATE
 from ._agent_invite import AgentInvite
+from ._agent_orchestration import (
+    AgentCancel,
+    AgentInvoke,
+    AgentRetryOrSwitch,
+    AgentRunStatus,
+    AgentSearch,
+)
 from ._team_create import TeamCreate
 from ._team_delete import TeamDelete
 from ._team_say import TeamSay
@@ -40,6 +47,11 @@ from ._weknora_project_knowledge import WeKnoraProjectKnowledgeTool
 __all__ = [
     "AgentCreate",
     "AgentInvite",
+    "AgentCancel",
+    "AgentInvoke",
+    "AgentRetryOrSwitch",
+    "AgentRunStatus",
+    "AgentSearch",
     "DEFAULT_SUB_AGENT_TEMPLATE",
     "TeamCreate",
     "TeamDelete",

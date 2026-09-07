@@ -5,6 +5,7 @@ from ._inbox_middleware import InboxMiddleware
 from ._protocol import ProtocolMiddlewareBase, AGUIProtocolMiddleware
 from ._state_change_middleware import StateChangeMiddleware
 from ._tool_offload_middleware import ToolOffloadMiddleware
+from ._thinking_language_middleware import ThinkingLanguageMiddleware
 
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "AGUIProtocolMiddleware",
     "StateChangeMiddleware",
     "ToolOffloadMiddleware",
+    "ThinkingLanguageMiddleware",
 ]

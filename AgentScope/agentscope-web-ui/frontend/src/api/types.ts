@@ -175,9 +175,11 @@ export type PlatformAgentRole = 'global_main' | 'business' | 'system_internal';
 
 export interface PlatformAgentConfig {
 	role: PlatformAgentRole;
+	agent_level: 'management' | 'worker';
 	enabled: boolean;
 	published: boolean;
 	allow_global_main_call: boolean;
+	project_knowledge_enabled: boolean;
 	description: string | null;
 	category: string;
 	sort_order: number;

@@ -109,6 +109,7 @@ def user_connector_view(row: UserConnectorConfig) -> dict[str, Any]:
         "platform_type": row.platform_type,
         "configured": row.configured,
         "has_secret": bool(row.secret_encrypted),
+        "sending_enabled": row.sending_enabled,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }
 

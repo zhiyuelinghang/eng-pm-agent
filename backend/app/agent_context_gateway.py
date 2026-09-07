@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hmac
+import json
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
@@ -184,6 +185,36 @@ def get_agent_tool_context(
             },
         },
     )
+
+
+@router.get("/knowledge-scope", dependencies=[Depends(require_service_token)])
+def get_agent_knowledge_scope(
+    agentscope_session_id: str,
+    actor_agent_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Recompute document permissions at query time from the bound account."""
+    from .agent_api_support import _platform_session_context
+
+    context = resolve_tool_context(db, agentscope_session_id)
+    envelope = _platform_session_context(
+        context.user, context.project, context.conversation, db,
+        knowledge_query_enabled=True,
+    )
+    scope = {
+        key: value for key, value in envelope.items()
+        if key.startswith("weknora_")
+        or key in {"user_id", "project_id", "conversation_id"}
+    }
+    db.add(OperationLog(
+        project_id=context.project.id, operator_id=context.user.id,
+        action="agent_knowledge_authorization", target_type="agent_conversations",
+        target_id=context.conversation.id,
+        detail=json.dumps({"agent_id": actor_agent_id, "session_id": agentscope_session_id,
+                           "scope": scope}, ensure_ascii=False),
+    ))
+    db.commit()
+    return ok(scope)
 
 
 @router.post(

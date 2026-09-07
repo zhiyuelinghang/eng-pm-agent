@@ -38,6 +38,24 @@ class InitializationAgentSpec:
     reasoning: bool = False
 
 
+@dataclass(frozen=True)
+class CollaborationAgentSpec:
+    """One management-centre agent used by Dobby or an explicit mention."""
+
+    key: str
+    name: str
+    description: str
+    category: str
+    role: str
+    agent_level: str
+    published: bool
+    allow_global_main_call: bool
+    project_knowledge_enabled: bool
+    mcp_ids: tuple[str, ...]
+    interaction_keys: tuple[str, ...]
+    system_prompt: str
+
+
 def _load_team_manifest(path: Path = TEAM_CONFIG_PATH) -> dict[str, Any]:
     """Load and validate the declarative platform initialization team."""
     try:
@@ -86,6 +104,30 @@ def _agent_spec(payload: dict[str, Any]) -> InitializationAgentSpec:
     )
 
 
+def _collaboration_agent_spec(payload: dict[str, Any]) -> CollaborationAgentSpec:
+    level = str(payload.get("agent_level") or "")
+    if level not in {"management", "worker"}:
+        raise RuntimeError(f"协同智能体“{payload.get('name')}”层级无效。")
+    return CollaborationAgentSpec(
+        key=str(payload["key"]),
+        name=str(payload["name"]),
+        description=str(payload["description"]),
+        category=str(payload["category"]),
+        role=str(payload["role"]),
+        agent_level=level,
+        published=bool(payload.get("published", True)),
+        allow_global_main_call=bool(payload.get("allow_global_main_call", False)),
+        project_knowledge_enabled=bool(
+            payload.get("project_knowledge_enabled", False),
+        ),
+        mcp_ids=tuple(str(value) for value in payload.get("mcp_ids") or []),
+        interaction_keys=tuple(
+            str(value) for value in payload.get("interaction_keys") or []
+        ),
+        system_prompt=str(payload["system_prompt"]),
+    )
+
+
 _TEAM_MANIFEST = _load_team_manifest()
 MANAGED_SKILL_NAMES = frozenset(
     str(name) for name in _TEAM_MANIFEST["managed_skill_names"]
@@ -100,6 +142,10 @@ UNASSIGNED_SYSTEM_AGENT_NAMES = frozenset(
     str(name) for name in _TEAM_MANIFEST["unassigned_system_agent_names"]
 )
 _AGENT_SPECS = tuple(_agent_spec(item) for item in _TEAM_MANIFEST["agents"])
+COLLABORATION_AGENTS = tuple(
+    _collaboration_agent_spec(item)
+    for item in _TEAM_MANIFEST.get("collaboration_agents") or []
+)
 _AGENT_BY_ROLE = {spec.initialization_role: spec for spec in _AGENT_SPECS}
 ORCHESTRATOR = _AGENT_BY_ROLE["orchestrator"]
 SPECIALISTS = tuple(
@@ -179,9 +225,15 @@ def _platform_config(
     config.update(
         {
             "role": "system_internal",
+            "agent_level": (
+                "management"
+                if spec.initialization_role == "orchestrator"
+                else "worker"
+            ),
             "enabled": True,
             "published": False,
             "allow_global_main_call": False,
+            "project_knowledge_enabled": False,
             "initialization_role": spec.initialization_role,
             "description": spec.description,
             "category": "项目初始化",
@@ -421,6 +473,127 @@ def _upsert_agent(
     return agent_id
 
 
+_DOBBY_POLICY_START = "<!-- DOBBY-COLLABORATION-POLICY:START -->"
+_DOBBY_POLICY_END = "<!-- DOBBY-COLLABORATION-POLICY:END -->"
+_DOBBY_POLICY = f"""{_DOBBY_POLICY_START}
+你是工程管理平台全局总控 Dobby。普通交流、意图理解、参数明确的受控业务操作
+和项目基础只读查询由你直接完成。只有需要专业判断、专属工具或复杂多阶段执行
+时，才先调用 agent_search，再用 agent_invoke 调用一个管理中心授权智能体；禁止
+使用运行时新建智能体。用户明确 @ 某个智能体时由平台直接路由，不得重复转交。
+普通问候直接回答，不激活项目数据库工具组，不调用记忆或专业智能体。查询基本信息
+上传情况直接调用 dobby_get_project_basic_info_status，不启动子智能体。指定文件和目标
+分类时直接形成修改确认；要求分析资料分类时先调用资料助手。用户已明确风险字段时
+直接形成新增确认；要求从施工资料识别风险时先调用风险研判助手。普通工程资料问题
+需要动态搜索并调用资料助手，不得由你假装已检索资料。
+所有写操作必须通过登记的语义化工具并等待用户确认。任务安排必须交给任务助手
+生成草稿，确认前不得发布。专业智能体失败时先检查 agent_run_status，再自行重试、
+切换或在无法恢复时向用户说明。不得把子智能体原始错误直接甩给用户。只传目标
+智能体完成任务所需的最小上下文，并始终遵守平台用户、项目和权限范围。
+若任务助手返回 <task-draft>...</task-draft>，最终答复必须原样保留该标签及 JSON，
+由平台转换为私有待确认草稿；不得声称已发布。
+{_DOBBY_POLICY_END}"""
+
+
+def _with_dobby_policy(prompt: str) -> str:
+    """Replace the managed policy block without discarding admin content."""
+    start = prompt.find(_DOBBY_POLICY_START)
+    end = prompt.find(_DOBBY_POLICY_END)
+    if start >= 0 and end >= start:
+        end += len(_DOBBY_POLICY_END)
+        prompt = (prompt[:start] + prompt[end:]).strip()
+    return (prompt.strip() + "\n\n" + _DOBBY_POLICY).strip()
+
+
+def _find_collaboration_agent(
+    agents: list[dict[str, Any]],
+    spec: CollaborationAgentSpec,
+) -> dict[str, Any] | None:
+    matches = [
+        agent
+        for agent in agents
+        if agent.get("data", {}).get("name") == spec.name
+    ]
+    if len(matches) > 1:
+        raise RuntimeError(f"发现多个同名协同智能体“{spec.name}”，请先清理。")
+    return matches[0] if matches else None
+
+
+def _upsert_collaboration_agent(
+    client: httpx.Client,
+    *,
+    token: str,
+    agents: list[dict[str, Any]],
+    template_data: dict[str, Any],
+    template_policy: dict[str, Any],
+    spec: CollaborationAgentSpec,
+) -> str:
+    existing = _find_collaboration_agent(agents, spec)
+    current = existing.get("data", {}) if existing else {}
+    platform_config = dict(current.get("platform_config") or {})
+    platform_config.update(
+        {
+            "role": spec.role,
+            "agent_level": spec.agent_level,
+            "enabled": True,
+            "published": spec.published,
+            "allow_global_main_call": spec.allow_global_main_call,
+            "project_knowledge_enabled": spec.project_knowledge_enabled,
+            "description": spec.description,
+            "category": spec.category,
+            "sort_order": int(platform_config.get("sort_order") or 200),
+            "permission_mode": "auto",
+            "knowledge_config": platform_config.get("knowledge_config"),
+        },
+    )
+    payload = {
+        "system_prompt": spec.system_prompt,
+        "react_config": _initialization_react_config(
+            current.get("react_config"),
+            template_data.get("react_config"),
+        ),
+        "model_policy": dict(template_policy),
+        "platform_config": platform_config,
+        "invite_config": {
+            "invitable": True,
+            "invite_description": spec.description,
+        },
+        "call_config": {"scope": "none", "allowed_agent_ids": []},
+        "mcp_config": {"allowed_mcp_ids": list(spec.mcp_ids)},
+        "skill_config": {"allowed_skill_ids": []},
+    }
+    if existing is None:
+        created = _request(
+            client,
+            "POST",
+            "/agent/",
+            token=token,
+            json={
+                "name": spec.name,
+                **payload,
+                "context_config": template_data.get("context_config") or {},
+            },
+        )
+        agent_id = str(created["agent_id"])
+        print(f"已创建协同智能体：{spec.name}（{agent_id[:8]}）")
+    else:
+        agent_id = str(existing["id"])
+        _request(
+            client,
+            "PATCH",
+            f"/agent/{agent_id}",
+            token=token,
+            json=payload,
+        )
+        print(f"已校准协同智能体：{spec.name}（{agent_id[:8]}）")
+    _assign_database_interactions(
+        client,
+        token=token,
+        agent_id=agent_id,
+        keys=spec.interaction_keys,
+    )
+    return agent_id
+
+
 def provision(base_url: str, *, replace_skills: bool = False) -> None:
     """Create or refresh the persistent AI-led initialization team."""
     username = _required_env("AGENTSCOPE_ADMIN_USERNAME")
@@ -473,6 +646,28 @@ def provision(base_url: str, *, replace_skills: bool = False) -> None:
         ):
             raise RuntimeError("全局主智能体必须先配置固定对话模型。")
 
+        dobby_platform_config = dict(template_data.get("platform_config") or {})
+        dobby_platform_config.update(
+            {
+                "agent_level": "management",
+                "project_knowledge_enabled": False,
+            },
+        )
+        _request(
+            client,
+            "PATCH",
+            f"/agent/{template_id}",
+            token=token,
+            json={
+                "system_prompt": _with_dobby_policy(
+                    str(template_data.get("system_prompt") or ""),
+                ),
+                "platform_config": dobby_platform_config,
+                "call_config": {"scope": "none", "allowed_agent_ids": []},
+                "mcp_config": {"allowed_mcp_ids": []},
+            },
+        )
+
         _assign_database_interactions(
             client,
             token=token,
@@ -511,16 +706,33 @@ def provision(base_url: str, *, replace_skills: bool = False) -> None:
             allowed_agent_ids=worker_ids,
             replace_skills=replace_skills,
         )
+        collaboration_ids = {
+            spec.key: _upsert_collaboration_agent(
+                client,
+                token=token,
+                agents=agents,
+                template_data=template_data,
+                template_policy=template_policy,
+                spec=spec,
+            )
+            for spec in COLLABORATION_AGENTS
+        }
+        task_assistant_id = collaboration_ids.get("task_assistant")
+        if not task_assistant_id:
+            raise RuntimeError("协同智能体配置缺少 task_assistant。")
         _request(
             client,
             "PUT",
             "/agent/platform/settings",
             token=token,
-            json={"project_initializer_agent_id": initializer_id},
+            json={
+                "project_initializer_agent_id": initializer_id,
+                "task_assistant_agent_id": task_assistant_id,
+            },
         )
         print(
-            "配置完成：真实初始化主智能体已连接 "
-            f"{len(worker_ids)} 个持久化专项智能体。",
+            "配置完成：Dobby 编排策略、资料/风险/任务助手及初始化团队已校准；"
+            f"初始化主智能体已连接 {len(worker_ids)} 个持久化专项智能体。",
         )
 
 

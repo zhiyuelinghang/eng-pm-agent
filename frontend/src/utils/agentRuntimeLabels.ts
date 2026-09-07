@@ -3,6 +3,14 @@ import type { AgentCollaborationActivity } from '@/types/agentRuntime'
 export function agentToolLabel(name: string) {
   const labels: Record<string, string> = {
     AgentInvite: '邀请协同智能体',
+    agent_search: '查找协同智能体',
+    agent_invoke: '调用协同智能体',
+    agent_run_status: '查看协同进度',
+    agent_retry_or_switch: '重新安排协同任务',
+    agent_cancel: '停止协同任务',
+    memory_search: '检索记忆',
+    memory_read: '读取记忆',
+    memory_write: '保存记忆',
     AgentCreate: '创建协同智能体',
     TeamCreate: '创建智能体团队',
     TeamSay: '发送团队消息',
@@ -19,6 +27,9 @@ export function agentToolLabel(name: string) {
   }
   if (labels[name]) return labels[name]
   const databaseLabels: Array<[RegExp, string]> = [
+    [/dobby_get_project_basic_info_status/i, '读取项目基本信息'],
+    [/dobby_update_document_classification/i, '修改资料分类'],
+    [/dobby_create_risk/i, '新增风险记录'],
     [/get_project_initialization_state/i, '读取初始化状态'],
     [/list_project_initialization_attachment_chunks/i, '读取附件解析分块'],
     [/get_project_initialization_draft/i, '读取初始化草稿'],
@@ -38,9 +49,10 @@ export function agentToolLabel(name: string) {
   ]
   const databaseLabel = databaseLabels.find(([pattern]) => pattern.test(name))
   if (databaseLabel) return databaseLabel[1]
-  if (/knowledge|retriev|search/i.test(name)) return '检索知识库'
-  if (name.startsWith('mcp__')) return '调用 MCP 工具'
-  return '调用工具'
+  if (/memory.*search/i.test(name)) return '检索记忆'
+  if (/knowledge|retriev|weknora/i.test(name)) return '检索知识库'
+  // Unknown tools still need an identifiable name; do not label every action as a knowledge search.
+  return name.split('__').filter(Boolean).pop() || '调用工具'
 }
 
 export function agentCollaborationActivityLabel(

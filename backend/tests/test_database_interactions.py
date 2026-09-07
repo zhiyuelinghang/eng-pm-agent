@@ -29,9 +29,15 @@ from backend.app.database_interactions import (
     update_interaction,
     update_table_policy,
 )
+from backend.app.database_interaction_router import (
+    ExecuteInteractionRequest,
+    execute_interaction as execute_runtime_interaction,
+)
 from backend.app.db import Base
 from backend.app.models import (
     AgentConversation,
+    Attachment,
+    AttachmentText,
     DatabaseInteraction,
     DatabaseInteractionAgentAssignment,
     DatabaseInteractionTablePolicy,
@@ -147,6 +153,67 @@ def _valid_wbs_payload() -> list[dict]:
             "level": 1,
         },
     ]
+
+
+def test_basic_information_status_is_one_scoped_read_with_audit(
+    db: Session,
+) -> None:
+    context = _context(db)
+    context.project.engineering_type_description = "房屋建筑工程"
+    bootstrap_declarative_catalog(db)
+    interaction = db.scalar(
+        select(DatabaseInteraction).where(
+            DatabaseInteraction.key == "dobby_get_project_basic_info_status",
+        ),
+    )
+    assert interaction is not None
+    update_agent_assignments(db, "dobby-main", [interaction.id])
+    attachment = Attachment(
+        project_id=context.project.id,
+        file_name="施工方案.pdf",
+        storage_path="test/status-plan.pdf",
+        category="未分类",
+    )
+    db.add(attachment)
+    db.flush()
+    db.add(
+        AttachmentText(
+            attachment_id=attachment.id,
+            project_id=context.project.id,
+            content="",
+            parse_status="processing",
+        ),
+    )
+    db.commit()
+
+    result = execute_runtime_interaction(
+        ExecuteInteractionRequest(
+            agentscope_session_id=context.conversation.agentscope_session_id,
+            actor_agent_id="dobby-main",
+            platform_agent_id=context.conversation.agent_id,
+            interaction_key="dobby_get_project_basic_info_status",
+            arguments={},
+        ),
+        db,
+    )
+
+    assert result["data"]["project_id"] == context.project.id
+    assert result["data"]["attachments"] == {
+        "total": 1,
+        "uncategorized": 1,
+        "parse_status_counts": {"processing": 1},
+    }
+    assert "工程类型说明" in result["data"]["field_status"]["filled_fields"]
+    operation = db.scalar(
+        select(OperationLog)
+        .where(OperationLog.action == "agent_database_read")
+        .order_by(OperationLog.id.desc()),
+    )
+    assert operation is not None
+    assert operation.operator_id == context.user.id
+    assert operation.project_id == context.project.id
+    assert "dobby-main" in operation.detail
+    assert str(context.conversation.id) in operation.detail
 
 
 def test_project_weknora_robot_binding_uses_existing_projects(

@@ -1080,3 +1080,13 @@
   .task-draft-dialog > footer { align-items: stretch; flex-direction: column; }
   .task-draft-dialog > footer > div { justify-content: flex-end; }
 }
+
+
+.channel-copy { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.channel-copy strong { flex: 1; min-width: 0; }
+.channel-copy .channel-meta { flex: 0 0 100%; }
+.group-all-mark { display: inline-block; flex: 0 0 auto; padding: 1px 5px; color: #35745b; border: 1px solid #b7d3c1; border-radius: 4px; font-size: 12px; font-weight: 700; }
+.group-unread { flex: 0 0 auto; min-width: 22px; padding: 1px 5px; border-radius: 10px; background: #b94035; color: white; font-size: 12px; text-align: center; }
+.group-all-choice { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.group-message-files button { display: grid; gap: 5px; padding: 12px; margin-top: 8px; border: 1px solid #c7dcd1; border-radius: 6px; background: #f1f7f3; color: #234f3c; font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
+.group-message-files small { font-size: 12px; color: #617c6d; }

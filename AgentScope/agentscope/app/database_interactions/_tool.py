@@ -162,22 +162,37 @@ class DatabaseInteractionTool(ToolBase):
         self._requires_confirmation = bool(
             definition.get("requires_confirmation"),
         )
+        self.requires_user_confirmation = self._requires_confirmation
         self._runtime_policy = dict(definition.get("runtime_policy") or {})
+        self.table_name = str((definition.get("policy") or {}).get("table_name") or "")
 
     async def check_permissions(
         self,
         tool_input: dict[str, Any],
         context: PermissionContext,
     ) -> PermissionDecision:
-        del tool_input, context
+        del context
         if not self._requires_confirmation:
             return PermissionDecision(
                 behavior=PermissionBehavior.ALLOW,
                 message="该数据库交互已通过平台白名单和会话授权。",
             )
+        try:
+            preview = await self._manager.preview_interaction(
+                session_id=self._session_id, actor_agent_id=self._actor_agent_id,
+                platform_agent_id=self._platform_agent_id,
+                interaction_key=self.name, arguments=tool_input,
+            )
+        except DatabaseInteractionGatewayError as exc:
+            return PermissionDecision(
+                behavior=PermissionBehavior.DENY,
+                message=f"无法核验本次变更，操作未执行：{exc.detail}",
+            )
         return PermissionDecision(
             behavior=PermissionBehavior.ASK,
             message="该数据库交互会修改业务数据，需要权限审核。",
+            bypass_immune=True,
+            confirmation_preview=preview,
         )
 
     async def call(self, **kwargs: Any) -> ToolChunk:

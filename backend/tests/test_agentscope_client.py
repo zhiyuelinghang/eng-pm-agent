@@ -12,9 +12,11 @@ from backend.app.agentscope_client import (
     AgentScopeConfirmationSubmission,
     AgentScopeGatewayError,
     AgentScopeReply,
+    AgentScopeRunCompletion,
 )
 from backend.app.agent_api_support import (
     _annotate_collaboration_event,
+    _adopt_initial_conversation_title,
     _agent_conversation_or_404,
     _agent_reply_extra_data,
     _agentscope_assistant_groups,
@@ -22,13 +24,13 @@ from backend.app.agent_api_support import (
     _agentscope_reply_from_group,
     _build_agent_project_context,
     _catalog_agent_for_conversation,
+    _conversation_title_from_content,
     _platform_session_context,
     _project_agentscope_user_message,
     _sse_frame,
 )
 from backend.app.agent_conversations_api import (
-    _adopt_initial_conversation_title,
-    _conversation_title_from_content,
+    _turn_platform_context,
     create_agent_conversation,
     delete_agent_conversation,
     list_agent_conversations,
@@ -61,6 +63,37 @@ def _client() -> AgentScopeClient:
 
 class AgentScopeClientTest(TestCase):
     """Exercise the server-side catalogue/session/chat protocol."""
+
+    def test_general_conversation_rejects_explicit_agent_rerouting(self) -> None:
+        user = SimpleNamespace(id=1, username="member", real_name="项目成员")
+        project = SimpleNamespace(id=2, name="测试项目")
+        conversation = SimpleNamespace(
+            id=3,
+            title="Dobby 对话",
+            conversation_type="general",
+            agent_name="Dobby",
+        )
+
+        with self.assertRaises(HTTPException) as direct_error:
+            _turn_platform_context(
+                Mock(),
+                user,
+                project,
+                conversation,
+                "@风险研判助手 请分析施工资料",
+            )
+        self.assertEqual(direct_error.exception.status_code, 409)
+        self.assertIn("不能经过 Dobby 路由", direct_error.exception.detail)
+
+        with self.assertRaises(HTTPException) as count_error:
+            _turn_platform_context(
+                Mock(),
+                user,
+                project,
+                conversation,
+                "@资料助手 @风险研判助手 同时处理",
+            )
+        self.assertEqual(count_error.exception.status_code, 422)
 
     def test_uses_dedicated_service_bearer_token(self) -> None:
         client = _client()
@@ -461,25 +494,25 @@ class AgentScopeClientTest(TestCase):
     def test_project_context_omits_knowledge_capability_when_unbound(self) -> None:
         db, project, user = self._project_context_fixtures(None)
 
-        with patch(
-            "backend.app.agent_api_support.get_engine",
-            return_value=SimpleNamespace(list_tasks=Mock(return_value=[])),
-        ):
-            context = _build_agent_project_context(db, project, user)
+        context = _build_agent_project_context(db, project, user)
 
         self.assertNotIn("WeKnora", context)
         self.assertNotIn("机器人", context)
         self.assertNotIn("weknora_query_project_knowledge", context)
-        self.assertNotIn("工程资料：", context)
+        self.assertIn("业务事实必须按需调用", context)
+        self.assertNotIn("WBS：", context)
+        db.scalars.assert_not_called()
+        db.get.assert_not_called()
 
     def test_project_context_exposes_knowledge_capability_when_bound(self) -> None:
         db, project, user = self._project_context_fixtures("robot-current")
 
-        with patch(
-            "backend.app.agent_api_support.get_engine",
-            return_value=SimpleNamespace(list_tasks=Mock(return_value=[])),
-        ):
-            context = _build_agent_project_context(db, project, user)
+        context = _build_agent_project_context(
+            db,
+            project,
+            user,
+            knowledge_query_enabled=True,
+        )
 
         self.assertIn("工程资料：", context)
         self.assertIn("weknora_query_project_knowledge", context)
@@ -857,10 +890,6 @@ class AgentScopeClientTest(TestCase):
 
         with (
             patch("backend.app.agentscope_client.uuid4") as uuid_factory,
-            patch(
-                "backend.app.agentscope_client.time.monotonic",
-                side_effect=[0, 1.0],
-            ),
             patch("backend.app.agentscope_client.time.sleep"),
         ):
             uuid_factory.return_value.hex = "user-message"
@@ -887,7 +916,7 @@ class AgentScopeClientTest(TestCase):
         self.assertEqual(reply.content, "处理完成")
         self.assertEqual(reply.message_id, "new")
         self.assertEqual(reply.raw_messages, [finished])
-        self.assertEqual(client.list_messages.call_count, 2)
+        self.assertEqual(client.list_messages.call_count, 1)
         request_body = client._request.call_args.kwargs["json"]
         self.assertEqual(request_body["input"]["id"], "user-message")
         self.assertEqual(request_body["input"]["metadata"]["source"], "test")
@@ -896,6 +925,36 @@ class AgentScopeClientTest(TestCase):
             request_body["input"]["content"][1]["name"],
             "资料.pdf",
         )
+
+    def test_chat_uses_stream_completion_without_status_polling(self) -> None:
+        client = _client()
+        client._request = Mock(return_value={"status": "started"})  # type: ignore[method-assign]
+        client.session_status = Mock()  # type: ignore[method-assign]
+        client.list_messages = Mock()  # type: ignore[method-assign]
+        completion = AgentScopeRunCompletion()
+        completion.resolve(
+            AgentScopeReply(
+                status="completed",
+                content="收到",
+                message_id="reply-1",
+                raw_message={"id": "reply-1", "role": "assistant"},
+                raw_messages=[],
+            ),
+        )
+
+        reply = client.chat(
+            agent_id="agent-1",
+            session_id="session-1",
+            content="你好",
+            sender_name="测试用户",
+            metadata={},
+            user_message_id="user-1",
+            completion=completion,
+        )
+
+        self.assertEqual(reply.content, "收到")
+        client.session_status.assert_not_called()
+        client.list_messages.assert_not_called()
 
     def test_team_state_keeps_idle_queued_member_pending(self) -> None:
         client = _client()
@@ -1043,10 +1102,6 @@ class AgentScopeClientTest(TestCase):
         client._request = Mock(return_value={"status": "started"})  # type: ignore[method-assign]
 
         with (
-            patch(
-                "backend.app.agentscope_client.time.monotonic",
-                side_effect=[0, 1.0],
-            ),
             patch("backend.app.agentscope_client.time.sleep"),
         ):
             reply = client.chat(
@@ -1090,10 +1145,6 @@ class AgentScopeClientTest(TestCase):
         client._request = Mock(return_value={"status": "started"})  # type: ignore[method-assign]
 
         with (
-            patch(
-                "backend.app.agentscope_client.time.monotonic",
-                side_effect=[0, 1.0],
-            ),
             patch("backend.app.agentscope_client.time.sleep"),
         ):
             reply = client.chat(
@@ -1150,17 +1201,10 @@ class AgentScopeClientTest(TestCase):
             "content": [{"type": "text", "text": "长任务处理完成"}],
         }
         client.list_messages = Mock(  # type: ignore[method-assign]
-            side_effect=[
-                {"messages": [turn_input]},
-                {"messages": [turn_input]},
-                {"messages": [turn_input]},
-                {"messages": [turn_input]},
-                {"messages": [turn_input, finished]},
-                {"messages": [turn_input, finished]},
-            ],
+            return_value={"messages": [turn_input, finished]},
         )
         client.session_status = Mock(  # type: ignore[method-assign]
-            side_effect=["running", "running", "running", "running", "idle", "idle"],
+            side_effect=["running", "running", "running", "running", "idle"],
         )
         client.session_team_state = Mock(  # type: ignore[method-assign]
             return_value=(False, False),
@@ -1168,10 +1212,6 @@ class AgentScopeClientTest(TestCase):
         client._request = Mock(return_value={"status": "started"})  # type: ignore[method-assign]
 
         with (
-            patch(
-                "backend.app.agentscope_client.time.monotonic",
-                side_effect=[0, 10_000],
-            ),
             patch("backend.app.agentscope_client.time.sleep"),
         ):
             reply = client.chat(
@@ -1221,10 +1261,6 @@ class AgentScopeClientTest(TestCase):
         client._request = Mock(return_value={"status": "started"})  # type: ignore[method-assign]
 
         with (
-            patch(
-                "backend.app.agentscope_client.time.monotonic",
-                side_effect=[0, 1.0],
-            ),
             patch("backend.app.agentscope_client.time.sleep"),
         ):
             reply = client.chat(

@@ -37,7 +37,7 @@
           <span><n-icon :size="30"><Robot /></n-icon></span>
           <i></i><i></i><i></i>
         </div>
-        <h3>Dobby 正在分析任务需求</h3>
+        <h3>任务助手正在分析任务需求</h3>
         <p>正在结合当前对话梳理目标、时间、责任人与交付要求。</p>
         <ol>
           <li class="active"><b>1</b><span>读取对话上下文</span></li>
@@ -57,7 +57,7 @@
 
       <div v-else-if="isUnavailable" class="home-task-unavailable" role="alert">
         <span><n-icon :size="30"><AlertCircle /></n-icon></span>
-        <h3>{{ statusName === 'cancelled' ? 'Dobby 已停止分析' : 'Dobby 未能完成分析' }}</h3>
+        <h3>{{ statusName === 'cancelled' ? '任务助手已停止分析' : '任务助手未能完成分析' }}</h3>
         <p>{{ startError || activeDraft?.error || '分析过程遇到问题，请重新尝试。' }}</p>
         <small>当前内容没有发布，也没有创建任务。</small>
       </div>
@@ -300,7 +300,7 @@ const statusName = computed(() => {
   return activeDraft.value?.status || 'generating'
 })
 const statusLabel = computed(() => ({
-  generating: 'Dobby 分析中',
+  generating: '任务助手分析中',
   ready: '待你确认',
   publishing: '正在发布',
   published: '已经发布',
@@ -353,7 +353,7 @@ const canPublish = computed(() => {
   )
 })
 const launcherTitle = computed(() => ({
-  generating: 'Dobby 正在分析任务',
+  generating: '任务助手正在分析任务',
   ready: '任务草稿等待确认',
   publishing: '任务正在发布',
   failed: '任务分析失败',
@@ -533,6 +533,20 @@ async function start(conversationId: number | null, requirement: string) {
   }
 }
 
+async function openExisting(draftId: number) {
+  if (!draftId || actionBusy.value) return false
+  try {
+    const row = await getProjectChatTaskDraft(draftId)
+    if (String(row.project_id) !== props.projectId) return false
+    await loadSupportData(props.projectId)
+    applyDraft(row, true)
+    return true
+  } catch (error: any) {
+    notice.error(errorDetail(error, '无法打开 Dobby 生成的任务草稿。'))
+    return false
+  }
+}
+
 function openDialog() {
   formError.value = ''
   dialogOpen.value = true
@@ -629,7 +643,7 @@ async function publishDraft() {
 watch(() => props.projectId, projectId => void loadActiveDraft(projectId), { immediate: true })
 onBeforeUnmount(() => clearPoll())
 
-defineExpose({ start })
+defineExpose({ openExisting, start })
 </script>
 
 <style scoped>

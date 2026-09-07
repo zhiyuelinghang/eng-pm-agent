@@ -45,6 +45,7 @@ export type ProjectChatChannel = {
   title: string
   summary: string
   channel_type: 'project' | 'topic' | 'private'
+  all_members?: boolean
   member_count: number
   last_message: ProjectChatMessage | null
   last_message_at: string | null
@@ -161,18 +162,6 @@ export type ProjectChatPrivateTaskDraftPublishResult = {
   result: Record<string, unknown>
 }
 
-export const PROJECT_CHAT_TASK_ASSISTANT: ProjectChatAgent = {
-  id: 'dobby-task-assistant',
-  name: '任务助手',
-  description: '分析群聊内容，整理任务草稿',
-  category: '任务协同',
-  role: 'system_internal',
-  enabled: true,
-  published: true,
-  model_ready: true,
-  sort_order: -100,
-}
-
 export type ProjectChatRealtimeStatus =
   | 'connecting'
   | 'connected'
@@ -246,15 +235,18 @@ export async function listProjectChatAgents() {
     task_assistant: ProjectChatAgent | null
     business_agents: ProjectChatAgent[]
   }>>('/agents/catalog')
-  const { business_agents: businessAgents } = response.data.data
-  return [PROJECT_CHAT_TASK_ASSISTANT, ...businessAgents]
+  const {
+    task_assistant: taskAssistant,
+    business_agents: businessAgents,
+  } = response.data.data
+  return [taskAssistant, ...businessAgents]
     .filter((agent): agent is ProjectChatAgent => Boolean(agent))
     .filter((agent, index, agents) => agents.findIndex(item => item.id === agent.id) === index)
 }
 
 export async function createPrivateProjectChatChannel(
   projectId: string,
-  payload: { title: string; participant_user_ids: number[] },
+  payload: { title: string; participant_user_ids: number[]; all_members?: boolean },
 ) {
   const response = await api.post<ApiEnvelope<ProjectChatChannel>>(
     `/projects/${projectId}/chat/channels`,
@@ -434,6 +426,18 @@ export async function stopProjectChatTaskDraft(messageId: number) {
   const response = await api.post<ApiEnvelope<ProjectChatMessage>>(
     `/chat/messages/${messageId}/task-draft/stop`,
   )
+  return response.data.data
+}
+
+export async function stopProjectChatAgentRun(messageId: number) {
+  const response = await api.post<ApiEnvelope<ProjectChatMessage>>(`/chat/messages/${messageId}/agent/stop`)
+  return response.data.data
+}
+
+export async function confirmProjectChatAgentTool(messageId: number, payload: {
+  reply_id: string; tool_call: Record<string, unknown>; confirmed: boolean
+}) {
+  const response = await api.post<ApiEnvelope<ProjectChatMessage>>(`/chat/messages/${messageId}/agent/confirm`, payload)
   return response.data.data
 }
 

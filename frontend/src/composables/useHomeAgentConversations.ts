@@ -31,6 +31,7 @@ export type HomeChatMessage = {
   generatedTaskIds?: string[]
   attachments?: HomeChatAttachment[]
   runtimeTrace?: AgentRuntimeTrace | null
+  taskDraftId?: number
 }
 
 export type HomeAgentConversation = {
@@ -43,6 +44,14 @@ export type HomeAgentConversation = {
   status: string
   created_at: string
   updated_at: string
+}
+
+export type HomeDirectAgent = {
+  id: string
+  name: string
+  description?: string | null
+  enabled: boolean
+  published: boolean
 }
 
 function routeQueryValue(value: unknown) {
@@ -77,6 +86,7 @@ function mapAgentMessage(row: ApiAgentMessage): HomeChatMessage {
     role: row.role,
     content: row.content,
     runtimeTrace: runtimeTraceFromExtraData(row.extra_data),
+    taskDraftId: Number(row.extra_data?.task_draft_id || 0) || undefined,
   }
 }
 
@@ -97,6 +107,7 @@ export function useHomeAgentConversations() {
   const { confirmAsyncAction } = useAsyncConfirmDialog()
 
   const homeAgentConversations = ref<HomeAgentConversation[]>([])
+  const homeDirectAgents = ref<HomeDirectAgent[]>([])
   const homeAgentConversation = ref<HomeAgentConversation | null>(null)
   const homeConversationKeyword = ref('')
   const homeConversationListLoading = ref(false)
@@ -109,6 +120,7 @@ export function useHomeAgentConversations() {
   const quickFiles = ref<File[]>([])
   const quickUploading = ref(false)
   const quickStopping = ref(false)
+  const pendingTaskDraftId = ref(0)
 
   let listSequence = 0
   let messageSequence = 0
@@ -135,7 +147,7 @@ export function useHomeAgentConversations() {
       : '发送第一条消息后保存到聊天记录'
   })
   const homeQuickAgentName = computed(
-    () => 'Dobby',
+    () => homeAgentConversation.value?.agent_name || 'Dobby',
   )
 
   function formatHomeConversationTime(value: string) {
@@ -299,10 +311,11 @@ export function useHomeAgentConversations() {
     try {
       const response = await api.get<ApiEnvelope<HomeAgentConversation[]>>(
         `/projects/${projectId}/agent-conversations`,
-        { params: { conversation_type: 'general' } },
       )
       if (sequence !== listSequence || projectId !== Number(store.currentProjectId)) return
-      homeAgentConversations.value = response.data.data
+      homeAgentConversations.value = response.data.data.filter(
+        item => item.conversation_type === 'general' || item.conversation_type === 'business',
+      )
       loadedProjectId = projectId
       const isQuickWorkspace = route.path === '/workbench'
         && routeQueryValue(route.query.mode) === 'quick'
@@ -335,7 +348,9 @@ export function useHomeAgentConversations() {
 
   async function ensureHomeAgentConversation(content: string, projectId: number) {
     const current = homeAgentConversation.value
-    if (current?.project_id === projectId) return current
+    if (current?.project_id === projectId && current.conversation_type === 'general') {
+      return current
+    }
     const response = await api.post<ApiEnvelope<HomeAgentConversation>>(
       `/projects/${projectId}/agent-conversations`,
       {
@@ -356,11 +371,54 @@ export function useHomeAgentConversations() {
     return created
   }
 
+  async function ensureDirectAgentConversation(
+    agentName: string,
+    content: string,
+    projectId: number,
+  ) {
+    const target = (await loadHomeDirectAgents()).find(
+      agent => agent.name === agentName && agent.enabled && agent.published,
+    )
+    if (!target) throw new Error(`管理中心没有发布可用的「${agentName}」。`)
+    const current = homeAgentConversation.value
+    if (
+      current?.project_id === projectId
+      && current.conversation_type === 'business'
+      && current.agent_id === target.id
+    ) return current
+    const response = await api.post<ApiEnvelope<HomeAgentConversation>>(
+      `/projects/${projectId}/agent-conversations`,
+      {
+        conversation_type: 'business',
+        agent_id: target.id,
+        title: firstUserSentenceTitle(content),
+      },
+    )
+    const created = response.data.data
+    homeAgentConversation.value = created
+    homeAgentConversations.value = [
+      created,
+      ...homeAgentConversations.value.filter(item => item.id !== created.id),
+    ]
+    syncConversationQuery(created.id)
+    return created
+  }
+
+  async function loadHomeDirectAgents() {
+    const response = await api.get<ApiEnvelope<{
+      business_agents: HomeDirectAgent[]
+    }>>('/agents/catalog')
+    homeDirectAgents.value = response.data.data.business_agents.filter(
+      agent => agent.enabled && agent.published,
+    )
+    return homeDirectAgents.value
+  }
+
   async function uploadComposerFiles(files: File[]) {
     for (const file of files) await store.uploadAttachment(file, 'Dobby问答附件')
   }
 
-  async function dispatchQuickCommand() {
+  async function dispatchQuickCommand(directAgentName?: string) {
     const files = [...quickFiles.value]
     const content = quickCommand.value.trim()
       || (files.length ? '请识别并分析我上传的资料' : '')
@@ -379,7 +437,9 @@ export function useHomeAgentConversations() {
     quickUploading.value = true
     try {
       if (files.length) await uploadComposerFiles(files)
-      const conversation = await ensureHomeAgentConversation(content, projectId)
+      const conversation = directAgentName
+        ? await ensureDirectAgentConversation(directAgentName, content, projectId)
+        : await ensureHomeAgentConversation(content, projectId)
       if (revision !== stateRevision) return false
       const optimisticUser: HomeChatMessage = {
         id: `hq-u-${Date.now()}`,
@@ -425,6 +485,9 @@ export function useHomeAgentConversations() {
         ...homeQuickChatMessages.value,
         mapAgentMessage(completion.message),
       ]
+      pendingTaskDraftId.value = Number(
+        completion.message.extra_data?.task_draft_id || 0,
+      )
       loadedConversationId = conversation.id
       homeQuickStreamingTrace.value = null
       touchConversation(conversation, {
@@ -435,7 +498,7 @@ export function useHomeAgentConversations() {
         id: `log${Date.now()}`,
         time: nowText(),
         operator: sessionStorage.getItem('current_user_name') || '当前用户',
-        action: files.length ? '资料问答' : 'Dobby问答',
+        action: directAgentName || (files.length ? '资料问答' : 'Dobby问答'),
         detail: files.length
           ? `${content}；附件：${files.map(file => file.name).join('、')}`
           : content,
@@ -473,6 +536,17 @@ export function useHomeAgentConversations() {
     quickCommand.value = content
     quickFiles.value = [...files]
     return dispatchQuickCommand()
+  }
+
+  async function sendDirectHomeAgentMessage(
+    agentName: string,
+    content: string,
+    files: File[] = [],
+  ) {
+    if (quickUploading.value) return false
+    quickCommand.value = content
+    quickFiles.value = [...files]
+    return dispatchQuickCommand(agentName)
   }
 
   async function stopHomeAgent() {
@@ -635,6 +709,7 @@ export function useHomeAgentConversations() {
       quickUploading.value = false
       quickStopping.value = false
       homeAgentConversations.value = []
+      homeDirectAgents.value = []
       homeAgentConversation.value = null
       homeQuickChatMessages.value = []
       homeQuickStreamingTrace.value = null
@@ -642,6 +717,7 @@ export function useHomeAgentConversations() {
       homeConversationDeletingId.value = null
       homeConversationKeyword.value = ''
       void loadHomeAgentConversations()
+      void loadHomeDirectAgents().catch(() => { homeDirectAgents.value = [] })
     },
     { immediate: true },
   )
@@ -672,6 +748,7 @@ export function useHomeAgentConversations() {
 
   return {
     homeAgentConversations,
+    homeDirectAgents,
     filteredHomeAgentConversations,
     homeAgentConversation,
     homeConversationKeyword,
@@ -685,6 +762,7 @@ export function useHomeAgentConversations() {
     quickFiles,
     quickUploading,
     quickStopping,
+    pendingTaskDraftId,
     homeQuickSession,
     homeQuickSessionTitle,
     homeQuickSessionTime,
@@ -696,6 +774,7 @@ export function useHomeAgentConversations() {
     deleteHomeConversation,
     dispatchQuickCommand,
     sendHomeAgentMessage,
+    sendDirectHomeAgentMessage,
     stopHomeAgent,
     confirmHomeToolCall,
   }

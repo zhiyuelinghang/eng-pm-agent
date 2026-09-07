@@ -154,9 +154,12 @@ class PlatformAgentCatalogItem(BaseModel):
     description: str
     category: str
     role: str
+    agent_level: str
     enabled: bool
     published: bool
     invitable: bool
+    allow_global_main_call: bool
+    project_knowledge_enabled: bool
     model_ready: bool
     sort_order: int
     permission_mode: str

@@ -1,0 +1,20 @@
+.agent-execution-step { min-width: 0; font-size: 12px; color: #526d67; }
+.agent-execution-step > summary { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto 14px;
+  align-items: center; gap: 8px; padding: 7px 2px; list-style: none; cursor: pointer; border-radius: 4px; }
+.agent-execution-step > summary::-webkit-details-marker { display: none; }
+.agent-execution-step > summary:hover { background: #edf5f2; }
+.agent-execution-step > summary:focus-visible { outline: 2px solid #177b6d; outline-offset: 2px; }
+.step-title { display: grid; gap: 2px; min-width: 0; }
+.step-title strong { font-size: 13px; font-weight: 600; }
+.step-title small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #677d77; font-size: 12px; }
+.step-state { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; color: #637b74; font-size: 12px; }
+.state-running, .state-queued { color: #147866; }.state-asking { color: #956000; }
+.state-error, .state-failed, .state-denied, .state-interrupted { color: #a24d32; }
+.step-chevron { color: #6f847e; transition: transform .15s; }
+.agent-execution-step[open] > summary .step-chevron { transform: rotate(90deg); }
+.step-detail { display: grid; min-width: 0; gap: 8px; margin: 2px 0 7px 10px;
+  border-left: 1px solid #d7e5df; padding: 6px 0 6px 17px; }
+.step-note { margin: 0; color: #607773; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.spin { animation: step-spin .8s linear infinite; }
+@keyframes step-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; }.step-chevron { transition: none; } }

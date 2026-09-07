@@ -26,7 +26,10 @@ from .models import (
     ProjectMemberPosition,
     ProjectPosition,
     User,
+    ChatChannel,
+    ChatChannelMember,
 )
+from .workspace_models import ChatKnowledgeFolder
 from .personnel_policy import (
     DEFAULT_ENGINEERING_KNOWLEDGE_BASE_NAME,
     PROJECT_MANAGER_POSITION_NAME,
@@ -796,11 +799,10 @@ def _catalogue_access_is_open(
     """Return whether every project member may access the whole catalogue."""
 
     state_row = db.get(EngineeringDocumentSyncState, project_id)
-    return (
-        user.role == "admin"
-        or state_row is None
-        or state_row.access_mode == "project"
-    )
+    if user.role == "admin":
+        return True
+    has_group_folders = db.scalar(select(ChatKnowledgeFolder.channel_id).where(ChatKnowledgeFolder.project_id == project_id).limit(1)) is not None
+    return not has_group_folders and (state_row is None or state_row.access_mode == "project")
 
 
 def _all_catalogue_capabilities() -> dict[str, bool]:
@@ -850,10 +852,18 @@ def _restricted_catalogue_access_snapshot(
 
     rows_by_id = {int(row["id"]): row for row in rows}
     all_allowed = _all_catalogue_capabilities()
+    state_row = db.get(EngineeringDocumentSyncState, project_id)
+    project_open = state_row is None or state_row.access_mode == "project"
+    group_folders = db.scalars(select(ChatKnowledgeFolder).where(ChatKnowledgeFolder.project_id == project_id)).all()
+    member_channels = set(db.scalars(select(ChatChannelMember.channel_id).join(ChatChannel, ChatChannel.id == ChatChannelMember.channel_id).where(
+        ChatChannel.project_id == project_id, ChatChannel.archived_at.is_(None),
+        ChatChannelMember.user_id == user.id, ChatChannelMember.left_at.is_(None),
+    )).all())
+    member_channels.update(db.scalars(select(ChatChannel.id).where(ChatChannel.project_id == project_id, ChatChannel.channel_type.in_(("project", "topic")), ChatChannel.archived_at.is_(None))).all())
     capabilities: dict[int, dict[str, bool]] = {}
     for row in rows:
         node_id = int(row["id"])
-        values = {name: False for name in CATALOG_CAPABILITIES}
+        values = {name: project_open for name in CATALOG_CAPABILITIES}
         cursor_id: int | None = node_id
         while cursor_id is not None:
             for grant in grants_by_node.get(cursor_id, []):
@@ -869,6 +879,17 @@ def _restricted_catalogue_access_snapshot(
             )
         if values["can_manage"]:
             values = dict(all_allowed)
+        for folder in group_folders:
+            if row["knowledge_base_id"] == folder.knowledge_base_id and row["node_type"] in {"knowledge_base", "folder"} and (
+                not row["folder_path"] or folder.folder_path.startswith(row["folder_path"] + "/")
+            ):
+                values.update(can_update=False, can_delete=False, can_manage=False)
+            if row["knowledge_base_id"] == folder.knowledge_base_id and (
+                row["folder_path"] == folder.folder_path or row["folder_path"].startswith(folder.folder_path + "/")
+            ):
+                allowed = folder.channel_id in member_channels
+                values = {name: allowed and name in {"can_read", "can_create"} for name in CATALOG_CAPABILITIES}
+                break
         capabilities[node_id] = values
 
     visible = {
@@ -1133,7 +1154,7 @@ def _file_view(
         "channel": node.channel or "",
         "parse_status": node.parse_status or "",
         "enable_status": node.enable_status or "",
-        "created_at": node.external_created_at,
+        "created_at": node.external_created_at or (node.created_at.isoformat() if node.created_at else None),
         "updated_at": node.external_updated_at,
         "processed_at": node.processed_at,
         "node_id": node.id,
@@ -1339,7 +1360,7 @@ def authorized_qa_payload(
     """Constrain restricted QA to explicit locally authorized document IDs."""
 
     state_row = db.get(EngineeringDocumentSyncState, project_id)
-    if user.role == "admin" or state_row is None or state_row.access_mode == "project":
+    if _catalogue_access_is_open(db, project_id, user):
         return payload
     requested_ids = {
         str(value).strip()
@@ -1643,147 +1664,8 @@ def filter_search_result(
     return {**result, "references": filtered, "total": len(filtered)}
 
 
-def permission_configuration_view(
-    db: Session,
-    project_id: int,
-    *,
-    include_nodes: bool = True,
-) -> dict[str, Any]:
-    state_row = get_or_create_sync_state(db, project_id)
-    # The permission tree only needs hierarchy fields. Selecting the complete ORM
-    # entity would also transfer large descriptions and metadata for every file.
-    node_rows = (
-        db.execute(
-            select(
-                EngineeringDocumentNode.id,
-                EngineeringDocumentNode.parent_id,
-                EngineeringDocumentNode.node_type,
-                EngineeringDocumentNode.knowledge_base_id,
-                EngineeringDocumentNode.external_id,
-                EngineeringDocumentNode.name,
-                EngineeringDocumentNode.folder_path,
-            )
-            .where(EngineeringDocumentNode.project_id == project_id)
-            .order_by(
-                EngineeringDocumentNode.knowledge_base_id,
-                EngineeringDocumentNode.id,
-            ),
-        ).mappings().all()
-        if include_nodes
-        else []
-    )
-    grants = db.scalars(
-        select(EngineeringDocumentPermission)
-        .where(EngineeringDocumentPermission.project_id == project_id)
-        .order_by(EngineeringDocumentPermission.id),
-    ).all()
-    positions = db.scalars(
-        select(ProjectPosition)
-        .where(ProjectPosition.project_id == project_id)
-        .order_by(ProjectPosition.position_name),
-    ).all()
-    members = db.execute(
-        select(ProjectMember, User)
-        .join(User, User.id == ProjectMember.user_id)
-        .where(ProjectMember.project_id == project_id)
-        .order_by(User.real_name),
-    ).all()
-    return {
-        "access_mode": state_row.access_mode,
-        "sync": sync_state_view(state_row),
-        "nodes": [dict(node) for node in node_rows],
-        "subjects": {
-            "users": [
-                {
-                    "id": user.id,
-                    "name": user.real_name,
-                    "username": user.username,
-                }
-                for _, user in members
-            ],
-            "positions": [
-                {"id": position.id, "name": position.position_name}
-                for position in positions
-            ],
-        },
-        "permissions": [
-            {
-                "id": grant.id,
-                "node_id": grant.node_id,
-                "subject_type": grant.subject_type,
-                "subject_id": grant.subject_id,
-                **{
-                    name: bool(getattr(grant, name))
-                    for name in CATALOG_CAPABILITIES
-                },
-                "inherit_to_children": grant.inherit_to_children,
-            }
-            for grant in grants
-        ],
-    }
-
-
-def set_catalogue_access_mode(
-    db: Session,
-    project_id: int,
-    access_mode: str,
-) -> EngineeringDocumentSyncState:
-    if access_mode not in {"project", "restricted"}:
-        raise ValueError("Invalid catalogue access mode")
-    state_row = get_or_create_sync_state(db, project_id)
-    state_row.access_mode = access_mode
-    return state_row
-
-
-def upsert_catalogue_permission(
-    db: Session,
-    project_id: int,
-    *,
-    node_id: int,
-    subject_type: str,
-    subject_id: int,
-    values: dict[str, bool],
-    granted_by_user_id: int,
-) -> EngineeringDocumentPermission:
-    node = db.get(EngineeringDocumentNode, node_id)
-    if node is None or node.project_id != project_id:
-        raise HTTPException(status_code=404, detail="工程资料目录节点不存在。")
-    if subject_type == "user":
-        valid_subject = db.scalar(
-            select(ProjectMember.id).where(
-                ProjectMember.project_id == project_id,
-                ProjectMember.user_id == subject_id,
-            ),
-        )
-    elif subject_type == "position":
-        valid_subject = db.scalar(
-            select(ProjectPosition.id).where(
-                ProjectPosition.project_id == project_id,
-                ProjectPosition.id == subject_id,
-            ),
-        )
-    else:
-        valid_subject = None
-    if valid_subject is None:
-        raise HTTPException(status_code=422, detail="授权对象不属于当前项目。")
-    row = db.scalar(
-        select(EngineeringDocumentPermission).where(
-            EngineeringDocumentPermission.project_id == project_id,
-            EngineeringDocumentPermission.node_id == node_id,
-            EngineeringDocumentPermission.subject_type == subject_type,
-            EngineeringDocumentPermission.subject_id == subject_id,
-        ),
-    )
-    if row is None:
-        row = EngineeringDocumentPermission(
-            project_id=project_id,
-            node_id=node_id,
-            subject_type=subject_type,
-            subject_id=subject_id,
-            granted_by_user_id=granted_by_user_id,
-        )
-        db.add(row)
-    for name in CATALOG_CAPABILITIES:
-        setattr(row, name, bool(values.get(name, False)))
-    row.inherit_to_children = bool(values.get("inherit_to_children", True))
-    return row
+from .engineering_document_permissions import (  # noqa: E402,F401
+    permission_configuration_view,
+    set_catalogue_access_mode,
+    upsert_catalogue_permission,
+)

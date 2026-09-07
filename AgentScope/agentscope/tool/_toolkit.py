@@ -8,6 +8,7 @@ from typing import (
     Type,
     Generator,
     Sequence,
+    Callable,
 )
 
 import mcp
@@ -94,6 +95,7 @@ class Toolkit:
         tool_groups: list[ToolGroup] | None = None,
         meta_tool_response_template: str = DEFAULT_META_TOOL_RESPONSE_TEMPLATE,
         skill_instruction_template: str = DEFAULT_SKILL_INSTRUCTION,
+        tool_policy: Callable[[ToolBase], bool] | None = None,
     ) -> None:
         """Initialize the toolkit.
 
@@ -152,6 +154,7 @@ class Toolkit:
 
         self.meta_tool_response_template = meta_tool_response_template
         self.skill_instruction_template = skill_instruction_template
+        self._tool_policy = tool_policy
 
         self.builtin_meta_tool = RegisteredTool(
             tool=ResetTools(
@@ -510,10 +513,10 @@ class Toolkit:
             if group.name not in groups_filter:
                 continue
 
-            cache_tools = []
-            # Python tools
-            for tool in group.tools:
-                cache_tools.append(tool)
+            # Python tools. A non-basic group may resolve its catalogue only
+            # after ``reset_tools`` activates it, keeping expensive schemas
+            # out of unrelated turns.
+            cache_tools = await group.list_tools()
 
             # MCP tools
             for client in group.mcps:
@@ -535,6 +538,11 @@ class Toolkit:
                     group=group.name,
                 )
 
+        if self._tool_policy is not None:
+            available_tools = {
+                name: registered for name, registered in available_tools.items()
+                if self._tool_policy(registered.tool)
+            }
         return available_tools
 
     async def check_tool_available(

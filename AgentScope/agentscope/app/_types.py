@@ -10,7 +10,7 @@ from ..event import AgentEvent
 from ..middleware import MiddlewareBase
 from ..permission import PermissionContext
 from ..state import TaskContext
-from ..tool import ToolBase
+from ..tool import ToolBase, ToolGroup
 
 if TYPE_CHECKING:
     from ._service._session_projection import SessionProjection
@@ -44,10 +44,11 @@ class AgentToolDescriptor(BaseModel):
 
 AgentToolFactory = Callable[
     [str, str, str],
-    Awaitable[list[ToolBase]],
+    Awaitable[list[ToolBase | ToolGroup]],
 ]
 #  Async factory signature: ``(user_id, agent_id, session_id)`` →
-#  awaitable of :class:`~agentscope.tool.ToolBase` instances.
+#  awaitable of direct tools and/or lazy :class:`~agentscope.tool.ToolGroup`
+#  instances.
 
 AgentToolCatalogFactory = Callable[
     [str, str],

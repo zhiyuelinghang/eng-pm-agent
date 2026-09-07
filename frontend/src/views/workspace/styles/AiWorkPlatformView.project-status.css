@@ -60,7 +60,7 @@
 .project-status-v2-summary article.neutral .project-status-v2-metric-icon { background: #f0f3f2; color: #6d807b; }
 
 .project-status-v2 .project-status-tabs {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   border-color: #dfe8e5;
   border-radius: 8px;
   box-shadow: 0 7px 20px rgba(24, 54, 51, .035);
@@ -412,3 +412,18 @@
   .project-status-document-recent article { grid-template-columns: 1fr; gap: 5px; }
   .project-status-document-recent time { text-align: left; }
 }
+
+
+.home-workbench.is-announcements { display: flex; flex-direction: column; gap: 12px; }
+.is-announcements .home-queue-pane { flex: 0 0 auto; }
+.is-announcements .announcement-panel { flex: 1; }
+.project-status-v2-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.project-status-v2-summary article:nth-child(-n+3) { border-bottom: 1px solid #dfe8e5; }
+.meeting-status-list, .meeting-material-tags { padding: 20px; display: grid; gap: 12px; font-size: 14px; }
+.meeting-status-list article { padding: 14px; background: #f5f8f6; border-radius: 6px; }
+.meeting-status-list article > span { margin-left: 15px; color: #ad692d; }
+.meeting-status-list p, .meeting-status-empty { color: #64776d; line-height: 1.7; font-size: 14px; }
+.meeting-status-empty { padding: 20px; }
+.meeting-material-tags span { color: #9c6330; }
+@media (max-width: 800px) { .project-status-v2-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 500px) { .project-status-v2-summary { grid-template-columns: 1fr; } }

@@ -9,12 +9,18 @@ tools, and caller-supplied extras — into one :class:`Toolkit`.
 from typing import Any, Literal
 
 from .._manager import BackgroundTaskManager, SchedulerManager
+from ..database_interactions import DatabaseInteractionTool
 from ..message_bus import MessageBus
 from ..mcp_registry import MCPRegistryManager
 from ..skill_registry import SkillRegistryManager
+from .._platform_tool_policy import PlatformToolPolicy
 from .._tool import (
-    AgentCreate,
+    AgentCancel,
     AgentInvite,
+    AgentInvoke,
+    AgentRetryOrSwitch,
+    AgentRunStatus,
+    AgentSearch,
     TeamCreate,
     TeamDelete,
     TeamSay,
@@ -37,6 +43,68 @@ from ._access import ResourceAccessService
 
 
 _GLOBALLY_DISABLED_TOOL_NAMES = frozenset({"PowerShell"})
+PROJECT_DATABASE_TOOL_GROUP = "project_database"
+
+
+def _attach_extra_tools(
+    *,
+    tools: list[Any],
+    tool_groups: list[ToolGroup],
+    extra_tools: list[Any],
+    platform_context: Any | None,
+) -> None:
+    """Attach caller tools without flooding ordinary platform turns.
+
+    Database interactions are still resolved exclusively from the
+    management-centre assignments.  For the homepage general conversation
+    they are exposed as one lazy AgentScope tool group: Dobby sees the
+    group's intent in ``reset_tools`` and receives the individual schemas
+    only after deciding that the current request needs live project data.
+    Non-platform and specialised conversations keep their existing direct
+    tool behaviour.
+    """
+    provided_groups = [
+        item for item in extra_tools if isinstance(item, ToolGroup)
+    ]
+    tool_groups.extend(provided_groups)
+    direct_tools = [
+        item for item in extra_tools if not isinstance(item, ToolGroup)
+    ]
+
+    if (
+        platform_context is None
+        or platform_context.conversation_type != "general"
+    ):
+        tools.extend(direct_tools)
+        return
+
+    database_tools = [
+        tool for tool in direct_tools if isinstance(tool, DatabaseInteractionTool)
+    ]
+    tools.extend(
+        tool
+        for tool in direct_tools
+        if not isinstance(tool, DatabaseInteractionTool)
+    )
+    if not database_tools:
+        return
+    tool_groups.append(
+        ToolGroup(
+            name=PROJECT_DATABASE_TOOL_GROUP,
+            description=(
+                "当前项目的数据库交互能力。仅当用户请求需要读取或更新实时"
+                "项目业务数据时激活；普通问候、解释以及不依赖项目数据的"
+                "请求保持关闭。组内只包含管理中心已分配给当前智能体、且"
+                "通过当前登录用户权限校验的能力。"
+            ),
+            instructions=(
+                "根据用户本轮意图，只调用完成请求所必需的数据库交互。"
+                "工具返回中没有的数据不得猜测；涉及写入时必须遵守工具自身"
+                "的确认和权限策略。"
+            ),
+            tools=database_tools,
+        ),
+    )
 
 
 def _filter_globally_disabled_tools(tools: list[Any]) -> list[Any]:
@@ -87,10 +155,11 @@ async def get_toolkit(
        though its underlying :class:`AgentRecord` still has
        ``source='user'``. A session that is a worker in some team
        gets only ``TeamSay``. A session that is not in any team OR
-       that is its team's leader gets the full leader-side toolset
-       (``TeamCreate / AgentCreate / TeamSay / TeamDelete``, plus
-       ``AgentInvite`` when the caller's agent-call configuration allows
-       at least one visible invitable agent).
+       that is its team's leader gets the bounded leader-side toolset
+       (``TeamCreate / TeamSay / TeamDelete``, plus ``AgentInvite`` when
+       the caller's agent-call configuration allows at least one visible
+       invitable agent). The global main agent gets only the managed
+       ``agent_*`` orchestration facade.
     6. Caller-supplied extras (``extra_factory``)
 
     Plus the workspace's skills and MCPs, which become the toolkit's
@@ -134,36 +203,61 @@ async def get_toolkit(
         extra_factory (`AgentToolFactory | None`, optional):
             Async factory invoked once per assembly to produce
             user/session-specific extra tools.
-        sub_agent_templates (`dict[str, SubAgentTemplate] | None`, \
-optional):
-            Sub-agent template registry, keyed by template type.
-            Passed to the ``AgentCreate`` tool so it can route to
-            the appropriate template when a ``subagent_type`` is
-            specified by the leader agent.
+        sub_agent_templates (`dict[str, SubAgentTemplate] | None`, optional):
+            Retained for call-site compatibility. Runtime creation of
+            arbitrary subagents is disabled by this platform policy.
 
     Returns:
         `Toolkit`: Fully populated toolkit (tools + skills + MCPs).
     """
 
     tool_groups = []
+    platform_context = getattr(session_record.config, "platform_context", None)
+    from ._platform_settings import get_global_main_agent_id
+
+    global_main_agent_id = await get_global_main_agent_id(
+        storage,
+        user_id,
+        legacy_record=agent_record,
+    )
+    caller_is_global_main = global_main_agent_id == agent_record.id
+    is_platform_dobby = caller_is_global_main
+    if is_platform_dobby:
+        # Project-data activation is a turn-local intent decision.  Do not
+        # carry a previous data-heavy turn's schemas into the next greeting.
+        session_state = getattr(session_record, "state", None)
+        tool_context = getattr(session_state, "tool_context", None)
+        if tool_context is not None:
+            tool_context.activated_groups = [
+                group
+                for group in tool_context.activated_groups
+                if group != PROJECT_DATABASE_TOOL_GROUP
+            ]
 
     # The general tools running in the workspace
     # Workspace/system tools are platform capabilities, not per-agent
     # assignments. Every agent receives the same catalogue; only the global
     # safety policy below may remove a tool for the whole platform.
-    tools = await workspace.list_tools()
+    tools = [] if is_platform_dobby else await workspace.list_tools()
 
-    # Planning tools — always on.
-    tools += [TaskCreate(), TaskList(), TaskGet(), TaskUpdate()]
+    # Dobby's platform surface is deliberately narrower than an ordinary
+    # AgentScope workspace: it receives only native orchestration, managed
+    # business interactions, and management-level memory.
+    if not is_platform_dobby:
+        tools += [TaskCreate(), TaskList(), TaskGet(), TaskUpdate()]
 
     # Background-task control.
-    tools += await background_task_manager.list_tools(
-        session_id=session_record.id,
-    )
+    if not is_platform_dobby:
+        tools += await background_task_manager.list_tools(
+            session_id=session_record.id,
+        )
 
     # Schedule control. Requires a model config on this session because
     # ``ScheduleCreate`` records it into new ``ScheduleRecord`` instances.
-    if session_record.config.chat_model_config is not None:
+    if (
+        not is_platform_dobby
+        and session_record.config.chat_model_config is not None
+    ):
         # Add schedule tools as a tool group
         tool_groups.append(
             ToolGroup(
@@ -213,41 +307,26 @@ time or interval"
             )
     if team_role == "worker":
         tools.append(TeamSay(**team_tool_kwargs, role="worker"))
+    elif caller_is_global_main:
+        orchestration_kwargs = {
+            **team_tool_kwargs,
+            "resource_access_service": resource_access_service,
+            "caller_owner_id": agent_record.user_id,
+        }
+        tools += [
+            AgentSearch(**orchestration_kwargs),
+            AgentInvoke(**orchestration_kwargs),
+            AgentRunStatus(**orchestration_kwargs),
+            AgentCancel(**orchestration_kwargs),
+            AgentRetryOrSwitch(**orchestration_kwargs),
+        ]
     else:
-        from ._platform_settings import (
-            get_global_main_agent_id,
-            get_project_initializer_agent_id,
-            get_task_assistant_agent_id,
-        )
-
-        global_main_agent_id = await get_global_main_agent_id(
-            storage,
-            user_id,
-            legacy_record=agent_record,
-        )
-        project_initializer_agent_id = (
-            await get_project_initializer_agent_id(storage, user_id)
-        )
-        task_assistant_agent_id = await get_task_assistant_agent_id(
-            storage,
-            user_id,
-        )
-        caller_is_global_main = global_main_agent_id == agent_record.id
         tools.append(TeamCreate(**team_tool_kwargs))
-        if agent_record.id not in {
-            project_initializer_agent_id,
-            task_assistant_agent_id,
-        }:
-            tools.append(
-                AgentCreate(
-                    **team_tool_kwargs,
-                    sub_agent_templates=sub_agent_templates or {},
-                ),
-            )
         tools += [
             TeamSay(**team_tool_kwargs, role="leader"),
             TeamDelete(**team_tool_kwargs),
         ]
+    if not caller_is_global_main:
         # Conditionally attach AgentInvite. Skipping construction when
         # the user has no invitable agents keeps the input_schema enum
         # non-empty (an empty enum would break tool-schema validators
@@ -267,18 +346,8 @@ time or interval"
             view
             for view in visible_agents
             if view.id != agent_record.id
-            and (
-                (
-                    caller_is_global_main
-                    and view.data.platform_config.enabled
-                    and view.data.platform_config.allow_global_main_call
-                    and view.id != global_main_agent_id
-                )
-                or (
-                    not caller_is_global_main
-                    and agent_record.data.call_config.allows(view.id)
-                )
-            )
+            and view.data.platform_config.enabled
+            and agent_record.data.call_config.allows(view.id)
             and view.data.invite_config.invitable
             and (view.data.invite_config.invite_description or "").strip()
         ]
@@ -293,10 +362,15 @@ time or interval"
 
     # Caller-supplied extras.
     if extra_factory is not None:
-        tools += await extra_factory(
-            user_id,
-            agent_record.id,
-            session_record.id,
+        _attach_extra_tools(
+            tools=tools,
+            tool_groups=tool_groups,
+            extra_tools=await extra_factory(
+                user_id,
+                agent_record.id,
+                session_record.id,
+            ),
+            platform_context=platform_context,
         )
 
     # Tools from middleware
@@ -310,13 +384,9 @@ time or interval"
     # back.  Revisit only together with the planned isolated code sandbox.
     tools = _filter_globally_disabled_tools(tools)
 
-    workspace_mcps = await workspace.list_mcps()
+    workspace_mcps = [] if is_platform_dobby else await workspace.list_mcps()
     blocked_mcp_names: set[str] = set()
-    platform_context = getattr(session_record.config, "platform_context", None)
-    if (
-        platform_context is not None
-        and platform_context.conversation_type == "general"
-    ):
+    if is_platform_dobby:
         # Homepage task assignment is an explicit, private platform flow.
         # Do not expose the direct task-engine MCP to the conversational
         # Dobby session, otherwise an ordinary message could bypass the draft.
@@ -353,7 +423,7 @@ time or interval"
             platform_agent_id=platform_agent_id,
             platform_session_id=platform_session_id,
         )
-        if mcp_registry_manager is not None
+        if mcp_registry_manager is not None and not is_platform_dobby
         else []
     )
     managed_names = {client.name for client in managed_mcps}
@@ -366,12 +436,16 @@ time or interval"
         client for client in managed_mcps if client.name not in blocked_mcp_names
     ]
 
-    workspace_skills = await workspace.list_skills(agent_id=agent_record.id)
+    workspace_skills = (
+        []
+        if is_platform_dobby
+        else await workspace.list_skills(agent_id=agent_record.id)
+    )
     managed_skills = (
         await skill_registry_manager.get_assigned_skills(
             agent_record.data.skill_config.allowed_skill_ids,
         )
-        if skill_registry_manager is not None
+        if skill_registry_manager is not None and not is_platform_dobby
         else []
     )
     managed_skill_names = {skill.name for skill in managed_skills}
@@ -386,4 +460,8 @@ time or interval"
         skills_or_loaders=resolved_skills,
         mcps=resolved_mcps,
         tool_groups=tool_groups,
+        tool_policy=PlatformToolPolicy(
+            global_main=caller_is_global_main,
+            management=agent_record.data.platform_config.agent_level == "management",
+        ),
     )

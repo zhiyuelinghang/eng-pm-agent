@@ -8,6 +8,7 @@ from agentscope.app.database_interactions import (
     runtime_argument_error,
 )
 from agentscope.message import ToolResultState
+from agentscope.permission import PermissionBehavior
 
 
 ATTACHMENT_POLICY = {
@@ -136,6 +137,29 @@ def test_successful_write_uses_declarative_team_completion_metadata() -> None:
     assert result.metadata["platform_data_changed"] is True
     assert result.metadata["team_report_on_success"] is True
     assert result.metadata["team_report_message"] == "草稿分区已持久化。"
+
+
+def test_confirmed_business_write_cannot_execute_without_review() -> None:
+    manager = AsyncMock()
+    manager.preview_interaction.return_value = {"target_name": "资料", "changes": []}
+    tool = DatabaseInteractionTool(
+        definition={
+            "key": "dobby_update_document_category",
+            "description": "修改资料分类",
+            "input_schema": {"type": "object"},
+            "read_only": False,
+            "requires_confirmation": True,
+        },
+        manager=manager,
+        session_id="session-1",
+        actor_agent_id="dobby-main",
+        platform_agent_id="dobby-main",
+    )
+
+    decision = asyncio.run(tool.check_permissions({}, None))
+
+    assert decision.behavior == PermissionBehavior.ASK
+    manager.execute_interaction.assert_not_awaited()
 
 
 def test_builder_loads_only_current_agent_assignments() -> None:

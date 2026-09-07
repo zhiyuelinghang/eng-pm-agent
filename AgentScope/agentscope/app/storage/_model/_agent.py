@@ -76,7 +76,7 @@ class AgentCallConfig(BaseModel):
     """
 
     scope: Literal["all", "selected", "none"] = Field(
-        default="all",
+        default="none",
         description=(
             "Agent-call scope. ``all`` allows every visible invitable agent, "
             "``selected`` allows only ``allowed_agent_ids``, and ``none`` "
@@ -256,6 +256,17 @@ class PlatformAgentConfig(BaseModel):
         title="Platform Role",
     )
 
+    agent_level: Literal["management", "worker"] = Field(
+        default="worker",
+        description=(
+            "Orchestration level independent from the platform role. "
+            "Management agents may use shared long-term memory and lead "
+            "authorised collaboration; worker agents execute bounded tasks "
+            "without long-term-memory tools."
+        ),
+        title="Agent Level",
+    )
+
     enabled: bool = Field(
         default=True,
         description="Whether the engineering platform may run this agent.",
@@ -279,6 +290,16 @@ class PlatformAgentConfig(BaseModel):
             "ordinary agents' selected call allowlists."
         ),
         title="Allow Platform Main Agent Call",
+    )
+
+    project_knowledge_enabled: bool = Field(
+        default=False,
+        description=(
+            "Whether engineering-platform sessions for this agent receive "
+            "the project-scoped WeKnora query tool. The current user's "
+            "project and document allowlists are still enforced each turn."
+        ),
+        title="Project Knowledge Query",
     )
 
     initialization_role: SkipJsonSchema[

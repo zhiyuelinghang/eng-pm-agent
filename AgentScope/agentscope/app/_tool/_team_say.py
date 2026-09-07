@@ -8,6 +8,7 @@ from pydantic import Field
 from ._constants import HANDLE_LEN
 from ._team_tool_base import _TeamToolBase
 from .._team_lifecycle import assign_team_member, settle_team_member
+from .._team_delegation import has_pending_delegations, report_recipient_session_id
 from .._team_messaging import deliver_team_message
 from ..storage._utils import _ensure_team_members
 from ...message import TextBlock, ToolResultState
@@ -18,6 +19,7 @@ class _TeamSayParams(ParamsBase):
     """Parameters for :class:`TeamSay`."""
 
     content: str = Field(
+        max_length=12_000,
         description=(
             "The message text. Plain natural-language; the recipient "
             "sees it as a user message in its context."
@@ -258,6 +260,13 @@ class TeamSay(_TeamToolBase):
                     display = member_agent.data.name
                 directory[display] = (member.session_id, member.agent_id)
 
+            report_session_id = report_recipient_session_id(team, self._session_id)
+            report_session = leader_session
+            if report_session_id != leader_session.id:
+                report_session = await self._storage.get_session(self._user_id, "", report_session_id)
+                if report_session is None:
+                    return ToolChunk(content=[TextBlock(text="上级协同会话已不存在。")], state=ToolResultState.ERROR)
+
             own_session_ids = {sid for sid, _aid in directory.values()}
             if self._session_id not in own_session_ids:
                 return ToolChunk(
@@ -276,7 +285,7 @@ class TeamSay(_TeamToolBase):
             if to is None:
                 if self._role == "worker":
                     recipients = [
-                        (leader_session.id, leader_session.agent_id),
+                        (report_session.id, report_session.agent_id),
                     ]
                 else:
                     recipients = [
@@ -326,14 +335,47 @@ class TeamSay(_TeamToolBase):
                 else self._agent_id
             )
 
+            # Team membership does not grant authority to start arbitrary
+            # peer work. Reports to the caller are exempt; every new task
+            # rechecks the latest caller allowlist and target enablement.
+            from .._service._platform_settings import get_global_main_agent_id
+
+            global_main_id = (
+                await get_global_main_agent_id(
+                    self._storage, self._user_id, legacy_record=sender_agent,
+                )
+                if any(self._session_id == team.session_id or sid != report_session.id
+                       for sid, _ in recipients)
+                else None
+            )
+            for sid, aid in recipients:
+                if self._session_id != team.session_id and sid == report_session.id:
+                    continue
+                if report_recipient_session_id(team, sid) != self._session_id:
+                    return ToolChunk(content=[TextBlock(text="TeamSay: 该成员由其他调用者负责，不能跨阶段重新分配任务。")],
+                                     state=ToolResultState.ERROR)
+                recipient = await self._storage.get_agent(self._user_id, aid)
+                allowed = (
+                    sender_agent is not None and sender_agent.data.platform_config.enabled
+                    and recipient is not None and recipient.data.platform_config.enabled
+                    and (
+                        recipient.data.platform_config.allow_global_main_call
+                        if sender_agent.id == global_main_id
+                        else sender_agent.data.call_config.allows(aid)
+                    )
+                )
+                if not allowed:
+                    return ToolChunk(content=[TextBlock(text="TeamSay: 目标不在当前调用白名单内或已停用。")],
+                                     state=ToolResultState.ERROR)
+
             reported_to_leader = (
-                self._session_id != leader_session.id
+                self._session_id != team.session_id
                 and any(
-                    sid == leader_session.id
+                    sid == report_session.id
                     for sid, _aid in recipients
                 )
             )
-            if reported_to_leader:
+            if reported_to_leader and not has_pending_delegations(team, self._session_id):
                 await settle_team_member(
                     self._storage,
                     self._message_bus,
@@ -344,7 +386,7 @@ class TeamSay(_TeamToolBase):
                 )
 
             for sid, aid in recipients:
-                if self._session_id == leader_session.id:
+                if not (self._session_id != team.session_id and sid == report_session.id):
                     assigned_revision = await assign_team_member(
                         self._storage,
                         self._message_bus,

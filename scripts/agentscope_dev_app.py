@@ -21,6 +21,7 @@ from agentscope.app.mcp_registry import MCPRegistryManager
 from agentscope.app.skill_registry import SkillRegistryManager
 from agentscope.app.memory import (
     DobbyMemoryMiddleware,
+    agent_can_use_shared_memory,
     apply_global_memory_settings,
     configure_platform_memory_model,
     get_memory_runtime,
@@ -49,8 +50,11 @@ from agentscope.rag import (
     TextParser,
     WordParser,
 )
+from agentscope.tool import ToolGroup
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 logger = logging.getLogger(__name__)
+PROJECT_DATABASE_TOOL_GROUP = "project_database"
 
 
 def _load_project_env() -> None:
@@ -261,8 +265,15 @@ async def _create_memory_middlewares(
     agent_id: str,
     session_id: str,
 ):
-    """Bind every AgentScope turn to its immutable project memory scope."""
+    """Bind shared memory only to management-level agents.
 
+    Worker agents receive bounded task context from their caller and must not
+    independently read or write long-term memory.
+    """
+
+    agent_record = await storage.get_agent(user_id, agent_id)
+    if not agent_can_use_shared_memory(agent_record):
+        return []
     session = await storage.get_session(user_id, agent_id, session_id)
     platform_context = await _memory_platform_context(user_id, session)
     platform_settings = await storage.get_platform_settings(user_id)
@@ -327,42 +338,83 @@ async def _create_platform_agent_tools(
             if leader_session is not None:
                 platform_session_id = leader_session.id
                 platform_agent_id = leader_session.agent_id
-    tools = []
-    try:
-        tools.extend(await create_database_interaction_tools(
-            manager=database_interaction_manager,
-            agent_id=agent_id,
-            session_id=session_id,
-            platform_session_id=platform_session_id,
-            platform_agent_id=platform_agent_id,
-            legacy_allowed_names=legacy_allowed_names,
-        ))
-    except DatabaseInteractionGatewayError as exc:
-        logger.warning("Unable to load database interactions: %s", exc)
     platform_context = session.config.platform_context if session else None
+
+    async def _load_database_tools():
+        try:
+            database_tools = await create_database_interaction_tools(
+                manager=database_interaction_manager,
+                agent_id=agent_id,
+                session_id=session_id,
+                platform_session_id=platform_session_id,
+                platform_agent_id=platform_agent_id,
+                legacy_allowed_names=legacy_allowed_names,
+            )
+        except DatabaseInteractionGatewayError as exc:
+            logger.warning("Unable to load database interactions: %s", exc)
+            return []
+
+        if (
+            platform_context is not None
+            and platform_context.conversation_type == "general"
+        ):
+            # Homepage task creation is handled by the platform's private
+            # draft workflow. Keeping the legacy SQL write tools here could
+            # silently create records outside the formal task engine.
+            database_tools = [
+                tool
+                for tool in database_tools
+                if getattr(tool, "name", "")
+                not in {"dobby_create_task", "dobby_update_task"}
+            ]
+        return database_tools
+
+    tools = []
     if (
         platform_context is not None
         and platform_context.conversation_type == "general"
     ):
-        # Homepage task creation is handled by the platform's private draft
-        # workflow. Keeping the legacy SQL write tools here could silently
-        # create records outside the formal task engine.
-        tools = [
-            tool
-            for tool in tools
-            if getattr(tool, "name", "")
-            not in {"dobby_create_task", "dobby_update_task"}
-        ]
+        # A normal turn sees only the capability-group description. The live
+        # catalogue from the management centre is loaded after Dobby decides
+        # that this request actually needs project data.
+        tools.append(
+            ToolGroup(
+                name=PROJECT_DATABASE_TOOL_GROUP,
+                description=(
+                    "当前项目的数据库交互能力。仅当用户请求需要读取或更新实时"
+                    "项目业务数据时激活；普通问候、解释以及不依赖项目数据的"
+                    "请求保持关闭。组内只包含管理中心已分配给当前智能体、且"
+                    "通过当前登录用户权限校验的能力。"
+                ),
+                instructions=(
+                    "根据用户本轮意图，只调用完成请求所必需的数据库交互。"
+                    "工具返回中没有的数据不得猜测；涉及写入时必须遵守工具自身"
+                    "的确认和权限策略。"
+                ),
+                tool_loader=_load_database_tools,
+            ),
+        )
+    else:
+        tools.extend(await _load_database_tools())
     robot_id = (
         (platform_context.weknora_agent_id or "").strip()
         if platform_context is not None
         else ""
     )
+    from agentscope.app._service._platform_settings import get_global_main_agent_id
+
+    main_agent_id = await get_global_main_agent_id(storage, user_id, legacy_record=agent_record)
+
+    async def _resolve_knowledge_scope():
+        return await database_interaction_manager.resolve_knowledge_scope(
+            session_id=platform_session_id, actor_agent_id=agent_id,
+        )
+
     if (
-        robot_id
+        agent_record is not None
+        and agent_record.id != main_agent_id
+        and agent_record.data.platform_config.project_knowledge_enabled
         and platform_context is not None
-        and platform_context.weknora_catalogue_ready
-        and platform_context.weknora_query_enabled
     ):
         settings = await storage.get_platform_settings(user_id)
         connection = (
@@ -374,6 +426,10 @@ async def _create_platform_agent_tools(
                     connection=connection,
                     robot_id=robot_id,
                     project_id=platform_context.project_id,
+                    platform_user_id=platform_context.user_id,
+                    platform_conversation_id=(
+                        platform_context.conversation_id
+                    ),
                     knowledge_base_ids=(
                         platform_context.weknora_knowledge_base_ids
                     ),
@@ -381,6 +437,7 @@ async def _create_platform_agent_tools(
                     restricted=(
                         platform_context.weknora_access_mode == "restricted"
                     ),
+                    scope_resolver=_resolve_knowledge_scope,
                 ),
             )
     return tools

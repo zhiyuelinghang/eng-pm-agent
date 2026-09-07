@@ -104,6 +104,25 @@ class PermissionEngine:
                 Decision indicating whether to allow, deny, or ask.
         """
         mode = self.context.mode
+        if tool.requires_user_confirmation:
+            deny = await self._check_deny_rules(tool, tool_input)
+            if deny:
+                return deny
+            if mode in (PermissionMode.EXPLORE, PermissionMode.DONT_ASK):
+                return PermissionDecision(
+                    behavior=PermissionBehavior.DENY,
+                    message="当前模式不能执行需要用户逐次确认的业务操作。",
+                )
+            tool_decision = await tool.check_permissions(tool_input, self.context)
+            if tool_decision.behavior == PermissionBehavior.DENY:
+                return tool_decision
+            return PermissionDecision(
+                behavior=PermissionBehavior.ASK,
+                message="请核对操作对象、字段变化和影响范围，确认后才会执行。",
+                decision_reason="平台业务操作必须由用户逐次确认。",
+                bypass_immune=True,
+                confirmation_preview=tool_decision.confirmation_preview,
+            )
         if mode == PermissionMode.DEFAULT:
             return await self._check_default(tool, tool_input)
         if mode == PermissionMode.AUTO:

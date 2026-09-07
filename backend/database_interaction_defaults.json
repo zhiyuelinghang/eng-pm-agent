@@ -1,6 +1,19 @@
 {
-  "version": 19,
+  "version": 20,
   "policies": [
+    {
+      "table_name": "projects",
+      "display_name": "项目基本信息",
+      "description": "读取当前项目基本信息字段的填写状态，不暴露其他项目。",
+      "allowed_operations": ["read"],
+      "readable_fields": ["id", "name", "engineering_type_description", "contract_start_date", "contract_end_date", "contract_duration_days", "contract_amount_wan_yuan", "construction_unit_name", "general_contractor_unit_name", "supervision_unit_name", "design_unit_name", "survey_unit_name", "updated_at"],
+      "writable_fields": [],
+      "filterable_fields": ["id"],
+      "scope_type": "project",
+      "scope_field": "id",
+      "minimum_role": "member",
+      "enabled": true
+    },
     {
       "table_name": "project_status_snapshots",
       "display_name": "项目状态概览",
@@ -241,6 +254,7 @@
     }
   ],
   "interactions": [
+    {"key": "dobby_get_project_basic_info_status", "display_name": "读取基本信息上传情况", "description": "一次性返回当前项目基本字段已填/缺失清单、附件数量与解析/目录同步状态；不读取附件正文。", "table_name": "projects", "table_operation": "read", "runtime_policy": {"handler": "project_basic_info_status"}, "allowed_conversation_types": ["general", "business"], "requires_confirmation": false, "default_assigned": false, "sort_order": 5, "legacy_keys": [], "upgrade_existing": true},
     {"key": "dobby_get_project_overview", "display_name": "读取项目状态概览", "description": "读取当前项目的进度、风险、安全、质量和任务完成情况。", "table_name": "project_status_snapshots", "table_operation": "read", "requires_confirmation": false, "default_assigned": false, "sort_order": 10, "legacy_keys": ["dobby_get_project_overview"]},
     {
       "key": "dobby_list_project_tasks",

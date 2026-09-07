@@ -13,24 +13,26 @@ set "FIRST_ARCHIVE=%OUTPUT_ROOT%\dobby-server-first-install.zip"
 
 title 生成 Dobby 服务器更新包
 
-call :REQUIRE_FILE "backend\app\main.py"
-if errorlevel 1 goto FAILED
-call :REQUIRE_FILE "frontend\package.json"
-if errorlevel 1 goto FAILED
-call :REQUIRE_FILE "AgentScope\agentscope\__init__.py"
-if errorlevel 1 goto FAILED
-call :REQUIRE_FILE "AgentScope\agentscope-web-ui\package.json"
-if errorlevel 1 goto FAILED
-call :REQUIRE_FILE "scripts\agentscope_dev_app.py"
-if errorlevel 1 goto FAILED
-call :REQUIRE_FILE "scripts\dobby_web_gateway.py"
-if errorlevel 1 goto FAILED
-call :REQUIRE_FILE "scripts\dobby_process_control.ps1"
-if errorlevel 1 goto FAILED
-call :REQUIRE_FILE "mcp-packages\task-engine\src\task_engine\__init__.py"
-if errorlevel 1 goto FAILED
-call :REQUIRE_FILE "python-3.13.14\python.exe"
-if errorlevel 1 goto FAILED
+set "MISSING_REQUIRED_FILE="
+call :CHECK_REQUIRED_FILE "backend\app\main.py"
+call :CHECK_REQUIRED_FILE "frontend\package.json"
+call :CHECK_REQUIRED_FILE "AgentScope\agentscope\__init__.py"
+call :CHECK_REQUIRED_FILE "AgentScope\agentscope-web-ui\package.json"
+call :CHECK_REQUIRED_FILE "scripts\agentscope_dev_app.py"
+call :CHECK_REQUIRED_FILE "scripts\dobby_web_gateway.py"
+call :CHECK_REQUIRED_FILE "scripts\dobby_process_control.ps1"
+call :CHECK_REQUIRED_FILE "scripts\install_centrifugo.ps1"
+call :CHECK_REQUIRED_FILE "backend\scripts\generate_centrifugo_config.py"
+call :CHECK_REQUIRED_FILE "mcp-packages\task-engine\src\task_engine\__init__.py"
+call :CHECK_REQUIRED_FILE "utils\config.py"
+call :CHECK_REQUIRED_FILE "start-centrifugo.bat"
+call :CHECK_REQUIRED_FILE "安装群聊实时服务.bat"
+call :CHECK_REQUIRED_FILE "runtime\centrifugo\centrifugo.exe"
+call :CHECK_REQUIRED_FILE "python-3.13.14\python.exe"
+if defined MISSING_REQUIRED_FILE (
+    echo [失败] 缺少必要文件：%ROOT%!MISSING_REQUIRED_FILE!
+    goto FAILED
+)
 
 where npm.cmd >nul 2>nul
 if errorlevel 1 (
@@ -75,6 +77,8 @@ call :COPY_CODE_DIR "AgentScope" "AgentScope"
 if errorlevel 1 goto FAILED
 call :COPY_CODE_DIR "scripts" "scripts"
 if errorlevel 1 goto FAILED
+call :COPY_CODE_DIR "utils" "utils"
+if errorlevel 1 goto FAILED
 call :COPY_CODE_DIR "mcp-packages\task-engine" "mcp-packages\task-engine"
 if errorlevel 1 goto FAILED
 
@@ -93,6 +97,8 @@ for %%F in (
     "服务器启动Dobby智能体服务.bat"
     "服务器启动工程管理平台.bat"
     "服务器一键启动.bat"
+    "start-centrifugo.bat"
+    "安装群聊实时服务.bat"
     "一键停止全部服务.bat"
 ) do (
     if not exist "%ROOT%%%~F" (
@@ -103,7 +109,7 @@ for %%F in (
     if errorlevel 1 goto COPY_FAILED
 )
 
-call :WRITE_VERSION "%UPDATE_TARGET%\VERSION.txt" "日常更新包" "不包含便携 Python 主体"
+call :WRITE_VERSION "%UPDATE_TARGET%\VERSION.txt" "日常更新包" "不包含便携 Python 主体" "不包含运行程序，保留服务器现有 runtime\centrifugo"
 if errorlevel 1 goto FAILED
 
 echo [更新包] 正在生成首次部署目录并加入完整便携 Python……
@@ -121,7 +127,14 @@ if !ROBOCOPY_EXIT! GEQ 8 (
 call :ENSURE_PYTHON_PATH "%FIRST_TARGET%\python-3.13.14\python313._pth" "..\mcp-packages\task-engine\src"
 if errorlevel 1 goto FAILED
 
-call :WRITE_VERSION "%FIRST_TARGET%\VERSION.txt" "首次部署包" "包含完整便携 Python 与 AgentScope 依赖"
+mkdir "%FIRST_TARGET%\runtime\centrifugo" >nul 2>nul
+copy /Y "%ROOT%runtime\centrifugo\centrifugo.exe" "%FIRST_TARGET%\runtime\centrifugo\centrifugo.exe" >nul
+if errorlevel 1 (
+    echo [失败] 复制群聊实时服务运行程序失败。
+    goto COPY_FAILED
+)
+
+call :WRITE_VERSION "%FIRST_TARGET%\VERSION.txt" "首次部署包" "包含完整便携 Python 与 AgentScope 依赖" "包含 Centrifugo 运行程序，首次部署无需联网安装"
 if errorlevel 1 goto FAILED
 
 echo [压缩] 正在生成日常更新包……
@@ -146,6 +159,8 @@ echo [日常更新] 文件数：%UPDATE_FILES%，字节数：%UPDATE_SIZE%
 echo.
 echo 服务器第一次增加 AgentScope 时使用 dobby-server-first-install.zip。
 echo 后续更新使用 dobby-server-update.zip。
+echo 首次部署包已包含群聊实时服务运行程序，无需另外安装。
+echo “安装群聊实时服务.bat”仅用于运行程序损坏后的修复或手动升级。
 echo 两个包均不包含 .env 和 data，服务器不执行 npm、pnpm 或 pip。
 goto FINISH
 
@@ -240,6 +255,7 @@ exit /b 0
     echo Python：%~3
     echo 前端：已在开发机完成构建
     echo 服务器 Node.js：不需要
+    echo 群聊实时广播：%~4
     echo.
     echo 本包不包含服务器 .env、data\engpm.db 或 data\agentscope。
     echo 首次部署请先阅读“服务器部署说明.md”，再运行“服务器首次部署检查.bat”。
@@ -263,11 +279,8 @@ if not "!ZIP_EXIT!"=="0" (
 )
 exit /b 0
 
-:REQUIRE_FILE
-if not exist "%ROOT%%~1" (
-    echo [失败] 缺少必要文件：%ROOT%%~1
-    exit /b 1
-)
+:CHECK_REQUIRED_FILE
+if not exist "%ROOT%%~1" set "MISSING_REQUIRED_FILE=%~1"
 exit /b 0
 
 :COPY_FAILED

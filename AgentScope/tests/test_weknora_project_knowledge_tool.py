@@ -11,6 +11,49 @@ from agentscope.message import ToolResultState
 
 
 @pytest.mark.asyncio
+async def test_revoked_membership_prevents_any_remote_knowledge_query():
+    resolver = AsyncMock(side_effect=RuntimeError("当前账号已无权访问该项目"))
+    tool = WeKnoraProjectKnowledgeTool(
+        connection=WeKnoraConnectionConfig(base_url="https://weknora.example.com", api_key="secret"),
+        robot_id="old-robot", project_id="1", platform_user_id="2", scope_resolver=resolver,
+    )
+    with patch("agentscope.app._tool._weknora_project_knowledge.httpx.AsyncClient") as client:
+        result = await tool.call("查询项目资料")
+    assert result.state == ToolResultState.ERROR
+    client.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_answer_is_discarded_if_document_access_is_revoked_during_query():
+    scope = {"user_id": "2", "project_id": "1", "conversation_id": "3",
+             "weknora_agent_id": "robot", "weknora_query_enabled": True,
+             "weknora_catalogue_ready": True, "weknora_knowledge_base_ids": ["kb"],
+             "weknora_knowledge_ids": ["allowed-document"]}
+    resolver = AsyncMock(side_effect=[scope, {**scope, "weknora_knowledge_ids": []}])
+    tool = WeKnoraProjectKnowledgeTool(
+        connection=WeKnoraConnectionConfig(base_url="https://weknora.example.com", api_key="secret"),
+        robot_id="robot", project_id="1", platform_user_id="2", scope_resolver=resolver,
+    )
+    client = MagicMock()
+    client.__aenter__ = AsyncMock(return_value=SimpleAsyncDeleteClient())
+    client.__aexit__ = AsyncMock(return_value=False)
+    with (
+        patch("agentscope.app._tool._weknora_project_knowledge.httpx.AsyncClient", return_value=client),
+        patch.object(WeKnoraProjectKnowledgeTool, "_create_session", new=AsyncMock(return_value="remote")),
+        patch.object(WeKnoraProjectKnowledgeTool, "_ask", new=AsyncMock(return_value=("不可再返回的内容", []))),
+    ):
+        result = await tool.call("查询资料")
+    assert result.state == ToolResultState.ERROR
+    assert "本次结果已丢弃" in result.content[0].text
+    assert "不可再返回的内容" not in result.content[0].text
+
+
+class SimpleAsyncDeleteClient:
+    async def delete(self, _url):
+        return None
+
+
+@pytest.mark.asyncio
 async def test_project_knowledge_tool_returns_answer_and_references() -> None:
     tool = WeKnoraProjectKnowledgeTool(
         connection=WeKnoraConnectionConfig(
@@ -20,6 +63,9 @@ async def test_project_knowledge_tool_returns_answer_and_references() -> None:
             api_key="secret",
         ),
         robot_id="project-robot",
+        project_id="project-1",
+        platform_user_id="user-7",
+        platform_conversation_id="conversation-9",
     )
     client = MagicMock()
     client.delete = AsyncMock()
@@ -55,6 +101,10 @@ async def test_project_knowledge_tool_returns_answer_and_references() -> None:
     assert payload["answer"] == "根据施工方案，应先复核监测数据。"
     assert payload["references"][0]["knowledge_id"] == "document-1"
     assert result.metadata["weknora_robot_id"] == "project-robot"
+    assert result.metadata["platform_user_id"] == "user-7"
+    assert result.metadata["platform_project_id"] == "project-1"
+    assert result.metadata["platform_conversation_id"] == "conversation-9"
+    assert result.metadata["knowledge_access_mode"] == "project"
     client.delete.assert_awaited_once_with(
         "https://weknora.example.com/api/v1/sessions/remote-session",
     )

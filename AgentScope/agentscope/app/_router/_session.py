@@ -725,8 +725,19 @@ async def list_messages(
             MessageBusKeys.bg_tasks(session_id),
         ),
     )
+    # Polling clients (including group chat) need the same pending input cards
+    # as SSE clients. Reconcile against each worker's authoritative state.
+    projection = SessionProjection(message_bus)
+    pending_inputs = []
+    for payload in await projection.list(session_id, SubagentHitlProjector.KIND):
+        if await _worker_still_asking(
+            storage, user_id, payload["worker_agent_id"],
+            payload["worker_session_id"], payload["reply_id"],
+        ):
+            pending_inputs.append(payload)
     return ListMessagesResponse(
         messages=messages,
+        subagent_hitl=pending_inputs,
         is_running=run_locked or background_running,
         has_more=has_more,
     )

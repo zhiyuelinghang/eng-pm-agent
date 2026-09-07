@@ -7,6 +7,7 @@ from ._model import (
     build_memory_model_runtime_config,
     configure_platform_memory_model,
 )
+from ._policy import agent_can_use_shared_memory
 from ._runtime import (
     MemoryTarget,
     MemoryRuntime,
@@ -23,6 +24,7 @@ __all__ = [
     "MemoryRuntime",
     "MemoryScope",
     "apply_global_memory_settings",
+    "agent_can_use_shared_memory",
     "build_business_memory_target",
     "build_memory_model_runtime_config",
     "configure_platform_memory_model",

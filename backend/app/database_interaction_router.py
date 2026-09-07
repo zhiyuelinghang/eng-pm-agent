@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .agent_context_gateway import (
@@ -35,7 +36,13 @@ from .initialization_validation import (
     InitializationValidationError,
     run_project_initialization_validation,
 )
-from .models import OperationLog, ProjectInitializationDraft
+from .models import (
+    Attachment,
+    AttachmentText,
+    EngineeringDocumentSyncState,
+    OperationLog,
+    ProjectInitializationDraft,
+)
 from .db import get_db
 
 
@@ -187,6 +194,27 @@ def remove_interaction(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@router.post("/preview")
+def preview_interaction(
+    payload: ExecuteInteractionRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    from .database_interaction_preview import preview_table_interaction
+
+    context = resolve_tool_context(db, payload.agentscope_session_id)
+    if payload.platform_agent_id != context.conversation.agent_id:
+        raise HTTPException(status_code=403, detail="数据库交互与当前平台会话不匹配")
+    interaction, policy = resolve_assigned_interaction(
+        db, payload.actor_agent_id, payload.interaction_key, access_mode="agent",
+    )
+    if interaction.execution_kind != "table" or policy is None:
+        raise HTTPException(status_code=409, detail="该交互不支持结构化变更预览")
+    return ok(preview_table_interaction(
+        db, context, interaction, policy, payload.arguments,
+        actor_agent_id=payload.actor_agent_id,
+    ))
+
+
 @router.post("/execute")
 def execute_interaction(
     payload: ExecuteInteractionRequest,
@@ -212,6 +240,113 @@ def execute_interaction(
             status_code=status.HTTP_409_CONFLICT,
             detail="该数据库交互尚未完成结构化规则迁移",
         )
+    if (
+        interaction.runtime_policy or {}
+    ).get("handler") == "project_basic_info_status":
+        if payload.arguments:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="基本信息上传情况查询不接受额外参数",
+            )
+        if context.conversation.conversation_type not in (
+            interaction.allowed_conversation_types or []
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="当前会话类型不能使用该数据库交互",
+            )
+        project = context.project
+        fields = {
+            "项目名称": project.name,
+            "工程类型说明": project.engineering_type_description,
+            "合同开始日期": project.contract_start_date,
+            "合同结束日期": project.contract_end_date,
+            "合同工期": project.contract_duration_days,
+            "合同金额": project.contract_amount_wan_yuan,
+            "建设单位": project.construction_unit_name,
+            "总承包单位": project.general_contractor_unit_name,
+            "监理单位": project.supervision_unit_name,
+            "设计单位": project.design_unit_name,
+            "勘察单位": project.survey_unit_name,
+        }
+        filled_fields = [
+            name for name, value in fields.items() if value not in {None, ""}
+        ]
+        missing_fields = [name for name in fields if name not in filled_fields]
+        attachment_count = int(
+            db.scalar(
+                select(func.count(Attachment.id)).where(
+                    Attachment.project_id == project.id,
+                ),
+            )
+            or 0
+        )
+        uncategorized_count = int(
+            db.scalar(
+                select(func.count(Attachment.id)).where(
+                    Attachment.project_id == project.id,
+                    Attachment.category.in_(["", "未分类"]),
+                ),
+            )
+            or 0
+        )
+        parse_counts = {
+            str(parse_status or "pending"): int(count)
+            for parse_status, count in db.execute(
+                select(AttachmentText.parse_status, func.count())
+                .where(AttachmentText.project_id == project.id)
+                .group_by(AttachmentText.parse_status),
+            ).all()
+        }
+        parsed_total = sum(parse_counts.values())
+        if parsed_total < attachment_count:
+            parse_counts["pending"] = (
+                parse_counts.get("pending", 0)
+                + attachment_count
+                - parsed_total
+            )
+        catalogue = db.get(EngineeringDocumentSyncState, project.id)
+        data = {
+            "project_id": project.id,
+            "field_status": {
+                "total": len(fields),
+                "filled": len(filled_fields),
+                "missing": len(missing_fields),
+                "filled_fields": filled_fields,
+                "missing_fields": missing_fields,
+            },
+            "attachments": {
+                "total": attachment_count,
+                "uncategorized": uncategorized_count,
+                "parse_status_counts": parse_counts,
+            },
+            "knowledge_catalogue": {
+                "status": catalogue.status if catalogue is not None else "not_configured",
+                "last_error": catalogue.last_error if catalogue is not None else None,
+                "last_completed_at": (
+                    catalogue.last_completed_at.isoformat()
+                    if catalogue is not None and catalogue.last_completed_at
+                    else None
+                ),
+            },
+        }
+        db.add(
+            OperationLog(
+                project_id=project.id,
+                operator_id=context.user.id,
+                action="agent_database_read",
+                detail=(
+                    "智能体 "
+                    f"{payload.actor_agent_id} 在平台会话 "
+                    f"{context.conversation.id} 通过数据库交互"
+                    f"「{interaction.display_name}」读取基本信息状态"
+                ),
+                target_type="projects",
+                target_id=project.id,
+            ),
+        )
+        db.commit()
+        return ok(data, "已读取当前项目基本信息上传情况")
     if (
         interaction.runtime_policy or {}
     ).get("handler") == "project_initialization_validation":

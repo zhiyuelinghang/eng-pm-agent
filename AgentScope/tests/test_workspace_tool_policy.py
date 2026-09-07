@@ -11,10 +11,14 @@ from agentscope.app._router._schema._agent import (
     UpdateAgentRequest,
 )
 from agentscope.app._service._toolkit import (
+    PROJECT_DATABASE_TOOL_GROUP,
+    _attach_extra_tools,
     _filter_globally_disabled_tools,
 )
+from agentscope.app.database_interactions import DatabaseInteractionTool
 from agentscope.app._types import AgentToolDescriptor
 from agentscope.app.storage import AgentToolConfig
+from agentscope.tool import Toolkit, ToolGroup
 from agentscope.workspace import LocalWorkspace
 
 
@@ -51,8 +55,103 @@ class GlobalToolPolicyTest(TestCase):
         self.assertNotIn("tool_config", CreateAgentRequest.model_fields)
         self.assertNotIn("tool_config", UpdateAgentRequest.model_fields)
 
+    def test_general_platform_database_tools_are_lazy_grouped(self) -> None:
+        database_tool = DatabaseInteractionTool(
+            definition={
+                "key": "dobby_project_overview",
+                "description": "读取项目概览",
+                "input_schema": {"type": "object", "properties": {}},
+                "read_only": True,
+            },
+            manager=SimpleNamespace(),
+            session_id="session-1",
+            actor_agent_id="global-main",
+            platform_agent_id="global-main",
+        )
+        direct_tool = SimpleNamespace(name="knowledge_query")
+        basic_tools = []
+        groups = []
+
+        _attach_extra_tools(
+            tools=basic_tools,
+            tool_groups=groups,
+            extra_tools=[database_tool, direct_tool],
+            platform_context=SimpleNamespace(conversation_type="general"),
+        )
+
+        self.assertEqual(basic_tools, [direct_tool])
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].name, PROJECT_DATABASE_TOOL_GROUP)
+        self.assertEqual(groups[0].tools, [database_tool])
+
+    def test_factory_supplied_lazy_group_remains_unloaded(self) -> None:
+        loader = AsyncMock(return_value=[])
+        supplied_group = ToolGroup(
+            name=PROJECT_DATABASE_TOOL_GROUP,
+            description="按需读取当前项目数据",
+            tool_loader=loader,
+        )
+        direct_tool = SimpleNamespace(name="knowledge_query")
+        basic_tools = []
+        groups = []
+
+        _attach_extra_tools(
+            tools=basic_tools,
+            tool_groups=groups,
+            extra_tools=[supplied_group, direct_tool],
+            platform_context=SimpleNamespace(conversation_type="general"),
+        )
+
+        self.assertEqual(basic_tools, [direct_tool])
+        self.assertEqual(groups, [supplied_group])
+        loader.assert_not_awaited()
+
+
 class LocalWorkspaceToolPolicyTest(IsolatedAsyncioTestCase):
     """The default local workspace must not expose PowerShell."""
+
+    async def test_inactive_lazy_group_does_not_load_runtime_tools(self) -> None:
+        database_tool = DatabaseInteractionTool(
+            definition={
+                "key": "dobby_project_overview",
+                "description": "读取项目概览",
+                "input_schema": {"type": "object", "properties": {}},
+                "read_only": True,
+            },
+            manager=SimpleNamespace(),
+            session_id="session-1",
+            actor_agent_id="global-main",
+            platform_agent_id="global-main",
+        )
+        loader = AsyncMock(return_value=[database_tool])
+        toolkit = Toolkit(
+            tool_groups=[
+                ToolGroup(
+                    name=PROJECT_DATABASE_TOOL_GROUP,
+                    description="按需读取当前项目数据",
+                    tool_loader=loader,
+                ),
+            ],
+        )
+
+        inactive_schemas = await toolkit.get_tool_schemas([])
+
+        loader.assert_not_awaited()
+        self.assertNotIn(
+            database_tool.name,
+            [schema["function"]["name"] for schema in inactive_schemas],
+        )
+
+        active_schemas = await toolkit.get_tool_schemas(
+            [PROJECT_DATABASE_TOOL_GROUP],
+        )
+        await toolkit.get_tool_schemas([PROJECT_DATABASE_TOOL_GROUP])
+
+        loader.assert_awaited_once_with()
+        self.assertIn(
+            database_tool.name,
+            [schema["function"]["name"] for schema in active_schemas],
+        )
 
     async def test_local_workspace_does_not_list_powershell(self) -> None:
         with TemporaryDirectory() as workdir:

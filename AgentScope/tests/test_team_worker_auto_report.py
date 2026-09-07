@@ -136,7 +136,7 @@ class WorkerAutoReportTest(IsolatedAsyncioTestCase):
         )
         settle.assert_awaited_once()
 
-    async def test_max_iteration_worker_reply_is_still_forwarded(self) -> None:
+    async def test_max_iteration_worker_reports_failure_with_partial_results(self) -> None:
         service, worker_agent = self._service()
         reply = AssistantMsg(
             id="reply-max-iters",
@@ -161,11 +161,9 @@ class WorkerAutoReportTest(IsolatedAsyncioTestCase):
                 reply_msg=reply,
             )
 
-        self.assertEqual(
-            deliver.await_args.kwargs["content"],
-            "已取得部分但可用的核验结果",
-        )
-        self.assertEqual(settle.await_args.kwargs["status"], "completed")
+        self.assertIn("达到迭代上限", deliver.await_args.kwargs["content"])
+        self.assertIn("已取得部分但可用的核验结果", deliver.await_args.kwargs["content"])
+        self.assertEqual(settle.await_args.kwargs["status"], "failed")
 
     async def test_interrupted_worker_is_reported_and_settled(self) -> None:
         service, worker_agent = self._service()

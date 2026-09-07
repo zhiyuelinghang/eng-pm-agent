@@ -161,6 +161,12 @@ class ToolCallBlock(BaseModel):
     """The suggestions for this tool call when asking user, used to maintain
     the suggestions across requests."""
 
+    confirmation_preview: dict[str, Any] | None = None
+    """Scoped business changes supplied by the trusted tool gateway."""
+
+    confirmation_revision: int = 0
+    """Distinguishes a new consent request after edited tool arguments."""
+
 
 class ToolResultState(StrEnum):
     """The tool result state."""

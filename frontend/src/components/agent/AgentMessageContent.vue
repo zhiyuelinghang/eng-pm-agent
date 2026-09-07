@@ -1,774 +1,167 @@
 <template>
   <div class="agent-message-content">
-    <details v-if="showPlan && runtimeTrace?.tasksContext?.tasks?.length" class="agent-plan">
-      <summary>
-        <span><n-icon :size="15"><ListCheck /></n-icon>执行计划</span>
-        <strong>{{ completedTasks }}/{{ runtimeTrace.tasksContext.tasks.length }}</strong>
-        <n-icon class="agent-plan-chevron" :size="15" aria-hidden="true"><ChevronRight /></n-icon>
-      </summary>
-      <div class="agent-plan-body">
-        <div class="agent-plan-track"><i :style="{ width: `${taskProgress}%` }"></i></div>
-        <ul>
-          <li
-            v-for="task in runtimeTrace.tasksContext.tasks"
-            :key="String(task.id)"
-            :class="task.state"
-          >
-            <n-icon :size="14">
-              <CircleCheck v-if="['completed', 'skipped'].includes(task.state)" />
-              <Loader v-else-if="task.state === 'in_progress'" class="spin" />
-              <Circle v-else />
-            </n-icon>
-            <span>{{ task.subject }}</span>
-          </li>
-        </ul>
+    <template v-for="item in conversationItems" :key="item.key">
+      <AgentCollaborationStep v-if="item.kind === 'collaboration'" :step="item.step"
+        :active="isTraceActive" :interrupted="isInterrupted" :can-confirm="canConfirm"
+        :confirmation-busy="confirmationBusy" :pending-key="pendingConfirmationKey" @confirm="confirmToolCall" />
+      <div v-else-if="item.kind === 'error'" class="agent-runtime-error" role="alert">
+        <n-icon :size="16"><AlertTriangle /></n-icon>
+        <span>{{ item.message.error?.message || '处理失败，请重试。' }}</span>
       </div>
-    </details>
-
-    <section v-if="runtimeTrace?.subagentHitl.length && isTraceActive" class="agent-subagent-hitl">
-      <header>
-        <n-icon :size="16"><Users /></n-icon>
-        <div>
-          <strong>协同智能体等待确认</strong>
-          <span>以下操作由子智能体发起，需要当前用户决策。</span>
-        </div>
-      </header>
-      <article
-        v-for="entry in runtimeTrace.subagentHitl"
-        :key="`${entry.worker_session_id}:${entry.reply_id}`"
-      >
-        <div class="agent-subagent-name">
-          <span>{{ entry.worker_agent_name }}</span>
-          <small>协同成员</small>
-        </div>
-        <details
-          v-for="toolCall in entry.event.tool_calls || []"
-          :key="toolCall.id"
-          class="agent-tool"
-          open
-        >
+      <template v-else-if="item.kind === 'block'">
+        <div v-if="item.block.type === 'text'" class="agent-markdown" v-html="renderMarkdown(item.block.text)"></div>
+        <details v-else-if="item.block.type === 'thinking'" class="agent-thinking"
+          :open="isThinkingBlockActive(runtimeTrace, item.message, item.block)">
           <summary>
-            <span class="agent-tool-icon"><n-icon :size="15"><Tool /></n-icon></span>
-            <span class="agent-tool-title">
-              <strong>{{ agentToolLabel(toolCall.name) }}</strong>
-              <small>{{ toolCall.name }}</small>
+            <span><n-icon :size="14"><Bulb /></n-icon>思考过程</span>
+            <span class="agent-thinking-actions">
+              <em v-if="isThinkingBlockActive(runtimeTrace, item.message, item.block)">思考中</em>
+              <n-icon class="agent-thinking-chevron" :size="14" aria-hidden="true"><ChevronRight /></n-icon>
             </span>
-            <em class="state-asking">等待确认</em>
-            <n-icon class="agent-tool-chevron" :size="15"><ChevronRight /></n-icon>
           </summary>
-          <div class="agent-tool-detail">
-            <section v-if="toolCall.input">
-              <span>调用参数</span>
-              <pre>{{ formatJson(toolCall.input) }}</pre>
-            </section>
-          </div>
-          <div class="agent-confirm">
-            <div>
-              <strong>需要人工确认</strong>
-              <span>确认结果会安全转发给发起请求的协同智能体。</span>
-            </div>
-            <button type="button" class="deny" :disabled="confirmationBusy" @click.prevent="confirmToolCall(entry.reply_id, toolCall, false)"><n-icon v-if="isPendingConfirmation(entry.reply_id, toolCall.id, false)" :size="14"><Loader class="spin" /></n-icon>{{ isPendingConfirmation(entry.reply_id, toolCall.id, false) ? '正在拒绝…' : '拒绝' }}</button>
-            <button type="button" class="allow" :disabled="confirmationBusy" @click.prevent="confirmToolCall(entry.reply_id, toolCall, true)"><n-icon v-if="isPendingConfirmation(entry.reply_id, toolCall.id, true)" :size="14"><Loader class="spin" /></n-icon>{{ isPendingConfirmation(entry.reply_id, toolCall.id, true) ? '正在允许…' : '允许本次' }}</button>
-          </div>
+          <div>{{ item.block.thinking || '正在思考…' }}</div>
         </details>
-      </article>
-    </section>
-
-    <template v-if="runtimeTrace?.messages.length">
-      <section
-        v-for="runtimeMessage in runtimeTrace.messages"
-        :key="runtimeMessage.id"
-        class="agent-runtime-message"
-      >
-        <template v-for="block in runtimeMessage.content" :key="block.id">
-          <section
-            v-if="isFirstInviteCall(runtimeMessage, block)"
-            class="agent-collaboration"
-            :class="{ active: collaborationBatchActive(runtimeMessage) }"
-          >
-            <header>
-              <span class="agent-collaboration-icon">
-                <n-icon :size="17"><Users /></n-icon>
-              </span>
-              <div class="agent-collaboration-heading">
-                <strong>{{ collaborationBatchTitle(runtimeMessage) }}</strong>
-                <span>{{ collaborationBatchSummary(runtimeMessage) }}</span>
-              </div>
-              <span
-                class="agent-collaboration-state"
-                :class="{ running: collaborationBatchActive(runtimeMessage) }"
-              >
-                <i v-if="collaborationBatchActive(runtimeMessage)" class="spin-dot"></i>
-                {{ collaborationBatchStatus(runtimeMessage) }}
-              </span>
-              <button
-                type="button"
-                class="agent-collaboration-toggle"
-                :aria-label="isCollaborationBatchOpen(runtimeMessage) ? '收起协同详情' : '展开协同详情'"
-                @click="toggleCollaborationBatch(runtimeMessage)"
-              >
-                <n-icon :size="16" :class="{ open: isCollaborationBatchOpen(runtimeMessage) }"><ChevronRight /></n-icon>
-              </button>
-            </header>
-
-            <div v-if="isCollaborationBatchOpen(runtimeMessage)" class="agent-collaboration-members">
-              <article
-                v-for="member in collaborationMembers(runtimeMessage)"
-                :key="member.callId"
-                :class="`state-${member.status}`"
-              >
-                <button
-                  type="button"
-                  class="agent-collaboration-member"
-                  @click="toggleCollaborationMember(runtimeMessage, member.callId)"
-                >
-                  <span class="agent-collaboration-avatar">{{ member.name.slice(0, 1) }}</span>
-                  <span class="agent-collaboration-member-main">
-                    <strong>{{ member.name }}</strong>
-                    <small>{{ member.currentLabel }}</small>
-                  </span>
-                  <span class="agent-collaboration-member-state" :class="member.status">
-                    <n-icon :size="14">
-                      <Loader v-if="member.active" class="spin" />
-                      <AlertTriangle v-else-if="member.status === 'failed' || member.status === 'interrupted'" />
-                      <CircleCheck v-else />
-                    </n-icon>
-                    {{ member.statusLabel }}
-                  </span>
-                  <span class="agent-collaboration-elapsed">{{ collaborationMemberElapsed(member) }}</span>
-                  <n-icon
-                    :size="15"
-                    class="agent-collaboration-chevron"
-                    :class="{ open: isCollaborationMemberOpen(runtimeMessage, member.callId) }"
-                  ><ChevronRight /></n-icon>
-                </button>
-                <div
-                  v-if="isCollaborationMemberOpen(runtimeMessage, member.callId)"
-                  class="agent-collaboration-detail"
-                >
-                  <section>
-                    <span>工作记录</span>
-                    <ol v-if="member.activities.length">
-                      <li v-for="(activity, index) in member.activities" :key="`${activity.created_at}-${index}`">
-                        <i :class="activity.state"></i>
-                        <span>{{ agentCollaborationActivityLabel(activity) }}</span>
-                        <time>{{ shortTime(activity.created_at) }}</time>
-                      </li>
-                    </ol>
-                    <p v-else>智能体正在启动，暂时没有工作记录。</p>
-                  </section>
-                </div>
-              </article>
-            </div>
-          </section>
-
-          <div
-            v-else-if="block.type === 'text' && block.text"
-            class="agent-markdown"
-            v-html="renderMarkdown(block.text)"
-          ></div>
-
-          <details v-else-if="block.type === 'thinking'" class="agent-thinking">
-            <summary>
-              <span><n-icon :size="14"><Bulb /></n-icon>思考过程</span>
-              <em v-if="isMessageRunning(runtimeMessage)"><i></i>生成中</em>
-              <em v-else>已完成</em>
-            </summary>
-            <div>{{ block.thinking || '正在推理…' }}</div>
-          </details>
-
-          <details
-            v-else-if="block.type === 'tool_call' && block.name !== 'AgentInvite'"
-            class="agent-tool"
-            :open="block.state === 'asking' || block.state === 'pending' || block.state === 'allowed'"
-          >
-            <summary>
-              <span class="agent-tool-icon"><n-icon :size="15"><Tool /></n-icon></span>
-              <span class="agent-tool-title">
-                <strong>{{ agentToolLabel(block.name) }}</strong>
-                <small>{{ block.name }}</small>
-              </span>
-              <em :class="`state-${toolState(block, runtimeMessage)}`">
-                <i v-if="toolState(block, runtimeMessage) === 'running'" class="spin-dot"></i>
-                {{ toolStateLabel(block, runtimeMessage) }}
-              </em>
-              <n-icon class="agent-tool-chevron" :size="15"><ChevronRight /></n-icon>
-            </summary>
-            <div class="agent-tool-detail">
-              <section v-if="block.input">
-                <span>调用参数</span>
-                <pre>{{ formatJson(block.input) }}</pre>
-              </section>
-              <section v-if="toolResult(runtimeMessage, block.id)">
-                <span>执行结果</span>
-                <pre :class="{ error: toolResult(runtimeMessage, block.id)?.state === 'error' }">{{ formatToolResult(toolResult(runtimeMessage, block.id)) }}</pre>
-              </section>
-              <p v-else class="agent-tool-waiting">{{ block.state === 'asking' ? '该操作需要人工确认。' : '等待工具返回结果…' }}</p>
-            </div>
-            <div v-if="block.state === 'asking' && isMessageRunning(runtimeMessage)" class="agent-confirm">
-              <div>
-                <strong>需要人工确认</strong>
-                <span>请核对工具和参数后决定是否继续。</span>
-              </div>
-              <button type="button" class="deny" :disabled="confirmationBusy" @click.prevent="confirmToolCall(runtimeMessage.id, block, false)"><n-icon v-if="isPendingConfirmation(runtimeMessage.id, block.id, false)" :size="14"><Loader class="spin" /></n-icon>{{ isPendingConfirmation(runtimeMessage.id, block.id, false) ? '正在拒绝…' : '拒绝' }}</button>
-              <button type="button" class="allow" :disabled="confirmationBusy" @click.prevent="confirmToolCall(runtimeMessage.id, block, true)"><n-icon v-if="isPendingConfirmation(runtimeMessage.id, block.id, true)" :size="14"><Loader class="spin" /></n-icon>{{ isPendingConfirmation(runtimeMessage.id, block.id, true) ? '正在允许…' : '允许本次' }}</button>
-            </div>
-          </details>
-
-          <details v-else-if="block.type === 'hint'" class="agent-hint">
-            <summary>
-              <n-icon :size="15"><Messages /></n-icon>
-              <span>{{ hintLabel(block.source) }}</span>
-              <n-icon class="agent-tool-chevron" :size="15"><ChevronRight /></n-icon>
-            </summary>
-            <div
-              v-if="typeof block.hint === 'string'"
-              class="agent-markdown"
-              v-html="renderMarkdown(block.hint)"
-            ></div>
-            <div v-else class="agent-hint-blocks">
-              <template v-for="item in block.hint" :key="item.id">
-                <div v-if="item.type === 'text'" class="agent-markdown" v-html="renderMarkdown(item.text)"></div>
-                <img v-else-if="dataUrl(item)" :src="dataUrl(item)!" :alt="item.name || '智能体返回图片'">
-              </template>
-            </div>
-          </details>
-
-          <figure v-else-if="block.type === 'data' && dataUrl(block)" class="agent-media">
-            <img v-if="block.source.media_type.startsWith('image/')" :src="dataUrl(block)!" :alt="block.name || '智能体返回图片'">
-            <a v-else :href="dataUrl(block)!" target="_blank" rel="noopener noreferrer">{{ block.name || '查看智能体返回文件' }}</a>
-          </figure>
-        </template>
-
-        <div v-if="runtimeMessage.error" class="agent-runtime-error">
-          <n-icon :size="16"><AlertTriangle /></n-icon>
-          <div>
-            <strong>执行失败</strong>
-            <span>{{ runtimeMessage.error.message || runtimeMessage.error.type || '智能体运行时发生未知错误。' }}</span>
-          </div>
-        </div>
-
-        <footer v-if="runtimeMessage.role === 'assistant'">
-          <div class="agent-runtime-status">
-            <span class="agent-runtime-state" :class="{ running: isMessageRunning(runtimeMessage) || isMessageWaiting(runtimeMessage), interrupted: isMessageInterrupted(runtimeMessage), error: Boolean(runtimeMessage.error) }">
-              <n-icon :size="13">
-                <Loader v-if="isMessageRunning(runtimeMessage) || isMessageWaiting(runtimeMessage)" class="spin" />
-                <AlertTriangle v-else-if="runtimeMessage.error" />
-                <Circle v-else-if="isMessageInterrupted(runtimeMessage)" />
-                <CircleCheck v-else />
-              </n-icon>
-              {{ messageStatusLabel(runtimeMessage) }}
-            </span>
-            <span>{{ elapsedLabel(runtimeMessage) }}</span>
-          </div>
-          <div v-if="runtimeMessage.model_names?.length || runtimeTrace.modelNames.length || runtimeMessage.usage" class="agent-runtime-metrics">
-            <span v-if="runtimeMessage.model_names?.length" class="agent-runtime-model" :title="runtimeMessage.model_names.join('、')">{{ runtimeMessage.model_names.join('、') }}</span>
-            <span v-else-if="runtimeTrace.modelNames.length" class="agent-runtime-model" :title="runtimeTrace.modelNames.join('、')">{{ runtimeTrace.modelNames.join('、') }}</span>
-            <span v-if="runtimeMessage.usage" class="agent-runtime-usage">
-              ↑ {{ formatNumber(runtimeMessage.usage.input_tokens) }}
-              · ↓ {{ formatNumber(runtimeMessage.usage.output_tokens) }}
-            </span>
-          </div>
-        </footer>
-      </section>
+        <AgentToolCall v-else-if="item.block.type === 'tool_call'" :call="item.block"
+          :result="findToolResult(item.message, item.block.id)" :reply-id="item.message.id"
+          :active="isMessageRunning(item.message)" :interrupted="isInterrupted || item.message.finished_reason === 'interrupted'"
+          :can-confirm="canConfirm" :confirmation-busy="confirmationBusy" :pending-key="pendingConfirmationKey"
+          @confirm="confirmToolCall" />
+        <figure v-else-if="item.block.type === 'data' && dataUrl(item.block)" class="agent-media">
+          <img v-if="item.block.source.media_type.startsWith('image/')" :src="dataUrl(item.block)!"
+            :alt="item.block.name || '智能体返回图片'">
+          <a v-else :href="dataUrl(item.block)!" target="_blank" rel="noopener noreferrer">{{ item.block.name || '查看智能体返回文件' }}</a>
+        </figure>
+      </template>
     </template>
 
-    <div v-else class="agent-markdown" v-html="renderMarkdown(content)"></div>
-
-    <div v-if="streaming && !runtimeTrace?.messages.length" class="agent-starting" role="status" aria-live="polite">
-      <span><i></i><i></i><i></i></span>
-      {{ startingLabel }}
+    <div v-if="!conversationItems.length && content" class="agent-markdown" v-html="renderMarkdown(content)"></div>
+    <div v-if="isTraceActive && !conversationItems.length" class="agent-starting" role="status" aria-live="polite">
+      <n-icon :size="14"><Loader class="spin" /></n-icon>{{ startingLabel }}
     </div>
+
+    <footer v-if="runtimeTrace && conversationItems.length" class="agent-runtime-footer">
+      <span class="agent-runtime-state" :class="{ running: isTraceActive, error: hasError, interrupted: isInterrupted }">
+        <n-icon :size="13">
+          <Loader v-if="isTraceActive" class="spin" />
+          <AlertTriangle v-else-if="hasError" />
+          <Circle v-else-if="isInterrupted" />
+          <CircleCheck v-else />
+        </n-icon>
+        {{ statusLabel }}
+      </span>
+      <span v-if="elapsedLabel">{{ elapsedLabel }}</span>
+      <div v-if="modelNames.length || usage" class="agent-runtime-metrics">
+        <span v-if="modelNames.length" class="agent-runtime-model" :title="modelNames.join('、')">{{ modelNames.join('、') }}</span>
+        <span v-if="usage">↑ {{ formatNumber(usage.input) }} · ↓ {{ formatNumber(usage.output) }}</span>
+      </div>
+    </footer>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
-import {
-  AlertTriangle,
-  Bulb,
-  ChevronRight,
-  Circle,
-  CircleCheck,
-  ListCheck,
-  Loader,
-  Messages,
-  Tool,
-  Users,
-} from '@vicons/tabler'
+import { AlertTriangle, Bulb, ChevronRight, Circle, CircleCheck, Loader } from '@vicons/tabler'
 import MarkdownIt from 'markdown-it'
-import type {
-  AgentCollaborationActivity,
-  AgentCollaborationMember,
-  AgentContentBlock,
-  AgentDataBlock,
-  AgentRuntimeMessage,
-  AgentRuntimeTrace,
-  AgentToolCallBlock,
-  AgentToolResultBlock,
-} from '@/types/agentRuntime'
-import {
-  agentCollaborationActivityLabel,
-  agentToolLabel,
-} from '@/utils/agentRuntimeLabels'
-
-type CollaborationCardMember = {
-  callId: string
-  name: string
-  status: string
-  statusLabel: string
-  active: boolean
-  currentLabel: string
-  assignedAt?: string | null
-  startedAt?: string | null
-  settledAt?: string | null
-  activities: AgentCollaborationActivity[]
-}
+import AgentCollaborationStep from './AgentCollaborationStep.vue'
+import AgentToolCall from './AgentToolCall.vue'
+import type { AgentDataBlock, AgentRuntimeMessage, AgentRuntimeTrace, AgentToolCallBlock } from '@/types/agentRuntime'
+import { agentConversationItems, findToolResult, isRuntimeActive, isThinkingBlockActive } from '@/utils/agentMessagePresentation'
 
 const props = withDefaults(defineProps<{
   content?: string
   runtimeTrace?: AgentRuntimeTrace | null
   streaming?: boolean
-  showPlan?: boolean
   startingLabel?: string
+  canConfirm?: boolean
   confirmationBusy?: boolean
 }>(), {
-  content: '',
-  runtimeTrace: null,
-  streaming: false,
-  showPlan: true,
-  startingLabel: '正在分析',
-  confirmationBusy: false,
+  content: '', runtimeTrace: null, streaming: false, startingLabel: '正在处理请求…',
+  canConfirm: true, confirmationBusy: false,
 })
-
-const emit = defineEmits<{
-  confirm: [replyId: string, toolCall: AgentToolCallBlock, confirmed: boolean]
-}>()
-
+const emit = defineEmits<{ confirm: [replyId: string, toolCall: AgentToolCallBlock, confirmed: boolean] }>()
 const pendingConfirmationKey = ref('')
 const confirmationBusy = computed(() => props.confirmationBusy || Boolean(pendingConfirmationKey.value))
-
-function confirmationKey(replyId: string, toolCallId: string, confirmed: boolean) {
-  return `${replyId}:${toolCallId}:${confirmed ? 'allow' : 'deny'}`
-}
-
-function isPendingConfirmation(replyId: string, toolCallId: string, confirmed: boolean) {
-  return pendingConfirmationKey.value === confirmationKey(replyId, toolCallId, confirmed)
-}
-
 function confirmToolCall(replyId: string, toolCall: AgentToolCallBlock, confirmed: boolean) {
-  if (confirmationBusy.value) return
-  pendingConfirmationKey.value = confirmationKey(replyId, toolCall.id, confirmed)
+  if (confirmationBusy.value || !props.canConfirm || !isTraceActive.value) return
+  pendingConfirmationKey.value = `${replyId}:${toolCall.id}:${confirmed ? 'allow' : 'deny'}`
   emit('confirm', replyId, toolCall, confirmed)
 }
-
 watch(() => props.confirmationBusy, value => {
   if (!value) pendingConfirmationKey.value = ''
 })
-
-const markdown = new MarkdownIt({
-  html: false,
-  linkify: true,
-  breaks: true,
-  typographer: false,
+watch(() => props.runtimeTrace?.status, () => {
+  if (!isRuntimeActive(props.runtimeTrace)) pendingConfirmationKey.value = ''
 })
+
+const conversationItems = computed(() => agentConversationItems(props.runtimeTrace))
+const isTraceActive = computed(() => isRuntimeActive(props.runtimeTrace) || props.streaming)
+const isInterrupted = computed(() => props.runtimeTrace?.status === 'interrupted')
+const lastMessage = computed(() => {
+  const messages = props.runtimeTrace?.messages.filter(message => message.role === 'assistant') || []
+  return messages[messages.length - 1]
+})
+const hasError = computed(() => ['error', 'failed'].includes(props.runtimeTrace?.status || '')
+  || Boolean(lastMessage.value?.error) || lastMessage.value?.finished_reason === 'exceed_max_iters')
+const statusLabel = computed(() => {
+  if (isInterrupted.value) return '已停止'
+  if (hasError.value) return '处理失败'
+  if (props.runtimeTrace?.status === 'awaiting_permission') return '等待确认'
+  if (props.runtimeTrace?.status === 'awaiting_external_result') return '等待操作结果'
+  if (isTraceActive.value) return '处理中'
+  return '已完成'
+})
+function isMessageRunning(message: AgentRuntimeMessage) {
+  return isTraceActive.value && !message.finished_at
+}
+
+const now = ref(Date.now())
+let clock: ReturnType<typeof setInterval> | null = null
+onMounted(() => { clock = setInterval(() => { now.value = Date.now() }, 1000) })
+onBeforeUnmount(() => { if (clock) clearInterval(clock) })
+const elapsedLabel = computed(() => {
+  const start = Date.parse(props.runtimeTrace?.turnStartedAt || props.runtimeTrace?.messages[0]?.created_at || '')
+  const finished = props.runtimeTrace?.turnFinishedAt || (!isTraceActive.value ? lastMessage.value?.finished_at : null)
+  const end = finished ? Date.parse(finished) : isTraceActive.value ? now.value : NaN
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return ''
+  const seconds = Math.max(0, Math.round((end - start) / 1000))
+  return `总耗时 ${seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`}`
+})
+const modelNames = computed(() => props.runtimeTrace?.modelNames.length
+  ? props.runtimeTrace.modelNames : lastMessage.value?.model_names || [])
+const usage = computed(() => {
+  const messages = props.runtimeTrace?.messages.filter(message => message.role === 'assistant' && message.usage) || []
+  return messages.length ? messages.reduce((total, message) => ({
+    input: total.input + (message.usage?.input_tokens || 0), output: total.output + (message.usage?.output_tokens || 0),
+  }), { input: 0, output: 0 }) : null
+})
+const formatNumber = (value: number) => new Intl.NumberFormat('zh-CN', { notation: value > 9999 ? 'compact' : 'standard' }).format(value)
+function dataUrl(block: AgentDataBlock) {
+  if (block.source.type === 'url') return block.source.url || null
+  return block.source.data ? `data:${block.source.media_type};base64,${block.source.data}` : null
+}
+
+const markdown = new MarkdownIt({ html: false, linkify: true, breaks: true })
 const defaultLinkOpen = markdown.renderer.rules.link_open
 markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
   tokens[index].attrSet('target', '_blank')
   tokens[index].attrSet('rel', 'noopener noreferrer')
-  return defaultLinkOpen
-    ? defaultLinkOpen(tokens, index, options, env, self)
-    : self.renderToken(tokens, index, options)
+  return defaultLinkOpen ? defaultLinkOpen(tokens, index, options, env, self) : self.renderToken(tokens, index, options)
 }
 const markdownCache = new Map<string, string>()
-const markdownCacheLimit = 256
-
-const now = ref(Date.now())
-const collaborationBatchOpen = ref<Record<string, boolean>>({})
-const collaborationMemberOpen = ref<Record<string, boolean>>({})
-let clock: ReturnType<typeof setInterval> | null = null
-onMounted(() => {
-  clock = setInterval(() => { now.value = Date.now() }, 1000)
-})
-onBeforeUnmount(() => {
-  if (clock) clearInterval(clock)
-})
-
-const completedTasks = computed(() =>
-  props.runtimeTrace?.tasksContext?.tasks.filter(
-    task => ['completed', 'skipped'].includes(task.state),
-  ).length || 0,
-)
-const taskProgress = computed(() => {
-  const total = props.runtimeTrace?.tasksContext?.tasks.length || 0
-  return total ? Math.round(completedTasks.value * 100 / total) : 0
-})
-const activeTraceStatuses = new Set([
-  'creating',
-  'running',
-  'interrupting',
-  'awaiting_permission',
-  'awaiting_external_result',
-])
-const isTraceActive = computed(() =>
-  activeTraceStatuses.has(props.runtimeTrace?.status || ''),
-)
-
 function renderMarkdown(value: string) {
   const source = value || ''
   const cached = markdownCache.get(source)
   if (cached !== undefined) return cached
   const rendered = markdown.render(source)
-  if (markdownCache.size >= markdownCacheLimit) {
-    const oldest = markdownCache.keys().next().value
-    if (oldest !== undefined) markdownCache.delete(oldest)
-  }
+  if (markdownCache.size >= 256) markdownCache.delete(markdownCache.keys().next().value!)
   markdownCache.set(source, rendered)
   return rendered
-}
-
-function toolResult(message: AgentRuntimeMessage, id: string) {
-  return message.content.find(
-    (block): block is AgentToolResultBlock => block.type === 'tool_result' && block.id === id,
-  )
-}
-
-function inviteCalls(message: AgentRuntimeMessage) {
-  return message.content.filter(
-    (block): block is AgentToolCallBlock => (
-      block.type === 'tool_call' && block.name === 'AgentInvite'
-    ),
-  )
-}
-
-function isFirstInviteCall(message: AgentRuntimeMessage, block: AgentContentBlock) {
-  return block.type === 'tool_call'
-    && block.name === 'AgentInvite'
-    && inviteCalls(message)[0]?.id === block.id
-}
-
-function parsedInviteInput(call: AgentToolCallBlock) {
-  try {
-    const value = JSON.parse(call.input || '{}') as Record<string, unknown>
-    return {
-      target: String(value.target || ''),
-    }
-  } catch {
-    return { target: '' }
-  }
-}
-
-function inviteMetadata(message: AgentRuntimeMessage, callId: string) {
-  const result = toolResult(message, callId)
-  const metadata = result?.metadata?.collaboration_member
-  return metadata && typeof metadata === 'object'
-    ? metadata as Record<string, unknown>
-    : null
-}
-
-function collaborationProgress(
-  message: AgentRuntimeMessage,
-  call: AgentToolCallBlock,
-  target: string,
-) {
-  const metadata = inviteMetadata(message, call.id)
-  const workerSessionId = String(metadata?.worker_session_id || '')
-  if (workerSessionId) {
-    const exact = props.runtimeTrace?.collaborations?.find(
-      member => member.worker_session_id === workerSessionId,
-    )
-    if (exact) return exact
-  }
-  const result = toolResult(message, call.id)
-  if (
-    result?.state === 'error'
-    || result?.state === 'denied'
-    || result?.state === 'interrupted'
-  ) {
-    return null
-  }
-  const targetName = target.split('@')[0]?.trim()
-  return props.runtimeTrace?.collaborations?.find(
-    member => member.worker_agent_name === targetName,
-  ) || null
-}
-
-function collaborationMemberStatus(
-  message: AgentRuntimeMessage,
-  call: AgentToolCallBlock,
-  progress: AgentCollaborationMember | null,
-) {
-  if (progress) {
-    if (progress.work_status === 'reported') return 'completed'
-    if (
-      ['idle', 'queued'].includes(progress.work_status)
-      && progress.current_activity?.state === 'running'
-    ) {
-      return 'running'
-    }
-    return progress.work_status
-  }
-  const result = toolResult(message, call.id)
-  if (result?.state === 'error' || result?.state === 'denied') return 'failed'
-  if (result?.state === 'interrupted') return 'interrupted'
-  if (result?.state === 'success') return 'queued'
-  return 'inviting'
-}
-
-function collaborationMembers(message: AgentRuntimeMessage): CollaborationCardMember[] {
-  return inviteCalls(message).map(call => {
-    const input = parsedInviteInput(call)
-    const metadata = inviteMetadata(message, call.id)
-    const progress = collaborationProgress(message, call, input.target)
-    const status = collaborationMemberStatus(message, call, progress)
-    const active = ['idle', 'queued', 'running', 'waiting', 'inviting'].includes(status)
-    const statusLabels: Record<string, string> = {
-      idle: '等待启动',
-      queued: '排队中',
-      running: '执行中',
-      waiting: '等待中',
-      inviting: '邀请中',
-      reported: '已反馈',
-      completed: '已完成',
-      failed: '失败',
-      interrupted: '已中断',
-    }
-    return {
-      callId: call.id,
-      name: String(
-        progress?.worker_agent_name
-        || metadata?.worker_agent_name
-        || input.target.split('@')[0]
-        || '协同智能体',
-      ),
-      status,
-      statusLabel: statusLabels[status] || status,
-      active,
-      currentLabel: progress?.current_activity
-        ? agentCollaborationActivityLabel(progress.current_activity)
-        : active
-          ? '正在建立协作会话'
-          : statusLabels[status] || status,
-      assignedAt: progress?.assigned_at || String(metadata?.assigned_at || '') || null,
-      startedAt: progress?.started_at,
-      settledAt: progress?.settled_at,
-      activities: progress?.activities || [],
-    }
-  })
-}
-
-function collaborationBatchKey(message: AgentRuntimeMessage) {
-  return `collaboration:${message.id}`
-}
-
-function collaborationBatchActive(message: AgentRuntimeMessage) {
-  return collaborationMembers(message).some(member => member.active)
-}
-
-function collaborationBatchTitle(message: AgentRuntimeMessage) {
-  const members = collaborationMembers(message)
-  return collaborationBatchActive(message)
-    ? `${members.length} 个协同智能体正在处理`
-    : `${members.length} 个协同智能体已结束工作`
-}
-
-function collaborationBatchSummary(message: AgentRuntimeMessage) {
-  const members = collaborationMembers(message)
-  const completed = members.filter(member => member.status === 'completed').length
-  const failed = members.filter(member => ['failed', 'interrupted'].includes(member.status)).length
-  const parts = [`${completed}/${members.length} 已完成`]
-  if (failed) parts.push(`${failed} 个异常`)
-  return parts.join(' · ')
-}
-
-function collaborationBatchStatus(message: AgentRuntimeMessage) {
-  if (collaborationBatchActive(message)) return '协同中'
-  return collaborationMembers(message).some(
-    member => ['failed', 'interrupted'].includes(member.status),
-  ) ? '部分异常' : '已完成'
-}
-
-function isCollaborationBatchOpen(message: AgentRuntimeMessage) {
-  const key = collaborationBatchKey(message)
-  if (Object.prototype.hasOwnProperty.call(collaborationBatchOpen.value, key)) {
-    return collaborationBatchOpen.value[key]
-  }
-  return collaborationBatchActive(message)
-}
-
-function toggleCollaborationBatch(message: AgentRuntimeMessage) {
-  const key = collaborationBatchKey(message)
-  collaborationBatchOpen.value = {
-    ...collaborationBatchOpen.value,
-    [key]: !isCollaborationBatchOpen(message),
-  }
-}
-
-function collaborationMemberKey(message: AgentRuntimeMessage, callId: string) {
-  return `${collaborationBatchKey(message)}:${callId}`
-}
-
-function isCollaborationMemberOpen(message: AgentRuntimeMessage, callId: string) {
-  return Boolean(collaborationMemberOpen.value[collaborationMemberKey(message, callId)])
-}
-
-function toggleCollaborationMember(message: AgentRuntimeMessage, callId: string) {
-  const key = collaborationMemberKey(message, callId)
-  collaborationMemberOpen.value = {
-    ...collaborationMemberOpen.value,
-    [key]: !collaborationMemberOpen.value[key],
-  }
-}
-
-function collaborationMemberElapsed(member: CollaborationCardMember) {
-  const rawStart = member.startedAt || member.assignedAt
-  if (!rawStart) return ''
-  const start = Date.parse(rawStart)
-  const end = member.settledAt ? Date.parse(member.settledAt) : now.value
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return ''
-  const seconds = Math.max(0, Math.round((end - start) / 1000))
-  if (seconds < 60) return `${seconds}s`
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-}
-
-function shortTime(value: string) {
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return ''
-  return new Intl.DateTimeFormat('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).format(parsed)
-}
-
-function toolState(call: AgentToolCallBlock, message: AgentRuntimeMessage) {
-  const result = toolResult(message, call.id)
-  if (call.state === 'asking') {
-    if (isMessageRunning(message)) return 'asking'
-    if (isMessageInterrupted(message)) return 'interrupted'
-    return result?.state || 'finished'
-  }
-  if (!result || result.state === 'running') {
-    if (isMessageRunning(message)) return 'running'
-    if (isMessageInterrupted(message)) return 'interrupted'
-    return 'finished'
-  }
-  return result.state
-}
-
-function toolStateLabel(call: AgentToolCallBlock, message: AgentRuntimeMessage) {
-  const state = toolState(call, message)
-  return ({
-    asking: '等待确认',
-    running: '执行中',
-    success: '已完成',
-    error: '失败',
-    denied: '已拒绝',
-    interrupted: '已中断',
-    finished: '已结束',
-  } as Record<string, string>)[state] || state
-}
-
-function formatJson(value: string) {
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2)
-  } catch {
-    return value
-  }
-}
-
-function formatToolResult(result?: AgentToolResultBlock) {
-  if (!result) return ''
-  if (typeof result.output === 'string') return result.output
-  return result.output
-    .map(block => block.type === 'text' ? block.text : `[${block.source.media_type} 数据]`)
-    .join('\n')
-}
-
-function hintLabel(source?: string | null) {
-  if (!source) return '智能体消息'
-  try {
-    const parsed = JSON.parse(source)
-    const labels: Record<string, string> = {
-      team_message: '协同智能体反馈',
-      schedule: '计划任务消息',
-      tool_output: '后台工具结果',
-    }
-    const label = labels[parsed.label] || parsed.label || '智能体消息'
-    return parsed.sublabel ? `${label} · ${parsed.sublabel}` : label
-  } catch {
-    return source
-  }
-}
-
-function dataUrl(block: AgentDataBlock) {
-  if (block.source.type === 'url') return block.source.url || null
-  if (!block.source.data) return null
-  return `data:${block.source.media_type};base64,${block.source.data}`
-}
-
-function isMessageRunning(message: AgentRuntimeMessage) {
-  return !message.finished_at
-    && !isMessageWaiting(message)
-    && isTraceActive.value
-}
-
-function isMessageWaiting(message: AgentRuntimeMessage) {
-  return message.finished_reason === 'waiting_for_collaboration'
-}
-
-function isMessageInterrupted(message: AgentRuntimeMessage) {
-  return message.finished_reason === 'interrupted'
-}
-
-function messageStatusLabel(message: AgentRuntimeMessage) {
-  if (isMessageWaiting(message)) return '等待协同'
-  if (isMessageRunning(message)) return '执行中'
-  if (message.error || message.finished_reason === 'error') return '执行失败'
-  if (isMessageInterrupted(message)) return '已中断'
-  if (message.finished_reason === 'exceed_max_iters') return '已达执行上限'
-  if (message.finished_reason === 'collaboration_continued') return '协同已接续'
-  return '已完成'
-}
-
-function isLatestRuntimeMessage(message: AgentRuntimeMessage) {
-  const messages = props.runtimeTrace?.messages || []
-  return messages[messages.length - 1]?.id === message.id
-}
-
-function elapsed(message: AgentRuntimeMessage) {
-  const isLatest = isLatestRuntimeMessage(message)
-  const startedAt = isLatest
-    ? props.runtimeTrace?.turnStartedAt || message.created_at
-    : message.created_at
-  const finishedAt = isLatest
-    ? props.runtimeTrace?.turnFinishedAt || message.finished_at
-    : message.finished_at
-  const start = Date.parse(startedAt)
-  const end = finishedAt ? Date.parse(finishedAt) : now.value
-  if (!Number.isFinite(start) || !Number.isFinite(end)) return ''
-  const seconds = Math.max(0, Math.round((end - start) / 1000))
-  if (seconds < 60) return `${seconds}s`
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-}
-
-function elapsedLabel(message: AgentRuntimeMessage) {
-  const value = elapsed(message)
-  if (!value) return ''
-  return isLatestRuntimeMessage(message)
-    ? `总耗时 ${value}`
-    : value
-}
-
-function formatNumber(value: number) {
-  return new Intl.NumberFormat('zh-CN', { notation: value > 9999 ? 'compact' : 'standard' }).format(value)
 }
 </script>
 
 <style scoped>
-.agent-message-content { display:grid; min-width:0; gap:10px; color:inherit; }
+.agent-message-content { display: grid; min-width: 0; gap: 8px; color: inherit; }
 .agent-markdown { min-width:0; color:inherit; font-size:13px; line-height:1.72; overflow-wrap:anywhere; }
 .agent-markdown :deep(p) { margin:0 0 .72em; white-space:normal; }
 .agent-markdown :deep(p:last-child) { margin-bottom:0; }
@@ -783,74 +176,28 @@ function formatNumber(value: number) {
 .agent-markdown :deep(table) { display:block; width:100%; max-width:100%; overflow:auto; border-collapse:collapse; }
 .agent-markdown :deep(th),.agent-markdown :deep(td) { border:1px solid #dbe5e2; padding:6px 9px; text-align:left; }
 .agent-markdown :deep(a) { color:#0b766b; text-decoration:underline; text-underline-offset:2px; }
-.agent-runtime-message { display:grid; gap:10px; min-width:0; }
-.agent-runtime-message + .agent-runtime-message { margin-top:4px; border-top:1px dashed #d9e6e2; padding-top:12px; }
-.agent-plan { overflow:hidden; border:1px solid #d8e7e3; border-radius:8px; background:#f6faf9; }
-.agent-plan summary { display:grid; min-height:40px; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:8px; padding:8px 11px; color:#315c56; font-size:12px; list-style:none; cursor:pointer; transition:background .16s ease,color .16s ease; }
-.agent-plan summary::-webkit-details-marker { display:none; }
-.agent-plan summary:hover { color:#174f47; background:#edf6f3; }
-.agent-plan summary:focus-visible { outline:2px solid rgba(15,118,110,.26); outline-offset:-2px; }
-.agent-plan summary span { display:flex; min-width:0; align-items:center; gap:6px; font-weight:800; }.agent-plan summary strong { font-size:12px; font-variant-numeric:tabular-nums; }
-.agent-plan-chevron { color:#68807b; transition:transform .16s ease; }.agent-plan[open] .agent-plan-chevron { transform:rotate(90deg); }
-.agent-plan-body { display:grid; gap:8px; border-top:1px solid #dfe9e6; padding:9px 11px 10px; }
-.agent-plan-track { height:4px; overflow:hidden; border-radius:99px; background:#dce9e6; }.agent-plan-track i { display:block; height:100%; border-radius:inherit; background:#0e8b79; transition:width .2s; }
-.agent-plan ul { display:grid; gap:5px; max-height:150px; margin:0; padding:0; overflow:auto; list-style:none; }
-.agent-plan li { display:flex; align-items:flex-start; gap:7px; color:#647d78; font-size:12px; line-height:1.45; }.agent-plan li.completed,.agent-plan li.skipped { opacity:.65; }.agent-plan li.completed span,.agent-plan li.skipped span { text-decoration:line-through; }
-.agent-subagent-hitl { display:grid; gap:9px; border:1px solid #e6c77e; border-radius:9px; padding:10px; background:#fffaf0; }
-.agent-subagent-hitl>header { display:flex; align-items:flex-start; gap:8px; color:#875c13; }.agent-subagent-hitl>header>div { display:grid; gap:2px; }.agent-subagent-hitl>header strong { font-size:12px; }.agent-subagent-hitl>header span { color:#967743; font-size:12px; line-height:1.45; }
-.agent-subagent-hitl>article { display:grid; gap:6px; }.agent-subagent-name { display:flex; align-items:center; gap:7px; color:#654b20; }.agent-subagent-name span { font-size:12px; font-weight:800; }.agent-subagent-name small { border-radius:999px; padding:2px 6px; color:#886a35; background:#f8ebcf; font-size:12px; }
-.agent-collaboration { overflow:hidden; border:1px solid #d6e5e1; border-radius:9px; background:#f8fbfa; }
-.agent-collaboration.active { border-color:#9fcfc4; box-shadow:0 0 0 1px rgba(18,132,115,.05); }
-.agent-collaboration>header { display:grid; grid-template-columns:32px minmax(0,1fr) auto 28px; align-items:center; gap:9px; padding:10px 11px; }
-.agent-collaboration-icon { display:grid; width:32px; height:32px; place-items:center; border-radius:8px; color:#0f7568; background:#e3f3ef; }
-.agent-collaboration-heading { display:grid; min-width:0; gap:2px; }.agent-collaboration-heading strong { color:#254e48; font-size:13px; }.agent-collaboration-heading span { color:#718681; font-size:12px; }
-.agent-collaboration-state { display:flex; align-items:center; gap:5px; border-radius:999px; padding:3px 8px; color:#4e6e68; background:#eaf1ef; font-size:12px; white-space:nowrap; }.agent-collaboration-state.running { color:#087563; background:#e2f4ef; }
-.agent-collaboration-toggle { display:grid; width:28px; height:28px; place-items:center; border:0; border-radius:6px; color:#718580; background:transparent; cursor:pointer; }.agent-collaboration-toggle:hover { color:#215d54; background:#eaf3f1; }.agent-collaboration-toggle svg { transition:transform .16s; }.agent-collaboration-toggle svg.open { transform:rotate(90deg); }
-.agent-collaboration-members { border-top:1px solid #dfe9e7; background:#fff; }
-.agent-collaboration-members>article+article { border-top:1px solid #e5ecea; }
-.agent-collaboration-member { display:grid; width:100%; grid-template-columns:28px minmax(0,1fr) auto 48px 16px; align-items:center; gap:8px; border:0; padding:9px 11px; color:inherit; background:transparent; text-align:left; cursor:pointer; }.agent-collaboration-member:hover { background:#f6faf9; }
-.agent-collaboration-avatar { display:grid; width:28px; height:28px; place-items:center; border-radius:50%; color:#176d62; background:#e5f2ef; font-size:12px; font-weight:800; }
-.agent-collaboration-member-main { display:grid; min-width:0; gap:2px; }.agent-collaboration-member-main strong { overflow:hidden; color:#294e48; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }.agent-collaboration-member-main small { overflow:hidden; color:#788d88; font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
-.agent-collaboration-member-state { display:flex; align-items:center; gap:4px; color:#55736d; font-size:12px; white-space:nowrap; }.agent-collaboration-member-state.running,.agent-collaboration-member-state.queued,.agent-collaboration-member-state.inviting { color:#0c7b69; }.agent-collaboration-member-state.failed,.agent-collaboration-member-state.interrupted { color:#a44a31; }
-.agent-collaboration-elapsed { color:#879792; font-size:12px; font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
-.agent-collaboration-chevron { color:#84948f; transition:transform .16s; }.agent-collaboration-chevron.open { transform:rotate(90deg); }
-.agent-collaboration-detail { border-top:1px solid #e6eeec; padding:10px 12px 12px 47px; background:#f8fbfa; }.agent-collaboration-detail>section { min-width:0; }.agent-collaboration-detail>section>span { display:block; margin-bottom:6px; color:#607a74; font-size:12px; font-weight:800; }.agent-collaboration-detail p { margin:0; color:#536c67; font-size:12px; line-height:1.6; }
-.agent-collaboration-detail ol { display:grid; gap:6px; max-height:220px; margin:0; padding:0; overflow:auto; list-style:none; }.agent-collaboration-detail li { display:grid; grid-template-columns:7px minmax(0,1fr) auto; align-items:center; gap:7px; color:#5f7772; font-size:12px; }.agent-collaboration-detail li>i { width:7px; height:7px; border-radius:50%; background:#8fa29e; }.agent-collaboration-detail li>i.running { background:#17a080; box-shadow:0 0 0 3px rgba(23,160,128,.1); }.agent-collaboration-detail li>i.success,.agent-collaboration-detail li>i.completed { background:#16806d; }.agent-collaboration-detail li>i.error,.agent-collaboration-detail li>i.failed,.agent-collaboration-detail li>i.interrupted { background:#c45e40; }.agent-collaboration-detail time { color:#91a09c; font-size:12px; font-variant-numeric:tabular-nums; }
-.agent-thinking,.agent-tool,.agent-hint { overflow:hidden; border:1px solid #dbe7e4; border-radius:8px; background:#f8fbfa; }
-.agent-thinking summary,.agent-hint summary { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:9px 11px; color:#54706b; font-size:12px; cursor:pointer; list-style:none; }
-.agent-thinking summary::-webkit-details-marker,.agent-tool summary::-webkit-details-marker,.agent-hint summary::-webkit-details-marker { display:none; }
-.agent-thinking summary span,.agent-hint summary { font-weight:750; }.agent-thinking summary span { display:flex; align-items:center; gap:6px; }
-.agent-thinking summary em { display:flex; align-items:center; gap:5px; color:#7c908c; font-size:12px; font-style:normal; font-weight:500; }
-.agent-thinking summary em i { width:6px; height:6px; border-radius:50%; background:#17a680; box-shadow:0 0 0 3px rgba(23,166,128,.1); }
-.agent-thinking>div { max-height:240px; overflow:auto; border-top:1px solid #e2ebe9; padding:10px 12px; color:#607672; font-size:12px; line-height:1.65; white-space:pre-wrap; }
-.agent-tool>summary { display:grid; grid-template-columns:28px minmax(0,1fr) auto 16px; align-items:center; gap:8px; padding:9px 10px; cursor:pointer; list-style:none; }
-.agent-tool-icon { display:grid; width:27px; height:27px; place-items:center; border-radius:6px; color:#176b61; background:#e5f3ef; }
-.agent-tool-title { display:grid; min-width:0; gap:1px; }.agent-tool-title strong { color:#31534e; font-size:12px; }.agent-tool-title small { overflow:hidden; color:#849792; font:12px/1.25 ui-monospace,Consolas,monospace; text-overflow:ellipsis; white-space:nowrap; }
-.agent-tool summary>em { display:flex; align-items:center; gap:5px; border-radius:999px; padding:3px 7px; color:#60746f; background:#edf3f1; font-size:12px; font-style:normal; white-space:nowrap; }
-.agent-tool summary>em.state-asking { color:#9b5b00; background:#fff2d9; }.agent-tool summary>em.state-error,.agent-tool summary>em.state-denied { color:#ae472b; background:#fff0eb; }.agent-tool summary>em.state-success { color:#08735f; background:#e7f5f0; }
-.spin-dot { width:6px; height:6px; border:1px solid #57958a; border-top-color:transparent; border-radius:50%; animation:spin .7s linear infinite; }
-.agent-tool-chevron { color:#81938f; transition:transform .15s; }.agent-tool[open]>summary .agent-tool-chevron,.agent-hint[open]>summary .agent-tool-chevron { transform:rotate(90deg); }
-.agent-tool-detail { display:grid; gap:9px; border-top:1px solid #e0eae7; padding:10px; background:#f2f7f5; }
-.agent-tool-detail section { min-width:0; }.agent-tool-detail section>span { display:block; margin-bottom:5px; color:#687f7a; font-size:12px; font-weight:800; text-transform:uppercase; }
-.agent-tool-detail pre { max-height:240px; margin:0; overflow:auto; border:1px solid #d9e4e1; border-radius:6px; padding:9px 10px; color:#34534e; background:#fff; font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; }
-.agent-tool-detail pre.error { border-color:#efd4ca; color:#9e452d; background:#fff8f5; }.agent-tool-waiting { margin:0; color:#7c908b; font-size:12px; }
-.agent-confirm { display:flex; align-items:center; gap:7px; border-top:1px solid #efdcb9; padding:10px; background:#fffaf0; }.agent-confirm>div { display:grid; flex:1; gap:2px; }.agent-confirm strong { color:#84520b; font-size:12px; }.agent-confirm span { color:#967549; font-size:12px; }
-.agent-confirm button { display:inline-flex; align-items:center; justify-content:center; gap:5px; border-radius:5px; padding:6px 9px; font:inherit; font-size:12px; font-weight:750; cursor:pointer; }.agent-confirm button:disabled { opacity:.58; cursor:wait; }.agent-confirm .deny { border:1px solid #d9cbb7; color:#725f45; background:#fff; }.agent-confirm .allow { border:1px solid #177b6d; color:#fff; background:#177b6d; }
-.agent-hint summary { justify-content:flex-start; }.agent-hint summary span { flex:1; }.agent-hint>.agent-markdown,.agent-hint-blocks { border-top:1px solid #e1ebe8; padding:10px 12px; background:#fff; }.agent-hint-blocks { display:grid; gap:8px; }.agent-hint-blocks img { max-width:100%; max-height:300px; border-radius:6px; }
-.agent-media { margin:0; }.agent-media img { max-width:100%; max-height:360px; border-radius:8px; object-fit:contain; }.agent-media a { color:#0d7469; font-size:12px; }
-.agent-runtime-error { display:flex; align-items:flex-start; gap:8px; border:1px solid #efcfc5; border-radius:7px; padding:9px 10px; color:#a23f25; background:#fff5f1; }.agent-runtime-error>div { display:grid; gap:2px; }.agent-runtime-error strong { font-size:12px; }.agent-runtime-error span { font-size:12px; line-height:1.5; }
-.agent-runtime-message footer { display:flex; min-width:0; align-items:center; gap:12px; color:#82928f; font-size:12px; }
-.agent-runtime-message footer span { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
-.agent-runtime-status { display:flex; min-width:0; align-items:center; gap:8px; }
-.agent-runtime-state { border-radius:999px; padding:3px 7px; color:#4e6e68; background:#edf3f1; }
-.agent-runtime-state.running { color:#0b7768; background:#e6f5f1; }
-.agent-runtime-state.interrupted { color:#8a5b19; background:#fff3dc; }
-.agent-runtime-state.error { color:#a4472d; background:#fff0ea; }
-.agent-runtime-metrics { display:flex; min-width:0; flex:0 1 auto; align-items:center; gap:10px; margin-left:auto; font-variant-numeric:tabular-nums; }
-.agent-runtime-model { display:block !important; max-width:160px; overflow:hidden; text-overflow:ellipsis; }
-.agent-runtime-usage { flex:0 0 auto; }
-.agent-starting { display:inline-flex; min-height:28px; align-items:center; gap:9px; color:#607873; font-size:12px; font-weight:650; }.agent-starting>span { display:flex; align-items:center; gap:4px; }.agent-starting i { width:5px; height:5px; border-radius:50%; background:#258679; animation:pulse 1.1s ease-in-out infinite; }.agent-starting i:nth-child(2){animation-delay:.15s}.agent-starting i:nth-child(3){animation-delay:.3s}
-.spin { animation:spin .8s linear infinite; }
-@keyframes spin { to { transform:rotate(360deg); } }
-@keyframes pulse { 0%,100%{opacity:.3;transform:translateY(0)}50%{opacity:1;transform:translateY(-2px)} }
+
+.agent-thinking { min-width: 0; color: #607873; }
+.agent-thinking summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 2px; cursor: pointer; list-style: none; font-size: 12px; }
+.agent-thinking summary::-webkit-details-marker { display: none; }
+.agent-thinking summary span { display: flex; align-items: center; gap: 8px; }
+.agent-thinking summary em { font-size: 12px; font-style: normal; }
+.agent-thinking-actions { flex-shrink: 0; }
+.agent-thinking-chevron { color: #6f847e; transition: transform .15s ease; }
+.agent-thinking[open] > summary .agent-thinking-chevron { transform: rotate(90deg); }
+.agent-thinking summary:focus-visible { outline: 2px solid #177b6d; outline-offset: 2px; }
+.agent-thinking > div { margin-left: 10px; padding: 8px 0 8px 17px; border-left: 1px solid #d7e5df;
+  font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-media { margin: 0; }.agent-media img { max-width: 100%; max-height: 360px; border-radius: 8px; object-fit: contain; }
+.agent-media a { color: #0d7469; font-size: 12px; }
+.agent-runtime-error { display: flex; align-items: flex-start; gap: 8px; border: 1px solid #efcfc5; border-radius: 7px;
+  padding: 9px 10px; color: #a23f25; background: #fff5f1; font-size: 12px; }
+.agent-runtime-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 5px; color: #6d837c; font-size: 12px; }
+.agent-runtime-state { display: inline-flex; align-items: center; gap: 4px; color: #4e6e68; }
+.agent-runtime-state.running { color: #0b7768; }.agent-runtime-state.interrupted { color: #8a5b19; }.agent-runtime-state.error { color: #a4472d; }
+.agent-runtime-metrics { display: flex; flex-wrap: wrap; min-width: 0; gap: 8px; margin-left: auto; font-variant-numeric: tabular-nums; }
+.agent-runtime-model { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-starting { display: flex; align-items: center; gap: 8px; min-height: 28px; color: #607873; font-size: 12px; }
+.spin { animation: spin .8s linear infinite; }@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; }.agent-thinking-chevron { transition: none; } }
 </style>

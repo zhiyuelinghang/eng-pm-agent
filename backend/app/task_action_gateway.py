@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from task_engine.domain.models import StepState, TaskInstance
 from task_engine.engine import TaskEngine
+from .chat_names import default_group_title
 
 from .models import (
     ChatChannel,
@@ -114,7 +115,7 @@ def _project_channel(
     channel = ChatChannel(
         project_id=project_id,
         created_by_user_id=owner_id,
-        title=f"{project.name}项目群",
+        title=default_group_title(db, project),
         summary="项目成员共享的实时协同群聊",
         channel_type="project",
     )
@@ -129,7 +130,7 @@ def _sync_project_channel_members(
     *,
     additional_user_id: int | None = None,
 ) -> None:
-    if channel.channel_type != "project":
+    if channel.channel_type not in {"project", "topic"}:
         return
     user_ids = set(
         db.scalars(

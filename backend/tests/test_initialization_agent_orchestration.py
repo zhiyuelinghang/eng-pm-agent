@@ -3,12 +3,14 @@ from pathlib import Path
 
 from backend.app import api
 from scripts.provision_initialization_agents import (
+    COLLABORATION_AGENTS,
     GLOBAL_BUSINESS_INTERACTIONS,
     ORCHESTRATOR,
     PARSED_ATTACHMENT_READ_INTERACTION,
     SPECIALISTS,
     TEAM_CONFIG_PATH,
     WORKERS,
+    _DOBBY_POLICY,
     _model_policy,
     _system_prompt,
 )
@@ -80,8 +82,53 @@ def test_persistent_team_is_declarative_and_has_bounded_assignments() -> None:
         spec.initialization_role == "validator"
         for spec in WORKERS
     )
-    assert len(GLOBAL_BUSINESS_INTERACTIONS) == 18
+    assert len(GLOBAL_BUSINESS_INTERACTIONS) == 17
+    assert "dobby_get_project_basic_info_status" in GLOBAL_BUSINESS_INTERACTIONS
+    assert "dobby_create_task" not in GLOBAL_BUSINESS_INTERACTIONS
+    assert "dobby_update_task" not in GLOBAL_BUSINESS_INTERACTIONS
     assert not any("initialization" in key for key in GLOBAL_BUSINESS_INTERACTIONS)
+
+
+def test_section_17_collaboration_roles_and_confirmed_writes_are_declarative() -> None:
+    agents = {spec.key: spec for spec in COLLABORATION_AGENTS}
+
+    knowledge = agents["knowledge_manager"]
+    assert knowledge.name == "资料助手"
+    assert knowledge.agent_level == "management"
+    assert knowledge.published is True
+    assert knowledge.allow_global_main_call is True
+    assert knowledge.project_knowledge_enabled is True
+
+    risk = agents["risk_advisor"]
+    assert risk.name == "风险研判助手"
+    assert risk.agent_level == "worker"
+    assert risk.allow_global_main_call is True
+    assert risk.project_knowledge_enabled is True
+    assert "不得直接写入风险源" in risk.system_prompt
+
+    task = agents["task_assistant"]
+    assert task.name == "任务助手"
+    assert task.role == "system_internal"
+    assert task.agent_level == "worker"
+    assert task.published is False
+    assert task.mcp_ids == ("task-engine",)
+    assert "绝不调用发布" in task.system_prompt
+
+    for interaction_key in (
+        "dobby_update_document_category",
+        "dobby_create_risk",
+    ):
+        assert interaction_key in GLOBAL_BUSINESS_INTERACTIONS
+        assert _database_interaction(interaction_key)["requires_confirmation"] is True
+
+    assert "普通交流、意图理解、参数明确的受控业务操作" in _DOBBY_POLICY
+    assert "只有需要专业判断、专属工具或复杂多阶段执行" in _DOBBY_POLICY
+    assert "先调用 agent_search，再用 agent_invoke" in _DOBBY_POLICY
+    assert "普通问候直接回答，不激活项目数据库工具组" in _DOBBY_POLICY
+    assert "dobby_get_project_basic_info_status，不启动子智能体" in _DOBBY_POLICY
+    assert "要求分析资料分类时先调用资料助手" in _DOBBY_POLICY
+    assert "要求从施工资料识别风险时先调用风险研判助手" in _DOBBY_POLICY
+    assert "专业智能体失败时先检查 agent_run_status" in _DOBBY_POLICY
 
 
 def test_platform_skill_is_the_only_initialization_workflow_source() -> None:

@@ -28,8 +28,10 @@ from .._team_lifecycle import (
     mark_team_leader_running,
     mark_team_member_running,
     settle_team_member,
+    team_work_is_pending,
 )
 from .._team_messaging import deliver_team_message
+from .._team_delegation import has_pending_delegations, report_recipient_session_id
 from ..message_bus import MessageBus, MessageBusKeys
 from ..mcp_registry import MCPRegistryManager
 from ..skill_registry import SkillRegistryManager
@@ -40,6 +42,7 @@ from ..workspace_manager import WorkspaceManagerBase
 from ..middleware import (
     InboxMiddleware,
     StateChangeMiddleware,
+    ThinkingLanguageMiddleware,
 )
 from ...middleware import TTSMiddleware, RAGMiddleware
 from ...rag import KnowledgeBase
@@ -65,6 +68,7 @@ from ..._logging import logger
 from ...agent import Agent, ModelConfig
 from ...event import (
     AgentEvent,
+    CustomEvent,
     ReplyStartEvent,
     ReplyEndEvent,
     ReplyFinishedReason,
@@ -80,6 +84,9 @@ from ...message import (
     ToolResultState,
 )
 from ...permission import AdditionalWorkingDirectory, PermissionMode
+
+
+RUN_COMPLETED_EVENT = "run_completed"
 
 
 class ChatService:
@@ -316,13 +323,28 @@ class ChatService:
         if session is None:
             raise LookupError(f"Session '{session_id}' not found.")
 
-        if await self._message_bus.is_locked(
+        running = await self._message_bus.is_locked(
             MessageBusKeys.session_lock(session_id),
-        ):
+        )
+        if running:
             await self._message_bus.publish(
                 MessageBusKeys.session_interrupt_channel(),
                 {"session_id": session_id},
             )
+
+        # A leader can be idle while its workers are still running or parked
+        # on confirmation. Cancel and purge those temporary sessions as well,
+        # so their late reports cannot restart a run the user has stopped.
+        team_id = getattr(session, "team_id", None)
+        if team_id is not None:
+            team = await self._storage.get_team(user_id, team_id)
+            if team is not None and team.session_id == session_id:
+                from ._session import SessionService
+
+                await SessionService(
+                    storage=self._storage, message_bus=self._message_bus,
+                ).delete_team(user_id, team_id)
+        if running:
             return
 
         await enqueue_run_trigger(
@@ -345,17 +367,157 @@ class ChatService:
         | ExternalExecutionResultEvent
         | UserInterruptEvent
         | None,
-    ) -> None:
-        """Serialize the complete session-state load, run and persist cycle."""
+    ) -> Msg | None:
+        """Serialize the complete session-state load, run and persist cycle.
+
+        A correlated ``run_completed`` event is published while the session
+        lock is still held and only after the reply/state persistence path has
+        finished.  Gateways that already consume the AgentScope event stream
+        can therefore stop polling the message and status endpoints merely to
+        learn that the durable result is ready.
+        """
+        reply_msg: Msg | None = None
+        failure: BaseException | None = None
         async with self._message_bus.acquire_lock(
             MessageBusKeys.session_lock(session_id),
             ttl_secs=MessageBusKeys.SESSION_RUN_TTL_SECS,
         ):
-            await self._run_impl_locked(
+            try:
+                reply_msg = await self._run_impl_locked(
+                    user_id,
+                    session_id,
+                    agent_id,
+                    input_msg,
+                )
+                return reply_msg
+            except BaseException as exc:
+                failure = exc
+                raise
+            finally:
+                completion_task = asyncio.create_task(
+                    self._publish_run_completed(
+                        user_id=user_id,
+                        session_id=session_id,
+                        agent_id=agent_id,
+                        input_msg=input_msg,
+                        reply_msg=reply_msg,
+                        failure=failure,
+                    ),
+                    name=f"run-completed:{session_id}",
+                )
+                try:
+                    await asyncio.shield(completion_task)
+                except asyncio.CancelledError:
+                    await completion_task
+                    raise
+
+    @staticmethod
+    def _input_message_ids(input_msg: object) -> list[str]:
+        messages = input_msg if isinstance(input_msg, list) else [input_msg]
+        return [
+            str(message.id)
+            for message in messages
+            if isinstance(message, Msg) and message.id
+        ]
+
+    @staticmethod
+    def _reply_runtime_status(
+        reply_msg: Msg | None,
+        failure: BaseException | None,
+    ) -> str:
+        if failure is not None:
+            return (
+                "interrupted"
+                if isinstance(failure, asyncio.CancelledError)
+                else "error"
+            )
+        if reply_msg is None:
+            return "idle"
+        tool_calls = reply_msg.get_content_blocks("tool_call")
+        if any(call.state == ToolCallState.ASKING for call in tool_calls):
+            return "awaiting_permission"
+        if any(call.state == ToolCallState.SUBMITTED for call in tool_calls):
+            return "awaiting_external_result"
+        if reply_msg.finished_reason == ReplyFinishedReason.ERROR:
+            return "error"
+        if reply_msg.finished_reason == ReplyFinishedReason.INTERRUPTED:
+            return "interrupted"
+        if reply_msg.finished_reason == ReplyFinishedReason.EXCEED_MAX_ITERS:
+            return "exceed_max_iters"
+        return "completed"
+
+    async def _leader_collaboration_pending(
+        self,
+        user_id: str,
+        session_id: str,
+        agent_id: str,
+    ) -> bool:
+        session = await self._storage.get_session(
+            user_id,
+            agent_id,
+            session_id,
+        )
+        if session is None or session.team_id is None:
+            return False
+        team = await self._storage.get_team(user_id, session.team_id)
+        return bool(
+            team is not None
+            and team.session_id == session_id
+            and team_work_is_pending(team)
+        )
+
+    async def _publish_run_completed(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        agent_id: str,
+        input_msg: object,
+        reply_msg: Msg | None,
+        failure: BaseException | None,
+    ) -> None:
+        """Publish one durable-result signal without masking run failures."""
+        try:
+            collaboration_pending = await self._leader_collaboration_pending(
                 user_id,
                 session_id,
                 agent_id,
-                input_msg,
+            )
+            error_message = None
+            if failure is not None:
+                error_message = (
+                    "智能体运行已中断。"
+                    if isinstance(failure, asyncio.CancelledError)
+                    else _classify_error(failure).message
+                )
+            event = CustomEvent(
+                name=RUN_COMPLETED_EVENT,
+                value={
+                    "session_id": session_id,
+                    "agent_id": agent_id,
+                    "input_message_ids": self._input_message_ids(input_msg),
+                    "runtime_status": self._reply_runtime_status(
+                        reply_msg,
+                        failure,
+                    ),
+                    "collaboration_pending": collaboration_pending,
+                    "reply": (
+                        reply_msg.model_dump(mode="json")
+                        if reply_msg is not None
+                        else None
+                    ),
+                    "error": error_message,
+                },
+            )
+            await publish_session_event(
+                self._message_bus,
+                session_id,
+                event.model_dump(mode="json"),
+            )
+        except Exception:  # pylint: disable=broad-except
+            logger.exception(
+                "Failed to publish run completion for session %s",
+                session_id,
             )
 
     async def _run_impl_locked(
@@ -369,7 +531,7 @@ class ChatService:
         | ExternalExecutionResultEvent
         | UserInterruptEvent
         | None,
-    ) -> None:
+    ) -> Msg | None:
         """Run one session while :meth:`_run_impl` holds its lock."""
 
         # ----------------------------------------------------------------
@@ -389,6 +551,8 @@ class ChatService:
                 status_code=404,
                 detail=f"Agent {agent_id!r} not found.",
             ) from exc
+        if not agent_record.data.platform_config.enabled and not isinstance(input_msg, UserInterruptEvent):
+            raise HTTPException(status_code=403, detail="该智能体已停用，不能继续执行。")
         session_record = await self._storage.get_session(
             user_id,
             agent_id,
@@ -585,6 +749,11 @@ class ChatService:
                 PermissionReviewerMiddleware(permission_reviewer),
             )
 
+        if session_record.config.platform_context is not None:
+            # Apply to every platform run, including existing sessions, workers,
+            # confirmation resumes and fallback models, without editing records.
+            middlewares.append(ThinkingLanguageMiddleware())
+
         agent_kwargs = dict(
             name=agent_record.data.name,
             system_prompt=agent_record.data.system_prompt,
@@ -638,6 +807,10 @@ class ChatService:
         # 7. Run the agent while the distributed session lock remains held
         # ----------------------------------------------------------------
         events_key = MessageBusKeys.session_events(session_id)
+        # A completed run leaves only its correlated completion marker for a
+        # late subscriber.  Clear that marker immediately before this run
+        # starts producing its own replayable events.
+        await self._message_bus.log_trim(events_key)
         # Keep the block shape local customisations rely on while the real
         # lock now wraps state loading, assembly and persistence above.
         async with nullcontext():
@@ -908,6 +1081,8 @@ class ChatService:
                     await persist_task
                     raise
 
+        return reply_msg
+
     @staticmethod
     def _reported_to_leader(
         reply_msg: Msg,
@@ -969,10 +1144,15 @@ class ChatService:
         if team is None or team.session_id == session_id:
             return
 
+        if (
+            reply_msg.finished_reason == ReplyFinishedReason.COMPLETED
+            and has_pending_delegations(team, session_id)
+        ):
+            return
         leader_session = await self._storage.get_session(
             user_id,
             "",
-            team.session_id,
+            report_recipient_session_id(team, session_id),
         )
         if leader_session is None:
             return
@@ -1007,10 +1187,12 @@ class ChatService:
             ),
             "",
         )
-        if reply_msg.finished_reason == ReplyFinishedReason.ERROR:
+        if reply_msg.finished_reason in {ReplyFinishedReason.ERROR, ReplyFinishedReason.EXCEED_MAX_ITERS}:
             error_message = (
                 reply_msg.error.message
                 if reply_msg.error is not None
+                else "达到迭代上限，任务尚未完成"
+                if reply_msg.finished_reason == ReplyFinishedReason.EXCEED_MAX_ITERS
                 else "未知运行错误"
             )
             content = (
@@ -1099,7 +1281,7 @@ class ChatService:
         leader_session = await self._storage.get_session(
             user_id,
             "",
-            team.session_id,
+            report_recipient_session_id(team, session_id),
         )
         if leader_session is None:
             return

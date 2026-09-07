@@ -8,6 +8,8 @@ export type AgentThinkingBlock = {
   type: 'thinking'
   id: string
   thinking: string
+  /** UI stream lifecycle; older persisted messages may omit this field. */
+  state?: 'streaming' | 'finished'
 }
 
 export type AgentDataBlock = {
@@ -29,6 +31,18 @@ export type AgentHintBlock = {
   hint: string | Array<AgentTextBlock | AgentDataBlock>
 }
 
+export type BusinessConfirmationPreview = {
+  operation: 'create' | 'update' | 'delete'
+  operation_label: string
+  target_name: string
+  record_id?: string | number | null
+  project_name: string
+  scope: string
+  impact: string
+  affected_count: number
+  changes: Array<{ field: string; before: unknown; after: unknown }>
+}
+
 export type AgentToolCallBlock = {
   type: 'tool_call'
   id: string
@@ -36,6 +50,8 @@ export type AgentToolCallBlock = {
   input: string
   state: 'pending' | 'asking' | 'allowed' | 'submitted' | 'finished'
   suggested_rules?: Array<Record<string, unknown>>
+  confirmation_preview?: BusinessConfirmationPreview | null
+  confirmation_revision?: number
 }
 
 export type AgentToolResultBlock = {
@@ -126,6 +142,15 @@ export type AgentSubagentHitlEntry = {
   created_at: string
 }
 
+export type AgentRuntimeStage = {
+  stage_id: string
+  label: string
+  status: string
+  started_at: string
+  finished_at?: string | null
+  duration_ms?: number | null
+}
+
 export type AgentRuntimeTrace = {
   messages: AgentRuntimeMessage[]
   modelNames: string[]
@@ -133,6 +158,7 @@ export type AgentRuntimeTrace = {
   teamUpdateCount: number
   collaborations: AgentCollaborationMember[]
   subagentHitl: AgentSubagentHitlEntry[]
+  stages: AgentRuntimeStage[]
   status: string
   turnStartedAt: string | null
   turnFinishedAt: string | null
@@ -236,6 +262,7 @@ function cloneRuntimeTraceForUpdate(
         })),
       },
     })),
+    stages: (current.stages || []).map(stage => ({ ...stage })),
   }
 }
 
@@ -250,6 +277,7 @@ export function createEmptyRuntimeTrace(
     teamUpdateCount: 0,
     collaborations: [],
     subagentHitl: [],
+    stages: [],
     status,
     turnStartedAt,
     turnFinishedAt: null,
@@ -291,6 +319,9 @@ export function runtimeTraceFromExtraData(
   const collaborations = Array.isArray(summary.collaborations)
     ? summary.collaborations as AgentCollaborationMember[]
     : []
+  const stages = Array.isArray(summary.stages)
+    ? summary.stages as AgentRuntimeStage[]
+    : []
   const messages = clone(collection)
   for (const message of messages) {
     if (message.platform_collaboration_status === 'continued') {
@@ -329,6 +360,7 @@ export function runtimeTraceFromExtraData(
     teamUpdateCount: Number(summary.team_update_count) || 0,
     collaborations: clone(collaborations),
     subagentHitl: clone(subagentHitl),
+    stages: clone(stages),
     status: runtimeStatus,
     turnStartedAt: summaryStartedAt || firstMessageStartedAt,
     turnFinishedAt: activeStatuses.has(runtimeStatus)
@@ -381,6 +413,14 @@ function ensureReply(
   return message
 }
 
+function finishThinkingBlocks(message: AgentRuntimeMessage, mutableBlocks: WeakSet<object>) {
+  for (const block of message.content) {
+    if (block.type !== 'thinking' || block.state === 'finished') continue
+    const mutable = findMutableBlock(message, 'thinking', block.id, mutableBlocks)
+    if (mutable) mutable.state = 'finished'
+  }
+}
+
 function applyAgentRuntimeEventMutable(
   trace: AgentRuntimeTrace,
   incoming: AgentRuntimeEvent,
@@ -422,6 +462,19 @@ function applyAgentRuntimeEventMutable(
       trace.subagentHitl = trace.subagentHitl.filter(
         item => `${item.worker_session_id}:${item.reply_id}` !== key,
       )
+    } else if (event.name === 'runtime_stage_updated' && event.value) {
+      const stage = event.value as AgentRuntimeStage
+      if (stage.stage_id) {
+        const existingIndex = trace.stages.findIndex(
+          item => item.stage_id === stage.stage_id,
+        )
+        if (existingIndex < 0) trace.stages = [...trace.stages, { ...stage }]
+        else {
+          trace.stages = trace.stages.map((item, index) => (
+            index === existingIndex ? { ...item, ...stage } : item
+          ))
+        }
+      }
     }
     return
   }
@@ -459,6 +512,7 @@ function applyAgentRuntimeEventMutable(
 
   switch (event.type) {
     case 'REPLY_END':
+      finishThinkingBlocks(message, mutableBlocks)
       if (event.platform_collaboration_pending) {
         message.finished_at = null
         message.finished_reason = 'waiting_for_collaboration'
@@ -489,6 +543,7 @@ function applyAgentRuntimeEventMutable(
       break
     }
     case 'MODEL_CALL_END':
+      finishThinkingBlocks(message, mutableBlocks)
       message.usage = message.usage || {
         input_tokens: 0,
         output_tokens: 0,
@@ -522,10 +577,12 @@ function applyAgentRuntimeEventMutable(
       break
     }
     case 'THINKING_BLOCK_START':
+      finishThinkingBlocks(message, mutableBlocks)
       message.content.push({
         type: 'thinking',
         id: String(event.block_id),
         thinking: '',
+        state: 'streaming',
       })
       break
     case 'THINKING_BLOCK_DELTA': {
@@ -536,6 +593,11 @@ function applyAgentRuntimeEventMutable(
         mutableBlocks,
       )
       if (block) block.thinking += String(event.delta || '')
+      break
+    }
+    case 'THINKING_BLOCK_END': {
+      const block = findMutableBlock(message, 'thinking', String(event.block_id), mutableBlocks)
+      if (block) block.state = 'finished'
       break
     }
     case 'DATA_BLOCK_START':

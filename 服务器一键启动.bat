@@ -78,7 +78,8 @@ echo [平台] http://服务器地址:%PLATFORM_WEB_PORT%/
 echo [平台后端] http://127.0.0.1:%PLATFORM_API_PORT%/
 echo [管理端] http://127.0.0.1:%AGENTSCOPE_WEBUI_PORT%/
 echo [AgentScope API] http://127.0.0.1:%AGENTSCOPE_PORT%/
-echo [群聊实时服务] ws://服务器地址:%DOBBY_REALTIME_PORT%/connection/websocket
+echo [群聊实时服务-本机] ws://127.0.0.1:%DOBBY_REALTIME_PORT%/connection/websocket
+echo [群聊实时服务-公网] 请使用 .env 中 CENTRIFUGO_WS_URL 配置的 Nginx WSS 地址。
 echo [运行环境] 仅使用项目便携 Python，不需要 Node.js。
 echo.
 echo 停止全部服务请运行 一键停止全部服务.bat。

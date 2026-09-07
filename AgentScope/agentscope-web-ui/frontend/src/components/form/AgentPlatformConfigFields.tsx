@@ -41,6 +41,7 @@ export function AgentPlatformConfigFields({ values, onChange }: Props) {
 	const { t } = useTranslation();
 	const { knowledgeBases, loading } = useKnowledgeBases();
 	const role = values.role ?? 'business';
+	const agentLevel = values.agent_level ?? 'worker';
 	const knowledgeConfig = values.knowledge_config ?? null;
 
 	const updateKnowledgeConfig = (next: SessionKnowledgeConfig | null) => {
@@ -105,6 +106,34 @@ export function AgentPlatformConfigFields({ values, onChange }: Props) {
 				</Alert>
 			)}
 
+			<Field>
+				<FieldLabel htmlFor="agent-platform-level">
+					{t('agent-form.platform-config.agentLevel.label')}
+				</FieldLabel>
+				<Select
+					value={agentLevel}
+					disabled={role === 'global_main'}
+					onValueChange={(value) =>
+						onChange('agent_level', value as 'management' | 'worker')
+					}
+				>
+					<SelectTrigger id="agent-platform-level" className="w-full">
+						<SelectValue />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="management">
+							{t('agent-form.platform-config.agentLevel.management')}
+						</SelectItem>
+						<SelectItem value="worker">
+							{t('agent-form.platform-config.agentLevel.worker')}
+						</SelectItem>
+					</SelectContent>
+				</Select>
+				<FieldDescription>
+					{t(`agent-form.platform-config.agentLevel.${agentLevel}Description`)}
+				</FieldDescription>
+			</Field>
+
 			<div className="grid grid-cols-2 gap-3">
 				<Field orientation="horizontal">
 					<Checkbox
@@ -150,6 +179,24 @@ export function AgentPlatformConfigFields({ values, onChange }: Props) {
 						{t(
 							'agent-form.platform-config.allowGlobalMainCallDescription',
 						)}
+					</FieldDescription>
+				</div>
+			</Field>
+
+			<Field orientation="horizontal">
+				<Checkbox
+					id="agent-platform-project-knowledge"
+					checked={values.project_knowledge_enabled ?? false}
+					onCheckedChange={(checked) =>
+						onChange('project_knowledge_enabled', checked === true)
+					}
+				/>
+				<div className="grid gap-1">
+					<FieldLabel htmlFor="agent-platform-project-knowledge" className="font-normal">
+						{t('agent-form.platform-config.projectKnowledge')}
+					</FieldLabel>
+					<FieldDescription>
+						{t('agent-form.platform-config.projectKnowledgeDescription')}
 					</FieldDescription>
 				</div>
 			</Field>

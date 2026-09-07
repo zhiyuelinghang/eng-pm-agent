@@ -6,9 +6,9 @@ Unlike :class:`AgentCreate`, which spawns a brand-new worker
 **borrows** a pre-existing user-owned agent by minting a fresh
 team-scoped :class:`SessionRecord` on top of the *existing*
 :class:`AgentRecord`.  The borrowed agent keeps its system prompt,
-context/react configs, workspace, MCP, skills, and model choice; only
-a new session is created so it can hold a parallel conversation for
-the team.
+context/react configs, assigned MCP and skills, and model policy.
+Platform calls receive a fresh workspace as well as a fresh session;
+another platform user's files and conversation settings are not borrowed.
 
 When the team is dissolved or the leader is deleted, only the borrowed
 session is cleaned up — the underlying :class:`AgentRecord` survives
@@ -27,6 +27,7 @@ from ._constants import HANDLE_LEN
 from ._team_tool_base import _TeamToolBase
 from .._platform_permissions import apply_platform_tool_allow_rules
 from .._team_lifecycle import add_and_assign_team_member
+from .._team_delegation import ancestor_session_ids, report_recipient_session_id
 from .._bus_ops import deliver_to_inbox
 from ..storage import SessionConfig, TeamMember
 from ..storage._utils import _ensure_team_members
@@ -148,7 +149,7 @@ earlier collaborations with you.
 class AgentInvite(_TeamToolBase):
     """Borrow one of the user's invitable agents into the current team.
 
-    The tool is only attached to the leader's toolkit when the calling
+    The tool is attached to a caller's toolkit only when the calling
     user has at least one agent with ``invitable=True`` and a non-empty
     ``invite_description`` — see the toolkit assembly logic in
     :func:`get_toolkit`. The invitable pool is captured as a **snapshot**
@@ -241,7 +242,7 @@ class AgentInvite(_TeamToolBase):
 
         Preconditions (all rechecked at call time against fresh storage
         reads):
-        - Caller's session is in a team AND is that team's leader.
+        - Caller is the team leader or a member delegating to an allowed target.
         - ``target`` is a well-formed ``"<name>@<handle>"`` string whose
           handle prefix-matches an agent id in the current invitable
           pool.
@@ -303,10 +304,12 @@ class AgentInvite(_TeamToolBase):
                     f"AgentInvite: team {session.team_id} no longer "
                     f"exists.",
                 )
-            if team.session_id != self._session_id:
+            if team.session_id != self._session_id and not any(
+                member.session_id == self._session_id
+                for member in await _ensure_team_members(self._storage, self._user_id, team)
+            ):
                 return _error(
-                    "AgentInvite: only the team leader can invite "
-                    "members; this session is a worker.",
+                    "AgentInvite: 当前会话不属于本次协同运行。",
                 )
 
             # Re-fetch the caller and enforce the current whitelist. The
@@ -341,6 +344,7 @@ class AgentInvite(_TeamToolBase):
             )
             if (
                 caller is None
+                or not caller.data.platform_config.enabled
                 or invited.id == caller.id
                 or not (
                     global_main_target_allowed
@@ -360,6 +364,7 @@ class AgentInvite(_TeamToolBase):
             )
             if (
                 fresh is None
+                or not fresh.data.platform_config.enabled
                 or not fresh.data.invite_config.invitable
                 or not (
                     fresh.data.invite_config.invite_description or ""
@@ -381,17 +386,25 @@ class AgentInvite(_TeamToolBase):
                 )
             invited = fresh
 
+            for ancestor_id in ancestor_session_ids(team, self._session_id):
+                ancestor = await self._storage.get_session(self._user_id, "", ancestor_id)
+                if ancestor is not None and getattr(ancestor, "agent_id", None) == invited.id:
+                    return _error("AgentInvite: 不能调用本次运行的上级智能体形成循环。")
+
             # Duplicate-borrow guard — one team, one borrow per agent.
             existing_members = await _ensure_team_members(
                 self._storage,
                 self._user_id,
                 team,
             )
-            if any(m.agent_id == invited.id for m in existing_members):
-                return _error(
-                    f"AgentInvite: agent {invited.data.name!r} is "
-                    f"already a member of team "
-                    f"{team.data.name!r}.",
+            existing = next(
+                (m for m in existing_members if m.agent_id == invited.id), None,
+            )
+            if existing is not None:
+                if report_recipient_session_id(team, existing.session_id) != self._session_id:
+                    return _error("AgentInvite: 目标已由其他阶段调用，请由该阶段继续分配。")
+                return await self._reassign_existing(
+                    invited, existing, team, session, prompt,
                 )
 
             # Leader session — needed for chat-model / workspace fallback
@@ -400,7 +413,7 @@ class AgentInvite(_TeamToolBase):
             leader_session = await self._storage.get_session(
                 self._user_id,
                 "",
-                team.session_id,
+                self._session_id,
             )
             if leader_session is None:
                 return _error(
@@ -422,9 +435,12 @@ class AgentInvite(_TeamToolBase):
             # but do not implicitly reuse that unrelated conversation's
             # model. A fixed agent model wins; otherwise this team-scoped
             # session follows the leader's currently selected model.
-            invited_sessions = await self._storage.list_sessions(
-                self._user_id,
-                invited.id,
+            # Platform sessions carry an account/project boundary. Borrowing
+            # an agent's unrelated primary workspace would expose another
+            # conversation's files through ordinary workspace tools.
+            invited_sessions = (
+                [] if leader_session.config.platform_context is not None
+                else await self._storage.list_sessions(self._user_id, invited.id)
             )
             borrowed_knowledge_config = (
                 invited.data.platform_config.knowledge_config
@@ -521,6 +537,7 @@ class AgentInvite(_TeamToolBase):
                     agent_id=invited.id,
                     session_id=borrowed.id,
                     role="invited",
+                    inviter_session_id=self._session_id,
                 ),
             )
             if assigned_revision is None:
@@ -589,6 +606,48 @@ class AgentInvite(_TeamToolBase):
                 content=[TextBlock(text=f"AgentInvite failed: {e}")],
                 state=ToolResultState.ERROR,
             )
+
+    async def _reassign_existing(self, invited, member, team, leader, prompt):
+        """Reuse a settled worker for another stage, with fresh authorization."""
+        if member.settled_revision < member.work_revision:
+            return _error("AgentInvite: 目标智能体仍在执行上一阶段，请等待结果后再调用。")
+        borrowed = await self._storage.get_session(
+            self._user_id, invited.id, member.session_id,
+        )
+        if borrowed is None:
+            return _error("AgentInvite: 协同会话已失效，请通过恢复工具重新建立运行。")
+        context = leader.config.platform_context
+        if context is not None:
+            context = context.model_copy(update={
+                "session_role": "worker",
+                "root_session_id": context.root_session_id or leader.id,
+            })
+        state = borrowed.state.model_copy(deep=True)
+        state.permission_context = apply_platform_tool_allow_rules(
+            PermissionContext(mode=invited.data.platform_config.permission_mode),
+            context,
+        )
+        await self._storage.upsert_session(
+            user_id=self._user_id, agent_id=invited.id, session_id=borrowed.id,
+            config=borrowed.config.model_copy(update={"platform_context": context}),
+            state=state, source=borrowed.source,
+        )
+        from ._team_say import TeamSay
+
+        result = await TeamSay(
+            self._storage, self._message_bus, self._workspace_manager,
+            self._user_id, self._session_id, self._agent_id, role="leader",
+        )(content=prompt, to=_display_name(invited.data.name, invited.id))
+        if result.state != ToolResultState.ERROR:
+            current = await self._storage.get_team(self._user_id, team.id)
+            updated = next(m for m in current.data.members if m.session_id == borrowed.id)
+            result.metadata = {"collaboration_member": {
+                "team_id": team.id, "team_name": team.data.name,
+                "worker_agent_id": invited.id, "worker_agent_name": invited.data.name,
+                "worker_session_id": borrowed.id, "work_revision": updated.work_revision,
+                "assigned_at": updated.assigned_at.isoformat(),
+            }}
+        return result
 
 
 def _resolve_target(

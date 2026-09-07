@@ -700,6 +700,9 @@ def upgrade_database_schema(
 
     legacy_layout = _prepare_legacy_sqlite_schema(engine)
     metadata.create_all(bind=engine)
+    from .workspace_migrations import upgrade_workspace
+    with engine.begin() as connection:
+        upgrade_workspace(connection)
     _ensure_database_interaction_join_rules(engine)
     _ensure_database_interaction_runtime_rules(engine)
     _ensure_attachment_text_pipeline_fields(engine)

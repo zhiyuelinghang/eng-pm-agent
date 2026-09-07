@@ -18,7 +18,7 @@
           </div>
         </div>
 
-        <div v-if="homeMode === 'work'" class="home-workbench">
+        <div v-if="homeMode === 'work'" class="home-workbench" :class="{ 'is-announcements': homeStatus === 'announcements' }">
           <aside class="home-queue-pane" aria-label="Dobby 推送的待处理工作">
             <div class="home-controlbar">
               <div class="home-status-tabs" role="tablist" aria-label="工作处理状态">
@@ -32,12 +32,12 @@
                   @click="homeStatus = tab.key"
                 >
                   {{ tab.label }}
-                  <span>{{ tab.count }}</span>
+                  <span v-if="tab.count !== undefined">{{ tab.count }}</span>
                 </button>
               </div>
             </div>
 
-            <div class="home-queue-list" role="listbox" :aria-label="`${homeStatusTabs.find(tab => tab.key === homeStatus)?.label || '任务'}列表`">
+            <div v-if="homeStatus !== 'announcements'" class="home-queue-list" role="listbox" :aria-label="`${homeStatusTabs.find(tab => tab.key === homeStatus)?.label || '任务'}列表`">
               <button
                 v-for="(item, index) in pagedHomeWorkItems"
                 :key="item.id"
@@ -74,7 +74,7 @@
                 <div class="task-empty-actions"><router-link :to="{ path: '/tasks', query: { tab: 'assign' } }">布置新任务</router-link><button type="button" @click="selectHomeMode('quick')">问问 Dobby</button></div>
               </div>
             </div>
-            <nav class="home-pagination" aria-label="工作列表分页">
+            <nav v-if="homeStatus !== 'announcements'" class="home-pagination" aria-label="工作列表分页">
               <span>{{ homePageRangeText }}</span>
               <div>
                 <button type="button" :disabled="homePageIndex === 0" aria-label="上一页" @click="goHomePage(-1)">
@@ -97,7 +97,8 @@
             </nav>
           </aside>
 
-          <section v-if="selectedHomeWorkItem" class="home-work-ai" aria-label="当前工作的 Dobby 交互">
+          <HomeAnnouncements v-if="homeStatus === 'announcements'" :project-id="store.currentProjectId" />
+          <section v-else-if="selectedHomeWorkItem" class="home-work-ai" aria-label="当前工作的 Dobby 交互">
             <header class="home-work-ai-head">
               <div class="home-work-ai-title">
                 <span class="home-ai-presence"><n-icon :size="16"><Robot /></n-icon>Dobby 正在跟进</span>
@@ -365,7 +366,7 @@
                   ref="homeQuickComposerInput"
                   class="chat-composer-input"
                   rows="1"
-                  :placeholder="`输入消息，或通过 @ 调用资料助手、任务助手`"
+                  placeholder="输入消息，或通过 @ 调用已发布智能体、任务助手"
                   :disabled="homeConversationMessagesLoading || homeCapabilityDispatching"
                   @blur="closeHomeCapabilityMenuLater"
                   @keydown.esc="homeCapabilityMenuOpen = false"
@@ -722,7 +723,7 @@
                         <label class="form-field task-flow-node-material">交付材料 / 留证<input v-model.trim="step.material" placeholder="填写后引擎将要求上传证明材料"></label>
                       </template>
                       <template v-else>
-                        <label class="form-field task-flow-node-target">目标群聊<select v-model.number="step.target_channel_id" required @change="handleTaskMessageChannelChange(step)"><option :value="null">请选择群聊</option><optgroup v-if="taskProjectChatChannels.length" label="项目群"><option v-for="channel in taskProjectChatChannels" :key="channel.id" :value="channel.id">{{ channel.title }}</option></optgroup><optgroup v-if="taskPrivateChatChannels.length" label="私密群"><option v-for="channel in taskPrivateChatChannels" :key="channel.id" :value="channel.id">{{ channel.title }}</option></optgroup></select></label>
+                        <label class="form-field task-flow-node-target">目标群聊<select v-model.number="step.target_channel_id" required @change="handleTaskMessageChannelChange(step)"><option :value="null">请选择群聊</option><option v-for="channel in taskChatChannels" :key="channel.id" :value="channel.id">{{ channel.title }}{{ channel.channel_type !== 'private' ? ' · ALL' : '' }}</option></select></label>
                         <label class="form-field task-flow-node-message">消息正文<textarea v-model.trim="step.message_content" maxlength="8000" rows="3" required placeholder="填写该节点到达时要发送的消息"></textarea><small>{{ step.message_content.length }} / 8000</small></label>
                         <section class="task-flow-node-audience" :class="{ 'has-recipient-picker': step.mention_mode === 'users' }" aria-label="提醒对象设置">
                           <label class="form-field">提醒方式<select v-model="step.mention_mode" @change="handleTaskMentionModeChange(step)"><option value="all">@全体成员</option><option value="users">指定成员</option><option value="none">不提及成员</option></select></label>
@@ -984,7 +985,9 @@
           </article>
         </section>
 
+        <ProjectStatusSupplement v-else-if="projectStatusTab === 'safety'" mode="safety" :overview="store.projectStatusOverview" />
         <section v-else-if="projectStatusTab === 'documents'" class="project-status-v2-stack">
+          <ProjectStatusSupplement mode="documents" :overview="store.projectStatusOverview" :completeness-label="documentCompletenessLabel" />
           <article class="project-status-v2-panel project-status-documents-panel">
             <header class="project-status-v2-panel-head">
               <div><span>工程资料</span><h2>资料目录概览</h2><p>{{ projectDocumentSummary.caption }}</p></div>
@@ -1051,14 +1054,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch, type Component } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
 import { NIcon, NSelect, useMessage } from 'naive-ui'
 import {
   AlertCircle, At, CalendarEvent, ChartBar, ChevronDown,
   ChevronLeft, ChevronRight, ChevronUp, CircleCheck, Clock, FileText, Folder,
   ListCheck, Loader, MapPin, Notes, Paperclip, Pin, PlayerStop, Plus, Repeat, Robot, Search,
-  Send, Settings, Trash, User, UserPlus, X,
+  Send, Settings, ShieldCheck, Trash, User, UserPlus, X,
 } from '@vicons/tabler'
 import { useAppStore } from '@/stores/app'
 import api, { type ApiEnvelope } from '@/api/client'
@@ -1071,95 +1074,26 @@ import {
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
 import ChatComposerSurface from '@/components/chat/ChatComposerSurface.vue'
 import ProjectGroupChat from '@/components/chat/ProjectGroupChat.vue'
+import HomeAnnouncements from '@/components/business/HomeAnnouncements.vue'
+import ProjectStatusSupplement from '@/components/business/ProjectStatusSupplement.vue'
 import HomeTaskDraftDialog from '@/components/task/HomeTaskDraftDialog.vue'
 import { useAsyncConfirmDialog } from '@/composables/useAsyncConfirmDialog'
 import { useHomeAgentConversations } from '@/composables/useHomeAgentConversations'
 import type { Member, QualityMetric, RiskLevel, Task, TaskStatus } from '@/types'
+import {
+  formatDateTime, formatFileSize, formatScheduleDateTime, nowStr,
+  projectBaseInfoRow, projectDateLabel, projectDateRange,
+  projectDocumentFileSizeLabel, projectDocumentFolderLabel, projectDocumentTypeLabel,
+  projectTaskStatusLabel, riskLabel, statusLabel, taskClosureLabel, taskClosureTone,
+  taskMaterialLabel, taskProgress, taskSourceLabel, taskStepLabel, taskTypeLabel,
+  wbsStatusLabel, workQueueCategory, workQueueDeadline, workQueueLabel, workQueueStatus,
+  type ChatMessage, type GeneratedTaskFlow, type HomeWorkItem, type TaskFlowStepDraft,
+  type TaskMessageMentionMode, type TaskNodeType, type TaskRunMode, type TaskSchedule,
+  type TriggerCalendarMode, type TriggerEndMode, type TriggerIntervalUnit,
+  type WorkQueueStatus,
+} from './ai-work-platform/presentation'
 
-type ChatMessage = {
-  id: string
-  role: 'assistant' | 'user'
-  content: string
-  generatedTaskIds?: string[]
-  attachments?: ChatAttachment[]
-}
-
-type ChatAttachment = {
-  id: string
-  name: string
-  size: number
-  type: string
-}
-
-type TaskNodeType = 'manual' | 'project_chat_message'
-type TaskMessageMentionMode = 'none' | 'all' | 'users'
-type TaskFlowStepDraft = {
-  id: string
-  name: string
-  node_type: TaskNodeType
-  owner_user_id: string
-  due_at: string
-  material: string
-  target_channel_id: number | null
-  mention_mode: TaskMessageMentionMode
-  mentioned_user_ids: number[]
-  message_content: string
-}
-type TriggerIntervalUnit = 'minute' | 'hour' | 'day' | 'week' | 'month'
-type TaskRunMode = 'immediate' | 'once' | 'recurring' | 'calendar'
-type TriggerEndMode = 'never' | 'until' | 'count'
-type TriggerCalendarMode = 'daily' | 'weekdays' | 'weekly' | 'monthly'
-type TaskSchedule = {
-  id: string
-  flow_id: string
-  title: string
-  status: string
-  active: boolean
-  paused: boolean
-  trigger_description: string
-  next_fire_at: string | null
-  last_fire_at: string | null
-  fire_count: number
-  last_error: string
-  execution_kind: 'responsibility' | 'automation'
-  action?: { type?: string; mention_mode?: string; content?: string } | null
-}
-type GeneratedTaskFlow = {
-  title: string
-  task_type: Task['type']
-  risk_level: RiskLevel
-  assignee_user_id?: number | null
-  confirmer_user_id?: number | null
-  wbs_item_id?: number | null
-  risk_source_id?: number | null
-  run_mode: 'single' | 'scheduled' | TaskRunMode
-  trigger_date: string
-  trigger_time: string
-  trigger_rule: string
-  trigger_interval_value: number
-  trigger_interval_unit: TriggerIntervalUnit
-  cc: string
-  steps: Array<{
-    name: string
-    node_type?: TaskNodeType
-    owner_user_id?: number | null
-    due_at?: string | null
-    material?: string
-    action?: {
-      type: 'project_chat_message'
-      channel_id: number
-      sender_agent_id: string
-      sender_agent_name?: string
-      mention_mode: TaskMessageMentionMode
-      mentioned_user_ids: number[]
-      content: string
-    }
-  }>
-  generated_by: 'ai'
-  generation_note: string
-}
-
-type ProjectStatusTab = 'progress' | 'riskQuality' | 'documents' | 'overview'
+type ProjectStatusTab = 'progress' | 'riskQuality' | 'safety' | 'documents' | 'overview'
 
 const route = useRoute()
 const router = useRouter()
@@ -1168,6 +1102,7 @@ const message = useMessage()
 const { confirmAsyncAction } = useAsyncConfirmDialog()
 const {
   homeAgentConversations,
+  homeDirectAgents,
   filteredHomeAgentConversations,
   homeAgentConversation,
   homeConversationKeyword,
@@ -1181,6 +1116,7 @@ const {
   quickFiles,
   quickUploading,
   quickStopping,
+  pendingTaskDraftId,
   homeQuickSessionTitle,
   homeQuickSessionTime,
   homeQuickAgentName,
@@ -1194,22 +1130,29 @@ const {
   confirmHomeToolCall,
 } = useHomeAgentConversations()
 
-const homeCapabilities = [
-  {
-    name: '资料助手',
-    description: '查询当前权限范围内的工程资料',
-    icon: Folder,
-  },
+const homeCapabilities = computed(() => [
+  ...homeDirectAgents.value.map(agent => ({
+    name: agent.name,
+    description: agent.description || '调用管理中心已发布智能体',
+    icon: agent.name === '资料助手' ? Folder : Robot,
+  })),
   {
     name: '任务助手',
     description: '分析当前对话并整理待确认任务',
     icon: ListCheck,
   },
-] as const
+])
 const homeCapabilityMenuOpen = ref(false)
 const homeCapabilityDispatching = ref(false)
 const homeQuickComposerInput = ref<HTMLTextAreaElement | null>(null)
 const homeTaskDraftDialog = ref<InstanceType<typeof HomeTaskDraftDialog> | null>(null)
+
+watch(pendingTaskDraftId, async draftId => {
+  if (!draftId) return
+  await nextTick()
+  await homeTaskDraftDialog.value?.openExisting(draftId)
+  pendingTaskDraftId.value = 0
+})
 
 function closeHomeCapabilityMenuLater() {
   window.setTimeout(() => {
@@ -1220,6 +1163,14 @@ function closeHomeCapabilityMenuLater() {
 async function insertHomeCapabilityMention(name: string) {
   const mention = `@${name}`
   const current = quickCommand.value
+  const trailingMention = current.match(/@[^\s@]*$/)
+  const settledContent = trailingMention
+    ? current.slice(0, trailingMention.index)
+    : current
+  if (/(?:^|\s)@[^\s@]+/.test(settledContent)) {
+    message.warning('每条消息最多只能明确提及一个智能体。')
+    return
+  }
   if (/@[^\s@]*$/.test(current)) {
     quickCommand.value = current.replace(/@[^\s@]*$/, `${mention} `)
   } else {
@@ -1232,12 +1183,15 @@ async function insertHomeCapabilityMention(name: string) {
 
 async function dispatchQuickCommand() {
   const content = quickCommand.value.trim()
-  const invokesKnowledge = content.includes('@资料助手')
-  const invokesTask = content.includes('@任务助手')
-  if (invokesKnowledge && invokesTask) {
-    message.warning('资料查询和任务布置请分两次发送。')
+  const explicitAgents = [...content.matchAll(/(?:^|\s)@([^\s@，。！？；：,.!?;:]+)/g)]
+    .map(match => match[1])
+  if (new Set(explicitAgents).size > 1) {
+    message.warning('每条消息最多只能明确提及一个智能体。')
     return false
   }
+  const directAgentName = explicitAgents[0]
+  const invokesTask = directAgentName === '任务助手'
+  if (directAgentName && !invokesTask) return dispatchGeneralQuickCommand(directAgentName)
   if (!invokesTask) return dispatchGeneralQuickCommand()
   if (homeCapabilityDispatching.value || quickUploading.value) return false
   if (quickFiles.value.length) {
@@ -1376,6 +1330,7 @@ const projectStatusTab = ref<ProjectStatusTab>('progress')
 const projectStatusTabs: Array<{ key: ProjectStatusTab; label: string; hint: string }> = [
   { key: 'progress', label: '进度与任务', hint: 'WBS 与责任任务' },
   { key: 'riskQuality', label: '风险与质量', hint: '风险源与质量要求' },
+  { key: 'safety', label: '安全', hint: '安全风险与管控要求' },
   { key: 'documents', label: '工程资料', hint: '目录与最近资料' },
   { key: 'overview', label: '项目概况', hint: '基础信息与成员' },
 ]
@@ -1439,17 +1394,21 @@ const projectBaseInfoRows = computed(() => {
     projectBaseInfoRow('勘察单位', project?.surveyUnitName),
   ]
 })
+const documentCompletenessLabel = computed(() => {
+  const documents = store.projectStatusOverview?.documents
+  return !documents || documents.complete === null ? '待核验' : documents.complete ? '文件已齐备' : `${documents.missingMaterials.length} 项待补齐`
+})
 const projectStatusMetrics = computed(() => {
   const overview = store.projectStatusOverview
-  const documents = projectDocumentSummary.value
   const wbsValue = !overview ? '—' : overview.wbs.configured && overview.wbs.progressRate != null ? `${overview.wbs.progressRate}%` : '未配置'
   const riskValue = !overview ? '—' : overview.risks.configured ? overview.risks.highLevelCount : '未维护'
   return [
-    { label: '基础信息', value: overview ? `${overview.baseInfo.completedFields} / ${overview.baseInfo.totalFields}` : '—', hint: '已录入字段', icon: FileText, tone: 'teal' },
+    { label: '风险点', value: overview?.risks.total ?? '—', hint: `高等级风险 ${riskValue}`, icon: AlertCircle, tone: 'orange' },
     { label: '工序进度', value: wbsValue, hint: '叶子工序平均', icon: ChartBar, tone: 'teal' },
-    { label: '项目任务', value: overview?.tasks.total ?? projectResponsibilityTasks.value.length, hint: '责任任务', icon: ListCheck, tone: 'teal' },
-    { label: '高等级风险源', value: riskValue, hint: '重大级、高风险', icon: AlertCircle, tone: 'orange' },
-    { label: '工程资料', value: documents.totalFiles, hint: '目录内文件', icon: Folder, tone: 'teal' },
+    { label: '安全', value: overview?.safety.total ?? '—', hint: '安全类风险记录', icon: ShieldCheck, tone: overview?.safety.total ? 'orange' : 'teal' },
+    { label: '资料是否完善', value: documentCompletenessLabel.value, hint: '按资料要求核对文件，内容待审', icon: Folder, tone: 'teal' },
+    { label: '今日新增资料', value: overview?.documents.todayCount ?? '—', hint: '北京时间 · 当前可见资料', icon: FileText, tone: 'teal' },
+    { label: '待完成任务', value: overview?.tasks.total ?? projectResponsibilityTasks.value.length, hint: '项目责任任务', icon: ListCheck, tone: 'teal' },
   ]
 })
 
@@ -1480,28 +1439,7 @@ const homeModeTabs = [
   { key: 'work' as const, label: 'Dobby推推' },
   { key: 'quick' as const, label: '问问Dobby' },
 ]
-type WorkQueueStatus = 'pending' | 'overdue' | 'processing'
-type WorkQueueCategory = 'decision' | 'upload' | 'generated'
-type WorkQueueTone = 'danger' | 'upload' | 'warning' | 'info'
-type HomeWorkItem = {
-  id: string
-  rank: number
-  workflowStatus: WorkQueueStatus
-  category: WorkQueueCategory
-  label: string
-  title: string
-  reason: string
-  tags: string[]
-  owner: string
-  role: string
-  deadline: string
-  action: string
-  to: string
-  tone: WorkQueueTone
-  icon: Component
-}
-
-const homeStatus = ref<WorkQueueStatus>('pending')
+const homeStatus = ref<WorkQueueStatus | 'announcements'>('pending')
 const homePageIndex = ref(0)
 const homePageSize = 5
 const homeWorkThreadViewport = ref<HTMLElement | null>(null)
@@ -1509,36 +1447,6 @@ const selectedHomeWorkItemId = ref('')
 const homeWorkCommand = ref('')
 const homeWorkFiles = ref<File[]>([])
 const homeWorkUploading = ref(false)
-
-function workQueueStatus(task: Task): WorkQueueStatus {
-  if (task.status === 'overdue') return 'overdue'
-  if (task.status === 'processing') return 'processing'
-  return 'pending'
-}
-
-function workQueueCategory(task: Task): WorkQueueCategory {
-  if (task.status === 'need_more_info' || task.type === 'material_missing') return 'upload'
-  if (task.status === 'processing' || task.type === 'fill_platform') return 'generated'
-  return 'decision'
-}
-
-function workQueueLabel(task: Task) {
-  if (task.status === 'need_more_info') return '需补充资料'
-  if (task.status === 'waiting_confirm') return '待我验收'
-  if (task.status === 'overdue') return '已逾期'
-  if (task.status === 'processing') return '执行中'
-  return '待处理'
-}
-
-function workQueueDeadline(value: string) {
-  if (!value) return '未设置截止时间'
-  if (!value.includes(':')) return `截止 ${formatDateTime(value, 'end')}`
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return `截止 ${value.replace('T', ' ')}`
-  const date = new Date(timestamp)
-  const pad = (part: number) => String(part).padStart(2, '0')
-  return `截止 ${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-}
 
 function workQueueTags(task: Task) {
   const tags = [taskTypeLabel(task.type), `风险等级 ${riskLabel(task.riskLevel)}`]
@@ -1645,9 +1553,10 @@ const homePageRangeText = computed(() => {
 const homeStatusTabs = computed(() => [
   { key: 'pending' as const, label: '待处理', count: homeWorkItems.value.filter(item => item.workflowStatus === 'pending').length },
   { key: 'overdue' as const, label: '已逾期', count: homeWorkItems.value.filter(item => item.workflowStatus === 'overdue').length },
-  { key: 'processing' as const, label: '执行中', count: homeWorkItems.value.filter(item => item.workflowStatus === 'processing').length },
+  { key: 'announcements' as const, label: '公告', count: undefined },
 ])
 const homeEmptyText = computed(() => ({
+  announcements: '当前项目暂无公告',
   pending: '当前没有需要立即处理的任务',
   overdue: '当前没有已逾期任务',
   processing: '当前没有执行中的任务',
@@ -1871,12 +1780,6 @@ const calendarModeLabel = computed(() => {
   return `每周 ${form.trigger_weekdays.map(day => names[day - 1]).join('、') || '未选择'}`
 })
 const taskFlowSteps = ref<TaskFlowStepDraft[]>([])
-const taskProjectChatChannels = computed(() => (
-  taskChatChannels.value.filter(channel => channel.channel_type !== 'private')
-))
-const taskPrivateChatChannels = computed(() => (
-  taskChatChannels.value.filter(channel => channel.channel_type === 'private')
-))
 
 function defaultTaskChatChannelId() {
   return taskChatChannels.value.find(channel => channel.channel_type === 'project')?.id || null
@@ -2976,106 +2879,9 @@ async function createManualTask() {
   }
 }
 
-function formatFileSize(bytes: number) { return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB` }
-function projectBaseInfoRow(label: string, rawValue?: string | null) {
-  const value = String(rawValue || '').trim()
-  return { label, value: value || '未填写', present: Boolean(value) }
-}
-
-function projectDateLabel(value?: string | null) {
-  if (!value) return ''
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return value
-  const date = new Date(timestamp)
-  const pad = (part: number) => String(part).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
-}
-
-function projectDocumentTypeLabel(fileType: string, fileName: string) {
-  const extension = fileName.includes('.') ? fileName.split('.').pop() || '' : ''
-  const normalized = (fileType || extension).trim().replace(/^\./, '').split('/').pop() || ''
-  return normalized ? normalized.toUpperCase() : '文件'
-}
-
-function projectDocumentFileSizeLabel(fileSize: number) {
-  return fileSize > 0 ? formatFileSize(fileSize) : '大小未记录'
-}
-
-function projectDocumentFolderLabel(folderPath: string) {
-  const segments = folderPath.replace(/\\/g, '/').split('/').map(item => item.trim()).filter(Boolean)
-  return segments.length ? segments[segments.length - 1] : '资料库根目录'
-}
-
-function projectDateRange(start?: string | null, end?: string | null) {
-  const startLabel = projectDateLabel(start)
-  const endLabel = projectDateLabel(end)
-  if (startLabel && endLabel) return `${startLabel} 至 ${endLabel}`
-  if (startLabel) return `${startLabel} 起`
-  if (endLabel) return `截至 ${endLabel}`
-  return '未填写'
-}
-
 function projectQualityWbsLabel(item: QualityMetric) {
   const code = item.wbsCode || (item.wbsId ? store.getWbsName(item.wbsId) : '')
   return [code, item.wbsName].filter(Boolean).join(' · ') || '未关联'
-}
-
-function riskLabel(level: RiskLevel) {
-  return ({ critical: '重大', high: '高', medium: '中', low: '低' } as Record<RiskLevel, string>)[level]
-}
-
-function wbsStatusLabel(status: string) {
-  return ({ not_started: '未开始', in_progress: '进行中', done: '已完成', delayed: '已延期' } as Record<string, string>)[status] || status
-}
-
-function projectTaskStatusLabel(status: TaskStatus) {
-  return ({ pending: '待处理', processing: '进行中', need_more_info: '待补充', waiting_confirm: '待确认', done: '已完成', overdue: '逾期', cancelled: '已取消' } as Record<TaskStatus, string>)[status]
-}
-
-function taskClosureLabel(task: Task) {
-  const currentStep = task.workflowSteps.find(step => step.status !== 'completed') ?? task.workflowSteps[task.workflowSteps.length - 1]
-  return currentStep?.closure || ({ pending: '未闭环', processing: '未闭环', need_more_info: '待补充', waiting_confirm: '待复核', done: '已闭环', overdue: '待复核', cancelled: '已取消' } as Record<TaskStatus, string>)[task.status]
-}
-
-function taskClosureTone(task: Task) {
-  const label = taskClosureLabel(task)
-  if (label === '已闭环') return 'closed'
-  if (label.includes('复核')) return 'review'
-  if (label.includes('补充')) return 'supplement'
-  if (label.includes('取消')) return 'cancelled'
-  return 'open'
-}
-
-function taskMaterialLabel(task: Task) {
-  const currentStep = task.workflowSteps.find(step => step.status !== 'completed')
-  const material = currentStep?.material || currentStep?.note || task.workflowSteps[task.workflowSteps.length - 1]?.material
-  return material || (task.missingCount > 0 ? `待补齐 ${task.missingCount} 项资料` : '暂无待补充材料')
-}
-
-function taskTypeLabel(type: Task['type']) {
-  return ({
-    risk_alert: '风险预警',
-    material_missing: '资料缺项',
-    daily_confirm: '日报确认',
-    draft_review: '草稿审核',
-    fill_platform: '平台填报',
-    automation: '自动化动作',
-  } as Record<Task['type'], string>)[type]
-}
-
-function taskStepLabel(status: Task['workflowSteps'][number]['status']) {
-  return ({ pending: '待处理', processing: '处理中', completed: '已完成', blocked: '受阻' } as Record<Task['workflowSteps'][number]['status'], string>)[status]
-}
-
-function taskSourceLabel(type: Task['type']) {
-  return ({
-    risk_alert: 'WBS 风险规则自动触发',
-    material_missing: '风险草稿资料校验',
-    daily_confirm: '日报目录解析',
-    draft_review: '风险草稿生成',
-    fill_platform: '填报包生成',
-    automation: '任务引擎自动执行',
-  } as Record<Task['type'], string>)[type]
 }
 
 function tasksByIds(ids: string[]) {
@@ -3084,56 +2890,6 @@ function tasksByIds(ids: string[]) {
     .filter((task): task is Task => Boolean(task))
 }
 
-function taskProgress(status: TaskStatus) {
-  return ({
-    overdue: 20,
-    pending: 30,
-    processing: 58,
-    need_more_info: 45,
-    waiting_confirm: 78,
-    done: 100,
-    cancelled: 0,
-  } as Record<TaskStatus, number>)[status]
-}
-
-function formatDateTime(date: string, mode: 'start' | 'end' = 'start') {
-  if (!date) return '—'
-  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(date)
-    ? `${date}T${mode === 'end' ? '18:00' : '00:00'}:00`
-    : date
-  const timestamp = Date.parse(normalized)
-  if (!Number.isFinite(timestamp)) return date.replace('T', ' ')
-
-  const value = new Date(timestamp)
-  const pad = (part: number) => String(part).padStart(2, '0')
-  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())} ${pad(value.getHours())}:${pad(value.getMinutes())}`
-}
-
-function formatScheduleDateTime(value: string) {
-  return formatDateTime(value)
-}
-
-function statusLabel(status: TaskStatus | string) {
-  return ({
-    pending: '待处理',
-    processing: '处理中',
-    need_more_info: '待补充资料',
-    waiting_confirm: '待确认',
-    done: '已完成',
-    overdue: '已逾期',
-    cancelled: '已取消',
-    running: '处理中',
-    review: '待确认',
-    blocked: '受阻',
-    pending_confirm: '待确认',
-    confirmed: '已确认',
-  } as Record<string, string>)[status] ?? status
-}
-
-function nowStr() {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
-}
 </script>
 
 <style scoped src="./styles/AiWorkPlatformView.base.css"></style>

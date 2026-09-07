@@ -192,7 +192,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             update={"call_config": AgentCallConfig(scope="none")},
         )
         normalised_main = _normalise_platform_agent_data(main)
-        self.assertEqual(normalised_main.call_config.scope, "all")
+        self.assertEqual(normalised_main.call_config.scope, "none")
 
         internal = _record(
             "internal",
@@ -378,7 +378,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             updated["selected"].data.platform_config.role,
             "global_main",
         )
-        self.assertEqual(updated["selected"].data.call_config.scope, "all")
+        self.assertEqual(updated["selected"].data.call_config.scope, "none")
 
     async def test_weknora_connection_is_configurable_and_secret_free(
         self,

@@ -57,6 +57,11 @@ class TeamMember(BaseModel):
         ),
     )
 
+    inviter_session_id: str | None = Field(
+        default=None,
+        description="Calling session to receive results; absent legacy values report to the team leader.",
+    )
+
     work_revision: int = Field(
         default=0,
         ge=0,

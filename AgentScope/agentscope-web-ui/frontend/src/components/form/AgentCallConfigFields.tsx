@@ -23,7 +23,7 @@ const SCOPES: AgentCallScope[] = ['all', 'selected', 'none'];
 
 export function AgentCallConfigFields({ values, agents, currentAgentId, onChange }: Props) {
 	const { t } = useTranslation();
-	const scope = values.scope ?? 'all';
+	const scope = values.scope ?? 'none';
 	const selectedIds = useMemo(() => values.allowed_agent_ids ?? [], [values.allowed_agent_ids]);
 	const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 

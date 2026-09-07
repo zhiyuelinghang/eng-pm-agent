@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """The tool group class."""
+from collections.abc import Awaitable, Callable
 from typing import Literal, Sequence
 
 from ..mcp import MCPClient
@@ -32,6 +33,9 @@ class ToolGroup:
     tools: list[ToolBase]
     """The tools in this group."""
 
+    tool_loader: Callable[[], Awaitable[list[ToolBase]]] | None
+    """Optional one-shot loader used only after the group is activated."""
+
     skills_or_loaders: list[Skill | SkillLoaderBase]
     """The skills in this group."""
 
@@ -44,6 +48,7 @@ class ToolGroup:
         description: str | None = None,
         instructions: str | None = None,
         tools: list[ToolBase] | None = None,
+        tool_loader: Callable[[], Awaitable[list[ToolBase]]] | None = None,
         skills_or_loaders: Sequence[str | Skill | SkillLoaderBase]
         | None = None,
         mcps: list[MCPClient] | None = None,
@@ -61,6 +66,10 @@ class ToolGroup:
                 properly use the meta tool.
             tools (`list[ToolBase] | None`, optional):
                 The tools in this group.
+            tool_loader (`Callable | None`, optional):
+                Async one-shot loader for tools whose runtime catalogue is
+                expensive or context-dependent. It is not invoked until the
+                group becomes active.
             skills_or_loaders (`list[str | Skill | SkillLoaderBase] | None`, \
             optional):
                 The skill paths, data, and loaders to access skills in this
@@ -79,6 +88,8 @@ class ToolGroup:
         self.description = description or ""
         self.instructions = instructions
         self.tools = tools or []
+        self.tool_loader = tool_loader
+        self._tools_loaded = tool_loader is None
         self.mcps = mcps or []
 
         # Skill
@@ -95,6 +106,13 @@ class ToolGroup:
                     f"Invalid skill or loader: {_}. Must be a skill, "
                     f"skill loader, or directory path.",
                 )
+
+    async def list_tools(self) -> list[ToolBase]:
+        """Return static tools plus a lazily resolved runtime catalogue."""
+        if not self._tools_loaded and self.tool_loader is not None:
+            self.tools.extend(await self.tool_loader())
+            self._tools_loaded = True
+        return list(self.tools)
 
     async def list_skills(self) -> list[Skill]:
         """List all the skills in this tool group."""

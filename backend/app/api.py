@@ -31,6 +31,7 @@ from .api_common import (
     serialize,
     user_connector_view,
 )
+from .project_status_details import meeting_status_details, project_status_tasks
 from .chat_api import ensure_project_chat_channel
 from .connector_secrets import encrypt_connector_secret
 from .db import get_db
@@ -165,133 +166,6 @@ def _prune_cancelled_task_flow_generations() -> None:
     for key, cancelled_at in list(_cancelled_task_flow_generations.items()):
         if cancelled_at < cutoff:
             _cancelled_task_flow_generations.pop(key, None)
-
-
-@router.post("/auth/login")
-def login(payload: LoginRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
-    user = db.scalar(select(User).where(User.username == payload.username))
-    if not user or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
-    previous_role = user.role
-    reconcile_user_management_role(db, user)
-    if user.role != previous_role:
-        db.commit()
-        db.refresh(user)
-    return ok({"access_token": create_access_token(user.id, user.role), "token_type": "bearer", "user": serialize(user)})
-
-
-@router.get("/me")
-def me(user: User = Depends(get_current_user)) -> dict[str, Any]:
-    return ok(serialize(user))
-
-
-@router.patch("/me")
-def update_me(payload: ProfileUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    user.real_name = payload.real_name.strip()
-    user.phone = payload.phone.strip() if payload.phone and payload.phone.strip() else None
-    user.email = payload.email.strip() if payload.email and payload.email.strip() else None
-    user.title = payload.title.strip() if payload.title and payload.title.strip() else None
-    user.org_name = payload.org_name.strip() if payload.org_name and payload.org_name.strip() else None
-    audit(db, user, "更新个人资料", "更新姓名、岗位或联系方式", target_type="user", target_id=user.id)
-    db.commit()
-    db.refresh(user)
-    return ok(serialize(user), "个人资料已保存")
-
-
-@router.post("/me/password")
-def change_my_password(payload: PasswordChangeInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    if not verify_password(payload.current_password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="当前密码不正确")
-    if verify_password(payload.new_password, user.password_hash):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="新密码不能与当前密码相同")
-    user.password_hash = hash_password(payload.new_password)
-    audit(db, user, "修改登录密码", "当前用户修改登录密码", target_type="user", target_id=user.id)
-    db.commit()
-    return ok(None, "登录密码已更新")
-
-
-@router.get("/me/connectors")
-def list_my_connectors(
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    rows = db.scalars(
-        select(UserConnectorConfig)
-        .where(UserConnectorConfig.user_id == user.id)
-        .order_by(UserConnectorConfig.id),
-    ).all()
-    return ok([user_connector_view(row) for row in rows])
-
-
-@router.put("/me/connectors/{connector_type}")
-def save_my_connector(
-    connector_type: UserConnectorType,
-    payload: UserConnectorConfigInput,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    row = db.scalar(
-        select(UserConnectorConfig).where(
-            UserConnectorConfig.user_id == user.id,
-            UserConnectorConfig.connector_type == connector_type,
-        ),
-    )
-    if row is None:
-        row = UserConnectorConfig(
-            user_id=user.id,
-            connector_type=connector_type,
-            account_identifier=payload.account_identifier.strip(),
-        )
-        db.add(row)
-    row.account_identifier = payload.account_identifier.strip()
-    row.platform_type = (
-        payload.platform_type.strip()
-        if payload.platform_type and payload.platform_type.strip()
-        else None
-    )
-    if payload.secret and payload.secret.strip():
-        row.secret_encrypted = encrypt_connector_secret(payload.secret)
-    row.configured = True
-    db.flush()
-    audit(
-        db,
-        user,
-        "保存个人连接配置",
-        f"保存个人{connector_type}连接配置",
-        target_type="user_connector_config",
-        target_id=row.id,
-    )
-    db.commit()
-    db.refresh(row)
-    return ok(user_connector_view(row), "个人连接配置已保存")
-
-
-@router.delete("/me/connectors/{connector_type}")
-def delete_my_connector(
-    connector_type: UserConnectorType,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-) -> dict[str, Any]:
-    row = db.scalar(
-        select(UserConnectorConfig).where(
-            UserConnectorConfig.user_id == user.id,
-            UserConnectorConfig.connector_type == connector_type,
-        ),
-    )
-    if row is None:
-        return ok(None, "个人连接配置已清除")
-    row_id = row.id
-    db.delete(row)
-    audit(
-        db,
-        user,
-        "清除个人连接配置",
-        f"清除个人{connector_type}连接配置",
-        target_type="user_connector_config",
-        target_id=row_id,
-    )
-    db.commit()
-    return ok(None, "个人连接配置已清除")
 
 
 @router.get("/projects")
@@ -852,7 +726,7 @@ def project_status_overview(
         "waiting_confirm": 0,
         "overdue": 0,
     }
-    for task in get_engine().list_tasks(limit=500):
+    for task in project_status_tasks(get_engine(), project_id):
         if _to_int((task.scope or {}).get("project_id")) != project_id:
             continue
         row = to_api_task(task)
@@ -933,6 +807,7 @@ def project_status_overview(
         key=lambda file_row: str(file_row.get("created_at") or ""),
         reverse=True,
     )
+    details = meeting_status_details(db, project_id, user, risks, quality_requirements)
     member_count = int(
         db.scalar(
             select(func.count(ProjectMember.id)).where(
@@ -967,7 +842,9 @@ def project_status_overview(
             "configured": bool(quality_requirements),
             "total": len(quality_requirements),
         },
+        "safety": details["safety"],
         "documents": {
+            **details["documents"],
             "total_files": document_total,
             "folder_count": document_folder_count,
             "knowledge_base_count": len(knowledge_bases),
@@ -2591,131 +2468,29 @@ def add_task_note(
     db.commit()
     return ok({"task_id": task.id}, "任务处理说明已记录")
 
-
-@router.get("/projects/{project_id}/daily-reports")
-def list_daily_reports(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    return ok(list_for_project(DailyReport, project_id, db))
-
-
-@router.post("/projects/{project_id}/daily-reports")
-def create_daily_report(project_id: int, payload: DailyReportInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    project_or_404(db, project_id); row = DailyReport(project_id=project_id, parse_status="parsed", **payload.model_dump()); db.add(row); db.flush()
-    audit(db, user, "录入日报", f"录入日报「{row.file_name}」", project_id, "daily_report", row.id); db.commit(); db.refresh(row)
-    return ok(serialize(row), "日报已创建")
-
-
-@router.patch("/daily-reports/{report_id}")
-def update_daily_report(report_id: int, payload: DailyReportUpdate, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    row = entity_or_404(db, DailyReport, report_id, "日报不存在")
-    for key, value in payload.model_dump(exclude_none=True).items(): setattr(row, key, value)
-    audit(db, user, "修正日报", f"修正日报「{row.file_name}」", row.project_id, "daily_report", row.id); db.commit(); db.refresh(row)
-    return ok(serialize(row), "日报已更新")
-
-
-@router.post("/daily-reports/{report_id}/confirm")
-def confirm_daily_report(report_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    row = entity_or_404(db, DailyReport, report_id, "日报不存在"); row.status = "confirmed"
-    audit(db, user, "确认日报", f"确认日报「{row.file_name}」", row.project_id, "daily_report", row.id); db.commit(); db.refresh(row)
-    return ok(serialize(row), "日报已确认")
-
-
-@router.get("/projects/{project_id}/risk-drafts")
-def list_drafts(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    return ok(list_for_project(RiskDraft, project_id, db))
-
-
-@router.post("/projects/{project_id}/risk-drafts")
-def create_draft(project_id: int, payload: DraftInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    project_or_404(db, project_id); entity_or_404(db, RiskSource, payload.risk_source_id, "风险源不存在")
-    row = RiskDraft(project_id=project_id, **payload.model_dump()); db.add(row); db.flush()
-    audit(db, user, "生成风险草稿", f"生成草稿「{row.title}」", project_id, "risk_draft", row.id); db.commit(); db.refresh(row)
-    return ok(serialize(row), "草稿已生成")
-
-
-@router.post("/projects/{project_id}/risk-drafts/assist/{risk_id}")
-def assist_risk_draft(project_id: int, risk_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    project_or_404(db, project_id); risk = entity_or_404(db, RiskSource, risk_id, "风险源不存在")
-    attachments = db.scalars(select(Attachment).where(Attachment.project_id == project_id)).all()
-    names = [attachment.file_name for attachment in attachments]
-    missing = [material for material in (risk.material_requirements or []) if not any(material.lower() in name.lower() or name.lower() in material.lower() for name in names)]
-    source_refs = names[-8:]
-    content = f"风险源：{risk.risk_part}\n风险等级：{risk.risk_level}\n控制要求：{risk.evaluation_condition or '待补充'}\n已关联资料：{'、'.join(source_refs) or '暂无'}\n缺项资料：{'、'.join(missing) or '无'}\n建议：请核对风险现场状态和资料完整性后提交审核。"
-    draft = RiskDraft(project_id=project_id, risk_source_id=risk.id, title=f"{risk.risk_part}风险上报草稿", content=content, source_refs=source_refs, missing_items=missing)
-    db.add(draft); db.flush()
-    task_id = None
-    if missing:
-        link = db.scalar(
-            select(WbsRiskLink)
-            .where(WbsRiskLink.risk_source_id == risk.id)
-            .order_by(WbsRiskLink.id),
-        )
-        try:
-            task = dispatch_platform_task(
-                db,
-                project_id=project_id,
-                title=f"补齐风险资料 — {risk.risk_part}",
-                task_type="material_missing",
-                risk_level=risk.risk_level,
-                assignee_user_id=risk.responsible_user_id,
-                confirmer_user_id=risk.confirmer_user_id,
-                wbs_item_id=link.wbs_item_id if link else None,
-                actor=user.id,
-                trigger_reason="智能草稿生成时发现风险资料缺项",
-                deliverables=missing,
-                risk_source_id=risk.id,
-                step_name="补齐风险资料",
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        task_id = task.id
-    audit(db, user, "智能生成风险草稿", f"为风险源「{risk.risk_part}」生成草稿" + ("并创建缺项任务" if task_id else ""), project_id, "risk_draft", draft.id)
-    db.commit(); db.refresh(draft)
-    return ok({"draft": serialize(draft), "task_id": task_id}, "风险草稿与缺项校验已完成")
-
-
-@router.post("/risk-drafts/{draft_id}/submit-review")
-def submit_draft_review(draft_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    row = entity_or_404(db, RiskDraft, draft_id, "草稿不存在"); row.status = "pending_review"
-    audit(db, user, "提交草稿审核", f"草稿「{row.title}」提交审核", row.project_id, "risk_draft", row.id); db.commit(); db.refresh(row)
-    return ok(serialize(row), "草稿已提交审核")
-
-
-@router.post("/risk-drafts/{draft_id}/confirm")
-def confirm_draft(draft_id: int, payload: DraftReviewInput | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    row = entity_or_404(db, RiskDraft, draft_id, "草稿不存在"); row.status = "confirmed"; row.review_note = payload.note if payload else None
-    audit(db, user, "确认风险草稿", f"确认草稿「{row.title}」", row.project_id, "risk_draft", row.id); db.commit(); db.refresh(row)
-    return ok(serialize(row), "草稿已确认")
-
-
-@router.post("/risk-drafts/{draft_id}/return")
-def return_draft(draft_id: int, payload: DraftReviewInput | None = None, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    row = entity_or_404(db, RiskDraft, draft_id, "草稿不存在"); row.status = "rejected"; row.review_note = payload.note if payload else None
-    audit(db, user, "退回风险草稿", f"退回草稿「{row.title}」", row.project_id, "risk_draft", row.id); db.commit(); db.refresh(row)
-    return ok(serialize(row), "草稿已退回")
-
-
-@router.post("/risk-drafts/{draft_id}/fill-package")
-def create_fill_package(draft_id: int, payload: FillPackageInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    draft = entity_or_404(db, RiskDraft, draft_id, "草稿不存在")
-    if draft.status != "confirmed": raise HTTPException(status_code=409, detail="仅已确认草稿可生成填报包")
-    package_data = payload.model_dump()
-    if not package_data["fields"]:
-        values = {"draft_title": draft.title, "draft_content": draft.content, "source_refs": "；".join(draft.source_refs)}
-        mappings = db.scalars(select(PlatformFieldMapping).where(PlatformFieldMapping.project_id == draft.project_id, PlatformFieldMapping.platform_name == payload.platform_name, PlatformFieldMapping.enabled.is_(True))).all()
-        package_data["fields"] = [{"name": mapping.target_field, "value": values.get(mapping.source_field, ""), "required": mapping.required, "transform_rule": mapping.transform_rule} for mapping in mappings]
-    row = FillPackage(project_id=draft.project_id, draft_id=draft.id, **package_data); draft.status = "packaged"; db.add(row); db.flush()
-    audit(db, user, "生成填报包", f"为草稿「{draft.title}」生成填报包", draft.project_id, "fill_package", row.id); db.commit(); db.refresh(row)
-    return ok(serialize(row), "填报包已生成")
-
-
-@router.get("/projects/{project_id}/fill-packages")
-def list_fill_packages(project_id: int, db: Session = Depends(get_db), _: User = Depends(get_current_user)) -> dict[str, Any]:
-    return ok(list_for_project(FillPackage, project_id, db))
-
-
-@router.post("/fill-packages/{package_id}/transition")
-def transition_fill_package(package_id: int, payload: TaskTransitionInput, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> dict[str, Any]:
-    row = entity_or_404(db, FillPackage, package_id, "填报包不存在")
-    if payload.status not in {"pending", "filling", "saved", "submitted", "failed", "cancelled"}: raise HTTPException(status_code=422, detail="不支持的填报状态")
-    row.status = payload.status; audit(db, user, "更新填报状态", f"填报包状态变更为 {row.status}", row.project_id, "fill_package", row.id); db.commit(); db.refresh(row)
-    return ok(serialize(row), "填报状态已更新")
+# Compatibility exports preserve the established import surface while route
+# responsibilities live in focused modules.
+from .account_api import (  # noqa: E402,F401
+    change_my_password,
+    delete_my_connector,
+    list_my_connectors,
+    login,
+    me,
+    save_my_connector,
+    update_me,
+)
+from .project_reporting_api import (  # noqa: E402,F401
+    assist_risk_draft,
+    confirm_daily_report,
+    confirm_draft,
+    create_daily_report,
+    create_draft,
+    create_fill_package,
+    list_daily_reports,
+    list_drafts,
+    list_fill_packages,
+    return_draft,
+    submit_draft_review,
+    transition_fill_package,
+    update_daily_report,
+)

@@ -84,7 +84,6 @@
                   :content="item.content"
                   :runtime-trace="item.runtimeTrace"
                   :confirmation-busy="materialAgentLoading || materialAgentStopping"
-                  :show-plan="true"
                   @confirm="confirmMaterialAgentToolCall"
                 />
                 <p v-else>{{ item.content }}</p>
@@ -109,7 +108,6 @@
                 <AgentMessageContent
                   :runtime-trace="materialAgentStreamingTrace"
                   :confirmation-busy="materialAgentLoading || materialAgentStopping"
-                  :show-plan="false"
                   streaming
                   @confirm="confirmMaterialAgentToolCall"
                 />
@@ -189,10 +187,6 @@
               </footer>
             </div>
           </section>
-          <AgentRuntimeDock
-            v-if="materialAgentActiveRuntimeTrace"
-            :runtime-trace="materialAgentActiveRuntimeTrace"
-          />
           <form class="material-agent-composer" @submit.prevent="sendMaterialAgentMessage">
             <input ref="materialAgentFileInput" class="visually-hidden" type="file" multiple accept=".xls,.xlsx,.csv,.docx,.pptx,.pdf,.txt,.md,.png,.jpg,.jpeg,.bmp,.webp,.tif,.tiff" @change="selectMaterialAgentFiles">
             <ChatComposerSurface :busy="materialAgentLoading || materialAgentStopping" contained>
@@ -357,7 +351,7 @@
 
           <section class="manual-config-list">
             <div class="manual-table-wrap" :class="{ 'permission-table-wrap': manualSection === 'documentPermissions' }">
-              <div v-if="!['overview', 'documentPermissions', 'wecom', 'feishu', 'dingtalk'].includes(manualSection)" class="manual-list-actions manual-inline-actions">
+              <div v-if="!['overview', 'documentPermissions', 'platforms', 'wecom', 'feishu', 'dingtalk'].includes(manualSection)" class="manual-list-actions manual-inline-actions">
                 <label class="manual-search">
                   <n-icon :size="16"><Search /></n-icon>
                   <input v-model.trim="manualSearch" :placeholder="`搜索${activeManualSection.label}`">
@@ -403,6 +397,7 @@
                 </form>
               </section>
 
+              <ProjectPlatformPanel v-else-if="manualSection === 'platforms'" :project-id="configProjectId" manage />
               <section v-else-if="['wecom', 'feishu', 'dingtalk'].includes(manualSection)" class="project-connector-direct">
                 <form v-if="activeProjectConnector" class="project-connector-editor" @submit.prevent="saveProjectConnector">
                   <label>{{ activeProjectConnector.connectionLabel }}<input v-model.trim="activeProjectConnector.connectionId" maxlength="500" :disabled="projectConnectorBusy" :placeholder="activeProjectConnector.connectionPlaceholder"></label>
@@ -1084,11 +1079,12 @@ import {
   streamAgentConversationMessage,
 } from '@/api/agentStream'
 import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
-import AgentRuntimeDock from '@/components/agent/AgentRuntimeDock.vue'
 import ProjectDocumentPermissionPanel from '@/components/admin/ProjectDocumentPermissionPanel.vue'
+import ProjectPlatformPanel from '@/components/business/ProjectPlatformPanel.vue'
 import ChatComposerSurface from '@/components/chat/ChatComposerSurface.vue'
 import InitializationIssueBadges from '@/components/initialization/InitializationIssueBadges.vue'
-import { useAppStore, type ProjectBaseInfoInput, type ProjectConfigScope } from '@/stores/app'
+import { useProjectSetupConfiguration } from '@/composables/useProjectSetupConfiguration'
+import { useAppStore, type ProjectConfigScope } from '@/stores/app'
 import type { DirConfig, Member, MemberPosition, PlatformFieldMapping, QualityMetric, RemindRule, RiskLevel, RiskSource, WbsItem } from '@/types'
 import {
   applyAgentRuntimeEvents,
@@ -1102,7 +1098,6 @@ import {
   type ApiAgentConversation,
   type ApiInitializationDraft,
   type ApiInitializationFile,
-  type ApiProjectConnectorConfig,
   type InitializationAttachment,
   type InitializationCredentialForm,
   type InitializationDraftIssue,
@@ -1111,8 +1106,6 @@ import {
   type ManualSection,
   type MaterialAgentMessage,
   type MaterialAgentPreparation,
-  type ProjectBaseInfoForm,
-  type ProjectConnectorConfig,
   type ProjectConnectorKey,
   type WorkspaceTab,
 } from './project-setup/types'
@@ -1153,7 +1146,6 @@ import {
   traceHasPendingMaterialToolCall,
   wbsStatusLabel,
 } from './project-setup/presentation'
-
 const store = useAppStore()
 const message = useMessage()
 const route = useRoute()
@@ -1161,6 +1153,10 @@ const router = useRouter()
 const submitting = ref(false)
 const configScopeLoading = ref(false)
 const configProjectId = ref('')
+const {
+  projectBaseInfoForm, projectBaseInfoCompletedCount, projectConnectorLoading, projectConnectorSaving, projectConnectorTesting, projectConnectorClearing,
+  activeProjectConnectorKey, projectConnectors, activeProjectConnector, projectConnectorBusy, syncProjectBaseInfo, saveProjectBaseInfo, loadProjectConnectorSettings, saveProjectConnector, testProjectConnector, clearProjectConnector,
+} = useProjectSetupConfiguration({ store, message, configProjectId, run })
 const isPlatformAdmin = computed(() => sessionStorage.getItem('user_role') === 'admin')
 const configProjectName = computed(() => store.projects.find(project => project.id === configProjectId.value)?.name || '当前项目')
 const projectRequiredNotice = computed(() => route.query.projectRequired === '1')
@@ -1172,19 +1168,6 @@ const workspaceTabs: Array<{ key: WorkspaceTab; label: string; hint: string }> =
 ]
 const projectCreateOpen = ref(false)
 const projectForm = reactive({ name: '' })
-const projectBaseInfoForm = reactive<ProjectBaseInfoForm>({
-  name: '',
-  engineeringTypeDescription: '',
-  contractStartDate: '',
-  contractEndDate: '',
-  contractDurationDays: '',
-  contractAmountWanYuan: '',
-  constructionUnitName: '',
-  generalContractorUnitName: '',
-  supervisionUnitName: '',
-  designUnitName: '',
-  surveyUnitName: '',
-})
 const memberForm = reactive({
   name: '',
   username: '',
@@ -1299,9 +1282,9 @@ const materialAgentPreparationTitle = computed(() => {
     return '正在上传并解析附件'
   }
   if (materialAgentPreparation.value?.stage === 'starting_agent') {
-    return '附件解析完成，正在启动智能体'
+    return '附件解析完成，正在处理初始化请求'
   }
-  return '正在建立项目初始化会话'
+  return '正在处理项目初始化请求'
 })
 const materialAgentPreparationDetail = computed(() => {
   const preparation = materialAgentPreparation.value
@@ -1367,39 +1350,6 @@ const initializationDraftApplying = ref(false)
 const initializationDraftValidating = ref(false)
 const initializationDraftAllowPartial = ref(false)
 const initializationCredentialForms = ref<InitializationCredentialForm[]>([])
-const projectConnectorLoading = ref(false)
-const projectConnectorSaving = ref(false)
-const projectConnectorTesting = ref(false)
-const projectConnectorClearing = ref(false)
-const activeProjectConnectorKey = ref<ProjectConnectorKey>('wecom')
-const projectConnectors = reactive<ProjectConnectorConfig[]>([
-  { key: 'wecom', label: '企业微信', description: '配置项目群机器人，用于任务下发、节点流转和逾期提醒。', connectionLabel: '项目群名称', connectionPlaceholder: '例如：项目管理群', secretLabel: '群机器人 Webhook', secretPlaceholder: '粘贴企业微信群机器人的完整 Webhook', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
-  { key: 'feishu', label: '飞书', description: '配置当前项目使用的飞书应用或项目群机器人。', connectionLabel: '应用 ID / 机器人 Webhook', connectionPlaceholder: '输入应用 ID 或项目群机器人 Webhook', secretLabel: '应用 Secret / 签名密钥', secretPlaceholder: '输入应用密钥或签名密钥', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
-  { key: 'dingtalk', label: '钉钉', description: '配置当前项目使用的钉钉应用或项目群机器人。', connectionLabel: '应用 Key / 机器人 Webhook', connectionPlaceholder: '输入应用 Key 或项目群机器人 Webhook', secretLabel: '应用 Secret / 加签密钥', secretPlaceholder: '输入应用密钥或加签密钥', connectionId: '', secret: '', configured: false, hasSecret: false, updatedAt: '', icon: MessageCircle },
-])
-const activeProjectConnector = computed(() => projectConnectors.find(item => item.key === activeProjectConnectorKey.value))
-const projectConnectorBusy = computed(() => (
-  projectConnectorLoading.value
-  || projectConnectorSaving.value
-  || projectConnectorTesting.value
-  || projectConnectorClearing.value
-))
-const projectBaseInfoCompletedCount = computed(() => {
-  const values = [
-    projectBaseInfoForm.name,
-    projectBaseInfoForm.engineeringTypeDescription,
-    projectBaseInfoForm.contractStartDate,
-    projectBaseInfoForm.contractEndDate,
-    projectBaseInfoForm.contractDurationDays,
-    projectBaseInfoForm.contractAmountWanYuan === 0 ? '0' : projectBaseInfoForm.contractAmountWanYuan,
-    projectBaseInfoForm.constructionUnitName,
-    projectBaseInfoForm.generalContractorUnitName,
-    projectBaseInfoForm.supervisionUnitName,
-    projectBaseInfoForm.designUnitName,
-    projectBaseInfoForm.surveyUnitName,
-  ]
-  return values.filter(value => value !== '' && value !== null && value !== undefined).length
-})
 const projectPositionCount = computed(() => new Set(
   configScope.members.flatMap(member => member.positions.map(position => position.positionId)),
 ).size)
@@ -1411,6 +1361,7 @@ const manualSections = computed(() => {
     { key: 'quality' as ManualSection, label: '质量指标', description: '维护验收要求、检查频次与关联工序。', count: configScope.qualityMetrics.length, icon: Shield },
     { key: 'risks' as ManualSection, label: '风险源', description: '维护风险等级、控制要求和资料要求。', count: configScope.riskSources.length, icon: Shield },
     { key: 'mappings' as ManualSection, label: '字段映射', description: '维护外部平台填报字段的映射规则。', count: configScope.platformMappings.length, icon: ArrowsLeftRight },
+    { key: 'platforms' as ManualSection, label: '工程平台', description: '维护工程平台名称、类型与访问地址。', count: '配置', icon: ArrowsLeftRight },
     { key: 'monitor' as ManualSection, label: '监控与预警', description: '维护资料目录监控与风险预警提前量。', count: monitorRules.value.length + 1, icon: ListDetails },
     { key: 'wecom' as ManualSection, label: '企业微信配置', description: '维护任务通知使用的项目群机器人。', count: projectConnectors[0].configured ? 1 : 0, icon: MessageCircle },
     { key: 'feishu' as ManualSection, label: '飞书配置', description: '维护当前项目使用的飞书应用或项目群机器人。', count: projectConnectors[1].configured ? 1 : 0, icon: MessageCircle },
@@ -1419,7 +1370,7 @@ const manualSections = computed(() => {
   if (isPlatformAdmin.value) {
     sections.splice(2, 0, {
       key: 'documentPermissions',
-      label: '资料权限',
+      label: '岗位权限',
       description: '按项目岗位分配工程资料目录与文件的访问范围。',
       count: projectPositionCount.value,
       icon: ShieldLock,
@@ -1875,52 +1826,6 @@ function selectManualSection(section: ManualSection, syncRoute = true) {
   if (syncRoute) replaceSetupRouteQuery({ tab: 'manual', section, recordId: undefined })
 }
 
-function syncProjectBaseInfo(projectId = configProjectId.value) {
-  const project = store.projects.find(item => item.id === projectId)
-  Object.assign(projectBaseInfoForm, {
-    name: project?.name || '',
-    engineeringTypeDescription: project?.engineeringTypeDescription || '',
-    contractStartDate: project?.contractStartDate || '',
-    contractEndDate: project?.contractEndDate || '',
-    contractDurationDays: project?.contractDurationDays ?? '',
-    contractAmountWanYuan: project?.contractAmountWanYuan ?? '',
-    constructionUnitName: project?.constructionUnitName || '',
-    generalContractorUnitName: project?.generalContractorUnitName || '',
-    supervisionUnitName: project?.supervisionUnitName || '',
-    designUnitName: project?.designUnitName || '',
-    surveyUnitName: project?.surveyUnitName || '',
-  })
-}
-
-function saveProjectBaseInfo() {
-  if (!configProjectId.value || !projectBaseInfoForm.name.trim()) return
-  if (
-    projectBaseInfoForm.contractStartDate
-    && projectBaseInfoForm.contractEndDate
-    && projectBaseInfoForm.contractEndDate < projectBaseInfoForm.contractStartDate
-  ) {
-    message.warning('合同结束日期不能早于开始日期。')
-    return
-  }
-  const payload: ProjectBaseInfoInput = {
-    name: projectBaseInfoForm.name.trim(),
-    engineeringTypeDescription: projectBaseInfoForm.engineeringTypeDescription.trim() || undefined,
-    contractStartDate: projectBaseInfoForm.contractStartDate || undefined,
-    contractEndDate: projectBaseInfoForm.contractEndDate || undefined,
-    contractDurationDays: projectBaseInfoForm.contractDurationDays === '' ? undefined : projectBaseInfoForm.contractDurationDays,
-    contractAmountWanYuan: projectBaseInfoForm.contractAmountWanYuan === '' ? undefined : projectBaseInfoForm.contractAmountWanYuan,
-    constructionUnitName: projectBaseInfoForm.constructionUnitName.trim() || undefined,
-    generalContractorUnitName: projectBaseInfoForm.generalContractorUnitName.trim() || undefined,
-    supervisionUnitName: projectBaseInfoForm.supervisionUnitName.trim() || undefined,
-    designUnitName: projectBaseInfoForm.designUnitName.trim() || undefined,
-    surveyUnitName: projectBaseInfoForm.surveyUnitName.trim() || undefined,
-  }
-  void run(async () => {
-    await store.updateProject(configProjectId.value, payload)
-    syncProjectBaseInfo(configProjectId.value)
-  }, '项目基础信息已保存')
-}
-
 function openPersonnelDetail(member: Member, position?: MemberPosition) {
   personnelDetailMemberId.value = member.id
   personnelDetailPositionId.value = position?.id || member.positions[0]?.id || ''
@@ -2277,101 +2182,6 @@ watch(() => store.projectSetupRefreshVersion, () => {
   void loadMaterialAgentConversation(configProjectId.value)
   void loadInitializationDraft(configProjectId.value)
 })
-
-async function loadProjectConnectorSettings() {
-  projectConnectorLoading.value = true
-  for (const connector of projectConnectors) {
-    connector.connectionId = ''
-    connector.secret = ''
-    connector.configured = false
-    connector.hasSecret = false
-    connector.updatedAt = ''
-  }
-  try {
-    if (!configProjectId.value) return
-    const response = await api.get<ApiEnvelope<ApiProjectConnectorConfig[]>>(`/projects/${configProjectId.value}/connectors`)
-    for (const value of response.data.data) {
-      const connector = projectConnectors.find(item => item.key === value.connector_type)
-      if (!connector) continue
-      connector.connectionId = value.connection_id || ''
-      connector.configured = Boolean(value.configured)
-      connector.hasSecret = Boolean(value.has_secret)
-      connector.updatedAt = value.updated_at ? new Date(value.updated_at).toLocaleString('zh-CN', { hour12: false }) : ''
-    }
-  } catch (error: any) {
-    message.error(error.response?.data?.detail || '项目连接配置加载失败。')
-  } finally {
-    projectConnectorLoading.value = false
-  }
-}
-
-async function saveProjectConnector() {
-  if (projectConnectorBusy.value) return
-  const connector = activeProjectConnector.value
-  if (!connector) return
-  if (!connector.connectionId.trim()) {
-    message.warning(`请填写${connector.connectionLabel}。`)
-    return
-  }
-  if (connector.key === 'wecom' && !connector.hasSecret && !connector.secret.trim()) {
-    message.warning('请填写企业微信群机器人 Webhook。')
-    return
-  }
-  if (!configProjectId.value) return
-  projectConnectorSaving.value = true
-  try {
-    const response = await api.put<ApiEnvelope<ApiProjectConnectorConfig>>(`/projects/${configProjectId.value}/connectors/${connector.key}`, {
-      connection_id: connector.connectionId,
-      secret: connector.secret || null,
-    })
-    const saved = response.data.data
-    connector.connectionId = saved.connection_id
-    connector.configured = saved.configured
-    connector.hasSecret = saved.has_secret
-    connector.updatedAt = saved.updated_at ? new Date(saved.updated_at).toLocaleString('zh-CN', { hour12: false }) : ''
-    connector.secret = ''
-    message.success(`${connector.label}连接信息已保存到项目。`)
-  } catch (error: any) {
-    message.error(error.response?.data?.detail || '项目连接配置保存失败。')
-  } finally {
-    projectConnectorSaving.value = false
-  }
-}
-
-async function testProjectConnector() {
-  if (projectConnectorBusy.value) return
-  const connector = activeProjectConnector.value
-  if (connector?.key !== 'wecom' || !connector.configured || !configProjectId.value) return
-  projectConnectorTesting.value = true
-  try {
-    await api.post(`/projects/${configProjectId.value}/connectors/wecom/test`)
-    message.success('测试消息已发送，请到项目群中确认。')
-  } catch (error: any) {
-    message.error(error.response?.data?.detail || '企业微信测试消息发送失败。')
-  } finally {
-    projectConnectorTesting.value = false
-  }
-}
-
-async function clearProjectConnector() {
-  if (projectConnectorBusy.value) return
-  const connector = activeProjectConnector.value
-  if (!connector || !connector.configured || !configProjectId.value) return
-  projectConnectorClearing.value = true
-  try {
-    await api.delete(`/projects/${configProjectId.value}/connectors/${connector.key}`)
-    connector.connectionId = ''
-    connector.secret = ''
-    connector.configured = false
-    connector.hasSecret = false
-    connector.updatedAt = ''
-    message.success(`${connector.label}连接配置已清除。`)
-  } catch (error: any) {
-    message.error(error.response?.data?.detail || '项目连接配置清除失败。')
-  } finally {
-    projectConnectorClearing.value = false
-  }
-}
 
 const materialAgentBottomThreshold = 48
 

@@ -1,12 +1,13 @@
 """Regression tests for the caller-to-callee agent allowlist."""
 
+import json
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from agentscope.agent import ContextConfig, ReActConfig
 from agentscope.app._service._toolkit import get_toolkit
-from agentscope.app._tool import AgentInvite
+from agentscope.app._tool import AgentInvite, AgentInvoke, AgentRetryOrSwitch
 from agentscope.app.storage import (
     AgentCallConfig,
     AgentData,
@@ -14,6 +15,8 @@ from agentscope.app.storage import (
     InviteConfig,
     PlatformAgentConfig,
 )
+from agentscope.message import TextBlock
+from agentscope.tool import ToolChunk
 
 
 USER_ID = "allowlist-test"
@@ -50,7 +53,7 @@ def _agent(
 class AgentCallConfigTest(IsolatedAsyncioTestCase):
     """Validate configuration compatibility and runtime enforcement."""
 
-    def test_old_agent_data_defaults_to_all(self) -> None:
+    def test_old_agent_data_defaults_to_deny(self) -> None:
         old_data = AgentData.model_validate(
             {
                 "name": "legacy",
@@ -59,7 +62,7 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
                 "invite_config": {},
             },
         )
-        self.assertEqual(old_data.call_config.scope, "all")
+        self.assertEqual(old_data.call_config.scope, "none")
         self.assertFalse(
             old_data.platform_config.allow_global_main_call,
         )
@@ -151,6 +154,99 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
         self.assertIn("prompt 过长", result.content[0].text)
         self.assertEqual(storage.get_session.await_count, 0)
 
+    async def test_recovery_rejects_unauthorised_switch_before_cleanup(self) -> None:
+        storage = SimpleNamespace(get_session=AsyncMock())
+        tool = AgentRetryOrSwitch(
+            storage=storage,
+            message_bus=object(),
+            workspace_manager=object(),
+            resource_access_service=SimpleNamespace(
+                list_resource=AsyncMock(return_value=[]),
+            ),
+            user_id=USER_ID,
+            session_id="session",
+            agent_id=CALLER_ID,
+            caller_owner_id=USER_ID,
+        )
+
+        result = await tool(
+            agent_id="not-authorised",
+            task="改用其他专业智能体恢复执行",
+        )
+
+        self.assertIn("不在当前 Dobby 授权范围", result.content[0].text)
+        storage.get_session.assert_not_awaited()
+
+    async def test_recovery_cleans_failed_run_then_reinvokes_authorised_target(
+        self,
+    ) -> None:
+        target = _agent(
+            TARGET_A_ID,
+            "Target A",
+            invitable=True,
+            platform_config=PlatformAgentConfig(
+                allow_global_main_call=True,
+            ),
+        )
+        storage = SimpleNamespace(
+            get_session=AsyncMock(
+                return_value=SimpleNamespace(team_id="failed-team"),
+            ),
+            get_team=AsyncMock(
+                return_value=SimpleNamespace(
+                    id="failed-team",
+                    session_id="session",
+                ),
+            ),
+        )
+        tool = AgentRetryOrSwitch(
+            storage=storage,
+            message_bus=object(),
+            workspace_manager=object(),
+            resource_access_service=SimpleNamespace(
+                list_resource=AsyncMock(return_value=[target]),
+            ),
+            user_id=USER_ID,
+            session_id="session",
+            agent_id=CALLER_ID,
+            caller_owner_id=USER_ID,
+        )
+        reinvoked = ToolChunk(
+            content=[TextBlock(text="reinvoked")],
+            metadata={"orchestration": {"operation": "invoke"}},
+        )
+
+        with (
+            patch(
+                "agentscope.app._service.SessionService.delete_team",
+                new=AsyncMock(),
+            ) as delete_team,
+            patch.object(
+                AgentInvoke,
+                "__call__",
+                new=AsyncMock(return_value=reinvoked),
+            ) as invoke,
+        ):
+            result = await tool(
+                agent_id=TARGET_A_ID,
+                task="用新边界重新分析",
+                reason="原执行缺少必要资料",
+            )
+
+        delete_team.assert_awaited_once_with(USER_ID, "failed-team")
+        invoke.assert_awaited_once_with(
+            agent_id=TARGET_A_ID,
+            task="用新边界重新分析",
+        )
+        self.assertEqual(
+            result.metadata["orchestration"],
+            {
+                "operation": "retry_or_switch",
+                "previous_team_id": "failed-team",
+                "reason": "原执行缺少必要资料",
+            },
+        )
+
     async def test_global_main_only_sees_explicitly_enabled_targets(
         self,
     ) -> None:
@@ -197,21 +293,69 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
                 ),
             ),
         ]
-        targets = await self._invite_targets_for(caller, visible_agents)
+        toolkit = await self._toolkit_for(caller, visible_agents)
 
-        self.assertEqual(len(targets or []), 2)
+        self.assertIsNone(await toolkit.get_tool("AgentInvite"))
+        expected = {
+            "agent_search",
+            "agent_invoke",
+            "agent_run_status",
+            "agent_cancel",
+            "agent_retry_or_switch",
+        }
         self.assertTrue(
-            any(target.startswith("Published@") for target in targets or []),
+            expected.issubset(
+                {tool.name for tool in toolkit.tool_groups[0].tools},
+            ),
         )
-        self.assertTrue(
-            any(target.startswith("Unpublished@") for target in targets or []),
+        search = await toolkit.get_tool("agent_search")
+        self.assertIsNotNone(search)
+        result = await search(query="capability", limit=5)
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(
+            {item["name"] for item in payload["candidates"]},
+            {"Published", "Unpublished"},
         )
-        self.assertFalse(
-            any(target.startswith("Internal@") for target in targets or []),
+
+    async def test_dynamic_search_ranks_chinese_professional_capability(self) -> None:
+        caller = _agent(
+            CALLER_ID,
+            "Dobby",
+            platform_config=PlatformAgentConfig(role="global_main"),
         )
-        self.assertFalse(
-            any(target.startswith("Disabled@") for target in targets or []),
+        knowledge = _agent(
+            TARGET_A_ID,
+            "资料助手",
+            invitable=True,
+            platform_config=PlatformAgentConfig(
+                category="工程资料",
+                description="检索施工方案、合同、图纸和验收标准并整理引用",
+                allow_global_main_call=True,
+                sort_order=10,
+            ),
         )
+        risk = _agent(
+            TARGET_B_ID,
+            "风险研判助手",
+            invitable=True,
+            platform_config=PlatformAgentConfig(
+                category="风险管理",
+                description="从施工资料识别风险线索并研判等级",
+                allow_global_main_call=True,
+                sort_order=200,
+            ),
+        )
+        toolkit = await self._toolkit_for(caller, [caller, knowledge, risk])
+
+        search = await toolkit.get_tool("agent_search")
+        result = await search(query="请从施工资料中识别风险", limit=1)
+        payload = json.loads(result.content[0].text)
+
+        self.assertEqual(payload["candidates"][0]["agent_id"], TARGET_B_ID)
+
+        result = await search(query="施工方案里的验收标准是什么", limit=1)
+        payload = json.loads(result.content[0].text)
+        self.assertEqual(payload["candidates"][0]["agent_id"], TARGET_A_ID)
 
     async def test_global_main_rechecks_target_permission(self) -> None:
         caller = _agent(
@@ -387,16 +531,7 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
             input_has_attachments=False,
         )
 
-        self.assertEqual(
-            mcp_registry.get_session_clients.await_args.kwargs["package_ids"],
-            ["safe-package"],
-        )
-        self.assertEqual(
-            mcp_registry.get_session_clients.await_args.kwargs[
-                "excluded_package_ids"
-            ],
-            {"attachment-parser", "task-engine"},
-        )
+        mcp_registry.get_session_clients.assert_not_awaited()
         self.assertFalse(
             any(
                 client.name == "task-engine"
@@ -427,13 +562,38 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
         caller: AgentRecord,
         visible_agents: list[AgentRecord],
     ) -> list[str] | None:
+        toolkit = await self._toolkit_for(caller, visible_agents)
+        invite = next(
+            (
+                tool
+                for tool in toolkit.tool_groups[0].tools
+                if tool.name == "AgentInvite"
+            ),
+            None,
+        )
+        if invite is None:
+            return None
+        return invite.input_schema["properties"]["target"]["enum"]
+
+    async def _toolkit_for(
+        self,
+        caller: AgentRecord,
+        visible_agents: list[AgentRecord],
+    ):
         workspace = SimpleNamespace(
             list_tools=AsyncMock(return_value=[]),
             list_skills=AsyncMock(return_value=[]),
             list_mcps=AsyncMock(return_value=[]),
         )
         toolkit = await get_toolkit(
-            storage=SimpleNamespace(get_team=AsyncMock(return_value=None)),
+            storage=SimpleNamespace(
+                get_team=AsyncMock(return_value=None),
+                get_session=AsyncMock(
+                    return_value=SimpleNamespace(
+                        config=SimpleNamespace(platform_context=None),
+                    ),
+                ),
+            ),
             workspace=workspace,
             workspace_manager=object(),
             scheduler_manager=object(),
@@ -453,14 +613,4 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
                 list_resource=AsyncMock(return_value=visible_agents),
             ),
         )
-        invite = next(
-            (
-                tool
-                for tool in toolkit.tool_groups[0].tools
-                if tool.name == "AgentInvite"
-            ),
-            None,
-        )
-        if invite is None:
-            return None
-        return invite.input_schema["properties"]["target"]["enum"]
+        return toolkit

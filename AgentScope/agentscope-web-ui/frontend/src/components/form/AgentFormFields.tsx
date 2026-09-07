@@ -286,8 +286,11 @@ export function defaultAgentFormValues(schema: AgentSchemaV2Response): AgentForm
 		model_policy: agentModelPolicyToForm(),
 		platform_config: {
 			role: 'business',
+			agent_level: 'worker',
 			enabled: true,
 			published: true,
+			allow_global_main_call: false,
+			project_knowledge_enabled: false,
 			description: null,
 			category: '通用',
 			sort_order: 100,

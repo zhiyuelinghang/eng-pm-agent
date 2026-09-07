@@ -237,6 +237,7 @@ class ListMessagesResponse(BaseModel):
     """Response body for listing messages in a session."""
 
     messages: list = Field(description="Messages in chronological order.")
+    subagent_hitl: list[dict[str, Any]] = Field(default_factory=list)
     is_running: bool = Field(
         description="Whether the session is currently running.",
     )

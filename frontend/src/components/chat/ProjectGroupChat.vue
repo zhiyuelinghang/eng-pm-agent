@@ -2,9 +2,9 @@
   <section class="project-chat-shell" aria-label="智能协同会话">
     <aside class="channel-rail" aria-label="会话列表">
       <header class="rail-heading">
-        <button class="new-private-chat" type="button" title="新建会话" @click="openPrivateChatDialog">
+        <button class="new-private-chat" type="button" title="新建群" @click="openPrivateChatDialog">
           <n-icon :size="18"><Plus /></n-icon>
-          <span>新会话</span>
+          <span>新建群</span>
         </button>
       </header>
 
@@ -17,13 +17,9 @@
         <div v-if="loadingChannels" class="channel-skeleton" aria-label="正在加载群聊">
           <i></i><span></span><small></small>
         </div>
-        <template v-for="sectionItem in channelSections" :key="sectionItem.key">
-          <div class="channel-section-label">
-            <span>{{ sectionItem.label }}</span>
-            <em>{{ sectionItem.channels.length }}</em>
-          </div>
+        <template v-if="filteredChannels.length">
           <button
-            v-for="channel in sectionItem.channels"
+            v-for="channel in filteredChannels"
             :key="channel.id"
             type="button"
             :class="['channel-item', { active: channel.id === activeChannelId }]"
@@ -32,6 +28,8 @@
           >
             <span class="channel-copy">
               <strong :title="channelDisplayTitle(channel)">{{ channelDisplayTitle(channel) }}</strong>
+              <span v-if="channel.all_members || channel.channel_type !== 'private'" class="group-all-mark" aria-label="全体成员">ALL</span>
+              <span v-if="unread.counts[String(channel.id)]" class="group-unread" :aria-label="`${unread.counts[String(channel.id)]} 条未读消息`">{{ unread.counts[String(channel.id)] > 99 ? '99+' : unread.counts[String(channel.id)] }}</span>
               <span v-if="channel.last_message_at" class="channel-meta">
                 <time>{{ compactTime(channel.last_message_at) }}</time>
               </span>
@@ -51,7 +49,7 @@
       <header class="chat-heading">
         <div class="chat-heading-main">
           <div class="chat-channel-mark">
-            <n-icon :size="20"><Lock v-if="activeChannel?.channel_type === 'private'" /><Hash v-else /></n-icon>
+            <n-icon :size="20"><Hash /></n-icon>
           </div>
           <div>
             <h1>{{ displayChannelTitle }}</h1>
@@ -70,7 +68,7 @@
         <button type="button" @click="reloadProjectChat">重试</button>
       </div>
 
-      <div ref="messageViewport" class="message-viewport" aria-live="polite">
+      <div ref="messageViewport" class="message-viewport" aria-live="polite" @scroll="markVisibleMessagesRead">
         <div v-if="loadingMessages" class="message-loading" aria-label="正在加载消息">
           <div v-for="index in 3" :key="index" :class="['message-placeholder', { own: index === 2 }]">
             <i></i><span></span>
@@ -79,8 +77,8 @@
 
         <div v-else-if="activeChannel && !messages.length" class="chat-empty">
           <div class="empty-robot"><n-icon :size="34"><Robot /></n-icon></div>
-          <h3>{{ activeChannel.channel_type === 'private' ? '私密会话已经准备好' : '项目群已经准备好' }}</h3>
-          <p>{{ activeChannel.channel_type === 'private' ? '只有当前参与人能够查看和发送消息。' : '发一条消息开始协作。普通群聊只在项目成员之间传递，不会自动调用智能体或创建任务。' }}</p>
+          <h3>群聊已经准备好</h3>
+          <p>发一条消息开始协作。群文件会按群名称自动存入知识库，仅群成员和工程管理员可见。</p>
         </div>
 
         <article
@@ -126,6 +124,8 @@
                 {{ taskEventLinkLabel(item) }}
               </router-link>
             </div>
+            <ChatAgentRunControls v-else-if="item.sender_type === 'agent'" :item="item"
+              :current-user-id="currentUserId" @updated="mergeMessages([$event])" />
             <div v-else class="message-content">
               <template v-for="(segment, segmentIndex) in messageSegments(item)" :key="`${item.id}-${segmentIndex}`">
                 <span
@@ -135,6 +135,7 @@
                 <template v-else>{{ segment.text }}</template>
               </template>
             </div>
+            <ChatMessageFiles :message="item" :project-id="store.currentProjectId" />
             <div v-if="item.message_type !== 'task_event' && item.task_ids?.length" class="message-task-links" aria-label="消息关联任务">
               <router-link v-for="taskId in item.task_ids" :key="taskId" :to="taskRoute(taskId)">
                 <n-icon :size="14"><ListCheck /></n-icon>{{ taskTitle(taskId) }}
@@ -243,6 +244,7 @@
               @keydown="handleComposerKeydown"
             ></div>
             <template #tools>
+              <ChatGroupFileUpload :channel-id="activeChannelId" :disabled="sending" @uploaded="handleFileUploaded" />
               <button
                 type="button"
                 class="mention-trigger chat-composer-tool"
@@ -269,11 +271,11 @@
 
     <aside class="chat-context" aria-label="群聊信息">
       <section class="context-section group-summary">
-        <div class="context-eyebrow">{{ activeChannel?.channel_type === 'private' ? '私密会话' : '当前项目' }}</div>
-        <h2>{{ activeChannel?.channel_type === 'private' ? displayChannelTitle : '项目协作群' }}</h2>
+        <div class="context-eyebrow">{{ currentProjectName }}</div>
+        <h2>{{ displayChannelTitle }} <span v-if="activeChannel && activeChannel.channel_type !== 'private'" class="group-all-mark">ALL</span></h2>
         <p>{{ activeChannel?.summary || '项目成员共享的实时协同群聊' }}</p>
         <dl>
-          <div><dt>消息范围</dt><dd>{{ activeChannel?.channel_type === 'private' ? '仅参与人' : '当前项目' }}</dd></div>
+          <div><dt>消息范围</dt><dd>群成员</dd></div>
           <div><dt>成员</dt><dd>{{ members.length }} 人</dd></div>
           <div><dt>消息记录</dt><dd>持续保存</dd></div>
         </dl>
@@ -318,9 +320,9 @@
     <section class="private-chat-dialog" role="dialog" aria-modal="true" aria-labelledby="private-chat-dialog-title">
       <header>
         <div>
-          <span>新建会话</span>
-          <h2 id="private-chat-dialog-title">发起私密会话</h2>
-          <p>只有你选择的当前项目成员可以看到会话和消息。</p>
+          <span>智能协同</span>
+          <h2 id="private-chat-dialog-title">新建群</h2>
+          <p>选择全体成员或指定成员，同一工程内群名称不能重复。</p>
         </div>
         <button type="button" aria-label="关闭" :disabled="creatingPrivateChat" @click="closePrivateChatDialog">
           <n-icon :size="20"><X /></n-icon>
@@ -338,11 +340,12 @@
             maxlength="100"
             required
             aria-required="true"
-            placeholder="请输入私聊群名称"
+            placeholder="请输入不重复的群名称"
           >
         </div>
 
-        <section class="participant-picker" aria-label="选择私密会话参与人">
+        <label class="group-all-choice"><input v-model="allGroupMembers" type="checkbox">全体项目成员 <span class="group-all-mark">ALL</span></label>
+        <section v-if="!allGroupMembers" class="participant-picker" aria-label="选择群成员">
           <div class="participant-picker-head">
             <div>
               <strong>选择参与人</strong>
@@ -409,7 +412,7 @@
           <button type="button" class="dialog-cancel" :disabled="creatingPrivateChat" @click="closePrivateChatDialog">取消</button>
           <button type="button" class="dialog-submit" :disabled="!canCreatePrivateChat" @click="createPrivateChat">
             <n-icon v-if="creatingPrivateChat" :size="16" class="task-draft-spinner"><Loader /></n-icon>
-            {{ creatingPrivateChat ? '创建中…' : '创建会话' }}
+            {{ creatingPrivateChat ? '创建中…' : '创建群' }}
           </button>
         </div>
       </footer>
@@ -451,7 +454,7 @@
           <span class="task-draft-generation-orbit" aria-hidden="true">
             <n-icon :size="28"><Robot /></n-icon>
           </span>
-          <h3>Dobby 正在分析任务需求</h3>
+          <h3>任务助手正在分析任务需求</h3>
           <p>正在结合群聊上下文梳理任务要素，完成后会在这里显示可编辑草稿。</p>
           <div class="task-draft-generation-skeleton" aria-hidden="true"><i></i><i></i><i></i></div>
         </section>
@@ -467,7 +470,7 @@
 
       <div v-else-if="isTaskDraftUnavailable" class="task-draft-unavailable" role="alert">
         <span><n-icon :size="28"><AlertCircle /></n-icon></span>
-        <h3>{{ privateTaskDraftStatus === 'cancelled' ? 'Dobby 已停止分析' : 'Dobby 未能完成分析' }}</h3>
+        <h3>{{ privateTaskDraftStatus === 'cancelled' ? '任务助手已停止分析' : '任务助手未能完成分析' }}</h3>
         <p>{{ taskDraftStartError || activePrivateTaskDraft?.error || '分析过程遇到问题，请重新尝试。' }}</p>
         <small>本次内容没有发送到群聊，也没有创建任务。</small>
       </div>
@@ -688,7 +691,6 @@ import {
 } from '@vicons/tabler'
 
 import {
-  PROJECT_CHAT_TASK_ASSISTANT,
   claimProjectChatMention,
   connectProjectChatRealtime,
   createPrivateProjectChatChannel,
@@ -717,9 +719,34 @@ import {
   type ProjectChatTaskDraft,
 } from '@/api/projectChat'
 import ChatComposerSurface from '@/components/chat/ChatComposerSurface.vue'
+import ChatAgentRunControls from '@/components/chat/ChatAgentRunControls.vue'
+import ChatGroupFileUpload from '@/components/chat/ChatGroupFileUpload.vue'
+import ChatMessageFiles from '@/components/chat/ChatMessageFiles.vue'
+import { useChatUnreadStore } from '@/stores/chatUnread'
+import {
+  useProjectChatComposer,
+  type ProjectChatMentionOption as MentionOption,
+} from '@/composables/useProjectChatComposer'
 import { useAppStore } from '@/stores/app'
 
 const store = useAppStore()
+const unread = useChatUnreadStore()
+const allGroupMembers = ref(false)
+function handleFileUploaded(item: ProjectChatMessage) {
+  if (item.channel_id === activeChannelId.value) mergeMessages([item], true)
+  void unread.refresh(store.currentProjectId)
+}
+const acknowledgedMessages = new Map<number, number>()
+let markingRead = false
+async function markVisibleMessagesRead() {
+  await nextTick()
+  const channelId = activeChannelId.value, projectId = store.currentProjectId, lastId = messages.value[messages.value.length - 1]?.id
+  if (!channelId || !lastId || markingRead || loadingMessages.value || document.visibilityState !== 'visible' || !isNearMessageBottom() || (acknowledgedMessages.get(channelId) || 0) >= lastId) return
+  markingRead = true
+  try { await unread.markRead(projectId, channelId, lastId); acknowledgedMessages.set(channelId, lastId) }
+  catch { /* 保留未读数字，下次可见时重试。 */ }
+  finally { markingRead = false }
+}
 const notice = useMessage()
 const route = useRoute()
 const router = useRouter()
@@ -753,16 +780,10 @@ const sending = ref(false)
 const pageError = ref('')
 const realtimeStatus = ref<ProjectChatRealtimeStatus>('connecting')
 const messageViewport = ref<HTMLElement | null>(null)
-const composerInput = ref<HTMLDivElement | null>(null)
 const projectParticipants = ref<ProjectChatParticipant[]>([])
-const mentionAgents = ref<ProjectChatAgent[]>([PROJECT_CHAT_TASK_ASSISTANT])
+const mentionAgents = ref<ProjectChatAgent[]>([])
 const mentionAgentsLoading = ref(false)
 const mentionAgentsLoaded = ref(false)
-const mentionMenuOpen = ref(false)
-const mentionQuery = ref('')
-const mentionRangeStart = ref(0)
-const mentionRangeEnd = ref(0)
-const mentionActiveIndex = ref(0)
 const privateChatDialogOpen = ref(false)
 const privateChatTitle = ref('')
 const privateChatTitleInput = ref<HTMLInputElement | null>(null)
@@ -776,7 +797,7 @@ const privateChatError = ref('')
 const pulsingMentionIds = ref<Set<number>>(new Set())
 const mentionNotices = ref<ProjectChatMessage[]>([])
 const locatingMentionNotice = ref(false)
-  const taskDraftDialogOpen = ref(false)
+const taskDraftDialogOpen = ref(false)
 const activePrivateTaskDraft = ref<ProjectChatPrivateTaskDraft | null>(null)
 const taskDraftForm = ref<ProjectChatTaskDraft | null>(null)
 const taskDraftMemberToAdd = ref('')
@@ -799,20 +820,34 @@ const claimingMentionIds = new Set<number>()
 const resolvedMentionIds = new Set<number>()
 const mentionPulseTimers = new Map<number, number>()
 
-type MentionOption = {
-  key: string
-  type: 'all' | 'user' | 'agent'
-  id: number | string
-  name: string
-  subtitle: string
-}
-
 type MessageSegment = {
   text: string
   targetType: 'all' | 'user' | 'agent' | null
 }
 
-const selectedMentions = ref<MentionOption[]>([])
+const {
+  composerInput,
+  mentionMenuOpen,
+  mentionQuery,
+  mentionActiveIndex,
+  selectedMentions,
+  renderComposer,
+  syncDraftFromEditor,
+  clearComposer,
+  closeMentionMenu,
+  deferCloseMentionMenu,
+  updateMentionState,
+  selectMention,
+  openMentionMenu,
+  handleComposerPaste,
+  handleComposerKeydown,
+} = useProjectChatComposer({
+  draft,
+  filteredMentionOptions: () => filteredMentionOptions.value,
+  loadMentionAgents,
+  sendMessage,
+  warn: value => notice.warning(value),
+})
 
 const activeChannel = computed(() => (
   channels.value.find(item => item.id === activeChannelId.value) || null
@@ -846,24 +881,9 @@ const filteredChannels = computed(() => {
     channel.last_message?.content,
   ].some(value => value?.toLowerCase().includes(keyword)))
 })
-const channelSections = computed(() => {
-  if (!channels.value.length) return []
-  return [
-    {
-      key: 'project',
-      label: '项目群',
-      channels: filteredChannels.value.filter(channel => channel.channel_type !== 'private'),
-    },
-    {
-      key: 'private',
-      label: '私密群',
-      channels: filteredChannels.value.filter(channel => channel.channel_type === 'private'),
-    },
-  ]
-})
 const displayChannelTitle = computed(() => {
-  if (loadingChannels.value) return '正在加载项目群'
-  return activeChannel.value ? channelDisplayTitle(activeChannel.value) : '项目群'
+  if (loadingChannels.value) return '正在加载群聊'
+  return activeChannel.value ? channelDisplayTitle(activeChannel.value) : '群聊'
 })
 const channelScopeLabel = computed(() => (
   activeChannel.value?.channel_type === 'private'
@@ -932,7 +952,7 @@ const filteredMentionOptions = computed(() => {
 })
 const canCreatePrivateChat = computed(() => (
   privateChatTitle.value.trim().length > 0
-  && selectedParticipantIds.value.length > 0
+  && (allGroupMembers.value || selectedParticipantIds.value.length > 0)
   && !creatingPrivateChat.value
 ))
 const taskDraftPeople = computed(() => {
@@ -988,7 +1008,7 @@ const privateTaskDraftStatus = computed(() => {
   return activePrivateTaskDraft.value?.status || 'generating'
 })
 const privateTaskDraftStatusLabel = computed(() => ({
-  generating: 'Dobby 分析中',
+  generating: '任务助手分析中',
   ready: '待你确认',
   publishing: '正在发布',
   published: '已经发布',
@@ -1015,10 +1035,10 @@ const privateTaskDraftRequestSummary = computed(() => {
   return source.length > 110 ? `${source.slice(0, 110)}…` : source
 })
 const privateTaskDraftLauncherTitle = computed(() => ({
-  generating: 'Dobby 正在分析任务需求',
+  generating: '任务助手正在分析任务需求',
   ready: '任务草稿等待确认',
   publishing: '任务正在发布',
-  failed: 'Dobby 未能完成分析',
+  failed: '任务助手未能完成分析',
   cancelled: 'Dobby 已停止分析',
 } as Record<string, string>)[activePrivateTaskDraft.value?.status || ''] || '继续处理任务草稿')
 const privateTaskDraftLauncherDescription = computed(() => {
@@ -1087,12 +1107,7 @@ function clearTaskContext() {
 }
 
 function channelDisplayTitle(channel: ProjectChatChannel) {
-  const title = channel.title?.trim()
-  if (channel.channel_type === 'project') {
-    return store.currentProject?.name?.trim() || title || '项目群'
-  }
-  if (!title) return channel.channel_type === 'private' ? '私密会话' : '项目群'
-  return title
+  return channel.title?.trim() || '未命名群'
 }
 
 function compactTime(value: string) {
@@ -1255,10 +1270,11 @@ function agentRuntimeLabel(item: ProjectChatMessage) {
     awaiting_permission: '等待确认',
     awaiting_external_result: '等待外部结果',
     interrupted: '已停止',
-    exceed_max_iters: '已达迭代上限',
+    exceed_max_iters: '本次处理未完成',
     error: '处理失败',
   } as Record<string, string>)[status] || ''
 }
+
 
 function renderTaskDraftContent(content: string) {
   const source = content || ''
@@ -1510,247 +1526,6 @@ function messageSegments(item: ProjectChatMessage): MessageSegment[] {
   }))
 }
 
-const COMPOSER_MAX_LENGTH = 20000
-
-function composerCaretOffset() {
-  const editor = composerInput.value
-  const selection = window.getSelection()
-  if (!editor || !selection?.rangeCount) return draft.value.length
-  const range = selection.getRangeAt(0)
-  if (!editor.contains(range.commonAncestorContainer)) return draft.value.length
-  const beforeCaret = range.cloneRange()
-  beforeCaret.selectNodeContents(editor)
-  beforeCaret.setEnd(range.endContainer, range.endOffset)
-  return beforeCaret.toString().length
-}
-
-function setComposerCaretOffset(requestedOffset: number) {
-  const editor = composerInput.value
-  if (!editor) return
-  const selection = window.getSelection()
-  if (!selection) return
-  const offset = Math.max(0, Math.min(requestedOffset, editor.textContent?.length || 0))
-  const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT)
-  let traversed = 0
-  let textNode = walker.nextNode() as Text | null
-  const range = document.createRange()
-  while (textNode) {
-    const nextOffset = traversed + textNode.data.length
-    if (offset <= nextOffset) {
-      const mentionToken = textNode.parentElement?.closest<HTMLElement>('[data-mention-key]')
-      if (mentionToken) range.setStartAfter(mentionToken)
-      else range.setStart(textNode, offset - traversed)
-      range.collapse(true)
-      selection.removeAllRanges()
-      selection.addRange(range)
-      return
-    }
-    traversed = nextOffset
-    textNode = walker.nextNode() as Text | null
-  }
-  range.selectNodeContents(editor)
-  range.collapse(false)
-  selection.removeAllRanges()
-  selection.addRange(range)
-}
-
-function composerMentionAtOffset(offset: number) {
-  const editor = composerInput.value
-  if (!editor) return false
-  let traversed = 0
-  return [...editor.childNodes].some(node => {
-    const length = node.textContent?.length || 0
-    const isMention = node instanceof HTMLElement && Boolean(node.dataset.mentionKey)
-    const containsOffset = isMention && offset >= traversed && offset <= traversed + length
-    traversed += length
-    return containsOffset
-  })
-}
-
-function syncSelectedMentionsFromEditor() {
-  const editor = composerInput.value
-  if (!editor) return
-  const liveKeys = new Set(
-    [...editor.querySelectorAll<HTMLElement>('[data-mention-key]')]
-      .map(node => node.dataset.mentionKey)
-      .filter((key): key is string => Boolean(key)),
-  )
-  selectedMentions.value = selectedMentions.value.filter(mention => liveKeys.has(mention.key))
-}
-
-function renderComposer(caretOffset = draft.value.length) {
-  const editor = composerInput.value
-  if (!editor) return
-  const mentionsByToken = new Map<string, MentionOption>()
-  selectedMentions.value.forEach(mention => {
-    mentionsByToken.set(`@${mention.name}`, mention)
-  })
-  const tokens = [...mentionsByToken.keys()].sort((left, right) => right.length - left.length)
-  const parts = tokens.length
-    ? draft.value.split(new RegExp(`(${tokens.map(escapeRegExp).join('|')})`, 'g')).filter(Boolean)
-    : [draft.value]
-  const fragment = document.createDocumentFragment()
-  parts.forEach(part => {
-    const mention = mentionsByToken.get(part)
-    if (!mention) {
-      fragment.appendChild(document.createTextNode(part))
-      return
-    }
-    const token = document.createElement('span')
-    token.className = `composer-mention ${mention.type}`
-    token.contentEditable = 'false'
-    token.dataset.mentionKey = mention.key
-    token.textContent = part
-    fragment.appendChild(token)
-  })
-  editor.replaceChildren(fragment)
-  setComposerCaretOffset(caretOffset)
-}
-
-function syncDraftFromEditor() {
-  const editor = composerInput.value
-  if (!editor) return
-  const caret = composerCaretOffset()
-  const content = (editor.textContent || '').replace(/\r/g, '')
-  draft.value = content.slice(0, COMPOSER_MAX_LENGTH)
-  syncSelectedMentionsFromEditor()
-  if (content.length > COMPOSER_MAX_LENGTH) {
-    renderComposer(Math.min(caret, COMPOSER_MAX_LENGTH))
-  }
-}
-
-function clearComposer() {
-  draft.value = ''
-  selectedMentions.value = []
-  composerInput.value?.replaceChildren()
-  closeMentionMenu()
-}
-
-function closeMentionMenu() {
-  mentionMenuOpen.value = false
-  mentionQuery.value = ''
-  mentionActiveIndex.value = 0
-}
-
-function deferCloseMentionMenu() {
-  window.setTimeout(() => closeMentionMenu(), 120)
-}
-
-function updateMentionState() {
-  syncDraftFromEditor()
-  const input = composerInput.value
-  if (!input) return closeMentionMenu()
-  const caret = composerCaretOffset()
-  if (composerMentionAtOffset(caret)) return closeMentionMenu()
-  const beforeCaret = draft.value.slice(0, caret)
-  const atIndex = beforeCaret.lastIndexOf('@')
-  if (atIndex < 0) return closeMentionMenu()
-  const query = beforeCaret.slice(atIndex + 1)
-  if (/\s/.test(query) || query.length > 40) return closeMentionMenu()
-  mentionRangeStart.value = atIndex
-  mentionRangeEnd.value = caret
-  if (mentionQuery.value !== query) mentionActiveIndex.value = 0
-  mentionQuery.value = query
-  mentionMenuOpen.value = true
-  void loadMentionAgents()
-}
-
-async function selectMention(option: MentionOption) {
-  const before = draft.value.slice(0, mentionRangeStart.value)
-  const after = draft.value.slice(mentionRangeEnd.value)
-  const inserted = `@${option.name} `
-  draft.value = `${before}${inserted}${after}`
-  if (!selectedMentions.value.some(item => item.key === option.key)) {
-    selectedMentions.value = [...selectedMentions.value, option]
-  }
-  const caret = before.length + inserted.length
-  closeMentionMenu()
-  await nextTick()
-  composerInput.value?.focus()
-  renderComposer(caret)
-}
-
-function insertComposerText(value: string) {
-  const editor = composerInput.value
-  const selection = window.getSelection()
-  if (!editor || !selection) return
-  let range: Range
-  if (selection.rangeCount && editor.contains(selection.getRangeAt(0).commonAncestorContainer)) {
-    range = selection.getRangeAt(0)
-  } else {
-    range = document.createRange()
-    range.selectNodeContents(editor)
-    range.collapse(false)
-  }
-  const currentLength = editor.textContent?.length || 0
-  const availableLength = Math.max(
-    0,
-    COMPOSER_MAX_LENGTH - currentLength + range.toString().length,
-  )
-  const safeValue = value.slice(0, availableLength)
-  range.deleteContents()
-  const textNode = document.createTextNode(safeValue)
-  range.insertNode(textNode)
-  range.setStartAfter(textNode)
-  range.collapse(true)
-  selection.removeAllRanges()
-  selection.addRange(range)
-  updateMentionState()
-}
-
-function openMentionMenu() {
-  const input = composerInput.value
-  if (!input) return
-  input.focus()
-  insertComposerText('@')
-}
-
-function handleComposerPaste(event: ClipboardEvent) {
-  event.preventDefault()
-  insertComposerText(event.clipboardData?.getData('text/plain').replace(/\r\n?/g, '\n') || '')
-}
-
-function handleComposerKeydown(event: KeyboardEvent) {
-  if (event.isComposing) return
-  if (mentionMenuOpen.value) {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      mentionActiveIndex.value = Math.min(
-        mentionActiveIndex.value + 1,
-        Math.max(0, filteredMentionOptions.value.length - 1),
-      )
-      return
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      mentionActiveIndex.value = Math.max(mentionActiveIndex.value - 1, 0)
-      return
-    }
-    if (
-      ((event.key === 'Enter' && !event.shiftKey) || event.key === 'Tab')
-      && filteredMentionOptions.value.length
-    ) {
-      event.preventDefault()
-      void selectMention(filteredMentionOptions.value[mentionActiveIndex.value])
-      return
-    }
-    if (event.key === 'Escape') {
-      event.preventDefault()
-      closeMentionMenu()
-      return
-    }
-  }
-  if (event.key === 'Enter' && event.shiftKey) {
-    event.preventDefault()
-    insertComposerText('\n')
-    return
-  }
-  if (event.key === 'Enter' && !event.shiftKey) {
-    event.preventDefault()
-    void sendMessage()
-  }
-}
-
 function isNearMessageBottom() {
   const viewport = messageViewport.value
   if (!viewport) return true
@@ -1891,7 +1666,7 @@ async function loadMentionAgents() {
     mentionAgents.value = await listProjectChatAgents()
     mentionAgentsLoaded.value = true
   } catch {
-    mentionAgents.value = [PROJECT_CHAT_TASK_ASSISTANT]
+    mentionAgents.value = []
   } finally {
     mentionAgentsLoading.value = false
   }
@@ -1910,6 +1685,7 @@ function setParticipantPage(page: number) {
 }
 
 function openPrivateChatDialog() {
+  allGroupMembers.value = false
   privateChatTitle.value = ''
   participantSearch.value = ''
   participantPage.value = 1
@@ -1927,12 +1703,17 @@ function closePrivateChatDialog() {
 async function createPrivateChat() {
   const projectId = store.currentProjectId
   if (!projectId || !canCreatePrivateChat.value) return
+  if (channels.value.some(channel => channel.title.trim().toLowerCase() === privateChatTitle.value.trim().toLowerCase())) {
+    privateChatError.value = '当前工程已存在同名群聊，请更换群名称。'
+    return
+  }
   creatingPrivateChat.value = true
   privateChatError.value = ''
   try {
     const created = await createPrivateProjectChatChannel(projectId, {
       title: privateChatTitle.value.trim(),
       participant_user_ids: selectedParticipantIds.value,
+      all_members: allGroupMembers.value,
     })
     channels.value = await listProjectChatChannels(projectId)
     privateChatDialogOpen.value = false
@@ -1940,9 +1721,9 @@ async function createPrivateChat() {
     stopRealtime()
     realtimeStatus.value = 'connecting'
     void startRealtime(projectId, loadGeneration)
-    notice.success('私密会话已创建。')
+    notice.success('群聊已创建。')
   } catch (error: any) {
-    privateChatError.value = errorDetail(error, '创建私密会话失败。')
+    privateChatError.value = errorDetail(error, '创建群聊失败。')
   } finally {
     creatingPrivateChat.value = false
   }
@@ -1958,6 +1739,7 @@ function stopRealtime() {
 function startPolling() {
   if (pollTimer !== null) window.clearInterval(pollTimer)
   pollTimer = window.setInterval(() => {
+    void markVisibleMessagesRead()
     // The timer is only a degraded-mode safety net. A healthy realtime
     // subscription already delivers every new message and must not keep
     // hitting the history API in parallel.
@@ -2004,8 +1786,10 @@ async function startRealtime(projectId: string, generation: number) {
   try {
     const client = await connectProjectChatRealtime(projectId, {
       onMessage: incoming => {
-        if (generation !== loadGeneration || incoming.channel_id !== activeChannelId.value) return
-        mergeMessages([incoming])
+        if (generation !== loadGeneration) return
+        channels.value = channels.value.map(channel => channel.id === incoming.channel_id ? { ...channel, last_message: incoming, last_message_at: incoming.created_at } : channel)
+        void unread.refresh(projectId)
+        if (incoming.channel_id === activeChannelId.value) mergeMessages([incoming])
       },
       onStatus: status => {
         if (generation === loadGeneration) realtimeStatus.value = status
@@ -2107,12 +1891,22 @@ async function sendMessage() {
   const content = draft.value.trim()
   const channelId = activeChannelId.value
   if (!content || !channelId || sending.value) return
-  const selectedAgentIds = selectedMentions.value
+  const selectedAgentMentions = selectedMentions.value
     .filter(mention => mention.type === 'agent')
+  const selectedAgentIds = selectedAgentMentions
     .map(mention => String(mention.id))
-  const invokesTaskAssistant = selectedAgentIds.includes(PROJECT_CHAT_TASK_ASSISTANT.id)
+  if (new Set(selectedAgentIds).size > 1) {
+    notice.warning('每条消息最多只能提及一个智能体。')
+    return
+  }
+  const taskAssistantMention = selectedAgentMentions.find(
+    mention => mention.name === '任务助手',
+  )
+  const invokesTaskAssistant = Boolean(taskAssistantMention)
   if (invokesTaskAssistant) {
-    const otherAgentIds = selectedAgentIds.filter(id => id !== PROJECT_CHAT_TASK_ASSISTANT.id)
+    const otherAgentIds = selectedAgentIds.filter(
+      id => id !== String(taskAssistantMention?.id || ''),
+    )
     if (otherAgentIds.length) {
       notice.warning('任务助手需要单独使用，请移除其他智能体后再发送。')
       return
@@ -2209,6 +2003,7 @@ onMounted(() => {
     if (item && shouldClaimMentionAttention(item)) mentionObserver?.observe(element)
   })
   document.addEventListener('visibilitychange', refreshVisibleMentionAttention)
+  document.addEventListener('visibilitychange', markVisibleMessagesRead)
 })
 
 watch(
@@ -2223,6 +2018,7 @@ watch(
 )
 
 watch(contextTask, () => void applyTaskContextDraft())
+watch([() => messages.value[messages.value.length - 1]?.id, loadingMessages], () => void markVisibleMessagesRead(), { flush: 'post' })
 watch(participantSearch, () => { participantPage.value = 1 })
 watch(participantPageCount, pageCount => {
   if (participantPage.value > pageCount) participantPage.value = pageCount
@@ -2232,6 +2028,7 @@ onBeforeUnmount(() => {
   loadGeneration += 1
   stopRealtime()
   document.removeEventListener('visibilitychange', refreshVisibleMentionAttention)
+  document.removeEventListener('visibilitychange', markVisibleMessagesRead)
   mentionObserver?.disconnect()
   mentionObserver = null
   messageElements.clear()

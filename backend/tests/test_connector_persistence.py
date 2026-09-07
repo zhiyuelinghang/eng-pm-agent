@@ -264,6 +264,7 @@ def test_project_status_overview_preserves_unconfigured_states(
     assert result["risks"]["configured"] is False
     assert result["documents"] == {
         "total_files": 0,
+        "today_count": 0, "today_files": [], "required_count": 0, "missing_materials": [], "complete": None,
         "folder_count": 0,
         "knowledge_base_count": 0,
         "knowledge_bases": [],
@@ -452,6 +453,7 @@ def test_project_status_overview_aggregates_only_backed_sources(
     assert result["quality"] == {"configured": True, "total": 1}
     assert result["documents"] == {
         "total_files": 2,
+        "today_count": 0, "today_files": [], "required_count": 1, "missing_materials": ["验收记录"], "complete": False,
         "folder_count": 1,
         "knowledge_base_count": 1,
         "knowledge_bases": [{

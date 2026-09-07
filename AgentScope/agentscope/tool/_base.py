@@ -105,6 +105,12 @@ class ToolBase(ABC):
     is_read_only: bool
     """If this tool is read-only, which will be used in the permission
     checking."""
+    requires_user_confirmation: bool = False
+    """Business approval that must be given for each concrete invocation.
+
+    Unlike an execution permission, this cannot be replaced by a saved allow
+    rule, an automatic reviewer, or BYPASS mode.
+    """
     is_external_tool: bool = False
     """If this tool is an external tool, which doesn't need to implement the
     __call__ method and the agent will yield the external tool call event."""

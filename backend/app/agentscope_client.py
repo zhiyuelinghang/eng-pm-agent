@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -15,6 +16,7 @@ from uuid import uuid4
 import httpx
 
 from .config import Settings
+from .agent_pending_input import pending_input_message
 
 
 class AgentScopeGatewayError(RuntimeError):
@@ -43,6 +45,50 @@ class AgentScopeConfirmationSubmission:
 
     existing_ids: set[str]
     routed_session_id: str
+
+
+@dataclass(slots=True)
+class AgentScopeRunCompletion:
+    """Thread-safe bridge from the AgentScope SSE relay to ``chat``.
+
+    The platform opens one event stream and one blocking chat worker.  The
+    stream resolves this object from AgentScope's durable ``run_completed``
+    event, allowing the worker to return without repeatedly polling message,
+    status, and team endpoints.  A slow fallback probe remains available for
+    browser disconnects or old AgentScope processes during rolling restarts.
+    """
+
+    _event: threading.Event = field(default_factory=threading.Event)
+    _reply: AgentScopeReply | None = None
+    _error: AgentScopeGatewayError | None = None
+
+    def resolve(self, reply: AgentScopeReply) -> None:
+        if self._event.is_set():
+            return
+        self._reply = reply
+        self._event.set()
+
+    def reject(self, error: AgentScopeGatewayError) -> None:
+        if self._event.is_set():
+            return
+        self._error = error
+        self._event.set()
+
+    def wait(self, timeout: float) -> bool:
+        return self._event.wait(timeout)
+
+    def is_set(self) -> bool:
+        return self._event.is_set()
+
+    def result(self) -> AgentScopeReply:
+        if self._error is not None:
+            raise self._error
+        if self._reply is None:
+            raise AgentScopeGatewayError(
+                "AgentScope 已发出完成信号，但没有返回运行结果。",
+                status_code=502,
+            )
+        return self._reply
 
 
 @dataclass(slots=True)
@@ -932,7 +978,7 @@ class AgentScopeClient:
             return "exceed_max_iters"
         return "completed"
 
-    def chat(
+    def trigger_chat(
         self,
         *,
         agent_id: str,
@@ -942,7 +988,8 @@ class AgentScopeClient:
         metadata: dict[str, Any],
         user_message_id: str | None = None,
         content_blocks: list[dict[str, Any]] | None = None,
-    ) -> AgentScopeReply:
+    ) -> str:
+        """Start one AgentScope run and return its correlated input id."""
         resolved_user_message_id = user_message_id or uuid4().hex
         self._request(
             "POST",
@@ -963,21 +1010,83 @@ class AgentScopeClient:
             },
             wait_for_response=True,
         )
+        return resolved_user_message_id
 
-        observed_running = False
+    def chat(
+        self,
+        *,
+        agent_id: str,
+        session_id: str,
+        content: str,
+        sender_name: str,
+        metadata: dict[str, Any],
+        user_message_id: str | None = None,
+        content_blocks: list[dict[str, Any]] | None = None,
+        completion: AgentScopeRunCompletion | None = None,
+    ) -> AgentScopeReply:
+        resolved_user_message_id = self.trigger_chat(
+            agent_id=agent_id,
+            session_id=session_id,
+            content=content,
+            sender_name=sender_name,
+            metadata=metadata,
+            user_message_id=user_message_id,
+            content_blocks=content_blocks,
+        )
+
+        if completion is not None:
+            # Normally the already-open AgentScope event stream resolves this
+            # immediately after durable persistence.  Probe slowly only as a
+            # recovery path when that stream disappears (for example, the
+            # browser navigates away mid-turn or an old AgentScope process is
+            # still running during a rolling restart).  This is not a wall
+            # clock deadline; long tool and multi-agent runs remain unlimited.
+            fallback_probe_seconds = max(5.0, self._poll_interval * 10)
+            while not completion.wait(fallback_probe_seconds):
+                status = self.session_status(
+                    session_id,
+                    agent_id,
+                    wait_for_response=True,
+                )
+                if status == "running":
+                    continue
+                if status in {
+                    "awaiting_permission",
+                    "awaiting_external_result",
+                }:
+                    break
+                if status == "idle":
+                    _, team_work_pending = self.session_team_state(
+                        session_id,
+                        agent_id,
+                        wait_for_response=True,
+                    )
+                    if team_work_pending:
+                        continue
+                    break
+            if completion.is_set():
+                return completion.result()
+
         last_assistant: dict[str, Any] | None = None
         new_assistants: list[dict[str, Any]] = []
         collaboration_waiting_ids: set[str] = set()
         turn_input_observed = False
-        settled_message_id: str | None = None
-        settled_since: float | None = None
-        settle_seconds = max(0.6, self._poll_interval * 2)
         idle_without_reply_polls = 0
         idle_without_reply_limit = max(
             3,
             int(3.0 / max(0.1, self._poll_interval)) + 1,
         )
         while True:
+            status = self.session_status(
+                session_id,
+                agent_id,
+                wait_for_response=True,
+            )
+            if status == "running":
+                idle_without_reply_polls = 0
+                time.sleep(max(0.1, self._poll_interval))
+                continue
+
             messages_payload = self.list_messages(
                 session_id,
                 agent_id,
@@ -1012,17 +1121,20 @@ class AgentScopeClient:
             if new_assistants:
                 last_assistant = new_assistants[-1]
 
-            status = self.session_status(
-                session_id,
-                agent_id,
-                wait_for_response=True,
-            )
-            runtime_running = (
-                status == "running"
-                or bool(messages_payload.get("is_running"))
-            )
-            observed_running = observed_running or runtime_running
-            if status == "idle" and not runtime_running and not new_assistants:
+            projected = pending_input_message(messages_payload, last_assistant)
+            if projected:
+                return AgentScopeReply(
+                    status="awaiting_permission", content="协同智能体需要人工确认后才能继续。",
+                    message_id=projected["id"], raw_message=projected,
+                    raw_messages=[*new_assistants[:-1], projected],
+                )
+
+            runtime_running = bool(messages_payload.get("is_running"))
+            if runtime_running:
+                idle_without_reply_polls = 0
+                time.sleep(max(0.1, self._poll_interval))
+                continue
+            if status == "idle" and not new_assistants:
                 idle_without_reply_polls += 1
                 if idle_without_reply_polls >= idle_without_reply_limit:
                     _, team_work_pending = self.session_team_state(
@@ -1077,39 +1189,23 @@ class AgentScopeClient:
                         collaboration_waiting_ids.add(
                             str(last_assistant["id"]),
                         )
-                    settled_message_id = None
-                    settled_since = None
                 else:
-                    candidate_id = str(last_assistant.get("id") or "")
-                    if candidate_id != settled_message_id:
-                        settled_message_id = candidate_id
-                        settled_since = time.monotonic()
-                    elif (
-                        settled_since is not None
-                        and time.monotonic() - settled_since
-                        >= settle_seconds
-                    ):
-                        for message in new_assistants:
-                            if (
-                                str(message.get("id") or "")
-                                in collaboration_waiting_ids
-                            ):
-                                message[
-                                    "platform_collaboration_status"
-                                ] = "continued"
-                        return AgentScopeReply(
-                            status=self._terminal_reply_status(
-                                last_assistant,
-                            ),
-                            content=self._message_text(last_assistant)
-                            or "智能体已完成处理，但未返回文本内容。",
-                            message_id=last_assistant.get("id"),
-                            raw_message=last_assistant,
-                            raw_messages=new_assistants,
-                        )
-            elif observed_running:
-                settled_message_id = None
-                settled_since = None
+                    for message in new_assistants:
+                        if (
+                            str(message.get("id") or "")
+                            in collaboration_waiting_ids
+                        ):
+                            message[
+                                "platform_collaboration_status"
+                            ] = "continued"
+                    return AgentScopeReply(
+                        status=self._terminal_reply_status(last_assistant),
+                        content=self._message_text(last_assistant)
+                        or "智能体已完成处理，但未返回文本内容。",
+                        message_id=last_assistant.get("id"),
+                        raw_message=last_assistant,
+                        raw_messages=new_assistants,
+                    )
             time.sleep(max(0.1, self._poll_interval))
 
     def interrupt(self, *, agent_id: str, session_id: str) -> dict[str, Any]:
@@ -1129,6 +1225,7 @@ class AgentScopeClient:
         tool_call: dict[str, Any],
         confirmed: bool,
         rules: list[dict[str, Any]] | None = None,
+        wait_for_collaboration: bool = False,
     ) -> AgentScopeReply:
         """Resume a parked reply after a platform user's decision."""
         submission = self.submit_tool_confirmation(
@@ -1145,6 +1242,7 @@ class AgentScopeClient:
             reply_id=reply_id,
             tool_call=tool_call,
             submission=submission,
+            wait_for_collaboration=wait_for_collaboration,
         )
 
     def submit_tool_confirmation(
@@ -1183,6 +1281,19 @@ class AgentScopeClient:
                     "该工具确认已经处理或所属回复已经结束，请刷新后查看最新状态。",
                     status_code=409,
                 )
+        current_calls = [
+            block for block in (matching_reply or {}).get("content", [])
+            if block.get("type") == "tool_call" and block.get("state") == "asking"
+        ]
+        for entry in before.get("subagent_hitl", []):
+            if entry.get("reply_id") == reply_id:
+                current_calls.extend((entry.get("event") or {}).get("tool_calls", []))
+        for current in current_calls:
+            if str(current.get("id")) == str(tool_call.get("id")) and (
+                int(current.get("confirmation_revision") or 0)
+                != int(tool_call.get("confirmation_revision") or 0)
+            ):
+                raise AgentScopeGatewayError("确认内容已更新，请刷新并核对最新变更。", status_code=409)
         existing_ids = {
             str(message.get("id"))
             for message in before.get("messages", [])
@@ -1225,9 +1336,10 @@ class AgentScopeClient:
         reply_id: str,
         tool_call: dict[str, Any],
         submission: AgentScopeConfirmationSubmission,
+        wait_for_collaboration: bool = False,
     ) -> AgentScopeReply:
         """Wait until a submitted HITL decision parks again or completes."""
-        if submission.routed_session_id != session_id:
+        if submission.routed_session_id != session_id and not wait_for_collaboration:
             # The confirmation belongs to a team member and AgentScope has
             # routed it through the leader session to that worker. The
             # original platform SSE turn remains open and will receive the
@@ -1263,6 +1375,13 @@ class AgentScopeClient:
             ]
             if relevant:
                 last_assistant = relevant[-1]
+            projected = pending_input_message(messages_payload, last_assistant, tool_call)
+            if projected:
+                return AgentScopeReply(
+                    status="awaiting_permission", content="协同智能体需要下一步人工确认。",
+                    message_id=projected["id"], raw_message=projected,
+                    raw_messages=[*relevant[:-1], projected],
+                )
             status = self.session_status(
                 session_id,
                 agent_id,
@@ -1283,6 +1402,8 @@ class AgentScopeClient:
                 ]
                 original_still_pending = any(
                     str(block.get("id")) == str(tool_call.get("id"))
+                    and int(block.get("confirmation_revision") or 0)
+                    <= int(tool_call.get("confirmation_revision") or 0)
                     for block in pending
                 )
                 if pending and not original_still_pending:

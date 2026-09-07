@@ -38,6 +38,7 @@ class UserConnectorConfigInput(BaseModel):
     account_identifier: str = Field(min_length=1, max_length=500)
     platform_type: str | None = Field(default=None, max_length=100)
     secret: str | None = Field(default=None, max_length=4000)
+    sending_enabled: bool | None = None
 
 
 class ProjectConnectorConfigInput(BaseModel):
@@ -389,7 +390,7 @@ class ChatMessageInput(BaseModel):
     reply_to_id: int | None = Field(default=None, ge=1)
     mention_all: bool = False
     mentioned_user_ids: list[int] = Field(default_factory=list, max_length=50)
-    mentioned_agent_ids: list[str] = Field(default_factory=list, max_length=10)
+    mentioned_agent_ids: list[str] = Field(default_factory=list, max_length=1)
 
 
 class ChatTaskDraftCreateInput(BaseModel):
@@ -407,7 +408,8 @@ class HomeTaskDraftCreateInput(ChatTaskDraftCreateInput):
 
 class ChatPrivateChannelInput(BaseModel):
     title: str = Field(min_length=1, max_length=100)
-    participant_user_ids: list[int] = Field(min_length=1, max_length=50)
+    participant_user_ids: list[int] = Field(default_factory=list, max_length=1000)
+    all_members: bool = False
 
     @field_validator("title", mode="before")
     @classmethod
@@ -416,6 +418,8 @@ class ChatPrivateChannelInput(BaseModel):
             value = value.strip()
         if not value:
             raise ValueError("群名称不能为空")
+        if value in {".", ".."} or any(char in str(value) for char in "/\\") or any(ord(char) < 32 for char in str(value)):
+            raise ValueError("群名称不能包含斜杠、路径片段或控制字符")
         return value
 
 

@@ -253,3 +253,58 @@ def test_provision_keeps_initialization_agents_without_regular_mcp_assignments(
     assert patch_call["json"]["mcp_config"] == {
         "allowed_mcp_ids": [],
     }
+
+
+def test_collaboration_agent_sync_projects_management_centre_governance(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def fake_request(
+        client: object,
+        method: str,
+        path: str,
+        **kwargs: Any,
+    ) -> Any:
+        del client
+        calls.append({"method": method, "path": path, **kwargs})
+        return {"agent_id": f"created-{len(calls)}"}
+
+    monkeypatch.setattr(provision_initialization_agents, "_request", fake_request)
+    monkeypatch.setattr(
+        provision_initialization_agents,
+        "_assign_database_interactions",
+        lambda *args, **kwargs: None,
+    )
+    specs = {
+        spec.key: spec
+        for spec in provision_initialization_agents.COLLABORATION_AGENTS
+    }
+
+    for key in ("knowledge_manager", "risk_advisor", "task_assistant"):
+        provision_initialization_agents._upsert_collaboration_agent(
+            object(),
+            token="token",
+            agents=[],
+            template_data={},
+            template_policy={},
+            spec=specs[key],
+        )
+
+    payloads = [call["json"] for call in calls if call["path"] == "/agent/"]
+    assert len(payloads) == 3
+    assert all(payload["call_config"] == {
+        "scope": "none",
+        "allowed_agent_ids": [],
+    } for payload in payloads)
+    by_name = {payload["name"]: payload for payload in payloads}
+    assert by_name["资料助手"]["platform_config"]["agent_level"] == "management"
+    assert by_name["资料助手"]["platform_config"][
+        "project_knowledge_enabled"
+    ] is True
+    assert by_name["风险研判助手"]["platform_config"]["agent_level"] == "worker"
+    assert by_name["任务助手"]["platform_config"]["role"] == "system_internal"
+    assert by_name["任务助手"]["platform_config"]["published"] is False
+    assert by_name["任务助手"]["mcp_config"] == {
+        "allowed_mcp_ids": ["task-engine"],
+    }

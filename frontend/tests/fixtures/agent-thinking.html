@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>思考区交互检查</title>
+  <style>
+    body { margin: 0; color: #29483f; background: #fafcfb; font: 14px/1.6 system-ui, 'Microsoft YaHei', sans-serif; }
+    main { max-width: 780px; margin: 40px auto; padding: 0 20px; } h1 { font-size: 20px; }
+    nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0; }
+    button { padding: 7px 11px; border: 1px solid #b7cec4; border-radius: 5px; background: white; color: inherit; font: inherit; font-size: 12px; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: default; } #thinking { background: #f1f6f3; border-radius: 9px; padding: 20px; }
+    .note { font-size: 12px; color: #647f72; }
+  </style>
+</head>
+<body><div id="app"></div><script type="module">
+  import { createApp, h, ref } from 'vue'
+  import AgentMessageContent from '../../src/components/agent/AgentMessageContent.vue'
+  import { applyAgentRuntimeEvents } from '../../src/types/agentRuntime.ts'
+  createApp({ setup() {
+    const run = ref(null)
+    const segment = ref(0)
+    const thinking = ref(false)
+    const event = (type, extra = {}) => ({ type, reply_id: 'thinking-demo', block_id: `thinking-${segment.value}`,
+      created_at: new Date().toISOString(), ...extra })
+    const apply = (...events) => { run.value = applyAgentRuntimeEvents(run.value, events) }
+    function start() {
+      if (!run.value || run.value.status !== 'running') {
+        run.value = null; segment.value = 0; apply(event('REPLY_START'))
+      }
+      segment.value += 1
+      apply(event('THINKING_BLOCK_START'), event('THINKING_BLOCK_DELTA', { delta: `第 ${segment.value} 段：正在核对当前项目资料。` }))
+      thinking.value = true
+    }
+    function end() { apply(event('THINKING_BLOCK_END')); thinking.value = false }
+    function finish() {
+      end()
+      apply(event('TEXT_BLOCK_START', { block_id: 'answer' }), event('TEXT_BLOCK_DELTA', { block_id: 'answer', delta: '项目资料已核对完成。' }), event('REPLY_END'))
+    }
+    return () => h('main', [h('h1', '思考区交互检查'), h('p', { class: 'note' }, '仅模拟 AgentScope 事件，不调用模型或业务 API。'),
+      h('nav', [
+        h('button', { onClick: start }, '开始一段思考'),
+        h('button', { disabled: !thinking.value, onClick: () => apply(event('THINKING_BLOCK_DELTA', { delta: ' 接着检查资料分类与当前任务是否一致。' })) }, '追加思考内容'),
+        h('button', { disabled: !thinking.value, onClick: end }, '结束本段思考'),
+        h('button', { disabled: !run.value || run.value.status !== 'running', onClick: finish }, '完成回复'),
+      ]), h('section', { id: 'thinking' }, [h(AgentMessageContent, { runtimeTrace: run.value })]),
+    ])
+  } }).mount('#app')
+</script></body></html>

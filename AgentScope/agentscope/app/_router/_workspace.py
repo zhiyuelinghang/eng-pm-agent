@@ -27,6 +27,7 @@ from ..mcp_registry import MCPRegistryManager
 from ..storage import StorageBase
 from ...mcp import MCPClient
 from ...skill import Skill
+from ...tool import ToolGroup
 from ...workspace import WorkspaceBase
 
 workspace_router = APIRouter(prefix="/workspace", tags=["workspace"])
@@ -174,7 +175,13 @@ async def list_workspace_tools(
     if catalog_factory is not None:
         platform_tools = await catalog_factory(user_id, agent_id)
     elif extra_factory is not None and session_id is not None:
-        platform_tools = await extra_factory(user_id, agent_id, session_id)
+        factory_items = await extra_factory(user_id, agent_id, session_id)
+        platform_tools = []
+        for item in factory_items:
+            if isinstance(item, ToolGroup):
+                platform_tools.extend(await item.list_tools())
+            else:
+                platform_tools.append(item)
     else:
         platform_tools = []
 

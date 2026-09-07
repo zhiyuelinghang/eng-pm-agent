@@ -12,6 +12,7 @@ export type { ProjectBaseInfoInput } from './appApiTypes'
 export type EngineeringDocumentCapabilities = { can_read: boolean; can_create: boolean; can_update: boolean; can_delete: boolean; can_manage: boolean }
 export type EngineeringDocumentSyncState = { status: 'uninitialized' | 'pending' | 'syncing' | 'ready' | 'error'; access_mode: 'project' | 'restricted'; revision: number; last_started_at?: string | null; last_completed_at?: string | null; last_error?: string | null }
 type ApiProjectStatusOverview = {
+  safety?: { total: number; items: Array<{ id: number; name: string; level: string; requirement: string; status: string }> }
   base_info: { completed_fields: number; total_fields: number; missing_fields: string[] }
   wbs: {
     configured: boolean
@@ -23,6 +24,11 @@ type ApiProjectStatusOverview = {
   risks: { configured: boolean; total: number; high_level_count: number }
   quality: { configured: boolean; total: number }
   documents: {
+    today_count?: number
+    today_files?: Array<{ id: string; name: string; folder_path: string }>
+    required_count?: number
+    missing_materials?: string[]
+    complete?: boolean | null
     total_files: number
     folder_count?: number
     knowledge_base_count: number
@@ -41,12 +47,18 @@ type ApiProjectStatusOverview = {
   members: { total: number }
 }
 export type ProjectStatusOverview = {
+  safety: { total: number; items: Array<{ id: number; name: string; level: string; requirement: string; status: string }> }
   baseInfo: { completedFields: number; totalFields: number; missingFields: string[] }
   wbs: { configured: boolean; totalItems: number; leafItems: number; progressRate: number | null }
   tasks: { total: number; pending: number; processing: number; waitingConfirm: number; overdue: number }
   risks: { configured: boolean; total: number; highLevelCount: number }
   quality: { configured: boolean; total: number }
   documents: {
+    todayCount: number
+    todayFiles: Array<{ id: string; name: string; folder_path: string }>
+    requiredCount: number
+    missingMaterials: string[]
+    complete: boolean | null
     totalFiles: number
     folderCount: number
     knowledgeBaseCount: number
@@ -464,8 +476,14 @@ export const useAppStore = defineStore('app', () => {
         total: row.risks.total,
         highLevelCount: row.risks.high_level_count,
       },
-      quality: row.quality,
-      documents: {
+        quality: row.quality,
+        safety: row.safety || { total: 0, items: [] },
+        documents: {
+          todayCount: row.documents.today_count ?? 0,
+          todayFiles: row.documents.today_files || [],
+          requiredCount: row.documents.required_count ?? 0,
+          missingMaterials: row.documents.missing_materials || [],
+          complete: row.documents.complete ?? null,
         totalFiles: row.documents.total_files,
         folderCount: row.documents.folder_count ?? 0,
         knowledgeBaseCount: row.documents.knowledge_base_count,
@@ -1449,7 +1467,21 @@ export const useAppStore = defineStore('app', () => {
   async function startFilling(packageId: string) { await api.post(`/fill-packages/${packageId}/transition`, { status: 'filling' }); await loadProjectData() }
   async function markFillDone(packageId: string) { await api.post(`/fill-packages/${packageId}/transition`, { status: 'submitted' }); await loadProjectData() }
   async function removeWbsRiskLink(linkId: string) { await api.delete(`/wbs-risk-links/${linkId}`); await loadProjectData() }
-  function addLog(log: OperationLog) { if (!currentProjectId.value) return; void api.post(`/projects/${currentProjectId.value}/operation-logs`, { action: log.action, detail: log.detail }).then(() => loadProjectData()) }
+  function addLog(log: OperationLog) {
+    const projectId = currentProjectId.value
+    if (!projectId) return
+    void api.post<ApiEnvelope<ApiLog>>(
+      `/projects/${projectId}/operation-logs`,
+      { action: log.action, detail: log.detail },
+    ).then(response => {
+      if (currentProjectId.value !== projectId || !response.data.data) return
+      const persisted = mapLog(response.data.data)
+      logs.value = [persisted, ...logs.value.filter(item => item.id !== persisted.id)]
+    }).catch(() => {
+      // Operation logs are best-effort telemetry and must never delay or
+      // invalidate an otherwise successful Dobby answer.
+    })
+  }
 
   return { projects, currentProjectId, currentProject, members, memberMap, wbsItems, riskSources, qualityMetrics, platformMappings, wbsRiskLinks, tasks, dailyReports, informationRecords, riskDrafts, fillPackages, attachments, documentFolders, weknoraKnowledgeBases, engineeringDocumentSync, engineeringDocumentsLoading, engineeringDocumentFolderLoading, engineeringDocumentsError, remindRules, dirConfig, logs, projectStatusOverview, projectChanges, notifications, loading, loadError, projectSetupRefreshVersion, projectCatalogLoaded, overdueTasks, pendingTasks, processingTasks, waitingConfirmTasks, pendingDailyReports, pendingDrafts, pendingFills, getMemberName, getWbsName, getRiskName, initialize, loadProjectCatalog, requestProjectSetupRefresh, resetSession, selectProject, createProject, updateProject, createProjectChange, readNotification, saveProjectSettings, createWbs, updateWbs, createRisk, updateRisk, createQualityMetric, updateQualityMetric, createPlatformMapping, updatePlatformMapping, removePlatformMapping, createTask, loadEngineeringDocumentAccess, updateEngineeringDocumentAccessMode, saveEngineeringDocumentPermission, deleteEngineeringDocumentPermission, uploadAttachment, updateAttachmentCategory, createDocumentFolder, updateDocumentFolder, deleteDocumentFolder, moveEngineeringDocuments, getEngineeringDocument, deleteEngineeringDocument, searchDocuments, createEngineeringDocumentSession, stopEngineeringDocumentAnswer, askEngineeringDocuments, loadEngineeringKnowledgeConversations, createEngineeringKnowledgeConversation, loadEngineeringKnowledgeMessages, updateEngineeringKnowledgeConversation, appendEngineeringKnowledgeMessage, deleteEngineeringKnowledgeConversation, parseDailyAttachment, createRiskDraft, assistRiskDraft, submitDraftReview, loadProjectData, loadEngineeringDocuments, loadEngineeringDocumentFolder, fetchProjectConfigScope, saveMember, updateMemberPosition, saveRiskSource, addWbsRiskLink, updateTaskStatus, updateTaskStep, reassignTask, addTaskNote, downloadAttachment, getTaskHistory, confirmDailyReport, disposeInformationRecord, confirmDraft, rejectDraft, createFillPackage, startFilling, markFillDone, removeWbsRiskLink, addLog }
 })

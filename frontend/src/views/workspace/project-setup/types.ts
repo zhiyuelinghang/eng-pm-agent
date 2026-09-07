@@ -29,6 +29,7 @@ export type ManualSection =
   | 'quality'
   | 'risks'
   | 'mappings'
+  | 'platforms'
   | 'monitor'
   | ProjectConnectorKey
 

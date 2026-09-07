@@ -465,11 +465,20 @@
 					"system_internal": "只供系统内部流程使用，不会显示在业务工具目录中。"
 				}
 			},
+			"agentLevel": {
+				"label": "智能体层级",
+				"management": "管理层智能体",
+				"worker": "执行层智能体",
+				"managementDescription": "可在授权范围内组织协同并使用跨会话共享记忆。",
+				"workerDescription": "只执行边界明确的任务，不挂载长期记忆工具。"
+			},
 			"globalMainNotice": "该智能体当前由“平台设置”指定为总控。请前往平台设置切换；总控不能在此处直接停用或更改角色。",
 			"enabled": "允许平台运行",
 			"published": "发布到平台",
 			"allowGlobalMainCall": "允许平台总智能体调用",
 			"allowGlobalMainCallDescription": "开启后，该智能体才会进入平台总智能体的可协同范围；普通智能体仍按各自白名单控制。",
+			"projectKnowledge": "启用项目资料查询",
+			"projectKnowledgeDescription": "仅为该智能体挂载 WeKnora 项目资料工具；每轮仍按当前用户、项目和文档白名单校验。",
 			"catalogDescription": "平台展示说明",
 			"descriptionPlaceholder": "说明该智能体面向业务用户提供什么能力。",
 			"category": "业务分类",

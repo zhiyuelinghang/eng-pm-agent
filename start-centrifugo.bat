@@ -13,7 +13,9 @@ set "CENTRIFUGO_ENABLED="
 set "CENTRIFUGO_PORT="
 
 if not exist "%DOBBY_REALTIME_EXE%" (
-    echo [失败] 尚未安装群聊实时服务，请先运行“安装群聊实时服务.bat”。
+    echo [失败] 缺少群聊实时服务运行程序：%DOBBY_REALTIME_EXE%
+    echo 首次部署请重新解压 dobby-server-first-install.zip。
+    echo 已部署服务器可运行“安装群聊实时服务.bat”进行修复。
     exit /b 1
 )
 if not exist "%PYTHON_EXE%" (

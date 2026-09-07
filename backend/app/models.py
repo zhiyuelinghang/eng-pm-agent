@@ -93,6 +93,7 @@ class UserConnectorConfig(TimestampMixin, Base):
     account_identifier: Mapped[str] = mapped_column(String(500))
     platform_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sending_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     configured: Mapped[bool] = mapped_column(
         Boolean,
         default=False,
@@ -816,6 +817,8 @@ class ChatChannel(TimestampMixin, Base):
             name="ck_chat_channels_type",
         ),
         Index("ix_chat_channels_project_updated", "project_id", "updated_at"),
+        Index("uq_chat_channels_project_title", "project_id", text("lower(trim(title))"), unique=True,
+              sqlite_where=text("archived_at IS NULL"), postgresql_where=text("archived_at IS NULL")),
         Index(
             "uq_chat_channels_project_default",
             "project_id",
@@ -2038,26 +2041,6 @@ class DatabaseInteraction(TimestampMixin, Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
 
-class DatabaseInteractionAgentAssignment(TimestampMixin, Base):
-    """Durable assignment state for one AgentScope agent and capability."""
-
-    __tablename__ = "database_interaction_agent_assignments"
-    __table_args__ = (
-        UniqueConstraint(
-            "agent_id",
-            "interaction_id",
-            name="uq_database_interaction_agent_assignment",
-        ),
-        Index(
-            "ix_database_interaction_assignments_agent",
-            "agent_id",
-            "assigned",
-        ),
-    )
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    agent_id: Mapped[str] = mapped_column(String(128))
-    interaction_id: Mapped[int] = mapped_column(
-        ForeignKey("database_interactions.id", ondelete="CASCADE"),
-        index=True,
-    )
-    assigned: Mapped[bool] = mapped_column(Boolean, default=False)
+from .database_interaction_assignment_model import (  # noqa: E402,F401
+    DatabaseInteractionAgentAssignment,
+)

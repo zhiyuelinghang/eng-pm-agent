@@ -21,6 +21,7 @@ from .api_common import project_for_user_or_403, serialize
 from .config import get_settings
 from .db import SessionLocal
 from .engineering_document_catalog import (
+    _catalogue_access_is_open,
     local_catalogue_knowledge_base_ids,
     readable_external_ids,
 )
@@ -38,11 +39,8 @@ from .models import (
     Project,
     ProjectInitializationFile,
     ProjectSettings,
-    RiskSource,
     User,
-    WbsItem,
 )
-from .task_engine_gateway import get_engine
 
 
 @lru_cache(maxsize=1)
@@ -109,9 +107,12 @@ def _public_agent_catalog_item(item: dict[str, Any] | None) -> dict[str, Any] | 
             "description",
             "category",
             "role",
+            "agent_level",
             "enabled",
             "published",
             "invitable",
+            "allow_global_main_call",
+            "project_knowledge_enabled",
             "model_ready",
             "sort_order",
             "permission_mode",
@@ -199,6 +200,18 @@ def _platform_session_context(
     knowledge_query_enabled: bool | None = None,
 ) -> dict[str, Any]:
     """Build the grouping snapshot stored with the AgentScope session."""
+    if knowledge_query_enabled is False or (
+        knowledge_query_enabled is None and conversation.conversation_type == "general"
+    ):
+        return {
+            "user_id": str(user.id), "username": user.username,
+            "display_name": user.real_name, "project_id": str(project.id),
+            "project_name": project.name, "conversation_id": str(conversation.id),
+            "conversation_title": conversation.title,
+            "conversation_type": conversation.conversation_type,
+            "agent_name": conversation.agent_name, "weknora_query_enabled": False,
+            "session_role": "primary", "auto_allowed_tool_names": [],
+        }
     project_settings = db.get(ProjectSettings, project.id) if db else None
     weknora_agent_id = (
         (project_settings.weknora_agent_id or "").strip() or None
@@ -233,6 +246,8 @@ def _platform_session_context(
         and catalogue_state is not None
         and getattr(catalogue_state, "status", "") == "ready"
     ):
+        if not _catalogue_access_is_open(db, project.id, user):
+            knowledge_access_mode = "restricted"
         knowledge_base_ids = local_catalogue_knowledge_base_ids(db, project.id)
         readable_ids = readable_external_ids(
             db,
@@ -357,11 +372,7 @@ def _restricted_engineering_knowledge_ids(
     user: User,
 ) -> set[str] | None:
     state_row = db.get(EngineeringDocumentSyncState, project_id)
-    if (
-        user.role == "admin"
-        or state_row is None
-        or state_row.access_mode == "project"
-    ):
+    if _catalogue_access_is_open(db, project_id, user):
         return None
     return readable_external_ids(db, project_id, user)
 
@@ -521,28 +532,18 @@ def _build_agent_project_context(
     *,
     knowledge_query_enabled: bool | None = None,
 ) -> str:
-    """Build a bounded, read-only project snapshot for one agent turn."""
-    wbs_items = db.scalars(
-        select(WbsItem)
-        .where(WbsItem.project_id == project.id)
-        .order_by(WbsItem.sort_order, WbsItem.wbs_code)
-        .limit(30),
-    ).all()
-    risks = db.scalars(
-        select(RiskSource)
-        .where(RiskSource.project_id == project.id)
-        .order_by(RiskSource.updated_at.desc())
-        .limit(20),
-    ).all()
-    tasks = get_engine().list_tasks(project_id=project.id, limit=30)
-    project_settings = db.get(ProjectSettings, project.id)
-    weknora_bound = bool(
-        project_settings
-        and (project_settings.weknora_agent_id or "").strip()
-    )
-    if not weknora_bound:
-        knowledge_context = ""
-    elif knowledge_query_enabled is True:
+    """Build the immutable authorization boundary for one agent turn.
+
+    Live project facts deliberately do not belong in this envelope.  The
+    global controller receives only the caller/project identity here and
+    obtains WBS, risk, task, member, or other business data through the
+    database interactions assigned in AgentScope management.  Besides
+    keeping that configuration authoritative, this prevents every ordinary
+    greeting from carrying a duplicated project snapshot in conversation
+    history.
+    """
+    del db  # Kept in the signature for the existing platform call sites.
+    if knowledge_query_enabled is True:
         knowledge_context = (
             "\n工程资料：用户本轮已明确点名 @资料助手。必须调用 "
             "weknora_query_project_knowledge，并仅依据该工具返回的授权资料"
@@ -555,53 +556,14 @@ def _build_agent_project_context(
             "也不得声称已查询项目知识库。"
         )
     else:
-        knowledge_context = (
-            "\n工程资料：由当前项目绑定的 WeKnora 机器人统一管理。只有用户问题"
-            "确实需要查阅资料、规范、图纸、方案或历史文件时，才调用 "
-            "weknora_query_project_knowledge；普通对话不要调用。不得使用旧的"
-            "本地附件表推断工程资料内容。"
-        )
+        knowledge_context = ""
     return (
         "<platform-context>\n"
-        "以下内容由工程管理平台后端按当前登录用户和项目权限注入，只能作为"
-        "本次任务的项目事实；不得假设用户拥有未列出的项目或权限。\n"
+        "以下内容由工程管理平台后端按当前登录状态生成，仅用于限定本轮身份、"
+        "项目和权限边界；业务事实必须按需调用管理中心已分配的工具读取，不得"
+        "根据未查询的数据自行补写。\n"
         f"当前用户：{user.real_name}（用户ID {user.id}，系统角色 {user.role}）\n"
         f"当前项目：{project.name}（项目ID {project.id}）\n"
-        "工程类型说明："
-        f"{(project.engineering_type_description or '未填写')[:500]}\n"
-        "参建单位："
-        f"建设单位={project.construction_unit_name or '未填写'}；"
-        f"总包单位={project.general_contractor_unit_name or '未填写'}；"
-        f"监理单位={project.supervision_unit_name or '未填写'}；"
-        f"设计单位={project.design_unit_name or '未填写'}；"
-        f"勘察单位={project.survey_unit_name or '未填写'}\n"
-        "WBS："
-        + (
-            "；".join(
-                f"{item.wbs_code} {item.name}"
-                f"（进度{item.progress_percent or 0}%／"
-                f"{item.status_text or '未设置'}）"
-                for item in wbs_items
-            )
-            or "暂无"
-        )
-        + "\n风险源："
-        + (
-            "；".join(
-                f"{item.serial_no} {item.risk_part}"
-                f"（{item.risk_level}／{item.related_process_name}）"
-                for item in risks
-            )
-            or "暂无"
-        )
-        + "\n近期任务："
-        + (
-            "；".join(
-                f"{item.title}（{item.state}，截止{item.due_at or '未设置'}）"
-                for item in tasks
-            )
-            or "暂无"
-        )
         + knowledge_context
         + "\n</platform-context>"
     )
@@ -623,6 +585,12 @@ def _agent_reply_extra_data(
     resolved_trace = _resolved_runtime_trace(reply, trace_summary)
     if isinstance(resolved_trace, dict):
         result["runtime_trace"] = resolved_trace
+    source = reply.raw_message or (
+        reply.raw_messages[-1] if reply.raw_messages else {}
+    )
+    metadata = source.get("metadata") or {}
+    if isinstance(metadata, dict) and metadata.get("platform_task_draft_id"):
+        result["task_draft_id"] = int(metadata["platform_task_draft_id"])
     return result
 
 
@@ -662,6 +630,10 @@ def _resolved_runtime_trace(
             resolved.update(persisted)
         if trace_summary:
             resolved.update(trace_summary)
+    # Used only while materializing a Dobby-orchestrated private task draft;
+    # the ordinary message already stores this text, so do not duplicate it
+    # inside runtime telemetry metadata.
+    resolved.pop("platform_user_request", None)
 
     started_at = (
         (trace_summary or {}).get("turn_started_at")
@@ -719,6 +691,40 @@ def _tagged_content(text: str, tag: str) -> str | None:
         flags=re.DOTALL,
     )
     return matched.group(1).strip() if matched else None
+
+
+def _conversation_title_from_content(content: str) -> str:
+    """Use the first sentence the user actually wrote as the chat title."""
+    request = re.search(
+        r"(?:^|\n)用户请求[：:]\s*(.*)$",
+        str(content or ""),
+        flags=re.DOTALL,
+    )
+    source = request.group(1) if request else str(content or "")
+    first_line = next(
+        (line.strip() for line in source.splitlines() if line.strip()),
+        "",
+    )
+    normalized = re.sub(r"\s+", " ", first_line).strip()
+    if not normalized:
+        return "新对话"
+    sentence = re.match(r"^.*?[。！？!?]|^.*?\.(?=\s|$)", normalized)
+    title = sentence.group(0) if sentence else normalized
+    if len(title) > 300:
+        return title[:299].rstrip() + "…"
+    return title
+
+
+def _adopt_initial_conversation_title(
+    conversation: AgentConversation,
+    content: str,
+) -> None:
+    default_suffix = {
+        "general": " · 智能协同",
+        "initialization": " · 项目初始化",
+    }.get(conversation.conversation_type)
+    if default_suffix and conversation.title.endswith(default_suffix):
+        conversation.title = _conversation_title_from_content(content)
 
 
 def _initialization_files_from_agentscope_message(
@@ -781,11 +787,17 @@ def _project_agentscope_reply(
     source = reply.raw_message or (
         reply.raw_messages[-1] if reply.raw_messages else {}
     )
+    metadata = source.get("metadata")
+    display_content = (
+        metadata.get("platform_display_content")
+        if isinstance(metadata, dict)
+        else None
+    )
     return {
         "id": str(source.get("id") or reply.message_id or uuid4().hex),
         "conversation_id": conversation_id,
         "role": "assistant",
-        "content": reply.content,
+        "content": str(display_content or reply.content),
         "agentscope_message_id": (
             str(source.get("id"))
             if source.get("id") is not None
@@ -824,6 +836,18 @@ def _finalize_agent_reply(
             reply.raw_message,
         )
         resolved_trace = _resolved_runtime_trace(reply, trace_summary)
+        from .dobby_task_draft_bridge import (  # noqa: PLC0415
+            materialize_dobby_task_draft,
+        )
+
+        task_draft = materialize_dobby_task_draft(
+            db,
+            conversation,
+            reply,
+            user_request=str(
+                (trace_summary or {}).get("platform_user_request") or ""
+            ),
+        )
         if final_message and reply.message_id:
             collaboration_statuses = {
                 str(message["id"]): str(
@@ -842,6 +866,13 @@ def _finalize_agent_reply(
                 )
             if resolved_trace:
                 metadata_update["platform_runtime_trace"] = resolved_trace
+            if task_draft is not None:
+                metadata_update.update(
+                    {
+                        "platform_task_draft_id": task_draft[0],
+                        "platform_display_content": task_draft[1],
+                    },
+                )
             updated = client.update_message_metadata(
                 conversation.agentscope_session_id,
                 conversation.agent_id,
