@@ -12,6 +12,8 @@ class _TeamDeleteParams(ParamsBase):
 class TeamDelete(_TeamToolBase):
     """Dissolve the team you currently lead and clean up all members."""
 
+    display_name = "结束协同团队"
+
     name: str = "TeamDelete"
 
     description: str = """Dissolve the team you currently lead.

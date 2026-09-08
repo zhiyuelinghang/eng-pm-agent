@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from backend.app import chat_api  # Initialize the public router and its compatibility exports.
 from backend.app.agent_context_gateway import get_agent_knowledge_scope, resolve_tool_context
+from backend.app.agent_context_gateway import get_agent_memory_scope
 from backend.app.chat_agent_sessions import create_group_agent_session
 from backend.app.agent_api_support import _platform_session_context
 from backend.app.db import Base
@@ -45,6 +46,56 @@ def scoped_project():
         db.commit()
         yield db, project, users
     engine.dispose()
+
+
+def test_memory_scope_tracks_group_privacy_and_membership(scoped_project):
+    db, project, users = scoped_project
+    user = users[0]
+    conversation = AgentConversation(project_id=project.id,user_id=user.id,agent_id="dobby",agent_name="Dobby",
+        title="记忆权限验证",agentscope_session_id="memory-scope",conversation_type="business")
+    db.add(conversation)
+    db.commit()
+    assert get_agent_memory_scope("memory-scope",db)["data"] == {
+        "user_id":str(user.id),"project_id":str(project.id),"private":True,"project_read":True,"project_write":False,
+        "group_source_channels":[],"group_shared_channels":[]}
+    conversation.conversation_type = "group_chat"
+    db.commit()
+    assert get_agent_memory_scope("memory-scope",db)["data"]["private"] is False
+    membership = db.scalar(select(ProjectMember).where(ProjectMember.project_id==project.id,ProjectMember.user_id==user.id))
+    db.delete(membership)
+    db.commit()
+    with pytest.raises(HTTPException) as denied:
+        get_agent_memory_scope("memory-scope",db)
+    assert denied.value.status_code == 403
+
+
+def test_shared_memory_write_requires_admin_authority(scoped_project):
+    db, project, users = scoped_project
+    users[0].role = "admin"
+    conversation = AgentConversation(project_id=project.id,user_id=users[0].id,agent_id="dobby",agent_name="Dobby",
+        title="共享记忆",agentscope_session_id="memory-admin",conversation_type="general")
+    db.add(conversation)
+    db.commit()
+    assert get_agent_memory_scope("memory-admin",db)["data"]["project_write"] is True
+    conversation.conversation_type = "initialization"
+    db.commit()
+    assert get_agent_memory_scope("memory-admin",db)["data"]["project_write"] is False
+
+
+def test_full_group_memory_write_accepts_member_but_subgroup_cannot_publish(scoped_project):
+    db, project, users = scoped_project
+    channel = ChatChannel(project_id=project.id, channel_type='project', title='全体群', auto_sync_members=True)
+    db.add(channel)
+    db.flush()
+    db.add(ChatAgentThread(channel_id=channel.id, agent_id='main', agent_name='主智能体', agentscope_session_id='group-write'))
+    db.add(AgentConversation(project_id=project.id, user_id=users[0].id, agent_id='main', agent_name='主智能体',
+        title='群聊', agentscope_session_id='group-write', conversation_type='group_chat'))
+    db.commit()
+    assert users[0].role == 'user'
+    assert get_agent_memory_scope('group-write',db)['data']['project_write'] is True
+    channel.auto_sync_members = False
+    db.commit()
+    assert get_agent_memory_scope('group-write',db)['data']['project_write'] is False
 
 
 def test_each_group_request_has_its_own_account_bound_session(scoped_project):

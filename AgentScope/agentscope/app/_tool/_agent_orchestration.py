@@ -157,6 +157,9 @@ class _OrchestrationBase(_TeamToolBase):
 class AgentSearch(_OrchestrationBase):
     """Find a small ranked subset of agents authorised for Dobby."""
 
+    display_name = "查找协同助手"
+    presentation_category = "collaboration"
+
     name: str = "agent_search"
     description: str = (
         "按能力描述动态搜索当前管理中心允许 Dobby 调用的智能体。"
@@ -250,6 +253,9 @@ class AgentSearch(_OrchestrationBase):
 class AgentInvoke(_OrchestrationBase):
     """Invoke one freshly authorised existing agent through a team session."""
 
+    display_name = "安排协同任务"
+    presentation_category = "collaboration"
+
     name: str = "agent_invoke"
     description: str = (
         "调用 agent_search 选出的一个既有智能体。执行前重新检查启用状态、"
@@ -315,6 +321,8 @@ class AgentInvoke(_OrchestrationBase):
 
 class AgentRunStatus(_OrchestrationBase):
     """Return durable per-member state for the current Dobby run."""
+
+    display_name = "查看协同进度"
 
     name: str = "agent_run_status"
     description: str = (
@@ -389,6 +397,8 @@ class AgentRunStatus(_OrchestrationBase):
 class AgentCancel(_OrchestrationBase):
     """Cancel and clean up the current Dobby collaboration run."""
 
+    display_name = "停止协同任务"
+
     name: str = "agent_cancel"
     description: str = "停止当前协同运行并清理其临时智能体会话；不修改业务数据。"
     input_schema: dict = _AgentCancelParams.model_json_schema()
@@ -426,6 +436,8 @@ class AgentCancel(_OrchestrationBase):
 
 class AgentRetryOrSwitch(AgentInvoke):
     """Dispose a failed run and invoke the selected recovery agent."""
+
+    display_name = "重新安排协同任务"
 
     name: str = "agent_retry_or_switch"
     description: str = (

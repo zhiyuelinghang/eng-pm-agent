@@ -160,6 +160,9 @@ class AgentInvite(_TeamToolBase):
     is caught cleanly.
     """
 
+    display_name = "邀请协同助手"
+    presentation_category = "collaboration"
+
     name: str = "AgentInvite"
     # No leader state needed — the borrowed session starts from a
     # fresh PermissionContext(); nothing carries over from the leader.

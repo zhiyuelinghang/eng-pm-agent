@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import type {
 	PermissionMode,
 	PlatformAgentConfig,
+	MemoryScopeType,
 	PlatformAgentRole,
 	SessionKnowledgeConfig,
 } from '@/api';
@@ -38,7 +39,8 @@ const PERMISSION_MODES: PermissionMode[] = [
 ];
 
 export function AgentPlatformConfigFields({ values, onChange }: Props) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
+	const zh = i18n.language.startsWith('zh');
 	const { knowledgeBases, loading } = useKnowledgeBases();
 	const role = values.role ?? 'business';
 	const agentLevel = values.agent_level ?? 'worker';
@@ -133,6 +135,27 @@ export function AgentPlatformConfigFields({ values, onChange }: Props) {
 					{t(`agent-form.platform-config.agentLevel.${agentLevel}Description`)}
 				</FieldDescription>
 			</Field>
+
+			<section className="space-y-3 rounded-lg border p-4 text-sm">
+				<h3 className="font-medium">{zh ? '长期记忆权限' : 'Long-term memory access'}</h3>
+				{role === 'global_main' && <p className="text-xs leading-6 text-muted-foreground">{zh ? '全局主智能体的写入抽屉、记录与提炼开关同时约束群聊后台学习。群聊成员均可贡献证据；成果归属由实际群可见范围决定。触发频率和预算在记忆设置中调整。' : 'The global main agent policy also governs background group learning. All members can contribute; source visibility determines ownership.'}</p>}
+				<p className="text-xs leading-5 text-muted-foreground">{agentLevel === 'worker'
+					? (zh ? '执行级智能体通过任务上下文工作，不直接读写长期记忆。下面的设置在切换为管理级后生效。' : 'Worker agents use task context. These settings apply when the agent becomes a management agent.')
+					: (zh ? '以下范围仍受当前用户、项目权限限制。群聊不读取私人抽屉，项目共享写入须有平台授权。' : 'Current user and project permissions still apply. Group conversations cannot read private drawers; shared writes require platform authorization.')}</p>
+				{(['memory_read_scopes', 'memory_write_scopes'] as const).map((key) => <div key={key} className="space-y-2">
+					<p className="text-xs font-medium">{key === 'memory_read_scopes' ? (zh ? '允许读取' : 'Allow reading') : (zh ? '允许写入' : 'Allow writing')}</p>
+					<div className="flex flex-wrap gap-4">{(['user', 'user_project', 'project'] as MemoryScopeType[]).map((scope) => {
+						const selected = values[key] ?? ['user', 'user_project', 'project'];
+						return <label key={scope} className="flex items-center gap-2 text-sm"><Checkbox disabled={agentLevel === 'worker'} checked={selected.includes(scope)} onCheckedChange={(checked) => onChange(key, checked === true ? [...selected, scope] : selected.filter((s) => s !== scope))} />
+							{({ user: zh ? '用户级' : 'User', user_project: zh ? '用户＋项目级' : 'User + project', project: zh ? '项目级' : 'Project' })[scope]}</label>;
+					})}</div>
+				</div>)}
+				<div className="space-y-3 border-t pt-3"><h4 className="text-sm font-medium">{zh ? '学习能力' : 'Learning capabilities'}</h4>{([
+					['learning_capture', zh ? '记录纠正与任务证据' : 'Capture corrections and task evidence'],
+					['learning_process', zh ? '后台自动整理经验与技能' : 'Generate candidate lessons and skills'],
+					['learning_use', zh ? '使用已验证的经验与技能' : 'Use verified lessons and skills'],
+				] as const).map(([key, label]) => <label key={key} className="flex items-center gap-2 text-sm"><Checkbox disabled={agentLevel === 'worker'} checked={values[key] ?? true} onCheckedChange={(checked) => onChange(key, checked === true)} />{label}</label>)}<p className="text-xs leading-5 text-muted-foreground">{zh ? '关闭提炼后仍可保留素材；有价值的成果经系统校验后自动启用，无需人工审核。执行层的结果由管理层在授权任务上下文中复盘。' : 'Capture can remain enabled when generation is paused. Results are checked and published automatically. Worker outcomes are reviewed by the manager within the authorized task context.'}</p></div>
+			</section>
 
 			<div className="grid grid-cols-2 gap-3">
 				<Field orientation="horizontal">

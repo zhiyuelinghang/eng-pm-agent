@@ -1,5 +1,6 @@
 import {
 	Bot,
+	BookOpen,
 	CheckCircle2,
 	Crown,
 	Download,
@@ -37,7 +38,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAgents } from '@/hooks/useAgents';
 import { useTranslation } from '@/i18n/useI18n';
 
-type AssignmentKey = 'main' | 'initializer' | 'taskAssistant';
+type AssignmentKey = 'main' | 'initializer' | 'taskAssistant' | 'knowledgeAssistant';
 
 const validationVersionKey = (binding: PlatformMCPVersionBinding) =>
 	`${binding.package_id}@${binding.version}`;
@@ -73,10 +74,12 @@ export function PlatformSettingsPage() {
 	const [mainSelectedId, setMainSelectedId] = useState<string>('');
 	const [initializerSelectedId, setInitializerSelectedId] = useState<string>('');
 	const [taskAssistantSelectedId, setTaskAssistantSelectedId] = useState<string>('');
+	const [knowledgeAssistantSelectedId, setKnowledgeAssistantSelectedId] = useState('');
 	const [loading, setLoading] = useState(true);
 	const [savingMain, setSavingMain] = useState(false);
 	const [savingInitializer, setSavingInitializer] = useState(false);
 	const [savingTaskAssistant, setSavingTaskAssistant] = useState(false);
+	const [savingKnowledgeAssistant, setSavingKnowledgeAssistant] = useState(false);
 
 	useEffect(() => {
 		let active = true;
@@ -91,6 +94,7 @@ export function PlatformSettingsPage() {
 				setMainSelectedId(value.global_main_agent_id ?? '');
 				setInitializerSelectedId(value.project_initializer_agent_id ?? '');
 				setTaskAssistantSelectedId(value.task_assistant_agent_id ?? '');
+				setKnowledgeAssistantSelectedId(value.knowledge_assistant_agent_id ?? '');
 				const selectedBinding =
 					value.project_initializer_validation_mcp ?? validation.current;
 				setValidationSelectedKey(
@@ -125,14 +129,22 @@ export function PlatformSettingsPage() {
 		[agents],
 	);
 	const mainCandidates = candidates.filter(
-		(agent) => agent.id !== initializerSelectedId && agent.id !== taskAssistantSelectedId,
+		(agent) => ![initializerSelectedId, taskAssistantSelectedId, knowledgeAssistantSelectedId].includes(agent.id),
 	);
 	const initializerCandidates = candidates.filter(
-		(agent) => agent.id !== mainSelectedId && agent.id !== taskAssistantSelectedId,
+		(agent) => ![mainSelectedId, taskAssistantSelectedId, knowledgeAssistantSelectedId].includes(agent.id),
 	);
 	const taskAssistantCandidates = candidates.filter(
-		(agent) => agent.id !== mainSelectedId && agent.id !== initializerSelectedId,
+		(agent) => ![mainSelectedId, initializerSelectedId, knowledgeAssistantSelectedId].includes(agent.id),
 	);
+	const knowledgeAssistantCandidates = candidates.filter(
+		(agent) => ![mainSelectedId, initializerSelectedId, taskAssistantSelectedId].includes(agent.id),
+	);
+	const selectedKnowledgeAssistant = agents.find((agent) => agent.id === knowledgeAssistantSelectedId) ?? null;
+	const currentKnowledgeAssistant = agents.find((agent) => agent.id === settings?.knowledge_assistant_agent_id) ?? null;
+	const knowledgeAssistantIsValid = selectedKnowledgeAssistant !== null && isMainCandidate(selectedKnowledgeAssistant)
+		&& selectedKnowledgeAssistant.data.platform_config.project_knowledge_enabled;
+	const knowledgeAssistantUnchanged = knowledgeAssistantSelectedId === (settings?.knowledge_assistant_agent_id ?? '');
 	const selectedAgent = agents.find((agent) => agent.id === mainSelectedId) ?? null;
 	const selectedInitializer = agents.find((agent) => agent.id === initializerSelectedId) ?? null;
 	const selectedTaskAssistant =
@@ -222,6 +234,21 @@ export function PlatformSettingsPage() {
 		}
 	};
 
+	const saveKnowledgeAssistant = async () => {
+		if (knowledgeAssistantSelectedId && !knowledgeAssistantIsValid) return;
+		setSavingKnowledgeAssistant(true);
+		try {
+			const updated = await agentApi.updatePlatformSettings({
+				knowledge_assistant_agent_id: knowledgeAssistantSelectedId || null,
+			});
+			setSettings(updated);
+			await refetch();
+			toast.success(t('platform-settings.knowledgeAssistant.saved'));
+		} finally {
+			setSavingKnowledgeAssistant(false);
+		}
+	};
+
 	const uploadValidationVersion = async (file: File) => {
 		setUploadingValidation(true);
 		try {
@@ -276,62 +303,66 @@ export function PlatformSettingsPage() {
 	const isMain = activeAssignment === 'main';
 	const isInitializer = activeAssignment === 'initializer';
 	const isTaskAssistant = activeAssignment === 'taskAssistant';
+	const isKnowledgeAssistant = activeAssignment === 'knowledgeAssistant';
 	const activeAgent = isMain
 		? selectedAgent
 		: isInitializer
 			? selectedInitializer
-			: selectedTaskAssistant;
+			: isTaskAssistant ? selectedTaskAssistant : selectedKnowledgeAssistant;
 	const activeCandidates = isMain
 		? mainCandidates
 		: isInitializer
 			? initializerCandidates
-			: taskAssistantCandidates;
+			: isTaskAssistant ? taskAssistantCandidates : knowledgeAssistantCandidates;
 	const activeSelectedId = isMain
 		? mainSelectedId
 		: isInitializer
 			? initializerSelectedId
-			: taskAssistantSelectedId;
+			: isTaskAssistant ? taskAssistantSelectedId : knowledgeAssistantSelectedId;
 	const activeValid = isMain
 		? selectedIsValid
 		: isInitializer
 			? initializerIsValid
-			: taskAssistantIsValid;
+			: isTaskAssistant ? taskAssistantIsValid : knowledgeAssistantIsValid;
 	const activeUnchanged = isMain
 		? mainUnchanged
 		: isInitializer
 			? initializerUnchanged
-			: taskAssistantUnchanged;
+			: isTaskAssistant ? taskAssistantUnchanged : knowledgeAssistantUnchanged;
 	const activeSaving = isMain
 		? savingMain
 		: isInitializer
 			? savingInitializer
-			: savingTaskAssistant;
+			: isTaskAssistant ? savingTaskAssistant : savingKnowledgeAssistant;
 	const activeCurrent = isMain
 		? currentAgent
 		: isInitializer
 			? currentInitializer
-			: currentTaskAssistant;
-	const activeCurrentInvalid = activeCurrent !== null && !isMainCandidate(activeCurrent);
+			: isTaskAssistant ? currentTaskAssistant : currentKnowledgeAssistant;
+	const activeCurrentInvalid = activeCurrent !== null && (!isMainCandidate(activeCurrent)
+		|| (isKnowledgeAssistant && !activeCurrent.data.platform_config.project_knowledge_enabled));
 	const activePrefix = isMain
 		? 'platform-settings.main'
 		: isInitializer
 			? 'platform-settings.initializer'
-			: 'platform-settings.taskAssistant';
-	const ActiveIcon = isMain ? Bot : isInitializer ? FileSearch : ListTodo;
+			: isTaskAssistant ? 'platform-settings.taskAssistant' : 'platform-settings.knowledgeAssistant';
+	const ActiveIcon = isMain ? Bot : isInitializer ? FileSearch : isTaskAssistant ? ListTodo : BookOpen;
 	const handleAgentSelection = (agentId: string) => {
 		if (isMain) {
 			setMainSelectedId(agentId);
 		} else if (isInitializer) {
 			setInitializerSelectedId(agentId);
-		} else {
+		} else if (isTaskAssistant) {
 			setTaskAssistantSelectedId(agentId);
+		} else {
+			setKnowledgeAssistantSelectedId(agentId === '__unassigned__' ? '' : agentId);
 		}
 	};
 	const saveActiveAssignment = isMain
 		? saveMain
 		: isInitializer
 			? saveInitializer
-			: saveTaskAssistant;
+			: isTaskAssistant ? saveTaskAssistant : saveKnowledgeAssistant;
 	const selectedValidationIsCurrent = Boolean(
 		selectedValidationVersion &&
 		settings?.project_initializer_validation_mcp &&
@@ -368,6 +399,14 @@ export function PlatformSettingsPage() {
 			agent: selectedTaskAssistant,
 			isValid: taskAssistantIsValid,
 			isDirty: !taskAssistantUnchanged,
+		},
+		{
+			key: 'knowledgeAssistant' as const,
+			icon: BookOpen,
+			title: t('platform-settings.knowledgeAssistant.title'),
+			agent: selectedKnowledgeAssistant,
+			isValid: knowledgeAssistantIsValid,
+			isDirty: !knowledgeAssistantUnchanged,
 		},
 	];
 
@@ -514,7 +553,7 @@ export function PlatformSettingsPage() {
 											{t(`${activePrefix}.selector`)}
 										</label>
 										<Select
-											value={activeSelectedId}
+											value={isKnowledgeAssistant && !activeSelectedId ? '__unassigned__' : activeSelectedId}
 											onValueChange={handleAgentSelection}
 										>
 											<SelectTrigger
@@ -526,6 +565,7 @@ export function PlatformSettingsPage() {
 												/>
 											</SelectTrigger>
 											<SelectContent>
+												{isKnowledgeAssistant && <SelectItem value="__unassigned__">{t('platform-settings.knowledgeAssistant.clear')}</SelectItem>}
 												{activeCandidates.map((agent) => (
 													<SelectItem key={agent.id} value={agent.id}>
 														{agent.data.name}
@@ -536,6 +576,9 @@ export function PlatformSettingsPage() {
 										<p className="text-xs leading-relaxed text-muted-foreground">
 											{t(`${activePrefix}.requirement`)}
 										</p>
+										{isKnowledgeAssistant && activeAgent && !activeAgent.data.platform_config.project_knowledge_enabled && (
+											<p role="alert" className="text-sm text-destructive">{t('platform-settings.knowledgeAssistant.missingCapability')}</p>
+										)}
 									</div>
 
 									{activeAgent ? (
@@ -559,9 +602,9 @@ export function PlatformSettingsPage() {
 																		? t(
 																				'platform-settings.initializer.internal',
 																			)
-																		: isTaskAssistant
+																		: (isTaskAssistant || isKnowledgeAssistant)
 																			? t(
-																					'platform-settings.taskAssistant.roleBadge',
+																					`${activePrefix}.roleBadge`,
 																				)
 																			: null}
 															</Badge>
@@ -628,7 +671,7 @@ export function PlatformSettingsPage() {
 												<FileSearch />
 											) : isTaskAssistant ? (
 												<ListTodo />
-											) : null}
+											) : <BookOpen />}
 											<AlertTitle>
 												{t(`${activePrefix}.unconfiguredTitle`)}
 											</AlertTitle>
@@ -839,7 +882,7 @@ export function PlatformSettingsPage() {
 							</p>
 							<Button
 								onClick={saveActiveAssignment}
-								disabled={busy || activeSaving || activeUnchanged || !activeValid}
+								disabled={busy || activeSaving || activeUnchanged || (!activeValid && !(isKnowledgeAssistant && !activeSelectedId))}
 								className="shrink-0"
 							>
 								{activeSaving && <Loader2 className="animate-spin" />}

@@ -17,6 +17,7 @@ from ..deps import (
     get_resource_access_service,
 )
 from .._service import ResourceAccessService
+from ...tool._presentation import tool_presentation
 
 
 database_interaction_router = APIRouter(
@@ -96,10 +97,14 @@ async def list_interactions(
 ) -> list[dict[str, Any]]:
     agent = await access.resolve_agent(user_id, agent_id)
     try:
-        return await manager.list_catalog(
+        items = await manager.list_catalog(
             agent_id,
             agent.data.tool_config.allowed_tool_names,
         )
+        return [{**item, "presentation": tool_presentation(
+            name=item["key"], display_name=item.get("display_name"),
+            category="database", read_only=item.get("read_only", True), source="database_catalog",
+        )} for item in items]
     except DatabaseInteractionGatewayError as exc:
         _raise_gateway_error(exc)
 

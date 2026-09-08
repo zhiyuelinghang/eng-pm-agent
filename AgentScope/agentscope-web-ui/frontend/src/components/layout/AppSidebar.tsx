@@ -59,15 +59,16 @@ export function AppSidebar() {
 	};
 
 	return (
-		<Sidebar collapsible="none" className="w-[calc(var(--sidebar-width-icon)+1px)]! border-r">
+		<Sidebar collapsible="none" className="w-44! shrink-0 border-r md:w-52!">
 			<SidebarHeader>
-				<div className="flex items-center justify-center h-12 mt-2">
+				<div className="flex min-h-16 items-center gap-3 px-2 py-3">
 					<img
 						src="/dobby.svg"
 						alt="Dobby"
 						title={t('brand.managementCenter')}
-						className="size-8 rounded-[10px] shadow-[0_5px_14px_rgba(201,86,34,0.24)]"
+						className="size-8 shrink-0 rounded-[10px] shadow-[0_5px_14px_rgba(201,86,34,0.24)]"
 					/>
+					<span className="text-sm font-semibold leading-5">{t('brand.managementCenter')}</span>
 				</div>
 			</SidebarHeader>
 			<SidebarContent>
@@ -76,77 +77,65 @@ export function AppSidebar() {
 						<SidebarMenu>
 							<SidebarMenuItem key={'chat'}>
 								<SidebarMenuButton
-									tooltip={{ children: t('common.chat'), hidden: false }}
 									isActive={
 										location.pathname === '/chat' ||
 										location.pathname.startsWith('/chat/')
 									}
 									onClick={() => navigate('/chat')}
-									className="px-2.5 md:px-2"
+									className="h-auto min-h-10 px-3 py-2 text-sm [&>span:last-child]:whitespace-normal [&>span:last-child]:overflow-visible"
 								>
 									<BotMessageSquare />
+									<span>{t('common.chat')}</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>
 								<SidebarMenuButton
-									tooltip={{
-										children: t('common.platformAudit'),
-										hidden: false,
-									}}
 									isActive={location.pathname === '/platform-audit'}
 									onClick={() => navigate('/platform-audit')}
-									className="px-2"
+									className="h-auto min-h-10 px-3 py-2 text-sm [&>span:last-child]:whitespace-normal [&>span:last-child]:overflow-visible"
 								>
 									<MessageSquareText />
+									<span>{t('common.platformAudit')}</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>
 								<SidebarMenuButton
-									tooltip={{
-										children: t('common.memoryManagement'),
-										hidden: false,
-									}}
 									isActive={location.pathname === '/memory-management'}
 									onClick={() => navigate('/memory-management')}
-									className="px-2"
+									className="h-auto min-h-10 px-3 py-2 text-sm [&>span:last-child]:whitespace-normal [&>span:last-child]:overflow-visible"
 								>
 									<BookUser />
+									<span>{t('common.memoryManagement')}</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>
 								<SidebarMenuButton
-									tooltip={{
-										children: t('common.platformSettings'),
-										hidden: false,
-									}}
 									isActive={location.pathname === '/platform-settings'}
 									onClick={() => navigate('/platform-settings')}
-									className="px-2"
+									className="h-auto min-h-10 px-3 py-2 text-sm [&>span:last-child]:whitespace-normal [&>span:last-child]:overflow-visible"
 								>
 									<Crown />
+									<span>{t('common.platformSettings')}</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>
 								<SidebarMenuButton
-									tooltip={{
-										children: t('common.memorySettings'),
-										hidden: false,
-									}}
 									isActive={location.pathname === '/memory-settings'}
 									onClick={() => navigate('/memory-settings')}
-									className="px-2"
+									className="h-auto min-h-10 px-3 py-2 text-sm [&>span:last-child]:whitespace-normal [&>span:last-child]:overflow-visible"
 								>
 									<BrainCircuit />
+									<span>{t('common.memorySettings')}</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>
 								<SidebarMenuButton
-									tooltip={{ children: t('common.schedule'), hidden: false }}
 									isActive={location.pathname === '/schedule'}
 									onClick={() => navigate('/schedule')}
-									className="px-2"
+									className="h-auto min-h-10 px-3 py-2 text-sm [&>span:last-child]:whitespace-normal [&>span:last-child]:overflow-visible"
 								>
 									<Calendars />
+									<span>{t('common.schedule')}</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 						</SidebarMenu>
@@ -157,36 +146,33 @@ export function AppSidebar() {
 						<SidebarMenu>
 							<SidebarMenuItem>
 								<SidebarMenuButton
-									tooltip={{ children: t('common.credential'), hidden: false }}
 									isActive={location.pathname === '/credential'}
 									onClick={() => navigate('/credential')}
-									className="px-2"
+									className="h-auto min-h-10 px-3 py-2 text-sm [&>span:last-child]:whitespace-normal [&>span:last-child]:overflow-visible"
 								>
 									<KeyRound />
+									<span>{t('common.credential')}</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>
 								<SidebarMenuButton
-									tooltip={{
-										children: t('common.engineeringKnowledge'),
-										hidden: false,
-									}}
 									isActive={location.pathname === '/engineering-knowledge'}
 									onClick={() => navigate('/engineering-knowledge')}
 									aria-label={t('common.engineeringKnowledge')}
-									className="px-2"
+									className="h-auto min-h-10 px-3 py-2 text-sm [&>span:last-child]:whitespace-normal [&>span:last-child]:overflow-visible"
 								>
 									<Database />
+									<span>{t('common.engineeringKnowledge')}</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 							<SidebarMenuItem>
 								<SidebarMenuButton
-									tooltip={{ children: t('common.knowledge'), hidden: false }}
 									isActive={location.pathname === '/knowledge'}
 									onClick={() => navigate('/knowledge')}
-									className="px-2"
+									className="h-auto min-h-10 px-3 py-2 text-sm [&>span:last-child]:whitespace-normal [&>span:last-child]:overflow-visible"
 								>
 									<LibraryBig />
+									<span>{t('common.knowledge')}</span>
 								</SidebarMenuButton>
 							</SidebarMenuItem>
 						</SidebarMenu>
@@ -197,34 +183,29 @@ export function AppSidebar() {
 				<SidebarMenu>
 					<SidebarMenuItem>
 						<SidebarMenuButton
-							tooltip={{
-								children: i18n.language.startsWith('zh')
-									? t('common.switchToEn')
-									: t('common.switchToZh'),
-								hidden: false,
-							}}
 							onClick={handleToggleLanguage}
-							className="px-2"
+							className="h-auto min-h-10 px-3 py-2 text-sm [&>span:last-child]:whitespace-normal [&>span:last-child]:overflow-visible"
 						>
 							<Languages />
+									<span>{i18n.language.startsWith('zh') ? t('common.switchToEn') : t('common.switchToZh')}</span>
 						</SidebarMenuButton>
 					</SidebarMenuItem>
 					<SidebarMenuItem>
 						<SidebarMenuButton
-							tooltip={{ children: t('tour.trigger'), hidden: false }}
 							onClick={handleStartTour}
-							className="px-2"
+							className="h-auto min-h-10 px-3 py-2 text-sm [&>span:last-child]:whitespace-normal [&>span:last-child]:overflow-visible"
 						>
 							<Compass />
+									<span>{t('tour.trigger')}</span>
 						</SidebarMenuButton>
 					</SidebarMenuItem>
 					<SidebarMenuItem>
 						<SidebarMenuButton
-							tooltip={{ children: t('common.logout'), hidden: false }}
 							onClick={handleLogout}
-							className="px-2"
+							className="h-auto min-h-10 px-3 py-2 text-sm [&>span:last-child]:whitespace-normal [&>span:last-child]:overflow-visible"
 						>
 							<LogOut />
+									<span>{t('common.logout')}</span>
 						</SidebarMenuButton>
 					</SidebarMenuItem>
 				</SidebarMenu>

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager, suppress
-from datetime import datetime, timezone
 import os
 import logging
 from pathlib import Path
@@ -20,9 +19,7 @@ from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app.mcp_registry import MCPRegistryManager
 from agentscope.app.skill_registry import SkillRegistryManager
 from agentscope.app.memory import (
-    DobbyMemoryMiddleware,
     agent_can_use_shared_memory,
-    apply_global_memory_settings,
     configure_platform_memory_model,
     get_memory_runtime,
 )
@@ -282,12 +279,6 @@ async def _create_memory_middlewares(
         if platform_settings is not None
         else MemorySettingsData()
     )
-    await configure_platform_memory_model(
-        user_id,
-        settings,
-        memory_resource_access,
-    )
-
     runtime = get_memory_runtime()
     scope = runtime.scope(
         project_id=(
@@ -304,12 +295,40 @@ async def _create_memory_middlewares(
             else None
         ),
     )
+    from agentscope.app.memory._direct import ThreeDrawerMemoryMiddleware
+    from utils.memory_repository import MemoryAccess, MemoryError
+
+    async def resolve_memory_access():
+        # Refresh agent settings as well as project membership on each operation.
+        current_agent = await storage.get_agent(user_id, agent_id)
+        if not agent_can_use_shared_memory(current_agent) or not current_agent.data.platform_config.enabled:
+            raise MemoryError("agent_memory_disabled", "该智能体已停用长期记忆。", status=403)
+        policy = current_agent.data.platform_config
+        if platform_context is not None:
+            root_id = platform_context.root_session_id or session_id
+            live = await database_interaction_manager.resolve_memory_scope(root_id)
+            if str(live["user_id"]) != str(platform_context.user_id) or str(live["project_id"]) != str(platform_context.project_id):
+                raise MemoryError("identity_mismatch", "会话身份与平台权限不一致。", status=403)
+            return MemoryAccess(runtime.tenant_id, str(live["user_id"]), str(live["project_id"]),
+                actor_id=f"business_user:{live['user_id']}", private=bool(live["private"]),
+                project_read=bool(live["project_read"]), project_write=bool(live["project_write"]),
+                group_source_channels=tuple(live.get('group_source_channels', [])), group_shared_channels=tuple(live.get('group_shared_channels', [])),
+                read_scopes=tuple(policy.memory_read_scopes), write_scopes=tuple(policy.memory_write_scopes),
+                learning_capture=policy.learning_capture,learning_process=policy.learning_process,learning_use=policy.learning_use)
+        return MemoryAccess(runtime.tenant_id, str(user_id), identity_type="management_user",
+            read_scopes=tuple(policy.memory_read_scopes), write_scopes=tuple(policy.memory_write_scopes),
+            learning_capture=policy.learning_capture,learning_process=policy.learning_process,learning_use=policy.learning_use)
+
     return [
-        DobbyMemoryMiddleware(
+        ThreeDrawerMemoryMiddleware(
             runtime,
             scope,
             settings,
             include_knowledge_base=False,
+            access_resolver=resolve_memory_access,
+            compression_setup=lambda: configure_platform_memory_model(user_id,settings,memory_resource_access),
+            config_owner=user_id,
+            learning_session_id=(platform_context.root_session_id or session_id) if platform_context else session_id,
         ),
     ]
 
@@ -492,80 +511,44 @@ app = create_app(
 app.state.database_interaction_manager = database_interaction_manager
 
 
-def _active_memory_projects() -> list[str]:
-    """Load active Dobby scopes for the upstream Dreamer cron scheduler."""
-
-    import psycopg
-    from utils import config as memory_config
-
-    conn = psycopg.Connection.connect(
-        memory_config.DATABASE_URL,
-        autocommit=True,
-        prepare_threshold=0,
-    )
-    try:
-        rows = conn.execute(
-            """SELECT DISTINCT project_id
-               FROM user_activity
-               WHERE active_on >= CURRENT_DATE - INTERVAL '90 days'
-               ORDER BY project_id""",
-        ).fetchall()
-        return [str(row[0]) for row in rows if row and row[0]]
-    finally:
-        conn.close()
-
-
-async def _memory_maintenance_loop() -> None:
-    """Run the copied Dreamer scheduler for every active memory scope."""
-
-    from utils.memory_manager import MemoryManager
-
-    last_slot = ""
-    while True:
-        slot = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M")
-        if slot != last_slot:
-            last_slot = slot
-            try:
-                global_config_id = (
-                    os.getenv("AGENTSCOPE_GLOBAL_CONFIG_ID", "default").strip()
-                    or "default"
-                )
-                settings = await _memory_settings(global_config_id)
-                apply_global_memory_settings(settings)
-                await configure_platform_memory_model(
-                    global_config_id,
-                    settings,
-                    memory_resource_access,
-                )
-                if settings.dreamer_enabled:
-                    projects = await asyncio.to_thread(_active_memory_projects)
-                    for project_id in projects:
-                        await MemoryManager(
-                            project_id=project_id,
-                            role_id="dobby_core",
-                            runtime_settings=settings,
-                        ).run_dreamer(project_id=project_id)
-            except Exception:
-                logger.exception("Dobby Dreamer maintenance iteration failed")
-        await asyncio.sleep(30)
-
-
 _agentscope_lifespan = app.router.lifespan_context
 
 
 @asynccontextmanager
 async def _lifespan_with_memory_maintenance(application: Any):
     async with _agentscope_lifespan(application):
+        from utils.memory_service import run_memory_index_worker
         maintenance_task = asyncio.create_task(
-            _memory_maintenance_loop(),
-            name="dobby-memory-dreamer",
+            run_memory_index_worker(lambda: _memory_settings(os.getenv("AGENTSCOPE_GLOBAL_CONFIG_ID", "default").strip() or "default")),
+            name="dobby-memory-index",
         )
+        from utils.learning_repository import LearningRepository
+        from utils.learning_service import run_learning_worker
+        from utils.memory_service import get_memory_repository
+        from agentscope.app.memory._learning import PlatformLearningRuntime
+        global_id=os.getenv('AGENTSCOPE_GLOBAL_CONFIG_ID','default').strip() or 'default'
+        learning_runtime=PlatformLearningRuntime(storage=storage,gateway=database_interaction_manager,resources=memory_resource_access,
+            settings_loader=lambda:_memory_settings(global_id),tenant_id=get_memory_runtime().tenant_id)
+        learning_task=asyncio.create_task(run_learning_worker(LearningRepository(get_memory_repository()),tenant_id=get_memory_runtime().tenant_id,
+            settings_loader=lambda:_memory_settings(global_id),authorize=learning_runtime.authorize,call_model=learning_runtime.call_model),
+            name='dobby-learning')
+        from utils.group_learning_repository import GroupLearningRepository
+        from utils.group_learning_service import run_group_learning_worker
+        group_learning_task = asyncio.create_task(run_group_learning_worker(GroupLearningRepository(get_memory_repository()),
+            runtime=learning_runtime, settings_loader=lambda:_memory_settings(global_id),
+            tenant_id=get_memory_runtime().tenant_id, config_owner=global_id), name='dobby-group-learning')
         try:
             yield
         finally:
             maintenance_task.cancel()
+            learning_task.cancel()
+            group_learning_task.cancel()
             with suppress(asyncio.CancelledError):
                 await maintenance_task
+            with suppress(asyncio.CancelledError):
+                await learning_task
+            with suppress(asyncio.CancelledError):
+                await group_learning_task
 
 
 app.router.lifespan_context = _lifespan_with_memory_maintenance

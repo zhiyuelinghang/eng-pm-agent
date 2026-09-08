@@ -28,6 +28,7 @@ from ..storage import StorageBase
 from ...mcp import MCPClient
 from ...skill import Skill
 from ...tool import ToolGroup
+from ...tool._presentation import tool_presentation
 from ...workspace import WorkspaceBase
 
 workspace_router = APIRouter(prefix="/workspace", tags=["workspace"])
@@ -52,6 +53,7 @@ class ToolInfo(BaseModel):
 
     name: str
     description: str | None = None
+    presentation: dict[str, str] | None = None
 
 
 class WorkspaceToolInfo(ToolInfo):
@@ -89,6 +91,7 @@ def _default_workspace_tool_catalog() -> list[AgentToolDescriptor]:
     return [
         AgentToolDescriptor(
             name=tool_type.name,
+            display_name=tool_type.display_name,
             description=tool_type.description,
             category="workspace",
             input_schema=tool_type.input_schema,
@@ -186,9 +189,14 @@ async def list_workspace_tools(
         platform_tools = []
 
     system_tools: list[AgentToolDescriptor] = []
+    system_presentations: dict[str, dict[str, str]] = {}
     if mcp_registry_manager is not None:
         for record in await mcp_registry_manager.list_system_tool_records():
             for tool in record.tools:
+                system_presentations[tool.name] = tool_presentation(
+                    name=tool.name, display_name=tool.display_name, category="mcp",
+                    read_only=tool.read_only, source="mcp_title",
+                )
                 system_tools.append(
                     AgentToolDescriptor(
                         name=tool.name,
@@ -211,10 +219,14 @@ async def list_workspace_tools(
             if tool.name == "PowerShell" or tool.name in seen:
                 continue
             seen.add(tool.name)
+            presentation = system_presentations.get(tool.name)
+            if presentation is None:
+                presentation = tool_presentation(tool)
             results.append(
                 WorkspaceToolInfo(
                     name=tool.name,
                     description=tool.description,
+                    presentation=presentation,
                     source=source,
                     category=getattr(
                         tool,
@@ -267,7 +279,7 @@ async def list_mcps(
         try:
             mcp_tools = await client.list_tools()
             tools = [
-                ToolInfo(name=t.name, description=t.description)
+                ToolInfo(name=t.name, description=t.description, presentation=tool_presentation(t))
                 for t in mcp_tools
             ]
             results.append(

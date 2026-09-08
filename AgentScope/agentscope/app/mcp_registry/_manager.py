@@ -782,7 +782,7 @@ class MCPRegistryManager:
                     display_name=(
                         str(tool.title).strip()
                         if getattr(tool, "title", None)
-                        else None
+                        else getattr(tool.annotations, "title", None)
                     ),
                     description=tool.description or "",
                     input_schema=dict(tool.inputSchema or {}),

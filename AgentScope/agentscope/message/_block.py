@@ -130,6 +130,8 @@ class ToolCallBlock(BaseModel):
     """The unique identifier of the tool call block."""
     name: str
     """The name of the tool to be called."""
+    presentation: dict[str, str] | None = None
+    """User-facing title snapshot supplied by the runtime tool registry."""
     input: str
     """The raw JSON string input of the tool, accumulated during streaming."""
     state: ToolCallState = ToolCallState.PENDING

@@ -16,6 +16,7 @@ from ...permission import PermissionBehavior, PermissionDecision
 from ...tool import ToolBase, ToolChunk, ToolResponse
 from ._runtime import MemoryRuntime, MemoryScope, MemoryTarget
 from ._scope_router import route_memory_content
+from ._tool_metadata import MEMORY_TOOL_TITLES
 
 if TYPE_CHECKING:
     from ...agent import Agent
@@ -116,6 +117,8 @@ class _DobbyMemoryTool(ToolBase):
         super().__init__()
         function = schema["function"]
         self.name = str(function["name"])
+        self.display_name = function.get("display_name") or MEMORY_TOOL_TITLES.get(self.name)
+        self.presentation_category = "memory"
         self.description = str(function.get("description") or "")
         self.input_schema = dict(function.get("parameters") or {})
         self.is_read_only = self.name != "add_memory"

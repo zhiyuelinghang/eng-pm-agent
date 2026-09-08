@@ -267,6 +267,20 @@ class PlatformAgentConfig(BaseModel):
         title="Agent Level",
     )
 
+    memory_read_scopes: list[Literal["user", "user_project", "project"]] = Field(
+        default_factory=lambda: ["user", "user_project", "project"],
+        title="记忆读取抽屉",
+        description="管理级智能体可读取的抽屉；仍受当前用户、项目权限和群聊隐私边界限制。执行级智能体不直接读取长期记忆。",
+    )
+    learning_capture: bool = Field(default=True,title="记录学习素材")
+    learning_process: bool = Field(default=True,title="后台提炼学习成果")
+    learning_use: bool = Field(default=True,title="使用已验证的学习成果")
+    memory_write_scopes: list[Literal["user", "user_project", "project"]] = Field(
+        default_factory=lambda: ["user", "user_project", "project"],
+        title="记忆写入抽屉",
+        description="管理级智能体可建议保存的抽屉；项目级共享写入还必须通过平台当前权限校验。",
+    )
+
     enabled: bool = Field(
         default=True,
         description="Whether the engineering platform may run this agent.",

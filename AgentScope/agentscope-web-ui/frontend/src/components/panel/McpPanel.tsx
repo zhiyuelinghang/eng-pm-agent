@@ -1,3 +1,4 @@
+import { ToolPresentationInfo } from './ToolPresentationInfo';
 import {
 	CircleAlert,
 	Loader2,
@@ -381,7 +382,8 @@ export function McpPanel({
 															t('panel.mcp.noToolDescription')}
 													</p>
 
-													<div className="mt-5 space-y-2">
+													<div className="mt-3"><ToolPresentationInfo value={tool.presentation} /><p className="mt-2 text-xs text-muted-foreground">展示标题来自 MCP 包；更新包中的 title 后，新调用自动使用新标题，历史记录保持原样。</p></div>
+<div className="mt-5 space-y-2">
 														<h3 className="text-sm font-medium">
 															{t('panel.mcp.parameters')}
 														</h3>

@@ -136,6 +136,24 @@
 			"invalidCurrent": "当前承载智能体已停用或缺少固定模型，请选择另一个可用智能体。",
 			"effect": "保存后会隐藏所选智能体，并以固定的“任务助手”身份接收群聊上下文、整理任务意图并调用其已配置的任务引擎工具。底层智能体名称仅在管理中心可见。",
 			"save": "保存任务助手配置"
+		},
+		"knowledgeAssistant": {
+			"title": "资料助手",
+			"description": "负责项目资料问答，可按需调用已分配的项目工具。",
+			"selector": "资料问答智能体",
+			"placeholder": "选择一个专用智能体",
+			"requirement": "需配置固定模型，并在智能体的「平台接入配置」中开启「启用项目资料查询」。不能与其他平台职责共用同一个智能体。",
+			"roleBadge": "平台职责",
+			"saved": "资料助手配置已保存",
+			"unconfiguredTitle": "尚未设置资料助手",
+			"unconfigured": "选择一个智能体并保存，项目资料问答将统一使用此助手。",
+			"noCandidates": "暂无符合条件的智能体。请先创建并启用一个配置了固定模型的智能体。",
+			"invalidCurrentTitle": "当前资料助手不可用",
+			"invalidCurrent": "请检查智能体是否启用、是否配置固定模型，以及是否开启项目资料查询。",
+			"effect": "新对话使用这里指定的资料助手；切换后旧对话仍可查看。项目工具和记忆权限沿用该智能体的配置。",
+			"save": "保存资料助手配置",
+			"clear": "暂不分配",
+			"missingCapability": "所选智能体尚未开启项目资料查询，请先在该智能体的「平台接入配置」中开启。"
 		}
 	},
 	"memory-settings": {
@@ -478,7 +496,7 @@
 			"allowGlobalMainCall": "允许平台总智能体调用",
 			"allowGlobalMainCallDescription": "开启后，该智能体才会进入平台总智能体的可协同范围；普通智能体仍按各自白名单控制。",
 			"projectKnowledge": "启用项目资料查询",
-			"projectKnowledgeDescription": "仅为该智能体挂载 WeKnora 项目资料工具；每轮仍按当前用户、项目和文档白名单校验。",
+			"projectKnowledgeDescription": "允许此智能体按需查阅项目授权资料。项目资料问答使用哪个智能体，请到「平台设置 → 资料助手」中指定；项目工具和记忆权限在本智能体中配置。",
 			"catalogDescription": "平台展示说明",
 			"descriptionPlaceholder": "说明该智能体面向业务用户提供什么能力。",
 			"category": "业务分类",

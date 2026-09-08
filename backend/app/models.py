@@ -1180,6 +1180,10 @@ class EngineeringKnowledgeConversation(TimestampMixin, Base):
         index=True,
     )
     title: Mapped[str] = mapped_column(String(300))
+    agent_conversation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_conversations.id", ondelete="SET NULL"),
+        nullable=True, unique=True,
+    )
     scope_type: Mapped[str] = mapped_column(
         String(20),
         default="project",

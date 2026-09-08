@@ -88,6 +88,8 @@ class ScheduleCreate(ToolBase):
     on each trigger.
     """
 
+    display_name = "创建定时安排"
+
     name: str = "ScheduleCreate"
 
     description: str = """Create a new recurring scheduled task for yourself. \

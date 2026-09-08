@@ -127,6 +127,7 @@ export interface DatabaseInteractionContextBinding {
 }
 
 export interface DatabaseInteraction {
+	presentation?: ToolPresentation | null;
 	id: number;
 	key: string;
 	display_name: string;
@@ -176,6 +177,11 @@ export type PlatformAgentRole = 'global_main' | 'business' | 'system_internal';
 export interface PlatformAgentConfig {
 	role: PlatformAgentRole;
 	agent_level: 'management' | 'worker';
+	memory_read_scopes?: MemoryScopeType[];
+	memory_write_scopes?: MemoryScopeType[];
+	learning_capture?: boolean;
+	learning_process?: boolean;
+	learning_use?: boolean;
 	enabled: boolean;
 	published: boolean;
 	allow_global_main_call: boolean;
@@ -253,6 +259,7 @@ export interface PlatformSettings {
 	global_main_agent_id: string | null;
 	project_initializer_agent_id: string | null;
 	task_assistant_agent_id: string | null;
+	knowledge_assistant_agent_id: string | null;
 	project_initializer_validation_mcp: PlatformMCPVersionBinding | null;
 }
 
@@ -265,11 +272,36 @@ export interface UpdatePlatformSettingsRequest {
 	global_main_agent_id?: string;
 	project_initializer_agent_id?: string | null;
 	task_assistant_agent_id?: string | null;
+	knowledge_assistant_agent_id?: string | null;
 	project_initializer_validation_mcp?: PlatformMCPVersionBinding | null;
 }
 
 export interface MemorySettings {
 	memory_model_config: ChatModelConfig | null;
+	memory_profile_enabled: boolean;
+	memory_semantic_search_enabled: boolean;
+	memory_index_enabled: boolean;
+	learning_enabled: boolean;
+	group_learning_enabled: boolean;
+	group_learning_scan_seconds: number;
+	group_learning_message_threshold: number;
+	group_learning_idle_seconds: number;
+	group_learning_max_wait_seconds: number;
+	group_learning_batch_size: number;
+	group_learning_daily_limit: number;
+	learning_auto_consolidate: boolean;
+	learning_model_config: ChatModelConfig | null;
+	learning_capture_corrections: boolean;
+	learning_capture_failures: boolean;
+	learning_capture_verified_tasks: boolean;
+	learning_capture_patterns: boolean;
+	learning_daily_job_limit: number;
+	learning_cooldown_seconds: number;
+	learning_pattern_threshold: number;
+	learning_timeout_seconds: number;
+	learning_input_char_limit: number;
+	learning_review_days: number;
+	learning_skill_limit: number;
 	recall_top_k: number;
 	recall_threshold: number;
 	recall_reinforce_threshold: number;
@@ -304,7 +336,6 @@ export interface MemorySettings {
 	compression_user_prompt: string;
 	compression_incremental_prompt: string;
 	historian_system_prompt: string;
-	memory_scope_prompt: string;
 }
 
 export interface MemoryInfrastructure {
@@ -328,7 +359,7 @@ export interface UpdateMemorySettingsRequest {
 	expected_revision: number;
 }
 
-export type MemoryScopeType = 'user' | 'user_project';
+export type MemoryScopeType = 'user' | 'user_project' | 'project';
 
 export interface ManagedMemoryItem {
 	id: string;
@@ -338,9 +369,17 @@ export interface ManagedMemoryItem {
 	project_id: string | null;
 	memory_type: string;
 	importance: number;
-	source: string;
-	source_agent_id: string | null;
-	source_session_id: string | null;
+	source: Record<string, unknown>;
+	identity_type: 'business_user' | 'management_user';
+	fact_key: string | null;
+	version: number;
+	status: 'active' | 'candidate' | 'inactive' | 'deleted';
+	origin?: 'explicit' | 'learning';
+	learning?: LearningDetail;
+	use_count?: number;
+	last_used_at?: string | null;
+	index_status: 'pending' | 'ready' | 'failed' | 'deleted';
+	created_by: string;
 	created_at: string | null;
 	updated_at: string | null;
 }
@@ -364,11 +403,103 @@ export interface MemoryManagementResponse {
 	users: MemoryManagementUser[];
 	memories: ManagedMemoryItem[];
 	total: number;
+	projects: MemoryManagementProject[];
+	memberships: { user_id: string; project_id: string }[];
+	catalog_warning: string | null;
+}
+
+export interface LearningEvidence {
+	id: string;
+	kind: string;
+	text: string;
+	outcome?: string;
+}
+
+export interface LearningDetail {
+	title?: string;
+	conditions?: string;
+	limitations?: string;
+	steps?: string[];
+	validation_state?: string;
+	evidence?: LearningEvidence[];
+	review_note?: string;
+	review_due_at?: string;
+	reason?: string;
+}
+
+export interface LearningEvent {
+	id: string;
+	agent_id: string;
+	session_id: string;
+	scope_type: MemoryScopeType;
+	platform_user_id: string;
+	project_id: string;
+	event_type: string;
+	evidence: LearningEvidence[];
+	state: 'pending' | 'running' | 'done' | 'skipped' | 'failed' | 'cancelled' | null;
+	job_id: string | null;
+	attempts: number | null;
+	error_code: string | null;
+	created_at: string;
+	result: { reason?: string; candidates?: { memory_id: string; status: string }[] } | null;
+}
+
+export interface LearningDashboard {
+	events: LearningEvent[];
+	total: number;
+	counts: { state: string; count: number }[];
+}
+
+export interface LearningReview {
+	expected_version: number;
+	action: 'approve' | 'reject' | 'suspend' | 'revise' | 'rollback';
+	note: string;
+	content?: string;
+	conditions?: string;
+	limitations?: string;
+	steps?: string[];
+	restore_version?: number;
+}
+
+export interface LearningFeedback {
+	id: string;
+	memory_version: number;
+	outcome: string;
+	evidence: string;
+	actor_id: string;
+	created_at: string;
 }
 
 export interface UpdateMemoryScopeRequest {
 	scope_type: MemoryScopeType;
 	project_id?: string | null;
+	platform_user_id?: string;
+	expected_version: number;
+	publish?: boolean;
+}
+
+export interface MemoryVersion {
+	version: number;
+	snapshot: ManagedMemoryItem;
+	action: string;
+	actor_id: string;
+	created_at: string;
+}
+
+export interface MemoryIndexJob {
+	memory_id: string;
+	version: number;
+	state: 'pending' | 'running' | 'failed';
+	attempts: number;
+	error_code: string | null;
+	updated_at: string;
+}
+
+export interface LegacyMemoryReview {
+	legacy_id: string;
+	content: string;
+	reason: string;
+	created_at: string;
 }
 
 export interface WeKnoraConnection {
@@ -1051,7 +1182,10 @@ export interface MCPClient {
 	mcp_config: StdioMCPConfig | HttpMCPConfig;
 }
 
+export interface ToolPresentation { label: string; source: string; category: string; }
+
 export interface ToolInfo {
+	presentation?: ToolPresentation | null;
 	name: string;
 	description?: string | null;
 }
@@ -1071,6 +1205,7 @@ export interface MCPClientStatus extends MCPClient {
 }
 
 export interface ManagedMCPTool {
+	presentation?: ToolPresentation | null;
 	name: string;
 	display_name?: string | null;
 	description: string;

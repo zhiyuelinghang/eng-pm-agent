@@ -136,6 +136,24 @@
 			"invalidCurrent": "The assigned agent is disabled or has no fixed model. Select another available agent.",
 			"effect": "The selected agent is hidden and receives group-chat context under the fixed Task Assistant identity, organizes task intent, and calls its configured task-engine tools. Its underlying name remains visible only in the management center.",
 			"save": "Save Task Assistant settings"
+		},
+		"knowledgeAssistant": {
+			"title": "Knowledge Assistant",
+			"description": "Answers project-document questions using assigned project tools as needed.",
+			"selector": "Knowledge-chat agent",
+			"placeholder": "Select a dedicated agent",
+			"requirement": "Requires a fixed model and project-document queries enabled in the agent configuration. Each platform responsibility requires a different agent.",
+			"roleBadge": "Platform responsibility",
+			"saved": "Knowledge Assistant settings saved",
+			"unconfiguredTitle": "Knowledge Assistant is not assigned",
+			"unconfigured": "Select an agent and save to use it for project knowledge chats.",
+			"noCandidates": "Create and enable an agent with a fixed chat model first.",
+			"invalidCurrentTitle": "Knowledge Assistant is unavailable",
+			"invalidCurrent": "Check that the agent is enabled, has a fixed model, and allows project-document queries.",
+			"effect": "New chats use this assignment. Previous conversations remain readable after switching. Project tools and memory permissions follow the selected agent configuration.",
+			"save": "Save Knowledge Assistant",
+			"clear": "Unassigned",
+			"missingCapability": "Enable project-document queries in the selected agent configuration before saving."
 		}
 	},
 	"memory-settings": {
@@ -478,7 +496,7 @@
 			"allowGlobalMainCall": "Allow calls from platform main agent",
 			"allowGlobalMainCallDescription": "Only enabled agents with this option enter the platform main agent's collaboration pool. Ordinary agents still use their own allowlists.",
 			"projectKnowledge": "Enable project knowledge queries",
-			"projectKnowledgeDescription": "Mounts the WeKnora project tool only for this agent; current user, project, and document allowlists are still checked every turn.",
+			"projectKnowledgeDescription": "Allows this agent to consult authorized project documents. Assign the Knowledge Assistant in Platform Settings; project tools and memory permissions remain configured on this agent.",
 			"catalogDescription": "Platform description",
 			"descriptionPlaceholder": "Explain what this agent offers to business users.",
 			"category": "Business category",

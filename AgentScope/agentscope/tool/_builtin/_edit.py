@@ -25,6 +25,9 @@ from ._backend import BackendBase, _normalize_newlines
 class Edit(ToolBase):
     """The edit tool for performing exact string replacements in files."""
 
+    display_name = "修改文件"
+    presentation_category = "workspace"
+
     name: str = "Edit"
     """The tool name presented to the agent."""
 

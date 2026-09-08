@@ -31,6 +31,8 @@ class _TeamToolBase(ToolBase):
     which team tools to attach in the first place.
     """
 
+    presentation_category = "collaboration"
+
     name: str
     description: str
     input_schema: dict[str, Any]

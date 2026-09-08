@@ -155,6 +155,7 @@ class Toolkit:
         self.meta_tool_response_template = meta_tool_response_template
         self.skill_instruction_template = skill_instruction_template
         self._tool_policy = tool_policy
+        self._presentation_snapshot: dict[str, dict[str, str]] = {}
 
         self.builtin_meta_tool = RegisteredTool(
             tool=ResetTools(
@@ -220,6 +221,11 @@ class Toolkit:
 
         # Get all available tools
         tools_dict = await self._get_available_tools(groups)
+        from ._presentation import tool_presentation
+        self._presentation_snapshot = {
+            name: tool_presentation(registered.tool)
+            for name, registered in tools_dict.items()
+        }
         for tool in tools_dict.values():
             function_schemas.append(tool.get_tool_schema())
 
@@ -588,6 +594,11 @@ class Toolkit:
 
         return tools[tool_name].tool
 
+    def get_tool_presentation(self, name: str) -> dict[str, str]:
+        """Read this model call's catalogue snapshot without MCP/network I/O."""
+        from ._presentation import tool_presentation
+        return dict(self._presentation_snapshot.get(name) or tool_presentation())
+
     async def get_tool(self, name: str) -> ToolBase | None:
         """Get tool instance by its name.
 
@@ -625,6 +636,7 @@ class Toolkit:
     def clear(self) -> None:
         """Clear the registered tools, skills and MCPs."""
         self.tool_groups.clear()
+        self._presentation_snapshot.clear()
 
     async def add_tool(
         self,

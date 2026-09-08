@@ -118,6 +118,7 @@ type ApiWeKnoraSession = { session_id: string }
 type ApiWeKnoraStop = { session_id: string; message_id?: string | null; stopped: boolean; message: string }
 export type EngineeringKnowledgeConversationRecord = {
   id: number
+  agent_conversation_id?: number | null
   project_id: number
   user_id: number
   title: string

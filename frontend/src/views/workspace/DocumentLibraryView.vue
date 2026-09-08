@@ -7,7 +7,7 @@
           :class="{ active: activeWorkspaceTab === 'chat' }"
           :aria-selected="activeWorkspaceTab === 'chat'"
           role="tab"
-          :disabled="knowledgeWorkspaceBlocked"
+          :disabled="knowledgeChatBusy"
           @click="switchWorkspaceTab('chat')"
         >
           <n-icon :size="18"><MessageCircle /></n-icon>
@@ -18,7 +18,7 @@
           :class="{ active: activeWorkspaceTab === 'files' }"
           :aria-selected="activeWorkspaceTab === 'files'"
           role="tab"
-          :disabled="knowledgeWorkspaceBlocked"
+          :disabled="knowledgeChatBusy"
           @click="switchWorkspaceTab('files')"
         >
           <n-icon :size="18"><FileText /></n-icon>
@@ -611,7 +611,7 @@ const canReadDocuments = computed(() => Boolean(store.currentProjectId) && (
 ))
 const canCreateDocuments = computed(() => Boolean(store.currentProjectId) && store.documentFolders.some(folder => allowsCapability(folder.capabilities, 'can_create')))
 const knowledgeWorkspaceBlocked = computed(() => Boolean(store.currentProjectId) && (
-  !knowledgeWorkspaceReady.value || !knowledgeChatReady.value
+  activeWorkspaceTab.value === 'chat' ? !knowledgeChatReady.value : !knowledgeWorkspaceReady.value
 ))
 const catalogueUninitialized = computed(() => store.engineeringDocumentSync?.status === 'uninitialized')
 const knowledgeWorkspaceStatusText = computed(() => {

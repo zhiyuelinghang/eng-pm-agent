@@ -1,489 +1,275 @@
-# -*- coding: utf-8 -*-
-"""Management APIs for reviewing and correcting personal long-term memory."""
-
+"""Management of authoritative memory records, revisions and index jobs."""
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
-from datetime import datetime, timezone
-from typing import Any, Literal
+import logging
+from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
+import psycopg
 
 from .._auth import AgentScopePrincipal
 from .._session_access import require_management_audit_access
-from ..deps import get_current_principal, get_current_user_id, get_storage
-from ..memory import build_business_memory_target, get_memory_runtime
-from ..storage import SessionSource, StorageBase
+from ..deps import get_current_principal
+from ..memory import get_memory_runtime
+from utils.memory_repository import MemoryAccess, MemoryError
+from utils.memory_service import get_memory_repository
+from utils.learning_repository import LearningRepository
+from utils.group_learning_repository import GroupLearningRepository
+
+logger = logging.getLogger(__name__)
+MemoryScopeType = Literal["user", "user_project", "project"]
+MemoryKind = Literal['fact','preference','decision','reference','reflection','experience','skill']
+async def _automatic_memory_management(request: Request, principal: AgentScopePrincipal = Depends(get_current_principal)):
+    require_management_audit_access(principal)
+    if request.method not in {'GET','HEAD','OPTIONS','DELETE'}:
+        raise HTTPException(409,detail={'code':'automatic_memory_management','message':'记忆由系统自动管理，管理端仅支持查看和删除。'})
 
 
-MemoryScopeType = Literal["user", "user_project"]
+memory_management_router = APIRouter(prefix="/memory-management", tags=["memory-management"], dependencies=[Depends(_automatic_memory_management)])
 
 
-class ManagedMemoryItem(BaseModel):
-    """One editable v2 business-user memory."""
-
-    id: str
-    content: str
-    scope_type: MemoryScopeType
-    platform_user_id: str
+class UpdateMemoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=1)
+    content: str | None = Field(default=None, min_length=1, max_length=16000)
+    scope_type: MemoryScopeType | None = None
+    platform_user_id: str | None = None
     project_id: str | None = None
-    memory_type: str
-    importance: float
-    source: str
-    source_agent_id: str | None = None
-    source_session_id: str | None = None
-    created_at: str | None = None
-    updated_at: str | None = None
+    status: Literal["active", "candidate", "inactive", "deleted"] | None = None
+    publish: bool = False
 
 
-class MemoryManagementProject(BaseModel):
-    project_id: str
-    project_name: str
-    memory_count: int = 0
-
-
-class MemoryManagementUser(BaseModel):
-    user_id: str
-    username: str
-    display_name: str
-    memory_count: int = 0
-    user_memory_count: int = 0
-    projects: list[MemoryManagementProject] = Field(default_factory=list)
-
-
-class MemoryManagementResponse(BaseModel):
-    users: list[MemoryManagementUser] = Field(default_factory=list)
-    memories: list[ManagedMemoryItem] = Field(default_factory=list)
-    total: int = 0
-
-
-class UpdateMemoryScopeRequest(BaseModel):
+class AssignLegacyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     scope_type: MemoryScopeType
-    project_id: str | None = None
+    platform_user_id: str = ""
+    project_id: str = ""
+    content: str = Field(min_length=1,max_length=16000)
+    publish: bool = False
 
 
-memory_management_router = APIRouter(
-    prefix="/memory-management",
-    tags=["memory-management"],
-)
+def _access(principal: AgentScopePrincipal) -> MemoryAccess:
+    require_management_audit_access(principal)
+    return MemoryAccess(get_memory_runtime().tenant_id, principal.subject,
+                        actor_id=f"management:{principal.subject}", management=True)
 
 
-def _memory_database() -> tuple[str, str]:
-    from utils import config as memory_config
-
-    return memory_config.DATABASE_URL, memory_config.MEM0_COLLECTION
-
-
-def _memory_uuid(memory_id: str) -> UUID:
+async def _run(method, *args, **kwargs):
     try:
-        return UUID(memory_id)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("memory_not_found") from exc
+        return await asyncio.to_thread(method, *args, **kwargs)
+    except MemoryError as exc:
+        raise HTTPException(exc.status, detail={"code":exc.code,"message":str(exc)}) from exc
+    except psycopg.errors.UniqueViolation as exc:
+        raise HTTPException(409, detail="目标抽屉已有相同事实字段，请先检查并处理冲突。") from exc
+    except ValueError as exc:
+        raise HTTPException(422, detail="记忆标识或参数无效。") from exc
+    except Exception as exc:
+        logger.exception("Memory management operation failed")
+        raise HTTPException(503, detail="记忆存储暂时不可用，请查看服务日志；已有正文不会被清空。") from exc
 
 
-def _list_business_memories() -> list[dict[str, Any]]:
-    """Read v2 payloads without instantiating the BGE embedding model."""
-
-    import psycopg
-    from psycopg import sql
-
-    database_url, collection = _memory_database()
-    tenant_id = get_memory_runtime().tenant_id
-    with psycopg.Connection.connect(
-        database_url,
-        autocommit=True,
-        prepare_threshold=0,
-    ) as connection:
-        rows = connection.execute(
-            sql.SQL(
-                """SELECT id, payload
-                   FROM {}
-                   WHERE payload->>'scope_version' = '2'
-                     AND payload->>'identity_type' = 'business_user'
-                     AND payload->>'tenant_id' = %s
-                   ORDER BY COALESCE(
-                       payload->>'updated_at',
-                       payload->>'created_at',
-                       ''
-                   ) DESC
-                   LIMIT 10000""",
-            ).format(sql.Identifier(collection)),
-            (tenant_id,),
-        ).fetchall()
-    result: list[dict[str, Any]] = []
-    for memory_id, raw_payload in rows:
-        payload = dict(raw_payload or {})
-        scope_type = str(payload.get("scope_type") or "")
-        platform_user_id = str(payload.get("platform_user_id") or "")
-        if scope_type not in {"user", "user_project"} or not platform_user_id:
-            continue
-        result.append({
-            "id": str(memory_id),
-            "payload": payload,
-        })
-    return result
-
-
-def _to_item(record: dict[str, Any]) -> ManagedMemoryItem:
-    payload = record["payload"]
-    return ManagedMemoryItem(
-        id=record["id"],
-        content=str(payload.get("data") or ""),
-        scope_type=str(payload["scope_type"]),
-        platform_user_id=str(payload["platform_user_id"]),
-        project_id=(str(payload["project_id"]) if payload.get("project_id") else None),
-        memory_type=str(payload.get("memory_type") or "fact"),
-        importance=float(payload.get("importance") or 0.5),
-        source=str(payload.get("source") or "memory"),
-        source_agent_id=(
-            str(payload["source_agent_id"])
-            if payload.get("source_agent_id")
-            else None
-        ),
-        source_session_id=(
-            str(payload["source_session_id"])
-            if payload.get("source_session_id")
-            else None
-        ),
-        created_at=(str(payload["created_at"]) if payload.get("created_at") else None),
-        updated_at=(str(payload["updated_at"]) if payload.get("updated_at") else None),
-    )
-
-
-async def _identity_catalog(
-    storage: StorageBase,
-    storage_user_id: str,
-) -> tuple[dict[str, dict[str, str]], dict[tuple[str, str], str]]:
-    users: dict[str, dict[str, str]] = {}
-    projects: dict[tuple[str, str], str] = {}
-    for session in await storage.list_all_sessions(storage_user_id):
-        context = session.config.platform_context
-        if (
-            session.source != SessionSource.PLATFORM
-            or context is None
-            or context.session_role != "primary"
-        ):
-            continue
-        users[context.user_id] = {
-            "username": context.username,
-            "display_name": context.display_name,
-        }
-        projects[(context.user_id, context.project_id)] = context.project_name
-    return users, projects
-
-
-def _find_memory(memory_id: str) -> dict[str, Any]:
-    import psycopg
-    from psycopg import sql
-
-    database_url, collection = _memory_database()
-    with psycopg.Connection.connect(
-        database_url,
-        autocommit=True,
-        prepare_threshold=0,
-    ) as connection:
-        row = connection.execute(
-            sql.SQL("SELECT payload FROM {} WHERE id = %s").format(
-                sql.Identifier(collection),
-            ),
-            (_memory_uuid(memory_id),),
-        ).fetchone()
-    if not row:
-        raise ValueError("memory_not_found")
-    metadata = dict(row[0] or {})
-    if (
-        str(metadata.get("scope_version") or "") != "2"
-        or metadata.get("identity_type") != "business_user"
-        or metadata.get("scope_type") not in {"user", "user_project"}
-        or metadata.get("tenant_id") != get_memory_runtime().tenant_id
-    ):
-        raise PermissionError("memory_not_managed")
-    return {
-        "item": {
-            "id": memory_id,
-            "memory": str(metadata.get("data") or ""),
-            "created_at": metadata.get("created_at"),
-            "updated_at": metadata.get("updated_at"),
-        },
-        "metadata": metadata,
-    }
-
-
-def _update_memory_metadata(memory_id: str, metadata: dict[str, Any]) -> None:
-    import psycopg
-    from psycopg import sql
-    from psycopg.types.json import Jsonb
-
-    database_url, collection = _memory_database()
-    with psycopg.Connection.connect(
-        database_url,
-        autocommit=True,
-        prepare_threshold=0,
-    ) as connection:
-        row = connection.execute(
-            sql.SQL(
-                """UPDATE {}
-                   SET payload = payload || %s
-                   WHERE id = %s
-                   RETURNING id""",
-            ).format(sql.Identifier(collection)),
-            (Jsonb(metadata), _memory_uuid(memory_id)),
-        ).fetchone()
-    if not row:
-        raise ValueError("memory_not_found")
-
-
-def _delete_memory_record(memory_id: str) -> None:
-    import psycopg
-    from psycopg import sql
-
-    database_url, collection = _memory_database()
-    with psycopg.Connection.connect(
-        database_url,
-        autocommit=True,
-        prepare_threshold=0,
-    ) as connection:
-        row = connection.execute(
-            sql.SQL("DELETE FROM {} WHERE id = %s RETURNING id").format(
-                sql.Identifier(collection),
-            ),
-            (_memory_uuid(memory_id),),
-        ).fetchone()
-    if not row:
-        raise ValueError("memory_not_found")
-
-
-async def _log_management_action(
-    *,
-    action: str,
-    principal: AgentScopePrincipal,
-    memory_id: str,
-    metadata: dict[str, Any],
-    details: dict[str, Any],
-) -> None:
-    """Persist an admin mutation when the optional audit table is available."""
-
-    def _write() -> None:
-        import psycopg
-        from psycopg.types.json import Jsonb
-        from utils import config as memory_config
-
-        with psycopg.Connection.connect(
-            memory_config.DATABASE_URL,
-            autocommit=True,
-            prepare_threshold=0,
-        ) as connection:
-            connection.execute(
-                """INSERT INTO memory.memory_audit_log
-                   (tenant_id, project_id, platform_user_id, agent_id,
-                    action, memory_id, details)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-                (
-                    str(metadata.get("tenant_id") or "projectcopilot"),
-                    metadata.get("project_id"),
-                    metadata.get("platform_user_id"),
-                    f"management:{principal.subject}",
-                    action,
-                    memory_id,
-                    Jsonb(details),
-                ),
-            )
-
+async def _catalog(request: Request) -> dict:
+    manager = getattr(request.app.state,"database_interaction_manager",None)
+    if manager is None:
+        raise HTTPException(503, detail="平台身份目录尚未配置。")
     try:
-        await asyncio.to_thread(_write)
-    except Exception:
-        # Memory mutation is authoritative; an unavailable auxiliary audit
-        # table must not make a successful correction appear to have failed.
-        return
+        return await manager.memory_identity_catalog()
+    except Exception as exc:
+        raise HTTPException(503, detail="无法获取最新用户和项目目录。") from exc
 
 
-@memory_management_router.get(
-    "/memories",
-    response_model=MemoryManagementResponse,
-    summary="List editable business-user long-term memories",
-)
+@memory_management_router.get("/memories")
 async def list_managed_memories(
-    platform_user_id: str | None = Query(default=None),
-    project_id: str | None = Query(default=None),
-    scope_type: MemoryScopeType | None = Query(default=None),
+    request: Request,
+    platform_user_id: str | None = None, project_id: str | None = None,
+    scope_type: MemoryScopeType | None = None,
     query: str = Query(default="", max_length=500),
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=200),
-    storage_user_id: str = Depends(get_current_user_id),
+    record_status: Literal["active","candidate","inactive","deleted"] = "active",
+    memory_type: MemoryKind | None = None,
+    origin: Literal['explicit','learning'] | None = None,
+    offset: int = Query(default=0,ge=0), limit: int = Query(default=50,ge=1,le=200),
     principal: AgentScopePrincipal = Depends(get_current_principal),
-    storage: StorageBase = Depends(get_storage),
-) -> MemoryManagementResponse:
-    require_management_audit_access(principal)
-    raw, catalog = await asyncio.gather(
-        asyncio.to_thread(_list_business_memories),
-        _identity_catalog(storage, storage_user_id),
-    )
-    known_users, known_projects = catalog
-
-    user_counts: dict[str, int] = defaultdict(int)
-    global_counts: dict[str, int] = defaultdict(int)
-    project_counts: dict[tuple[str, str], int] = defaultdict(int)
-    all_items: list[ManagedMemoryItem] = []
-    for record in raw:
-        item = _to_item(record)
-        all_items.append(item)
-        user_counts[item.platform_user_id] += 1
-        if item.scope_type == "user":
-            global_counts[item.platform_user_id] += 1
-        elif item.project_id:
-            project_counts[(item.platform_user_id, item.project_id)] += 1
-
-    user_ids = set(known_users) | set(user_counts)
-    users: list[MemoryManagementUser] = []
-    for user_id in user_ids:
-        known = known_users.get(user_id) or {}
-        project_ids = {
-            pid
-            for uid, pid in set(known_projects) | set(project_counts)
-            if uid == user_id
-        }
-        projects = [
-            MemoryManagementProject(
-                project_id=pid,
-                project_name=known_projects.get((user_id, pid), pid),
-                memory_count=project_counts.get((user_id, pid), 0),
-            )
-            for pid in project_ids
-        ]
-        projects.sort(key=lambda value: (-value.memory_count, value.project_name))
-        users.append(MemoryManagementUser(
-            user_id=user_id,
-            username=known.get("username", user_id),
-            display_name=known.get("display_name", user_id),
-            memory_count=user_counts.get(user_id, 0),
-            user_memory_count=global_counts.get(user_id, 0),
-            projects=projects,
-        ))
-    users.sort(key=lambda value: (-value.memory_count, value.display_name))
-
-    normalized_query = query.strip().casefold()
-    filtered = [
-        item
-        for item in all_items
-        if (platform_user_id is None or item.platform_user_id == platform_user_id)
-        and (scope_type is None or item.scope_type == scope_type)
-        and (
-            project_id is None
-            or (item.scope_type == "user_project" and item.project_id == project_id)
-        )
-        and (not normalized_query or normalized_query in item.content.casefold())
-    ]
-    filtered.sort(
-        key=lambda item: item.updated_at or item.created_at or "",
-        reverse=True,
-    )
-    return MemoryManagementResponse(
-        users=users,
-        memories=filtered[offset : offset + limit],
-        total=len(filtered),
-    )
-
-
-@memory_management_router.patch(
-    "/memories/{memory_id}/scope",
-    response_model=ManagedMemoryItem,
-    summary="Move one memory between user and user-project scopes",
-)
-async def update_managed_memory_scope(
-    memory_id: str,
-    body: UpdateMemoryScopeRequest,
-    storage_user_id: str = Depends(get_current_user_id),
-    principal: AgentScopePrincipal = Depends(get_current_principal),
-    storage: StorageBase = Depends(get_storage),
-) -> ManagedMemoryItem:
-    require_management_audit_access(principal)
+) -> dict:
+    access = _access(principal)
+    repo = get_memory_repository()
+    page, counts = await asyncio.gather(
+        _run(repo.list,access,scope_type=scope_type,user_id=platform_user_id,project_id=project_id,
+             query=query,status=record_status,offset=offset,limit=limit,memory_type=memory_type,origin=origin),
+        _run(repo.counts,access))
+    # Browsing existing records remains possible when the business catalogue is offline.
+    warning = None
     try:
-        found = await asyncio.to_thread(_find_memory, memory_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到该记忆。") from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="该记忆不属于可管理的业务用户记忆。") from exc
-
-    metadata = found["metadata"]
-    platform_user_id = str(metadata["platform_user_id"])
-    target_project_id = body.project_id if body.scope_type == "user_project" else None
-    if body.scope_type == "user_project" and not target_project_id:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="调整为用户＋项目记忆时必须选择项目。",
-        )
-    if target_project_id:
-        _, known_projects = await _identity_catalog(storage, storage_user_id)
-        if (platform_user_id, target_project_id) not in known_projects:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="所选项目不属于该业务用户。",
-            )
-
-    target = build_business_memory_target(
-        tenant_id=str(metadata.get("tenant_id") or get_memory_runtime().tenant_id),
-        platform_user_id=platform_user_id,
-        scope_type=body.scope_type,
-        project_id=target_project_id,
-    )
-    old_scope = {
-        "scope_type": metadata.get("scope_type"),
-        "project_id": metadata.get("project_id"),
-    }
-    adjusted_at = datetime.now(timezone.utc).isoformat()
-    update_metadata = {
-        **target.as_dict(),
-        "scope_adjusted_at": adjusted_at,
-        "scope_adjusted_by": principal.subject,
-        "updated_at": adjusted_at,
-    }
-
-    await asyncio.to_thread(_update_memory_metadata, memory_id, update_metadata)
-    get_memory_runtime().invalidate_memory_caches()
-    await _log_management_action(
-        action="move_scope",
-        principal=principal,
-        memory_id=memory_id,
-        metadata=update_metadata,
-        details={"from": old_scope, "to": target.as_dict()},
-    )
-    refreshed = await asyncio.to_thread(_find_memory, memory_id)
-    item = refreshed["item"]
-    payload = {**refreshed["metadata"], "data": item.get("memory", "")}
-    payload["created_at"] = item.get("created_at")
-    payload["updated_at"] = item.get("updated_at")
-    return _to_item({"id": memory_id, "payload": payload})
+        catalog = await _catalog(request)
+    except HTTPException as exc:
+        catalog = {"users":[],"projects":[],"memberships":[]}
+        warning = str(exc.detail)
+    users = {u["user_id"]:{**u,"memory_count":0,"user_memory_count":0,"projects":[]} for u in catalog["users"]}
+    projects = {p["project_id"]:{**p,"memory_count":0} for p in catalog["projects"]}
+    for count in counts:
+        uid,pid,n = count["platform_user_id"],count["project_id"],count["count"]
+        if pid:
+            projects.setdefault(pid,{"project_id":pid,"project_name":pid,"memory_count":0})
+        if count["scope_type"] == "project":
+            projects[pid]["memory_count"] += n
+        else:
+            user = users.setdefault(uid,{"user_id":uid,"username":uid,"display_name":uid,"memory_count":0,"user_memory_count":0,"projects":[]})
+            user["memory_count"] += n
+            if count["scope_type"] == "user":
+                user["user_memory_count"] += n
+    return {**page,"users":list(users.values()),"projects":list(projects.values()),
+            "memberships":catalog["memberships"],"catalog_warning":warning}
 
 
-@memory_management_router.delete(
-    "/memories/{memory_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete one managed long-term memory",
-)
-async def delete_managed_memory(
-    memory_id: str,
-    principal: AgentScopePrincipal = Depends(get_current_principal),
-) -> None:
-    require_management_audit_access(principal)
-    try:
-        found = await asyncio.to_thread(_find_memory, memory_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到该记忆。") from exc
-    except PermissionError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="该记忆不属于可管理的业务用户记忆。") from exc
-
-    await asyncio.to_thread(_delete_memory_record, memory_id)
-    get_memory_runtime().invalidate_memory_caches()
-    await _log_management_action(
-        action="delete",
-        principal=principal,
-        memory_id=memory_id,
-        metadata=found["metadata"],
-        details={"scope_type": found["metadata"].get("scope_type")},
-    )
+@memory_management_router.get("/memories/{memory_id}/history")
+async def memory_history(memory_id: UUID, principal: AgentScopePrincipal = Depends(get_current_principal)):
+    return await _run(get_memory_repository().history,_access(principal),str(memory_id))
 
 
-__all__ = ["memory_management_router"]
+@memory_management_router.patch("/memories/{memory_id}")
+async def update_managed_memory(memory_id: UUID, body: UpdateMemoryRequest, request: Request,
+                                principal: AgentScopePrincipal = Depends(get_current_principal)):
+    access = _access(principal)
+    repo = get_memory_repository()
+    current = await _run(repo.get,access,str(memory_id))
+    scope = body.scope_type or current["scope_type"]
+    project = body.project_id if body.project_id is not None else current["project_id"]
+    user = body.platform_user_id if body.platform_user_id is not None else current["platform_user_id"]
+    if body.scope_type or body.project_id is not None or body.platform_user_id is not None:
+        if current["identity_type"] == "management_user":
+            if scope != "user" or user != current["platform_user_id"]:
+                raise HTTPException(422,detail="管理测试记忆不能转为业务用户或项目共享记忆。")
+        else:
+            catalog = await _catalog(request)
+            known_user = next((u for u in catalog["users"] if u["user_id"]==user),None)
+            if scope != "project" and not known_user:
+                raise HTTPException(422,detail="请选择当前有效的业务用户。")
+            if scope != "user" and project not in {p["project_id"] for p in catalog["projects"]}:
+                raise HTTPException(422,detail="请选择当前有效项目。")
+            if scope == "user_project" and known_user["role"] != "admin" and not any(
+                m["user_id"]==user and m["project_id"]==project for m in catalog["memberships"]):
+                raise HTTPException(422,detail="该用户当前不属于所选项目。")
+    return await _run(repo.manage,access,str(memory_id),expected_version=body.expected_version,
+        content=body.content,scope_type=body.scope_type,user_id=body.platform_user_id,
+        project_id=body.project_id,status=body.status,publish=body.publish)
+
+
+@memory_management_router.delete("/memories/{memory_id}",status_code=204)
+async def delete_managed_memory(memory_id: UUID, expected_version: int = Query(ge=1),
+                                principal: AgentScopePrincipal = Depends(get_current_principal)) -> None:
+    await _run(get_memory_repository().manage,_access(principal),str(memory_id),
+               expected_version=expected_version,status="deleted")
+
+
+@memory_management_router.get("/index-jobs")
+async def memory_index_jobs(principal: AgentScopePrincipal = Depends(get_current_principal)):
+    return await _run(get_memory_repository().diagnostics,_access(principal))
+
+
+@memory_management_router.post("/memories/{memory_id}/retry-index")
+async def retry_memory_index(memory_id: UUID, principal: AgentScopePrincipal = Depends(get_current_principal)):
+    return await _run(get_memory_repository().retry_index,_access(principal),str(memory_id))
+
+
+@memory_management_router.get("/legacy-review")
+async def legacy_memory_reviews(principal: AgentScopePrincipal = Depends(get_current_principal)):
+    return await _run(get_memory_repository().legacy_reviews,_access(principal))
+
+
+@memory_management_router.post("/legacy-review/{legacy_id}/assign")
+async def assign_legacy_memory(legacy_id: UUID, body: AssignLegacyRequest, request: Request,
+                               principal: AgentScopePrincipal = Depends(get_current_principal)):
+    access = _access(principal)
+    catalog = await _catalog(request)
+    user = next((u for u in catalog["users"] if u["user_id"]==body.platform_user_id),None)
+    if body.scope_type != "project" and not user:
+        raise HTTPException(422,detail="请选择当前有效用户。")
+    if body.scope_type != "user" and body.project_id not in {p["project_id"] for p in catalog["projects"]}:
+        raise HTTPException(422,detail="请选择当前有效项目。")
+    if body.scope_type == "user_project" and user["role"] != "admin" and not any(
+        m["user_id"]==body.platform_user_id and m["project_id"]==body.project_id for m in catalog["memberships"]):
+        raise HTTPException(422,detail="该用户当前不属于所选项目。")
+    return await _run(get_memory_repository().resolve_legacy,access,str(legacy_id),
+        user_id=body.platform_user_id,project_id=body.project_id,scope_type=body.scope_type,
+        content=body.content,publish=body.publish)
+
+
+class ReviewLearningRequest(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    expected_version: int = Field(ge=1)
+    action: Literal['approve','reject','suspend','revise','rollback']
+    note: str = Field(min_length=1,max_length=4000)
+    content: str | None = Field(default=None,min_length=1,max_length=16000)
+    conditions: str | None = Field(default=None,min_length=1,max_length=2000)
+    limitations: str | None = Field(default=None,min_length=1,max_length=2000)
+    steps: list[str] | None = Field(default=None,max_length=10)
+    restore_version: int | None = Field(default=None,ge=1)
+
+
+@memory_management_router.get('/group-learning')
+async def group_learning_dashboard(offset: int = Query(0, ge=0), limit: int = Query(30, ge=1, le=100),
+    principal: AgentScopePrincipal = Depends(get_current_principal)):
+    return await _run(GroupLearningRepository(get_memory_repository()).dashboard, _access(principal), offset=offset, limit=limit)
+
+
+@memory_management_router.post('/group-learning/channels/{channel_id}/{action}')
+async def group_learning_channel_action(channel_id: int, action: Literal['pause', 'resume'],
+    principal: AgentScopePrincipal = Depends(get_current_principal)):
+    return await _run(GroupLearningRepository(get_memory_repository()).action, _access(principal), channel_id=channel_id, action=action)
+
+
+@memory_management_router.post('/group-learning/batches/{batch_id}/retry')
+async def group_learning_batch_retry(batch_id: UUID, principal: AgentScopePrincipal = Depends(get_current_principal)):
+    return await _run(GroupLearningRepository(get_memory_repository()).action, _access(principal), batch_id=str(batch_id), action='retry')
+
+
+class LearningFeedbackRequest(BaseModel):
+    expected_version: int = Field(ge=1)
+    outcome: Literal['success','failure','irrelevant']
+    evidence: str = Field(min_length=1,max_length=4000)
+    request_id: str = Field(min_length=1,max_length=255)
+
+
+class DeriveLearningRequest(BaseModel):
+    memory_ids: list[UUID] = Field(min_length=1,max_length=10)
+    action: Literal['consolidate','skill_compile']
+    note: str = Field(min_length=1,max_length=4000)
+
+
+@memory_management_router.get('/learning')
+async def learning_dashboard(offset: int=Query(default=0,ge=0),limit: int=Query(default=30,ge=1,le=100),
+    state: Literal['recorded','pending','running','done','skipped','failed','cancelled'] | None=None,
+    principal: AgentScopePrincipal=Depends(get_current_principal)):
+    return await _run(LearningRepository(get_memory_repository()).dashboard,_access(principal),offset=offset,limit=limit,state=state)
+
+
+@memory_management_router.post('/learning/events/{event_id}/{action}')
+async def learning_job_action(event_id: UUID,action: Literal['retry','cancel'],principal: AgentScopePrincipal=Depends(get_current_principal)):
+    return await _run(LearningRepository(get_memory_repository()).job_action,_access(principal),str(event_id),action)
+
+
+@memory_management_router.post('/learning/derive')
+async def derive_learning(body: DeriveLearningRequest,principal: AgentScopePrincipal=Depends(get_current_principal)):
+    return await _run(LearningRepository(get_memory_repository()).derive,_access(principal),[str(mid) for mid in body.memory_ids],action=body.action,note=body.note)
+
+
+@memory_management_router.post('/memories/{memory_id}/learning-review')
+async def review_learning(memory_id: UUID,body: ReviewLearningRequest,principal: AgentScopePrincipal=Depends(get_current_principal)):
+    return await _run(LearningRepository(get_memory_repository()).review,_access(principal),str(memory_id),**body.model_dump())
+
+
+@memory_management_router.get('/memories/{memory_id}/feedback')
+async def learning_feedback_history(memory_id: UUID,principal: AgentScopePrincipal=Depends(get_current_principal)):
+    return await _run(LearningRepository(get_memory_repository()).feedback_history,_access(principal),str(memory_id))
+
+
+@memory_management_router.post('/memories/{memory_id}/feedback')
+async def learning_feedback(memory_id: UUID,body: LearningFeedbackRequest,principal: AgentScopePrincipal=Depends(get_current_principal)):
+    return await _run(LearningRepository(get_memory_repository()).feedback,_access(principal),str(memory_id),**body.model_dump())
+
+
+@memory_management_router.get('/memories/{memory_id}/learning-document')
+async def export_learning_document(memory_id: UUID,principal: AgentScopePrincipal=Depends(get_current_principal)):
+    return await _run(LearningRepository(get_memory_repository()).export_document,_access(principal),str(memory_id))

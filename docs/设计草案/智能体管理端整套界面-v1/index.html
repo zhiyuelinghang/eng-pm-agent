@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dobby 智能体管理端 · 整套设计图</title>
+<style>
+:root{font-family:"Microsoft YaHei","Segoe UI",sans-serif;color:#252a30;background:#fafaf9;font-size:14px}
+*{box-sizing:border-box}body{margin:0}button,a{font:inherit}button{cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #c95622;outline-offset:3px}
+header{padding:22px 28px;background:white;border-bottom:1px solid #e5e5e3;display:flex;align-items:center;justify-content:space-between;gap:20px}
+h1{font-size:22px;margin:0 0 7px}header p{margin:0;color:#626971;line-height:1.6}
+header a{color:#a9471e;white-space:nowrap}main{display:grid;grid-template-columns:260px minmax(0,1fr);min-height:calc(100vh - 100px)}
+nav{padding:18px 14px;background:white;border-right:1px solid #e5e5e3}
+nav button{width:100%;display:flex;gap:10px;text-align:left;background:none;border:0;border-radius:7px;padding:12px 10px;margin:2px 0;line-height:1.5;color:#424a53}
+nav button span{font-size:12px;min-width:22px;color:#757d86}nav button[aria-current="page"]{background:#f8ede6;color:#a94418;font-weight:600}
+article{padding:22px 24px;min-width:0}.toolbar{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:12px}h2{font-size:19px;margin:0 0 7px}
+#description{line-height:1.8;color:#5d6570;max-width:880px;margin:0}.controls{display:flex;gap:8px;flex-wrap:wrap}
+.controls button,.controls a{padding:8px 12px;background:white;color:#444d56;border:1px solid #dcdedc;border-radius:6px;white-space:nowrap;text-decoration:none}
+#canvas{overflow:auto;border:1px solid #e1e2df;background:white;border-radius:8px;margin-top:18px;max-height:calc(100vh - 265px)}
+#screen{display:block;width:100%;height:auto}#canvas.original #screen{width:auto;max-width:none}
+footer{display:flex;justify-content:space-between;margin-top:13px;gap:15px;font-size:12px;color:#717880;line-height:1.7}
+@media(max-width:900px){header{align-items:flex-start;padding:18px}main{grid-template-columns:1fr}nav{display:flex;overflow:auto;padding:8px;border-right:0;border-bottom:1px solid #ddd}nav button{min-width:180px}article{padding:16px}.toolbar{flex-direction:column}#canvas{max-height:none}h1{font-size:20px}}
+@media print{nav,.controls,header a{display:none}main{display:block}#canvas{max-height:none;border:0}article{padding:0}}
+</style>
+</head>
+<body>
+<header><div><h1>Dobby 智能体管理端 · 整套设计图</h1><p>第 1 版方向 · 两个独立菜单 · 共 14 张页面与弹窗设计 · 2026-09-08</p></div><a href="../智能体管理端入口与职责调整讨论稿.md">功能对照表</a></header>
+<main>
+<nav aria-label="设计图目录"><button data-index="0" type="button"><span>01</span>平台主智能体</button>
+<button data-index="1" type="button"><span>02</span>业务工具</button>
+<button data-index="2" type="button"><span>03</span>编辑智能体—基本信息</button>
+<button data-index="3" type="button"><span>04</span>编辑智能体—模型与运行</button>
+<button data-index="4" type="button"><span>05</span>编辑智能体—平台接入</button>
+<button data-index="5" type="button"><span>06</span>编辑智能体—记忆与学习</button>
+<button data-index="6" type="button"><span>07</span>能力配置—MCP</button>
+<button data-index="7" type="button"><span>08</span>能力配置—技能</button>
+<button data-index="8" type="button"><span>09</span>能力配置—数据库交互</button>
+<button data-index="9" type="button"><span>10</span>能力配置—工具</button>
+<button data-index="10" type="button"><span>11</span>能力配置—协同智能体</button>
+<button data-index="11" type="button"><span>12</span>新增业务工具</button>
+<button data-index="12" type="button"><span>13</span>智能体调试</button>
+<button data-index="13" type="button"><span>14</span>运行记录</button></nav>
+<article>
+<div class="toolbar"><div><h2 id="title"></h2><p id="description"></p></div><div class="controls"><button id="previous" type="button" aria-label="上一张设计图">上一张</button><button id="next" type="button" aria-label="下一张设计图">下一张</button><button id="zoom" type="button" aria-pressed="false">原尺寸</button><a id="original" target="_blank" rel="noopener">打开原图</a></div></div>
+<div id="canvas"><img id="screen" alt=""></div>
+<footer><span id="counter" aria-live="polite"></span><span>设计图用于评审布局和操作流程；示例数据与状态不代表实际配置或验证结果。</span></footer>
+</article>
+</main>
+<script>
+const screens=[{"key":"main","title":"平台主智能体","type":"页面","note":"默认首页。四个固定职责，无新增职责按钮。编辑当前职责对应的实际智能体。","file":"01-平台主智能体.png"},{"key":"business","title":"业务工具","type":"页面","note":"独立菜单、独立页面，复用主智能体的列表与详情布局，增加搜索、筛选和新增业务工具。","file":"02-业务工具.png"},{"key":"identity","title":"编辑智能体—基本信息","type":"弹窗","note":"在本职责内直接编辑名称、用途和提示词。分组切换内容；不把整份配置拼成长表单。","file":"03-编辑智能体-基本信息.png"},{"key":"model","title":"编辑智能体—模型与运行","type":"弹窗","note":"常用模型选择直接显示；模型参数、上下文模板和 ReAct 细节折叠。折叠或隐藏字段必须保留已有值。","file":"04-编辑智能体-模型与运行.png"},{"key":"platform","title":"编辑智能体—平台接入","type":"弹窗","note":"启用、对外使用方式、总控调用、邀请说明和外部资料查询权限；层级、权限模式、分类与排序按需展开。业务对象显示发布设置；固定职责按职责约束展示。","file":"05-编辑智能体-平台接入.png"},{"key":"memory","title":"编辑智能体—记忆与学习","type":"弹窗","note":"三个抽屉独立读写权限，自动学习的记录、提炼和使用开关。管理员配置能力，成果自动处理，不新增人工审核。","file":"06-编辑智能体-记忆与学习.png"},{"key":"mcp","title":"能力配置—MCP","type":"弹窗","note":"按 MCP 包分配；保留上传、包详情、包内工具参数与展示信息、删除入口。图中按包授权，不设计单工具勾选权限。","file":"07-能力配置-MCP.png"},{"key":"skills","title":"能力配置—技能","type":"弹窗","note":"技能分配、创建、编辑、内容预览、历史版本、下载和删除均保留。打开详情或编辑时复用当前弹窗子视图，返回不丢分配草稿。","file":"08-能力配置-技能.png"},{"key":"database","title":"能力配置—数据库交互","type":"弹窗","note":"交互定义与智能体分配分开。保留新增交互、策略管理、定义编辑、字段/查询约束及删除；图中资料助手仍未分配数据库权限。","file":"09-能力配置-数据库交互.png"},{"key":"tools","title":"能力配置—工具","type":"弹窗","note":"查看现有工具说明、参数与展示信息。当前面板只供查看，不意味着工具本身只能读取数据；实现文案应写“此面板仅供查看”。","file":"10-能力配置-工具.png"},{"key":"collaboration","title":"能力配置—协同智能体","type":"弹窗","note":"编辑该智能体主动调用他人的范围与白名单；与“允许别人邀请我”分别保存独立字段，统一入口避免重复配置。","file":"11-能力配置-协同智能体.png"},{"key":"create","title":"新增业务工具","type":"弹窗","note":"仅业务工具页面可打开。复用编辑器的空白状态，必填项未完成时不能创建；新建后继续配置能力。","file":"12-新增业务工具.png"},{"key":"debug","title":"智能体调试","type":"独立工作区","note":"大弹窗可最大化，独立会话列表，保留附件、思考折叠项、工作记录、结果和输入框。按需打开管理端技术详情，不把整个编辑表单挤在旁边。","file":"13-智能体调试.png"},{"key":"records","title":"运行记录","type":"详情标签","note":"区分管理端调试与业务会话，支持来源、状态与日期筛选、运行详情和失败信息；数据是设计示例。","file":"14-运行记录.png"}];
+let current=0;
+const title=document.getElementById('title');
+const description=document.getElementById('description');
+const screen=document.getElementById('screen');
+const canvas=document.getElementById('canvas');
+const original=document.getElementById('original');
+const zoom=document.getElementById('zoom');
+function show(index){
+ current=(index+screens.length)%screens.length;
+ const item=screens[current];
+ title.textContent=item.title;description.textContent=item.note;screen.src=item.file;screen.alt=item.title+'设计图';original.href=item.file;
+ document.getElementById('counter').textContent=(current+1)+' / '+screens.length+' · '+item.type;
+ document.querySelectorAll('nav button').forEach((button,i)=>{if(i===current)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');});
+ canvas.scrollTop=0;canvas.scrollLeft=0;history.replaceState(null,'','#'+item.key);
+}
+document.querySelectorAll('nav button').forEach(button=>button.addEventListener('click',()=>show(Number(button.dataset.index))));
+document.getElementById('previous').addEventListener('click',()=>show(current-1));
+document.getElementById('next').addEventListener('click',()=>show(current+1));
+zoom.addEventListener('click',()=>{const active=canvas.classList.toggle('original');zoom.setAttribute('aria-pressed',String(active));zoom.textContent=active?'适应宽度':'原尺寸';});
+document.addEventListener('keydown',event=>{if(event.key==='ArrowLeft'){event.preventDefault();show(current-1);}if(event.key==='ArrowRight'){event.preventDefault();show(current+1);}});
+const initial=screens.findIndex(item=>item.key===location.hash.slice(1));show(initial<0?0:initial);
+</script>
+</body>
+</html>

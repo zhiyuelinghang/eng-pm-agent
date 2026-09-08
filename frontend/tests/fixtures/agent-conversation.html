@@ -13,8 +13,9 @@
 </head>
 <body><div id="app"></div><script type="module">
   import { createApp, h, ref } from 'vue'
+  import coldMemoryHistory from './cold-memory-history.json'
   import AgentMessageContent from '../../src/components/agent/AgentMessageContent.vue'
-  import { collaborationTrace, confirmationTrace, greetingTrace, message, runtimeHint, trace } from './agentConversation.mjs'
+  import { collaborationTrace, confirmationTrace, greetingTrace, message, runtimeHint, toolCall, trace } from './agentConversation.mjs'
   createApp({ setup() {
     const pending = ref(confirmationTrace())
     const busy = ref(false)
@@ -29,8 +30,14 @@
       h(AgentMessageContent, { runtimeTrace: run, ...props }),
     ])]
     return () => h('main', [h('h1', 'Dobby 对话展示检查'), h('p', { class: 'check-note' }, '本地模拟记录，确认按钮不会执行实际业务。'),
+      ...example('memory-history', '冷启动后直接读取的记忆历史', trace(coldMemoryHistory.messages)),
       ...example('greeting', '普通问候', greetingTrace()),
-      ...example('workflow', '工具与协同穿插在答复中', collaborationTrace()),
+      ...example('working', '正在整理项目：思考与每条工作记录均保留', trace([{...message('lookup', [
+        {type:'thinking',id:'reason',thinking:'先核对项目人员，再查看任务进展。'},
+        toolCall('people','dobby_list_project_personnel',{project_id:'private-project'},'pending'),
+        toolCall('tasks','dobby_list_project_tasks',{project_id:'private-project'},'pending'),
+      ]),finished_at:null}], {status:'running',turnFinishedAt:null})),
+      ...example('workflow', '整理完成：保留过程和结果', collaborationTrace()),
       ...example('confirmation', '协同操作等待确认', pending.value, { confirmationBusy: busy.value, onConfirm: confirm }),
       h('output', { id: 'confirmation-output' }, output.value),
       ...example('spectator', '其他成员查看同一操作', confirmationTrace(), { canConfirm: false }),

@@ -383,6 +383,7 @@ class Msg(BaseModel):
                     ToolCallBlock(
                         id=event.tool_call_id,
                         name=event.tool_call_name,
+                        presentation=event.presentation,
                         input="",
                     ),
                 )

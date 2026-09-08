@@ -26,6 +26,8 @@ class ScheduleList(ToolBase):
     ``next_run_time`` from the in-memory APScheduler job when available.
     """
 
+    display_name = "查看定时安排"
+
     name: str = "ScheduleList"
 
     description: str = (

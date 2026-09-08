@@ -517,6 +517,15 @@ class AgentScopeClientTest(TestCase):
         self.assertIn("工程资料：", context)
         self.assertIn("weknora_query_project_knowledge", context)
 
+    def test_project_context_separates_account_identity_from_preferred_address(self) -> None:
+        db, project, user = self._project_context_fixtures(None)
+        user.id=17
+        user.real_name='群聊测试甲'
+        context=_build_agent_project_context(db,project,user)
+        self.assertIn('当前登录用户ID：17；账号显示名：群聊测试甲；系统角色：admin',context)
+        self.assertIn('称呼偏好不改变此处的登录身份与权限',context)
+        db.get.assert_not_called()
+
     def test_agent_conversation_is_private_even_from_platform_admin(
         self,
     ) -> None:
@@ -1507,7 +1516,17 @@ class AgentScopeClientTest(TestCase):
             await iterator.aclose()
             return str(frame)
 
-        first_frame = asyncio.run(read_first_frame())
+        # Streaming executes after the route returns. Keep persistence mocked
+        # while consuming the stream so this unit test cannot use the host DB.
+        with (
+            patch('backend.app.agent_conversations_api._mark_agent_turn_running') as mark_running,
+            patch('backend.app.agent_conversations_api._finalize_agent_reply_after_disconnect'),
+            patch('backend.app.agent_api_support.SessionLocal',
+                  side_effect=AssertionError('单元测试不得连接配置数据库')),
+        ):
+            first_frame = asyncio.run(read_first_frame())
+
+        mark_running.assert_called_once_with(conversation.id)
 
         self.assertIn("event: accepted", first_frame)
         self.assertIn("已允许", first_frame)

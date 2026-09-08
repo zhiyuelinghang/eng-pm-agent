@@ -54,6 +54,8 @@ class _TaskUpdateParams(BaseModel):
 class TaskUpdate(_TaskToolBase):
     """The tool to update the agent task."""
 
+    display_name = "更新执行进度"
+
     name: str = "TaskUpdate"
 
     description: str = """Use this tool to update a task in the task list.

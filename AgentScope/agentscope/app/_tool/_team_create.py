@@ -30,6 +30,8 @@ class _TeamCreateParams(ParamsBase):
 class TeamCreate(_TeamToolBase):
     """Create a new team and become its leader."""
 
+    display_name = "建立协同团队"
+
     name: str = "TeamCreate"
 
     description: str = """Create a new team led by your current session and \

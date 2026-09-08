@@ -175,6 +175,10 @@ class EngineeringKnowledgeMessageInput(BaseModel):
     failed: bool = False
 
 
+class KnowledgeAgentConnectInput(BaseModel):
+    agent_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class MemberInput(BaseModel):
     username: str | None = Field(default=None, max_length=64)
     real_name: str = Field(min_length=1, max_length=100)

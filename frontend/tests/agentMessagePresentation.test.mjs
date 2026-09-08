@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 import { createServer } from 'vite'
@@ -8,7 +9,7 @@ import { activity, at, collaborationTrace, confirmationTrace, greetingTrace, mem
   metadata, pendingEntry, persistedExtra, runtimeHint, textBlock, toolCall, toolResult, trace } from './fixtures/agentConversation.mjs'
 
 const server = await createServer({
-  server: { middlewareMode: true }, appType: 'custom', logLevel: 'error',
+  server: { middlewareMode: true, hmr: false }, appType: 'custom', logLevel: 'error',
   plugins: [{
     name: 'presentation-test-chat-api', enforce: 'pre',
     resolveId(id) {
@@ -55,14 +56,15 @@ test('仅内部事件不会产生空卡片或已完成提示，运行中仍有�
   assert.equal(agentConversationItems(run).length, 0)
 })
 
-test('工具、协同和答复按实际调用位置展示，协同默认收起', async () => {
-  const html = await render(collaborationTrace())
-  const positions = ['我先核对项目资料', '读取项目基本信息', '接着请资料助手', 'agent-collaboration-step', '已完成分类核对'].map(text => html.indexOf(text))
+test('完成后保留调用记录和答复，隐藏调用参数与模型指标', async () => {
+  const run = collaborationTrace()
+  const html = await render(run)
+  const positions = ['我先核对项目资料', '接着请资料助手', '已完成分类核对'].map(text => html.indexOf(text))
   assert.ok(positions.every((position, index) => position >= 0 && (!index || position > positions[index - 1])))
-  assert.match(html, /检查施工方案与验收资料的分类/)
-  assert.match(html, /检索知识库已完成/)
-  assert.doesNotMatch(html, /agent-collaboration-step[^>]*\sopen(?:>|\s)/)
-  assert.doesNotMatch(html, /agent-tool[^>]*\sopen(?:>|\s)/)
+  assert.match(html, /读取项目基本信息/)
+  assert.match(html, /协同处理任务/)
+  assert.match(html, /检索知识库/)
+  assert.doesNotMatch(html, /dobby_get_project|agent_invoke|检查施工方案与验收资料的分类|示例模型|调用详情/)
 })
 
 test('旧 AgentInvite 也按各自位置展示，不把一条消息中的协同挪到开头', () => {
@@ -105,20 +107,20 @@ test('协同工作记录隐藏装配活动，合并同一次工具的开始和�
   assert.equal(records[0].state, 'success')
 })
 
-test('确认内联在对应协同下，完整保留权威预览和版本；旁观者无法确认', async () => {
+test('业务确认保留权威预览和版本，隐藏内部调用；旁观者无法确认', async () => {
   const run = confirmationTrace()
   const items = agentConversationItems(run)
   const step = items.find(item => item.kind === 'collaboration').step
   assert.equal(step.pending[0].reply_id, 'worker-reply')
   assert.equal(step.pending[0].event.tool_calls[0].confirmation_revision, 3)
   const html = await render(run)
-  assert.ok(html.indexOf('agent-collaboration-step') < html.indexOf('本次业务变更'))
+  assert.match(html, /agent-business-confirmation/)
   assert.match(html, /修改前/)
   assert.match(html, /未分类/)
-  assert.match(html, /允许本次/)
-  assert.match(html, /agent-collaboration-step[^>]*\sopen/)
+  assert.match(html, /确认本次操作/)
+  assert.doesNotMatch(html, /dobby_update_document_classification|调用详情|record_id/)
   const spectator = await render(run, { canConfirm: false })
-  assert.doesNotMatch(spectator, /<button/)
+  assert.doesNotMatch(spectator, /<button|等待你确认后继续|需要你的确认/)
   assert.match(spectator, /等待请求发起人确认/)
 })
 
@@ -128,7 +130,7 @@ test('缺少协同进度时，下级确认仍显示在对话中', async () => {
   })
   const html = await render(run)
   assert.ok(html.indexOf('已请资料助手处理') < html.indexOf('本次业务变更'))
-  assert.match(html, /允许本次/)
+  assert.match(html, /确认本次操作/)
 })
 
 test('停止后不再保留可点击确认或伪装仍在运行', async () => {
@@ -137,7 +139,7 @@ test('停止后不再保留可点击确认或伪装仍在运行', async () => {
   run.turnFinishedAt = at(4)
   const html = await render(run)
   assert.match(html, /已停止/)
-  assert.doesNotMatch(html, /允许本次|等待确认|state-running/)
+  assert.doesNotMatch(html, /确认本次操作|等待确认|state-running/)
 })
 
 test('等待外部工具结果不能误报为等待用户确认', async () => {
@@ -145,8 +147,8 @@ test('等待外部工具结果不能误报为等待用户确认', async () => {
   run.status = 'awaiting_external_result'
   run.subagentHitl[0].event_type = 'require_external_execution'
   const html = await render(run)
-  assert.match(html, /等待结果/)
-  assert.doesNotMatch(html, /允许本次|等待请求发起人确认|等待确认/)
+  assert.match(html, /等待处理结果/)
+  assert.doesNotMatch(html, /确认本次操作|等待请求发起人确认|等待确认/)
 })
 
 test('已收到结果时不能因残留 asking 状态再次请求确认', () => {
@@ -158,7 +160,7 @@ test('刷新后的历史记录与实时记录使用相同展示规则', async ()
   const run = confirmationTrace()
   const restored = runtimeTraceFromExtraData(JSON.parse(JSON.stringify(persistedExtra(run))))
   const html = await render(restored)
-  assert.match(html, /资料助手|本次业务变更|允许本次/)
+  assert.match(html, /资料助手|本次业务变更|确认本次操作/)
   assert.doesNotMatch(html, /System|Runtime State|阶段耗时/)
 })
 
@@ -166,10 +168,10 @@ test('群聊仅渲染一次智能体内容，确认和停止仍只对请求发�
   const run = confirmationTrace()
   const owner = await renderGroup(run, 7)
   assert.equal((owner.match(/我先核对项目资料/g) || []).length, 1)
-  assert.match(owner, /允许本次|停止本次执行/)
+  assert.match(owner, /确认本次操作|停止本次执行/)
   const spectator = await renderGroup(run, 8)
   assert.match(spectator, /等待请求发起人确认/)
-  assert.doesNotMatch(spectator, /允许本次|停止本次执行/)
+  assert.doesNotMatch(spectator, /确认本次操作|停止本次执行/)
 })
 
 test('群聊启动占位不展示授权检查文案', async () => {
@@ -192,11 +194,11 @@ const startThinking = () => applyAgentRuntimeEvents(null, [
 ])
 const openThinkingCount = html => (html.match(/<details[^>]*class="agent-thinking"[^>]*\sopen(?:>|\s)/g) || []).length
 
-test('每段思考开始即展开，结束事件立即收起，无需等待回复结束', async () => {
+test('思考生成时自动展开，结束后收起但保留正文', async () => {
   const start = startThinking()
   const startHtml = await render(start)
   assert.equal(openThinkingCount(startHtml), 1)
-  assert.match(startHtml, /正在思考/)
+  assert.match(startHtml, /Dobby 正在整理思路/)
   const delta = applyAgentRuntimeEvents(start, [thinkingEvent('THINKING_BLOCK_DELTA', 'thinking-1', { delta: '先核对项目资料。' })])
   assert.equal(openThinkingCount(await render(delta)), 1)
   const end = applyAgentRuntimeEvents(delta, [thinkingEvent('THINKING_BLOCK_END')])
@@ -206,19 +208,21 @@ test('每段思考开始即展开，结束事件立即收起，无需等待回�
   assert.match(await render(end), /先核对项目资料/)
 })
 
-test('工具调用之后的新思考独立展开，前段保持收起', async () => {
+test('多轮思考和调用按顺序保留，只有当前思考自动展开', async () => {
   const run = applyAgentRuntimeEvents(startThinking(), [
     thinkingEvent('THINKING_BLOCK_DELTA', 'thinking-1', { delta: '先查询项目。' }),
     thinkingEvent('THINKING_BLOCK_END'),
-    thinkingEvent('TOOL_CALL_START', '', { tool_call_id: 'lookup', tool_call_name: 'Read' }),
+    thinkingEvent('TOOL_CALL_START', '', { tool_call_id: 'lookup', tool_call_name: 'Read', presentation: {label:'读取文件',source:'registration',category:'workspace'} }),
     thinkingEvent('THINKING_BLOCK_START', 'thinking-2'),
     thinkingEvent('THINKING_BLOCK_DELTA', 'thinking-2', { delta: '再核对查询结果。' }),
   ])
   const html = await render(run)
   assert.equal(openThinkingCount(html), 1)
-  const blocks = html.match(/<details[^>]*class="agent-thinking"[^>]*>/g)
-  assert.doesNotMatch(blocks[0], /\sopen/)
-  assert.match(blocks[1], /\sopen/)
+  assert.equal((html.match(/class="agent-working"/g) || []).length, 1)
+  const timeline = html.slice(html.indexOf('<details'))
+  const positions = ['先查询项目', '读取文件', '再核对查询结果'].map(value => timeline.indexOf(value))
+  assert.ok(positions.every((value, index) => value >= 0 && (!index || value > positions[index - 1])))
+  assert.doesNotMatch(html, /调用详情/)
 })
 
 test('模型结束或回复结束会兜底收起缺少结束事件的思考', async () => {
@@ -240,10 +244,132 @@ test('停止、等待确认、协同等待及历史记录不自动展开', async
   assert.equal(openThinkingCount(await render(waiting)), 0)
 })
 
-test('旧格式轮询只展开当前末段思考，正文或工具已出现则收起', async () => {
+test('旧格式轮询恢复思考，后续答复使思考自动收起', async () => {
   const thinking = { type: 'thinking', id: 'old-thinking', thinking: '正在核对资料。' }
   const run = trace([{ ...message('old', [thinking]), finished_at: null }], { status: 'running', turnFinishedAt: null })
   assert.equal(openThinkingCount(await render(run)), 1)
+  assert.match(await render(run), /正在核对资料/ )
   run.messages[0].content.push(textBlock('核对结果如下。'))
+  assert.match(await render(run), /核对结果如下/)
   assert.equal(openThinkingCount(await render(run)), 0)
+})
+
+
+test('未知调用保留通用工作记录，隐藏函数与参数并保留思考和历史', async () => {
+  const run = trace([message('private', [
+    {type:'thinking',id:'reason',thinking:'先核对用户提供的信息'},
+    toolCall('unknown','mcp__private__unknown',{password:'private-input'}),
+    {...toolResult('unknown','mcp__private__unknown'),output:'private-output'},
+    textBlock('已整理好你需要的信息。'),
+  ])])
+  const before=structuredClone(run)
+  const html=await render(run)
+  assert.doesNotMatch(html,/mcp__private|private-input|private-output|调用详情/)
+  assert.match(html,/先核对用户提供的信息/)
+  assert.match(html,/思考过程/)
+  assert.match(html,/处理相关事项/)
+  assert.match(html,/已整理好你需要的信息/)
+  assert.deepEqual(run,before)
+})
+
+test('没有可展示结果或处理失败时不伪报成功，也不暴露错误堆栈', async () => {
+  const run=trace([message('empty',[toolCall('x','internal_tool'),toolResult('x','internal_tool')])])
+  assert.match(await render(run),/暂时没有可展示的结果/)
+  run.status='error';run.messages[0].error={message:'Traceback secret-path'}
+  const html=await render(run)
+  assert.match(html,/处理遇到了问题/)
+  assert.doesNotMatch(html,/Traceback|secret-path|已回复/)
+})
+
+test('缺少业务影响预览时拒绝按钮可用，确认执行不可用', async () => {
+  const run=confirmationTrace()
+  run.subagentHitl[0].event.tool_calls[0].confirmation_preview=null
+  const html=await render(run)
+  assert.match(html,/暂时无法展示这项操作的具体影响/)
+  assert.match(html,/<button[^>]*class="allow"[^>]*disabled/)
+  assert.doesNotMatch(html,/dobby_update_document_classification|record_id/)
+})
+
+
+test('停止过程中隐藏待确认按钮，只显示停止进度', async () => {
+  const run=confirmationTrace();run.status='interrupting'
+  const html=await render(run)
+  assert.match(html,/正在停止处理/)
+  assert.doesNotMatch(html,/确认本次操作|需要你的确认/)
+})
+
+test('最终正文中的表格和附件仍可展示', async () => {
+  const run=trace([message('result',[
+    textBlock('| 项目 | 状态 |\n| --- | --- |\n| 验收资料 | 已整理 |'),
+    {type:'data',id:'image',name:'整理结果图',source:{type:'url',media_type:'image/png',url:'https://example.com/result.png'}},
+  ])])
+  const html=await render(run)
+  assert.match(html,/<table>/)
+  assert.match(html,/alt="整理结果图"/)
+})
+
+
+test('每次调用都保留独立记录，成功失败及缺失结果的历史状态真实', async () => {
+  const run = trace([message('records', [
+    toolCall('one','dobby_list_project_personnel',{secret:'hidden-person-id'}),
+    toolResult('one','dobby_list_project_personnel'),
+    toolCall('two','dobby_list_project_personnel',{secret:'hidden-person-id'}),
+    toolResult('two','dobby_list_project_personnel',{},'error'),
+    toolCall('three','dobby_list_project_tasks'),
+  ])])
+  const html = await render(run)
+  assert.equal((html.match(/class="agent-work-record/g) || []).length, 3)
+  assert.equal((html.match(/查看项目人员/g) || []).length, 2)
+  assert.match(html,/已完成/)
+  assert.match(html,/处理失败/)
+  assert.match(html,/已结束/)
+  assert.doesNotMatch(html,/dobby_list_project|hidden-person-id/)
+  const restored = runtimeTraceFromExtraData(JSON.parse(JSON.stringify(persistedExtra(run))))
+  assert.equal(await render(restored), html)
+})
+
+
+test('新工具和 MCP 使用事件文案；刷新及后续结果保留快照，不暴露调用标识', async () => {
+  let run = applyAgentRuntimeEvents(null, [
+    {type:'REPLY_START',reply_id:'new',created_at:at(0)},
+    {type:'TOOL_CALL_START',reply_id:'new',tool_call_id:'new-call',tool_call_name:'mcp__new_server__never_seen',
+      presentation:{label:'查询设备检修记录',source:'mcp_title',category:'mcp'},created_at:at(0)},
+    {type:'TOOL_CALL_DELTA',reply_id:'new',tool_call_id:'new-call',delta:'{"sql":"private-query"}',created_at:at(0)},
+  ])
+  const running = await render(run)
+  assert.match(running,/查询设备检修记录/)
+  assert.doesNotMatch(running,/never_seen|new_server|private-query/)
+  const before=structuredClone(run)
+  run=applyAgentRuntimeEvents(run,[
+    {type:'TOOL_RESULT_START',reply_id:'new',tool_call_id:'new-call',tool_call_name:'mcp__new_server__never_seen',created_at:at(1)},
+    {type:'TOOL_RESULT_END',reply_id:'new',tool_call_id:'new-call',state:'success',created_at:at(2)},
+    {type:'REPLY_END',reply_id:'new',finished_reason:'completed',created_at:at(3)},
+  ])
+  assert.equal(before.messages[0].content[0].presentation.label,'查询设备检修记录')
+  const restored=runtimeTraceFromExtraData(JSON.parse(JSON.stringify(persistedExtra(run))))
+  const html=await render(restored)
+  assert.match(html,/查询设备检修记录/)
+  assert.match(html,/已完成/)
+  assert.doesNotMatch(html,/never_seen|new_server|private-query/)
+})
+
+test('协同工具复用服务端工作描述，旧记录没有描述时使用通用提示', async () => {
+  const run=collaborationTrace()
+  run.collaborations[0].activities[0].presentation={label:'核对设备清单',source:'database_catalog',category:'database'}
+  const html=await render(run)
+  assert.match(html,/核对设备清单/)
+  assert.doesNotMatch(html,/weknora_search/)
+  run.messages[0].content.find(block=>block.type==='tool_call').presentation=null
+  assert.match(await render(run),/处理相关事项/)
+})
+
+
+test('冷启动历史接口返回的记忆记录直接显示具体描述', async () => {
+  const history = JSON.parse(readFileSync(new URL('./fixtures/cold-memory-history.json', import.meta.url), 'utf8'))
+  const html = await render(trace(history.messages))
+  assert.equal((html.match(/class="agent-work-record/g) || []).length, 6)
+  assert.equal((html.match(/回顾相关信息/g) || []).length, 4)
+  assert.equal((html.match(/记下重要信息/g) || []).length, 2)
+  assert.match(html,/回顾相关信息/)
+  assert.doesNotMatch(html,/处理相关事项|do-not-display|search_memory|add_memory|memory_write/)
 })

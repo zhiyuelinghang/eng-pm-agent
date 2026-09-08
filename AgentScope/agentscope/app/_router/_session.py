@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from ..._utils._common import _generate_id
@@ -694,6 +694,7 @@ async def list_messages(
     principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     message_bus: MessageBus = Depends(get_message_bus),
+    request: Request = None,
 ) -> ListMessagesResponse:
     """Return persisted messages for a session with cursor-based
     pagination.
@@ -753,6 +754,11 @@ async def list_messages(
             payload["worker_session_id"], payload["reply_id"],
         ):
             pending_inputs.append(payload)
+    from .._service._history_tool_presentation import enrich_history
+    messages, pending_inputs = await enrich_history(
+        messages, pending_inputs, state=request.app.state if request is not None else None,
+        storage=storage, user_id=user_id, agent_id=agent_id,
+    )
     return ListMessagesResponse(
         messages=messages,
         subagent_hitl=pending_inputs,

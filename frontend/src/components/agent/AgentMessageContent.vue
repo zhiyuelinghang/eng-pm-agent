@@ -1,45 +1,46 @@
 <template>
   <div class="agent-message-content">
-    <template v-for="item in conversationItems" :key="item.key">
-      <AgentCollaborationStep v-if="item.kind === 'collaboration'" :step="item.step"
-        :active="isTraceActive" :interrupted="isInterrupted" :can-confirm="canConfirm"
-        :confirmation-busy="confirmationBusy" :pending-key="pendingConfirmationKey" @confirm="confirmToolCall" />
-      <div v-else-if="item.kind === 'error'" class="agent-runtime-error" role="alert">
-        <n-icon :size="16"><AlertTriangle /></n-icon>
-        <span>{{ item.message.error?.message || '处理失败，请重试。' }}</span>
-      </div>
-      <template v-else-if="item.kind === 'block'">
-        <div v-if="item.block.type === 'text'" class="agent-markdown" v-html="renderMarkdown(item.block.text)"></div>
-        <details v-else-if="item.block.type === 'thinking'" class="agent-thinking"
-          :open="isThinkingBlockActive(runtimeTrace, item.message, item.block)">
-          <summary>
-            <span><n-icon :size="14"><Bulb /></n-icon>思考过程</span>
-            <span class="agent-thinking-actions">
-              <em v-if="isThinkingBlockActive(runtimeTrace, item.message, item.block)">思考中</em>
-              <n-icon class="agent-thinking-chevron" :size="14" aria-hidden="true"><ChevronRight /></n-icon>
-            </span>
-          </summary>
-          <div>{{ item.block.thinking || '正在思考…' }}</div>
+    <div v-if="isTraceActive" class="agent-working" role="status" aria-live="polite">
+      <span class="working-mark"><n-icon :size="16"><Loader class="spin" /></n-icon></span>
+      <span>{{ !canConfirm && presentation.confirmations.length ? '等待请求发起人确认后继续' : workingLabel }}</span>
+    </div>
+    <template v-for="item in presentation.items" :key="item.key">
+      <template v-if="item.kind === 'block'">
+        <details v-if="item.block.type === 'thinking'" class="agent-thinking" :open="isThinkingBlockActive(runtimeTrace, item.message, item.block)">
+          <summary><n-icon :size="15"><Bulb /></n-icon><span>思考过程</span><n-icon class="thinking-chevron" :size="14"><ChevronRight /></n-icon></summary>
+          <div class="thinking-body agent-markdown" v-html="renderMarkdown(item.block.thinking || '正在思考…')"></div>
         </details>
-        <AgentToolCall v-else-if="item.block.type === 'tool_call'" :call="item.block"
-          :result="findToolResult(item.message, item.block.id)" :reply-id="item.message.id"
-          :active="isMessageRunning(item.message)" :interrupted="isInterrupted || item.message.finished_reason === 'interrupted'"
-          :can-confirm="canConfirm" :confirmation-busy="confirmationBusy" :pending-key="pendingConfirmationKey"
-          @confirm="confirmToolCall" />
+        <AgentWorkRecord v-else-if="item.block.type === 'tool_call'" :label="userWorkLabel(item.block.presentation)"
+          :state="callState(item.message, item.block)" />
+        <div v-if="item.block.type === 'text'" class="agent-markdown" v-html="renderMarkdown(item.block.text)"></div>
         <figure v-else-if="item.block.type === 'data' && dataUrl(item.block)" class="agent-media">
-          <img v-if="item.block.source.media_type.startsWith('image/')" :src="dataUrl(item.block)!"
-            :alt="item.block.name || '智能体返回图片'">
-          <a v-else :href="dataUrl(item.block)!" target="_blank" rel="noopener noreferrer">{{ item.block.name || '查看智能体返回文件' }}</a>
+          <img v-if="item.block.source.media_type.startsWith('image/')" :src="dataUrl(item.block)!" :alt="item.block.name || 'Dobby 返回图片'">
+          <a v-else :href="dataUrl(item.block)!" target="_blank" rel="noopener noreferrer">{{ item.block.name || '查看结果文件' }}</a>
         </figure>
       </template>
+      <template v-else-if="item.kind === 'collaboration'">
+        <AgentWorkRecord :label="item.step.call?.presentation ? userWorkLabel(item.step.call.presentation) : '协同处理任务'" :state="userWorkState(item.step.status, isTraceActive, isInterrupted)" />
+        <AgentWorkRecord v-for="(activity, index) in item.step.activities" :key="`${item.key}:${index}`"
+          :label="userWorkLabel(activity.presentation)" :state="userWorkState(activity.state, isTraceActive, isInterrupted)" />
+        <template v-for="entry in item.step.pending" :key="`${entry.worker_session_id}:${entry.reply_id}`">
+          <AgentWorkRecord v-for="call in (entry.event.tool_calls || []).filter(call => !item.step.activities.some(activity => activity.reply_id === entry.reply_id && activity.tool_call_id === call.id))"
+            :key="call.id" :label="userWorkLabel(call.presentation)"
+            :state="userWorkState(entry.event_type === 'require_user_confirm' ? 'asking' : 'external', isTraceActive, isInterrupted)" />
+        </template>
+      </template>
     </template>
-
-    <div v-if="!conversationItems.length && content" class="agent-markdown" v-html="renderMarkdown(content)"></div>
-    <div v-if="isTraceActive && !conversationItems.length" class="agent-starting" role="status" aria-live="polite">
-      <n-icon :size="14"><Loader class="spin" /></n-icon>{{ startingLabel }}
+    <div v-if="!presentation.answers.length && content" class="agent-markdown" v-html="renderMarkdown(content)"></div>
+    <AgentToolCall v-for="entry in presentation.confirmations" :key="entry.key" :call="entry.call"
+      :reply-id="entry.replyId" :active="isTraceActive" :can-confirm="canConfirm" :confirmation-busy="confirmationBusy"
+      :pending-key="pendingConfirmationKey" @confirm="confirmToolCall" />
+    <div v-if="hasError && !isTraceActive" class="agent-runtime-error" role="alert">
+      <n-icon :size="16"><AlertTriangle /></n-icon><span>这次处理遇到了问题，请稍后重试。</span>
     </div>
+    <p v-else-if="runtimeTrace && !isTraceActive && !presentation.answers.length && !content" class="agent-empty-result">
+      {{ isInterrupted ? '本次处理已停止。' : '本次处理已结束，暂时没有可展示的结果。' }}
+    </p>
 
-    <footer v-if="runtimeTrace && conversationItems.length" class="agent-runtime-footer">
+    <footer v-if="runtimeTrace && !isTraceActive && (presentation.answers.length || content)" class="agent-runtime-footer">
       <span class="agent-runtime-state" :class="{ running: isTraceActive, error: hasError, interrupted: isInterrupted }">
         <n-icon :size="13">
           <Loader v-if="isTraceActive" class="spin" />
@@ -50,10 +51,6 @@
         {{ statusLabel }}
       </span>
       <span v-if="elapsedLabel">{{ elapsedLabel }}</span>
-      <div v-if="modelNames.length || usage" class="agent-runtime-metrics">
-        <span v-if="modelNames.length" class="agent-runtime-model" :title="modelNames.join('、')">{{ modelNames.join('、') }}</span>
-        <span v-if="usage">↑ {{ formatNumber(usage.input) }} · ↓ {{ formatNumber(usage.output) }}</span>
-      </div>
     </footer>
   </div>
 </template>
@@ -63,16 +60,19 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
 import { AlertTriangle, Bulb, ChevronRight, Circle, CircleCheck, Loader } from '@vicons/tabler'
 import MarkdownIt from 'markdown-it'
-import AgentCollaborationStep from './AgentCollaborationStep.vue'
 import AgentToolCall from './AgentToolCall.vue'
+import AgentWorkRecord from './AgentWorkRecord.vue'
 import type { AgentDataBlock, AgentRuntimeMessage, AgentRuntimeTrace, AgentToolCallBlock } from '@/types/agentRuntime'
-import { agentConversationItems, findToolResult, isRuntimeActive, isThinkingBlockActive } from '@/utils/agentMessagePresentation'
+import { findToolResult, isRuntimeActive, isThinkingBlockActive, toolPresentationState } from '@/utils/agentMessagePresentation'
+import { userMessagePresentation, userWorkLabel, userWorkState } from '@/utils/agentUserPresentation'
 
 const props = withDefaults(defineProps<{
   content?: string
   runtimeTrace?: AgentRuntimeTrace | null
   streaming?: boolean
   startingLabel?: string
+  markdownRenderer?: (content: string) => string
+  assistantName?: string
   canConfirm?: boolean
   confirmationBusy?: boolean
 }>(), {
@@ -94,9 +94,18 @@ watch(() => props.runtimeTrace?.status, () => {
   if (!isRuntimeActive(props.runtimeTrace)) pendingConfirmationKey.value = ''
 })
 
-const conversationItems = computed(() => agentConversationItems(props.runtimeTrace))
+const presentation = computed(() => userMessagePresentation(props.runtimeTrace, props.streaming))
+const workingLabel = computed(() => {
+  if (props.assistantName && !props.runtimeTrace?.messages.length) return props.startingLabel
+  return props.assistantName ? presentation.value.workingLabel.replace(/^Dobby/, props.assistantName) : presentation.value.workingLabel
+})
 const isTraceActive = computed(() => isRuntimeActive(props.runtimeTrace) || props.streaming)
 const isInterrupted = computed(() => props.runtimeTrace?.status === 'interrupted')
+function callState(message: AgentRuntimeMessage, call: AgentToolCallBlock) {
+  const result = findToolResult(message, call.id)
+  if ((!result || result.state === 'running') && isTraceActive.value && props.runtimeTrace?.status === 'awaiting_external_result') return 'external'
+  return toolPresentationState(call, result, isTraceActive.value, isInterrupted.value)
+}
 const lastMessage = computed(() => {
   const messages = props.runtimeTrace?.messages.filter(message => message.role === 'assistant') || []
   return messages[messages.length - 1]
@@ -109,12 +118,8 @@ const statusLabel = computed(() => {
   if (props.runtimeTrace?.status === 'awaiting_permission') return '等待确认'
   if (props.runtimeTrace?.status === 'awaiting_external_result') return '等待操作结果'
   if (isTraceActive.value) return '处理中'
-  return '已完成'
+  return '已回复'
 })
-function isMessageRunning(message: AgentRuntimeMessage) {
-  return isTraceActive.value && !message.finished_at
-}
-
 const now = ref(Date.now())
 let clock: ReturnType<typeof setInterval> | null = null
 onMounted(() => { clock = setInterval(() => { now.value = Date.now() }, 1000) })
@@ -127,15 +132,6 @@ const elapsedLabel = computed(() => {
   const seconds = Math.max(0, Math.round((end - start) / 1000))
   return `总耗时 ${seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`}`
 })
-const modelNames = computed(() => props.runtimeTrace?.modelNames.length
-  ? props.runtimeTrace.modelNames : lastMessage.value?.model_names || [])
-const usage = computed(() => {
-  const messages = props.runtimeTrace?.messages.filter(message => message.role === 'assistant' && message.usage) || []
-  return messages.length ? messages.reduce((total, message) => ({
-    input: total.input + (message.usage?.input_tokens || 0), output: total.output + (message.usage?.output_tokens || 0),
-  }), { input: 0, output: 0 }) : null
-})
-const formatNumber = (value: number) => new Intl.NumberFormat('zh-CN', { notation: value > 9999 ? 'compact' : 'standard' }).format(value)
 function dataUrl(block: AgentDataBlock) {
   if (block.source.type === 'url') return block.source.url || null
   return block.source.data ? `data:${block.source.media_type};base64,${block.source.data}` : null
@@ -150,6 +146,7 @@ markdown.renderer.rules.link_open = (tokens, index, options, env, self) => {
 }
 const markdownCache = new Map<string, string>()
 function renderMarkdown(value: string) {
+  if (props.markdownRenderer) return props.markdownRenderer(value)
   const source = value || ''
   const cached = markdownCache.get(source)
   if (cached !== undefined) return cached
@@ -162,6 +159,12 @@ function renderMarkdown(value: string) {
 
 <style scoped>
 .agent-message-content { display: grid; min-width: 0; gap: 8px; color: inherit; }
+.agent-thinking { min-width:0; color:#607b76; font-size:13px; }
+.agent-thinking summary { display:flex; align-items:center; gap:8px; padding:8px 3px; cursor:pointer; list-style:none; }
+.agent-thinking summary::-webkit-details-marker { display:none; }
+.agent-thinking summary:focus-visible { outline:2px solid #177b6d; outline-offset:2px; }
+.thinking-chevron { margin-left:auto; }.agent-thinking[open] .thinking-chevron { transform:rotate(90deg); }
+.thinking-body { margin:2px 0 8px 10px; padding:6px 12px; border-left:2px solid #d7e5df; }
 .agent-markdown { min-width:0; color:inherit; font-size:13px; line-height:1.72; overflow-wrap:anywhere; }
 .agent-markdown :deep(p) { margin:0 0 .72em; white-space:normal; }
 .agent-markdown :deep(p:last-child) { margin-bottom:0; }
@@ -177,17 +180,10 @@ function renderMarkdown(value: string) {
 .agent-markdown :deep(th),.agent-markdown :deep(td) { border:1px solid #dbe5e2; padding:6px 9px; text-align:left; }
 .agent-markdown :deep(a) { color:#0b766b; text-decoration:underline; text-underline-offset:2px; }
 
-.agent-thinking { min-width: 0; color: #607873; }
-.agent-thinking summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 2px; cursor: pointer; list-style: none; font-size: 12px; }
-.agent-thinking summary::-webkit-details-marker { display: none; }
-.agent-thinking summary span { display: flex; align-items: center; gap: 8px; }
-.agent-thinking summary em { font-size: 12px; font-style: normal; }
-.agent-thinking-actions { flex-shrink: 0; }
-.agent-thinking-chevron { color: #6f847e; transition: transform .15s ease; }
-.agent-thinking[open] > summary .agent-thinking-chevron { transform: rotate(90deg); }
-.agent-thinking summary:focus-visible { outline: 2px solid #177b6d; outline-offset: 2px; }
-.agent-thinking > div { margin-left: 10px; padding: 8px 0 8px 17px; border-left: 1px solid #d7e5df;
-  font-size: 12px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-working { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #dce9e4;
+  border-radius: 9px; background: #edf5f1; color: #37665a; font-size: 13px; line-height: 1.6; }
+.working-mark { display: inline-flex; align-items: center; justify-content: center; color: #177b6d; }
+.agent-empty-result { margin: 0; color: #607873; font-size: 13px; line-height: 1.7; }
 .agent-media { margin: 0; }.agent-media img { max-width: 100%; max-height: 360px; border-radius: 8px; object-fit: contain; }
 .agent-media a { color: #0d7469; font-size: 12px; }
 .agent-runtime-error { display: flex; align-items: flex-start; gap: 8px; border: 1px solid #efcfc5; border-radius: 7px;
@@ -195,9 +191,6 @@ function renderMarkdown(value: string) {
 .agent-runtime-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 5px; color: #6d837c; font-size: 12px; }
 .agent-runtime-state { display: inline-flex; align-items: center; gap: 4px; color: #4e6e68; }
 .agent-runtime-state.running { color: #0b7768; }.agent-runtime-state.interrupted { color: #8a5b19; }.agent-runtime-state.error { color: #a4472d; }
-.agent-runtime-metrics { display: flex; flex-wrap: wrap; min-width: 0; gap: 8px; margin-left: auto; font-variant-numeric: tabular-nums; }
-.agent-runtime-model { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-starting { display: flex; align-items: center; gap: 8px; min-height: 28px; color: #607873; font-size: 12px; }
 .spin { animation: spin .8s linear infinite; }@keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .spin { animation: none; }.agent-thinking-chevron { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 </style>

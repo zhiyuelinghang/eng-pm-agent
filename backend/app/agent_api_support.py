@@ -147,8 +147,13 @@ def _public_task_assistant_catalog_item(
 def _catalog_agent_for_conversation(
     catalog: dict[str, Any],
     conversation: AgentConversation,
+    *, db: Session | None = None,
 ) -> dict[str, Any]:
     """Resolve a conversation against the latest publication catalogue."""
+    if db is not None and conversation.conversation_type == 'business':
+        from .knowledge_agent_support import linked_knowledge_conversation, require_knowledge_agent
+        if linked_knowledge_conversation(db, conversation) is not None:
+            return require_knowledge_agent(catalog, conversation.agent_id)
     if conversation.conversation_type == "general":
         selected = catalog.get("global_main")
         if selected is None or selected.get("id") != conversation.agent_id:
@@ -562,7 +567,8 @@ def _build_agent_project_context(
         "以下内容由工程管理平台后端按当前登录状态生成，仅用于限定本轮身份、"
         "项目和权限边界；业务事实必须按需调用管理中心已分配的工具读取，不得"
         "根据未查询的数据自行补写。\n"
-        f"当前用户：{user.real_name}（用户ID {user.id}，系统角色 {user.role}）\n"
+        f"当前登录用户ID：{user.id}；账号显示名：{user.real_name}；系统角色：{user.role}\n"
+        "账号显示名仅为平台资料标签，可以与用户自报姓名或希望的称呼不同；称呼偏好不改变此处的登录身份与权限。\n"
         f"当前项目：{project.name}（项目ID {project.id}）\n"
         + knowledge_context
         + "\n</platform-context>"
@@ -1120,3 +1126,58 @@ async def _finalize_agent_reply_after_disconnect(
             conversation_id,
             str(exc),
         )
+
+
+def _turn_platform_context(
+    db: Session,
+    user: User,
+    project: Project,
+    conversation: AgentConversation,
+    content: str,
+) -> tuple[dict[str, Any], bool | None]:
+    """Build a fresh authorization envelope for one agent turn."""
+    from .knowledge_agent_support import linked_knowledge_conversation
+    knowledge_entry = linked_knowledge_conversation(db, conversation)
+    if knowledge_entry is not None:
+        knowledge_entry.updated_at = datetime.now(UTC)
+        # Greetings must not enumerate documents or contact WeKnora. The tool
+        # resolves a fresh scope only after the assistant chooses to query it.
+        return _platform_session_context(user, project, conversation, db, knowledge_query_enabled=False), None
+    if conversation.conversation_type != "general":
+        return (
+            _platform_session_context(user, project, conversation, db),
+            None,
+        )
+    explicit_agents = list(
+        dict.fromkeys(
+            re.findall(r"(?:^|\s)@([^\s@，。！？；：,.!?;:]+)", content),
+        ),
+    )
+    if len(explicit_agents) > 1:
+        raise HTTPException(
+            status_code=422,
+            detail="每条消息最多只能明确提及一个智能体",
+        )
+    if explicit_agents == ["任务助手"]:
+        raise HTTPException(
+            status_code=409,
+            detail="任务助手需要先生成私有草稿，请通过首页任务助手入口发起。",
+        )
+    if explicit_agents:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"明确 @{explicit_agents[0]} 必须直接进入目标智能体会话，"
+                "不能经过 Dobby 路由。"
+            ),
+        )
+    # Discovery does not need a project-document snapshot. A knowledge agent
+    # resolves the current document allowlist only when its tool is called.
+    platform_context = _platform_session_context(
+        user,
+        project,
+        conversation,
+        db,
+        knowledge_query_enabled=False,
+    )
+    return platform_context, None

@@ -92,6 +92,8 @@ class TeamSay(_TeamToolBase):
     the ``role`` parameter.
     """
 
+    display_name = "发送协同消息"
+
     name: str = "TeamSay"
     description: str
 

@@ -37,6 +37,7 @@ from .agent_api_support import (
     _reset_unsafe_engineering_knowledge_session,
     _restricted_engineering_knowledge_ids,
     _sse_frame,
+    _platform_session_context,
 )
 from .api_common import (
     audit,
@@ -73,6 +74,7 @@ from .engineering_document_catalog import (
     upsert_catalogue_permission,
 )
 from .models import (
+    AgentConversation,
     Attachment,
     AttachmentText,
     DailyReport,
@@ -99,6 +101,7 @@ from .schemas import (
     EngineeringKnowledgeConversationCreateInput,
     EngineeringKnowledgeConversationUpdateInput,
     EngineeringKnowledgeMessageInput,
+    KnowledgeAgentConnectInput,
     OperationLogInput,
 )
 from .system_attachment_parser import (
@@ -1108,6 +1111,9 @@ def delete_engineering_knowledge_conversation(
         user,
     )
     title = conversation.title
+    if conversation.agent_conversation_id:
+        from .agent_conversations_api import delete_agent_conversation
+        delete_agent_conversation(conversation.agent_conversation_id, db, user)
     db.execute(
         delete(EngineeringKnowledgeMessage).where(
             EngineeringKnowledgeMessage.conversation_id == conversation.id,
@@ -1125,6 +1131,15 @@ def delete_engineering_knowledge_conversation(
     db.delete(conversation)
     db.commit()
     return ok({"id": conversation_id}, "知识库对话已删除")
+
+
+@router.post('/projects/{project_id}/engineering-knowledge-conversations/{conversation_id}/agent')
+def connect_knowledge_agent(
+    project_id: int, conversation_id: int, payload: KnowledgeAgentConnectInput,
+    db: Session = Depends(get_db), user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    from .knowledge_agent_entry import connect_knowledge_agent_entry
+    return connect_knowledge_agent_entry(project_id, conversation_id, payload, db, user, _agentscope_client())
 
 
 @router.post("/projects/{project_id}/engineering-documents/ask")

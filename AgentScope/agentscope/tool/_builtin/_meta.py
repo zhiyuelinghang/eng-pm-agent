@@ -22,6 +22,8 @@ class ResetTools(ToolBase):
     """A meta tool allows agent to self-manage its equipped tools by
     activating or deactivating tool groups dynamically."""
 
+    display_name = "准备所需能力"
+
     name: str = "reset_tools"
     description: str = (
         "This tool allows you to reset your equipped tools based on your "

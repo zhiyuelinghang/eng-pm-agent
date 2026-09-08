@@ -16,6 +16,8 @@ class _TaskListParams(ParamsBase):
 class TaskList(_TaskToolBase):
     """List tasks for the agent to perform."""
 
+    display_name = "查看执行计划"
+
     name: str = "TaskList"
 
     # pylint: disable=line-too-long

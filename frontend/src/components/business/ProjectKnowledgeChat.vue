@@ -60,7 +60,7 @@
 
     <section class="knowledge-chat-pane">
       <header class="knowledge-chat-head">
-        <strong>项目资料综合问答</strong>
+        <div class="knowledge-assistant-heading"><strong>项目资料助手</strong><small>资料依据与项目动态，在这里一起梳理</small></div>
         <div class="knowledge-scope-picker">
           <button
             type="button"
@@ -143,14 +143,15 @@
         </div>
       </header>
 
-      <div ref="chatScrollRef" class="knowledge-chat-scroll" :aria-busy="answering">
+      <div ref="chatScrollRef" class="knowledge-chat-scroll" :aria-busy="answering" @scroll="trackScroll">
         <section v-if="loadingMessages" class="knowledge-chat-empty" role="status">
           <span class="knowledge-chat-empty-icon conversation-loading-robot"><n-icon :size="26"><Robot /></n-icon></span>
           <strong>正在加载聊天记录</strong>
         </section>
-        <section v-else-if="!activeMessages.length" class="knowledge-chat-empty">
+        <section v-else-if="!activeMessages.length && !answering" class="knowledge-chat-empty">
           <span class="knowledge-chat-empty-icon"><n-icon :size="26"><Robot /></n-icon></span>
-          <strong>从项目资料中查找答案</strong>
+          <strong>项目资料问答</strong>
+          <p>选择资料范围，或直接输入问题。</p>
         </section>
 
         <template v-else>
@@ -162,7 +163,10 @@
           >
             <span v-if="chatMessage.role === 'assistant'" class="knowledge-message-avatar"><n-icon :size="17"><Robot /></n-icon></span>
             <div class="knowledge-message-card">
-              <div v-if="chatMessage.role === 'assistant'" class="knowledge-markdown" v-html="renderMarkdown(chatMessage.content, displayedMessageReferences(chatMessage))"></div>
+              <AgentMessageContent v-if="chatMessage.role === 'assistant' && chatMessage.runtimeTrace"
+                :content="chatMessage.content" :runtime-trace="chatMessage.runtimeTrace" assistant-name="资料助手"
+                :confirmation-busy="answering" :markdown-renderer="text => renderMarkdown(text, displayedMessageReferences(chatMessage))" @confirm="confirmToolCall" />
+              <div v-else-if="chatMessage.role === 'assistant'" class="knowledge-markdown" v-html="renderMarkdown(chatMessage.content, displayedMessageReferences(chatMessage))"></div>
               <p v-else>{{ chatMessage.content }}</p>
               <KnowledgeReferenceList
                 v-if="displayedMessageReferences(chatMessage).length && store.currentProjectId"
@@ -180,8 +184,10 @@
         <article v-if="answering" class="knowledge-chat-message is-assistant is-pending" :class="{ 'has-content': streamingMessage?.content }" role="status" aria-live="polite">
           <span class="knowledge-message-avatar"><n-icon :size="17"><Robot /></n-icon></span>
           <div class="knowledge-message-card">
-            <div v-if="streamingMessage?.content" class="knowledge-markdown" v-html="renderMarkdown(streamingMessage.content, displayedMessageReferences(streamingMessage))"></div>
-            <p v-else>{{ stopping ? '正在终止本次回答…' : streamStatus }}</p>
+            <AgentMessageContent :runtime-trace="streamingTrace" streaming assistant-name="资料助手"
+              :starting-label="stopping ? '正在停止并保留已生成内容…' : streamStatus" :confirmation-busy="answering"
+              :markdown-renderer="text => renderMarkdown(text, streamingMessage ? displayedMessageReferences(streamingMessage) : [])" />
+            <div class="knowledge-wait-detail"><span>{{ stopping ? '正在停止' : '处理中' }} · {{ elapsedSeconds }} 秒</span><span v-if="idleSeconds >= 20">暂未收到新的进度，可继续等待或停止本次回答。</span></div>
             <KnowledgeReferenceList
               v-if="streamingMessage && displayedMessageReferences(streamingMessage).length && store.currentProjectId"
               :project-id="store.currentProjectId"
@@ -189,14 +195,15 @@
               :locating-knowledge-id="locatingKnowledgeId"
               @locate="emit('locate-reference', $event)"
             />
-            <span class="streaming-cursor" aria-hidden="true"></span>
           </div>
         </article>
       </div>
 
       <footer class="knowledge-chat-footer">
+        <div v-if="catalogError || requestError" class="knowledge-chat-alert" role="alert"><span>{{ requestError || catalogError }}</span><button v-if="catalogError" type="button" @click="loadKnowledgeAgents">重新加载</button><button v-else-if="!answering" type="button" @click="recoverMessages">恢复记录</button></div>
+        <button v-if="!followingBottom && answering" type="button" class="knowledge-return-latest" @click="followLatest">查看最新进度 ↓</button>
         <div class="knowledge-scope-summary">
-          <span>问答范围：</span>
+          <span>资料范围：</span>
           <strong>{{ conversationScopeLabel(currentScope) }}</strong>
         </div>
         <form class="knowledge-composer" @submit.prevent="sendQuestion">
@@ -210,7 +217,7 @@
               @keydown.enter.exact.prevent="sendQuestion"
             ></textarea>
             <template #action>
-              <button v-if="answering" type="button" class="chat-composer-action is-stop" :disabled="stopping" aria-label="终止回答" @click="stopAnswer">
+              <button v-if="answering || recoveringRun" type="button" class="chat-composer-action is-stop" :disabled="stopping" aria-label="终止回答" @click="stopAnswer">
                 <n-icon v-if="stopping" :size="17" class="conversation-delete-spinner"><Loader /></n-icon>
                 <n-icon v-else :size="17"><PlayerStop /></n-icon>
                 <span>{{ stopping ? '正在停止…' : '停止' }}</span>
@@ -237,7 +244,11 @@ import KnowledgeReferenceList from '@/components/business/KnowledgeReferenceList
 import ChatComposerSurface from '@/components/chat/ChatComposerSurface.vue'
 import { useAsyncConfirmDialog } from '@/composables/useAsyncConfirmDialog'
 import { fetchWeKnoraKnowledgePreviewBlob, fetchWeKnoraResourceBlob } from '@/api/weknoraAssets'
-import { streamEngineeringKnowledgeAnswer } from '@/api/weknoraStream'
+import api, { type ApiEnvelope } from '@/api/client'
+import { streamAgentConversationMessage, streamAgentConversationConfirmation, type AgentStreamHandlers } from '@/api/agentStream'
+import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
+import { applyAgentRuntimeEvents, createEmptyRuntimeTrace, runtimeTraceFromExtraData, type AgentRuntimeTrace, type AgentToolCallBlock, type ApiAgentMessage } from '@/types/agentRuntime'
+import { knowledgeAgentReferences, knowledgeAgentText } from '@/utils/knowledgeAgentPresentation'
 import {
   useAppStore,
   type AttachmentRecord,
@@ -306,10 +317,12 @@ type KnowledgeChatMessage = {
   createdAt: string
   references?: KnowledgeReference[]
   failed?: boolean
+  runtimeTrace?: AgentRuntimeTrace | null
 }
 
 type KnowledgeConversation = {
   id: number
+  agentConversationId?: number | null
   title: string
   sessionId: string
   scope: KnowledgeScope
@@ -341,11 +354,26 @@ const draftScope = ref<KnowledgeScope>({ type: 'project' })
 const conversationKeyword = ref('')
 const question = ref('')
 const answering = ref(false)
+const recoveringRun = ref(false)
+let recoveryTimer: ReturnType<typeof setTimeout> | null = null
 const stopping = ref(false)
 const stopRequested = ref(false)
-const answerSessionId = ref('')
-const streamStatus = ref('正在准备回答…')
+const streamStatus = ref('正在连接资料助手…')
+const streamingTrace = ref<AgentRuntimeTrace | null>(null)
+const knowledgeAgentReady = ref(false)
+const catalogLoading = ref(false)
+const catalogError = ref('')
+const requestError = ref('')
+const followingBottom = ref(true)
+const elapsedSeconds = ref(0)
+const idleSeconds = ref(0)
+let turnStartedAt = 0
+let lastProgressAt = 0
+let progressClock: ReturnType<typeof setInterval> | null = null
 const streamingMessage = ref<KnowledgeChatMessage | null>(null)
+const draftUserMessage = ref<KnowledgeChatMessage | null>(null)
+let turnEpoch = 0
+let lastScrollTop = 0
 const streamingRawReferences = ref<Array<Record<string, unknown>>>([])
 const loadingHistory = ref(false)
 const loadingMessages = ref(false)
@@ -367,7 +395,7 @@ const failedKnowledgePreviewIds = new Set<string>()
 let resourceFetchQueue: Promise<void> = Promise.resolve()
 
 const activeConversation = computed(() => conversations.value.find(item => item.id === activeConversationId.value))
-const activeMessages = computed(() => activeConversation.value?.messages || [])
+const activeMessages = computed(() => [...(activeConversation.value?.messages || []), ...(draftUserMessage.value ? [draftUserMessage.value] : [])])
 const currentScope = computed<KnowledgeScope>(() => activeConversation.value?.scope || draftScope.value)
 const filteredConversations = computed(() => {
   const keyword = conversationKeyword.value.toLocaleLowerCase('zh-CN')
@@ -394,7 +422,7 @@ const scopeQuestionPlaceholder = computed(() => {
   if (scope.type === 'folder') return '向当前目录中的资料提问…'
   if (scope.type === 'knowledge_base') return '向当前知识库提问…'
   if (scope.type === 'selection') return `向已选择的 ${scope.items.length} 项资料范围提问…`
-  return '向当前项目知识库提问…'
+  return '询问项目资料、任务进展，或继续刚才的话题…'
 })
 const scopePickerRows = computed<ScopePickerRow[]>(() => {
   const rows: ScopePickerRow[] = []
@@ -436,6 +464,13 @@ const scopePickerRows = computed<ScopePickerRow[]>(() => {
 })
 
 watch(() => store.currentProjectId, projectId => {
+  turnEpoch += 1
+  const previousId = activeConversation.value?.agentConversationId
+  if ((answering.value || recoveringRun.value) && previousId) void api.post(`/agent-conversations/${previousId}/interrupt`).catch(() => undefined)
+  activeStreamController?.abort()
+  stopRecoveryPolling()
+  finishTurn()
+  requestError.value = ''
   void loadConversationHistory(projectId)
 }, { immediate: true })
 
@@ -446,7 +481,7 @@ watch(() => props.focusDocumentId, documentId => {
   emit('document-consumed')
 }, { immediate: true })
 
-watch(answering, value => emit('busy-change', value), { immediate: true })
+watch(() => answering.value || recoveringRun.value, value => emit('busy-change', value), { immediate: true })
 
 function conversationScope(record: EngineeringKnowledgeConversationRecord): KnowledgeScope {
   if (record.scope_type === 'selection') {
@@ -485,6 +520,7 @@ function conversationScope(record: EngineeringKnowledgeConversationRecord): Know
 function mapConversation(record: EngineeringKnowledgeConversationRecord): KnowledgeConversation {
   return {
     id: record.id,
+    agentConversationId: record.agent_conversation_id,
     title: record.title,
     sessionId: record.weknora_session_id || '',
     scope: conversationScope(record),
@@ -549,19 +585,34 @@ async function loadConversationMessages(conversation: KnowledgeConversation) {
     return
   }
   const requestVersion = ++messageLoadVersion
-  loadingMessages.value = true
+  if (!recoveringRun.value) loadingMessages.value = true
   try {
     const records = await store.loadEngineeringKnowledgeMessages(conversation.id)
+    const agentRecords = conversation.agentConversationId
+      ? (await api.get<ApiEnvelope<ApiAgentMessage[]>>(`/agent-conversations/${conversation.agentConversationId}/messages`)).data.data : []
     if (requestVersion !== messageLoadVersion) return
     const target = conversations.value.find(item => item.id === conversation.id)
     if (!target) return
-    target.messages = records.map(mapMessage)
+    // A newly created legacy shell stores the first question. Native agent
+    // history owns that question once accepted; old completed Q&A stays visible.
+    target.messages = [...(agentRecords.length && !records.some(item => item.role === 'assistant') ? [] : records.map(mapMessage)), ...agentRecords.map(mapAgentMessage)]
     for (const chatMessage of target.messages) hydrateMessageResources(chatMessage)
     target.loaded = true
+    const latest = [...target.messages].reverse().find(item => item.role === 'assistant')
+    const recovering = ['creating', 'running', 'interrupting', 'awaiting_external_result'].includes(latest?.runtimeTrace?.status || '')
+    stopRecoveryPolling()
+    recoveringRun.value = recovering
+    if (recovering) {
+      recoveryTimer = setTimeout(() => {
+        if (activeConversationId.value !== target.id || answering.value) return
+        target.loaded = false
+        void loadConversationMessages(target)
+      }, 3000)
+    } else stopping.value = false
     void scrollToBottom()
   } catch (error: any) {
     if (requestVersion !== messageLoadVersion) return
-    message.error(error.response?.data?.detail || error.message || '聊天记录加载失败。')
+    requestError.value = error.response?.data?.detail || error.message || '聊天记录加载失败，请恢复记录后重试。'
   } finally {
     if (requestVersion === messageLoadVersion) loadingMessages.value = false
   }
@@ -750,20 +801,22 @@ function formatScopeFileSize(value: number) {
 }
 
 function startNewConversation(scope: KnowledgeScope = { type: 'project' }) {
-  if (answering.value) {
+  if (answering.value || recoveringRun.value) {
     message.warning('请先终止当前回答，再新建对话。')
     return
   }
   messageLoadVersion += 1
   loadingMessages.value = false
   activeConversationId.value = null
+  requestError.value = ''
+  followingBottom.value = true
   draftScope.value = scope
   question.value = ''
   void scrollToBottom()
 }
 
 function selectConversation(conversationId: number) {
-  if (answering.value && conversationId !== activeConversationId.value) {
+  if ((answering.value || recoveringRun.value) && conversationId !== activeConversationId.value) {
     message.warning('请先终止当前回答，再切换对话。')
     return
   }
@@ -776,7 +829,7 @@ function selectConversation(conversationId: number) {
 }
 
 function confirmDeleteConversation(conversation: KnowledgeConversation) {
-  if (answering.value && conversation.id === activeConversationId.value) {
+  if ((answering.value || recoveringRun.value) && conversation.id === activeConversationId.value) {
     message.warning('请先终止当前回答，再删除该对话。')
     return
   }
@@ -995,6 +1048,7 @@ function citedReferences(
 }
 
 function displayedMessageReferences(chatMessage: KnowledgeChatMessage) {
+  if (chatMessage.runtimeTrace) return chatMessage.references || []
   return citedReferences(chatMessage.content, chatMessage.references || [])
 }
 
@@ -1099,23 +1153,29 @@ function numberValue(...values: unknown[]) {
   return undefined
 }
 
-function isMissingSessionError(error: any) {
-  const status = Number(error?.statusCode || error?.response?.status || 0)
-  const detail = String(error?.response?.data?.detail || error?.message || '')
-  return status === 404 && /(session|会话).*(not found|不存在|失效)/i.test(detail)
+
+function mapAgentMessage(record: ApiAgentMessage): KnowledgeChatMessage {
+  const trace = runtimeTraceFromExtraData(record.extra_data)
+  return { id: 'agent-' + record.id, role: record.role, content: record.content,
+    createdAt: record.created_at, runtimeTrace: trace,
+    references: normalizeReferences(knowledgeAgentReferences(trace)) }
 }
 
-function sessionRecoveryQuestion(messages: KnowledgeChatMessage[], currentQuestion: string) {
-  const context = messages
-    .filter(item => !item.failed)
-    .slice(0, -1)
-    .slice(-10)
-    .map(item => `${item.role === 'user' ? '用户' : '助手'}：${item.content}`)
-    .join('\n')
-    .slice(-5000)
-  if (!context) return currentQuestion
-  return `请结合以下此前对话继续回答最后的问题。\n\n${context}\n\n用户当前问题：${currentQuestion}`
+async function loadKnowledgeAgents() {
+  catalogLoading.value = true
+  catalogError.value = ''
+  knowledgeAgentReady.value = false
+  try {
+    const response = await api.get<ApiEnvelope<{ knowledge_assistant: { enabled: boolean; model_ready: boolean; project_knowledge_enabled: boolean } | null }>>('/agents/catalog')
+    const agent = response.data.data.knowledge_assistant
+    knowledgeAgentReady.value = Boolean(agent?.enabled && agent.model_ready && agent.project_knowledge_enabled)
+    if (!agent?.enabled) catalogError.value = '资料助手尚未分配或已停用，请在智能体管理端「平台设置 → 资料助手」中配置。'
+    else if (!knowledgeAgentReady.value) catalogError.value = '资料助手配置不完整，请检查固定模型和「启用项目资料查询」。'
+  } catch (error: any) {
+    catalogError.value = error.response?.data?.detail || '资料助手目录加载失败，请重试。'
+  } finally { catalogLoading.value = false }
 }
+void loadKnowledgeAgents()
 
 function scopeDisplayName(scope: KnowledgeScope) {
   if (scope.type === 'knowledge_base') return scope.knowledgeBaseName
@@ -1125,314 +1185,213 @@ function scopeDisplayName(scope: KnowledgeScope) {
   return ''
 }
 
-async function resolveScopeItemFilters(scope: KnowledgeScopeItem) {
-  if (scope.type === 'knowledge_base') {
-    return { knowledgeIds: [] as string[], knowledgeBaseIds: [scope.knowledgeBaseId] as string[] }
-  }
-  if (scope.type === 'document') {
-    return {
-      knowledgeIds: [scope.documentId],
-      knowledgeBaseIds: scope.knowledgeBaseId ? [scope.knowledgeBaseId] : [],
-    }
-  }
-
-  let folder = store.documentFolders.find(item => (
-    item.knowledgeBaseId === scope.knowledgeBaseId
-    && normalizeScopeFolderPath(item.path) === normalizeScopeFolderPath(scope.folderPath)
-  ))
-  if (!folder && store.currentProjectId) {
-    await store.loadEngineeringDocuments(store.currentProjectId, true)
-    folder = store.documentFolders.find(item => (
-      item.knowledgeBaseId === scope.knowledgeBaseId
-      && normalizeScopeFolderPath(item.path) === normalizeScopeFolderPath(scope.folderPath)
-    ))
-  }
-  if (!folder) throw new Error('所选目录已不存在，请重新选择问答范围。')
-  const files = await store.loadEngineeringDocumentFolder(folder.id, false, true)
-  const knowledgeIds = [...new Set(files.map(item => item.id).filter(Boolean))]
-  if (!knowledgeIds.length) throw new Error('所选目录中没有可用于问答的资料。')
-  if (knowledgeIds.length > 200) {
-    throw new Error(`所选目录包含 ${knowledgeIds.length} 份资料，当前单次问答最多限定 200 份，请选择更小的目录。`)
-  }
-  return { knowledgeIds, knowledgeBaseIds: [scope.knowledgeBaseId] }
-}
-
-async function resolveScopeAskFilters(scope: KnowledgeScope) {
-  if (scope.type === 'project') return { knowledgeIds: [] as string[], knowledgeBaseIds: [] as string[] }
-  const items = scope.type === 'selection' ? scope.items : [scope]
-  const knowledgeIds = new Set<string>()
-  const knowledgeBaseIds = new Set<string>()
-  for (const item of items) {
-    const filters = await resolveScopeItemFilters(item)
-    filters.knowledgeIds.forEach(id => knowledgeIds.add(id))
-    filters.knowledgeBaseIds.forEach(id => knowledgeBaseIds.add(id))
-  }
-  if (knowledgeIds.size > 200) {
-    throw new Error(`所选范围共包含 ${knowledgeIds.size} 份指定资料，当前单次问答最多限定 200 份，请缩小范围。`)
-  }
-  if (knowledgeBaseIds.size > 50) {
-    throw new Error('所选知识库超过 50 个，请缩小问答范围。')
-  }
-  return { knowledgeIds: [...knowledgeIds], knowledgeBaseIds: [...knowledgeBaseIds] }
-}
-
-async function sendQuestion() {
-  const content = question.value.trim()
-  if (props.disabled || loadingHistory.value || loadingMessages.value || !content || answering.value || !store.currentProjectId) return
-  let conversation = activeConversation.value
-  let userMessageStored = false
-  question.value = ''
+function beginTurn() {
   answering.value = true
   stopping.value = false
   stopRequested.value = false
-  answerSessionId.value = conversation?.sessionId || ''
-  streamStatus.value = '正在准备回答…'
-  streamingRawReferences.value = []
+  requestError.value = ''
+  followingBottom.value = true
+  elapsedSeconds.value = idleSeconds.value = 0
+  turnStartedAt = lastProgressAt = Date.now()
+  streamStatus.value = '正在连接资料助手…'
+  streamingTrace.value = createEmptyRuntimeTrace()
   streamingMessage.value = createChatMessage('assistant', '', [])
+  streamingRawReferences.value = []
+  activeStreamController = new AbortController()
+  progressClock = setInterval(() => {
+    elapsedSeconds.value = Math.floor((Date.now() - turnStartedAt) / 1000)
+    idleSeconds.value = Math.floor((Date.now() - lastProgressAt) / 1000)
+  }, 1000)
+}
+function finishTurn() {
+  if (progressClock) clearInterval(progressClock)
+  progressClock = null
+  answering.value = stopping.value = false
+  activeStreamController = null
+  streamingTrace.value = null
+  streamingMessage.value = null
+  streamingRawReferences.value = []
+  draftUserMessage.value = null
+  void scrollToBottom()
+}
+function upsertMessage(conversation: KnowledgeConversation, incoming: KnowledgeChatMessage) {
+  const index = conversation.messages.findIndex(item => item.id === incoming.id)
+  if (index >= 0) conversation.messages.splice(index, 1, incoming)
+  else conversation.messages.push(incoming)
+  hydrateMessageResources(incoming)
+}
+function agentHandlers(conversation: KnowledgeConversation, completed: { done: boolean; accepted: boolean }, optimisticId?: string): AgentStreamHandlers {
+  const epoch = turnEpoch
+  return {
+    onAccepted: payload => {
+      if (epoch !== turnEpoch) return
+      completed.accepted = true
+      lastProgressAt = Date.now()
+      streamStatus.value = '资料助手已接收，正在理解问题…'
+      if (payload.user_message) {
+        if (!conversation.messages.some(item => item.role === 'assistant' || item.id.startsWith('agent-'))) conversation.messages = []
+        if (optimisticId) conversation.messages = conversation.messages.filter(item => item.id !== optimisticId)
+        upsertMessage(conversation, mapAgentMessage(payload.user_message))
+      }
+    },
+    onEvents: events => {
+      if (epoch !== turnEpoch) return
+      lastProgressAt = Date.now()
+      streamingTrace.value = applyAgentRuntimeEvents(streamingTrace.value, events)
+      if (streamingMessage.value) {
+        streamingMessage.value.runtimeTrace = streamingTrace.value
+        streamingMessage.value.content = knowledgeAgentText(streamingTrace.value)
+        streamingMessage.value.references = normalizeReferences(knowledgeAgentReferences(streamingTrace.value))
+        hydrateMessageResources(streamingMessage.value)
+      }
+      void scrollToBottom()
+    },
+    onDone: payload => {
+      if (epoch !== turnEpoch) return
+      completed.done = true
+      if (payload.message) upsertMessage(conversation, mapAgentMessage(payload.message))
+      else if (streamingTrace.value?.messages.length) {
+        upsertMessage(conversation, { ...streamingMessage.value!, runtimeTrace: { ...streamingTrace.value, status: payload.runtime_status } })
+      }
+      conversation.updatedAt = new Date().toISOString()
+    },
+  }
+}
+function keepPartial(conversation: KnowledgeConversation, detail: string) {
+  requestError.value = detail
+  if (streamingTrace.value?.messages.length && streamingMessage.value) {
+    upsertMessage(conversation, { ...streamingMessage.value,
+      runtimeTrace: { ...streamingTrace.value, status: stopRequested.value ? 'interrupted' : 'error' } })
+  }
+}
+async function recoverMessages() {
+  const conversation = activeConversation.value
+  if (!conversation || answering.value) return
+  conversation.loaded = false
+  requestError.value = ''
+  await loadConversationMessages(conversation)
+}
+function stopRecoveryPolling() {
+  if (recoveryTimer) clearTimeout(recoveryTimer)
+  recoveryTimer = null
+  recoveringRun.value = false
+}
+async function sendQuestion() {
+  const content = question.value.trim()
+  if (props.disabled || loadingHistory.value || loadingMessages.value || !content || answering.value || recoveringRun.value || !store.currentProjectId) return
+  if (!knowledgeAgentReady.value && !activeConversation.value?.agentConversationId) {
+    requestError.value = catalogError.value || '正在检查资料助手配置，请稍候。'
+    return
+  }
+  const projectId = store.currentProjectId
+  const epoch = ++turnEpoch
+  let conversation = activeConversation.value
+  const completed = { done: false, accepted: false }
+  let optimisticId = ''
+  question.value = ''
+  beginTurn()
+  draftUserMessage.value = createChatMessage('user', content)
+  void scrollToBottom()
   try {
-    const requestedScope = conversation?.scope || draftScope.value
-    const scopeFilters = await resolveScopeAskFilters(requestedScope)
     if (!conversation) {
+      streamStatus.value = '正在建立项目对话…'
       const scope = draftScope.value
       const created = await store.createEngineeringKnowledgeConversation({
-        title: scope.type === 'project'
-          ? content.slice(0, 60)
-          : `${scopeDisplayName(scope)} · ${content.slice(0, 24)}`,
+        title: scope.type === 'project' ? content.slice(0, 60) : `${scopeDisplayName(scope)} · ${content.slice(0, 24)}`,
         scopeType: scope.type,
         knowledgeId: scope.type === 'document' ? scope.documentId : undefined,
         knowledgeName: ['knowledge_base', 'folder', 'document'].includes(scope.type) ? scopeDisplayName(scope) : undefined,
-        knowledgeBaseId: scope.type === 'knowledge_base' || scope.type === 'folder' || scope.type === 'document'
-          ? scope.knowledgeBaseId
-          : undefined,
+        knowledgeBaseId: scope.type === 'project' || scope.type === 'selection' ? undefined : scope.knowledgeBaseId,
         folderPath: scope.type === 'folder' ? scope.folderPath : undefined,
-        scopeItems: scope.type === 'selection' ? scope.items.map(scopeItemRecord) : undefined,
-        firstMessage: content,
+        scopeItems: scope.type === 'selection' ? scope.items.map(scopeItemRecord) : undefined, firstMessage: content,
       })
-      conversation = mapConversation(created.conversation)
+      if (epoch !== turnEpoch) return
+      conversations.value.unshift(mapConversation(created.conversation))
+      conversation = conversations.value[0]!
       conversation.messages = created.messages.map(mapMessage)
+      optimisticId = conversation.messages[0]?.id || ''
       conversation.loaded = true
-      conversations.value = [conversation, ...conversations.value]
       activeConversationId.value = conversation.id
-      userMessageStored = true
     } else {
-      const savedUserMessage = await store.appendEngineeringKnowledgeMessage(
-        conversation.id,
-        { role: 'user', content },
-      )
-      conversation.messages.push(mapMessage(savedUserMessage))
-      conversation.updatedAt = savedUserMessage.created_at
-      userMessageStored = true
+      const optimistic = createChatMessage('user', content)
+      optimisticId = optimistic.id
+      conversation.messages.push(optimistic)
     }
+    draftUserMessage.value = null
     void scrollToBottom()
-
-    if (!conversation.sessionId) {
-      const session = await store.createEngineeringDocumentSession()
-      await updateConversationSession(conversation, session.session_id)
-    }
-    answerSessionId.value = conversation.sessionId
-    if (stopRequested.value) {
-      await saveAssistantMessage(conversation, '回答已终止。')
-      return
-    }
-    const scopedConversation = conversation
-    const ask = (query: string) => {
-      activeStreamController = new AbortController()
-      return streamEngineeringKnowledgeAnswer(
-        store.currentProjectId,
-        {
-          query,
-          knowledge_base_ids: scopeFilters.knowledgeBaseIds.length
-            ? scopeFilters.knowledgeBaseIds
-            : store.weknoraKnowledgeBases.map(item => item.id),
-          knowledge_ids: scopeFilters.knowledgeIds,
-          session_id: scopedConversation.sessionId || undefined,
-        },
-        {
-          onSession: async sessionId => {
-            if (sessionId !== scopedConversation.sessionId) {
-              await updateConversationSession(scopedConversation, sessionId)
-            }
-          },
-          onStatus: status => {
-            streamStatus.value = status
-          },
-          onAnswer: progress => {
-            if (!streamingMessage.value) return
-            streamingMessage.value.content = progress.answer
-            streamStatus.value = progress.done ? '回答已生成，正在整理引用…' : '正在生成回答…'
-            hydrateMessageResources(streamingMessage.value)
-            void scrollToBottom()
-          },
-          onReferences: references => {
-            streamingRawReferences.value = mergeRawReferences(
-              streamingRawReferences.value,
-              references,
-            )
-            if (streamingMessage.value) {
-              streamingMessage.value.references = normalizeReferences(streamingRawReferences.value)
-              hydrateMessageResources(streamingMessage.value)
-            }
-            void scrollToBottom()
-          },
-          onTitle: title => updateConversationTitle(scopedConversation, title),
-        },
-        activeStreamController.signal,
+    if (stopRequested.value) return
+    if (!conversation.agentConversationId) {
+      const linked = await api.post<ApiEnvelope<{ id: number }>>(
+        `/projects/${projectId}/engineering-knowledge-conversations/${conversation.id}/agent`,
+        {},
       )
+      if (epoch !== turnEpoch) return
+      conversation.agentConversationId = linked.data.data.id
     }
-    let answer
-    try {
-      answer = await ask(content)
-    } catch (error: any) {
-      if (!isMissingSessionError(error) || stopRequested.value) throw error
-      const session = await store.createEngineeringDocumentSession()
-      await updateConversationSession(conversation, session.session_id)
-      answerSessionId.value = conversation.sessionId
-      streamingRawReferences.value = []
-      if (streamingMessage.value) {
-        streamingMessage.value.content = ''
-        streamingMessage.value.references = []
-      }
-      streamStatus.value = '原会话已失效，正在恢复上下文…'
-      answer = await ask(sessionRecoveryQuestion(conversation.messages, content))
-    }
-    if (answer.sessionId && answer.sessionId !== conversation.sessionId) {
-      await updateConversationSession(conversation, answer.sessionId)
-    }
-    streamingRawReferences.value = mergeRawReferences(answer.references)
-    if (streamingMessage.value) {
-      streamingMessage.value.references = normalizeReferences(streamingRawReferences.value)
-      hydrateMessageResources(streamingMessage.value)
-    }
-    const answerContent = answer.answer.trim()
-    await saveAssistantMessage(
-      conversation,
-      answerContent
-        ? answerContent + (stopRequested.value ? '\n\n（回答已终止）' : '')
-        : stopRequested.value
-          ? '回答已终止。'
-          : '暂时没有可展示的回答。',
-      streamingRawReferences.value,
-    )
+    if (stopRequested.value) return
+    streamStatus.value = '正在连接资料助手…'
+    await streamAgentConversationMessage(conversation.agentConversationId!, content,
+      agentHandlers(conversation, completed, optimisticId), activeStreamController!.signal)
+    if (!completed.done) throw new Error('连接已中断，尚未确认处理结果。请先恢复记录，避免重复提交。')
   } catch (error: any) {
-    const detail = error.response?.data?.detail || error.message || '知识库问答失败，请稍后重试。'
-    if (!conversation || !userMessageStored) {
-      question.value = content
-      message.error(detail)
-    } else if (stopRequested.value) {
-      const partial = streamingMessage.value?.content.trim() || ''
-      await saveAssistantMessage(
-        conversation,
-        partial ? `${partial}\n\n（回答已终止）` : '回答已终止。',
-        streamingRawReferences.value,
-      )
-    } else {
-      const partial = streamingMessage.value?.content.trim() || ''
-      await saveAssistantMessage(
-        conversation,
-        partial ? `${partial}\n\n（回答中断：${detail}）` : detail,
-        streamingRawReferences.value,
-        true,
-      )
-      message.error(detail)
-    }
+    if (epoch !== turnEpoch) return
+    const detail = error.response?.data?.detail || error.message || '资料助手暂时无法回答，请稍后重试。'
+    if (!completed.accepted && !question.value) question.value = content
+    if (conversation) keepPartial(conversation, detail)
+    else requestError.value = detail
   } finally {
-    if (conversation) conversation.updatedAt = new Date().toISOString()
-    answering.value = false
-    stopping.value = false
-    stopRequested.value = false
-    answerSessionId.value = ''
-    activeStreamController = null
-    streamingMessage.value = null
-    streamingRawReferences.value = []
-    streamStatus.value = '正在准备回答…'
-    void scrollToBottom()
+    if (epoch === turnEpoch) finishTurn()
   }
 }
 
-async function updateConversationSession(conversation: KnowledgeConversation, sessionId: string) {
-  conversation.sessionId = sessionId
-  answerSessionId.value = sessionId
+async function confirmToolCall(replyId: string, toolCall: AgentToolCallBlock, confirmed: boolean) {
+  const conversation = activeConversation.value
+  if (!conversation?.agentConversationId || answering.value) return
+  const completed = { done: false, accepted: false }
+  const epoch = ++turnEpoch
+  beginTurn()
+  streamStatus.value = confirmed ? '正在继续处理…' : '正在取消这项操作…'
   try {
-    const updated = await store.updateEngineeringKnowledgeConversation(
-      conversation.id,
-      { sessionId },
-    )
-    conversation.updatedAt = updated.updated_at
+    await streamAgentConversationConfirmation(conversation.agentConversationId,
+      { reply_id: replyId, tool_call: toolCall, confirmed },
+      agentHandlers(conversation, completed), activeStreamController!.signal)
+    if (!completed.done) throw new Error('连接已中断，请恢复记录确认操作结果。')
+    if (epoch !== turnEpoch) return
+    conversation.loaded = false
+    await loadConversationMessages(conversation)
   } catch (error: any) {
-    message.warning(error.response?.data?.detail || '会话已建立，但会话标识暂未写入数据库。')
-  }
+    if (epoch !== turnEpoch) return
+    keepPartial(conversation, error.response?.data?.detail || error.message || '操作未完成，请恢复记录。')
+  } finally { if (epoch === turnEpoch) finishTurn() }
 }
-
-async function updateConversationTitle(conversation: KnowledgeConversation, title: string) {
-  const normalized = title.trim().slice(0, 300)
-  if (!normalized || normalized === conversation.title) return
-  conversation.title = normalized
+async function stopAnswer() {
+  if ((!answering.value && !recoveringRun.value) || stopping.value) return
+  stopRequested.value = stopping.value = true
+  const id = activeConversation.value?.agentConversationId
+  if (!id) return
   try {
-    const updated = await store.updateEngineeringKnowledgeConversation(
-      conversation.id,
-      { title: normalized },
-    )
-    conversation.updatedAt = updated.updated_at
+    await api.post(`/agent-conversations/${id}/interrupt`)
+    // Keep listening so the server can persist and return the interrupted turn.
+    streamStatus.value = '正在停止并保留已生成内容…'
   } catch (error: any) {
-    message.warning(error.response?.data?.detail || '会话标题已生成，但暂未写入数据库。')
+    stopRequested.value = stopping.value = false
+    requestError.value = error.response?.data?.detail || '停止请求未成功，请重试。'
   }
 }
-
-async function saveAssistantMessage(
-  conversation: KnowledgeConversation,
-  content: string,
-  references?: Array<Record<string, unknown>>,
-  failed = false,
-) {
-  const usedReferences = citedRawReferences(content, references)
-  try {
-    const saved = await store.appendEngineeringKnowledgeMessage(
-      conversation.id,
-      { role: 'assistant', content, references: usedReferences, failed },
-    )
-    const savedMessage = mapMessage(saved)
-    conversation.messages.push(savedMessage)
-    hydrateMessageResources(savedMessage)
-    conversation.updatedAt = saved.created_at
-  } catch {
-    const localMessage = createChatMessage(
-      'assistant',
-      content,
-      normalizeReferences(usedReferences),
-      failed,
-    )
-    conversation.messages.push(localMessage)
-    hydrateMessageResources(localMessage)
-    message.error('回答已显示，但这条聊天记录未能写入数据库。')
-  }
+function trackScroll() {
+  const el = chatScrollRef.value
+  if (!el) return
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 100) followingBottom.value = true
+  else if (el.scrollTop < lastScrollTop - 2) followingBottom.value = false
+  lastScrollTop = el.scrollTop
+}
+function followLatest() {
+  followingBottom.value = true
   void scrollToBottom()
 }
-
-async function stopAnswer() {
-  if (!answering.value || stopping.value) return
-  stopRequested.value = true
-  stopping.value = true
-  if (!answerSessionId.value) return
-  try {
-    const result = await store.stopEngineeringDocumentAnswer(answerSessionId.value)
-    if (!result.stopped) {
-      stopRequested.value = false
-      stopping.value = false
-      message.info(result.message || '当前没有正在生成的回答。')
-      return
-    }
-    message.info('已发送终止请求，正在保留已经生成的内容。')
-    activeStreamController?.abort()
-  } catch (error: any) {
-    stopRequested.value = false
-    stopping.value = false
-    message.error(error.response?.data?.detail || error.message || '终止回答失败。')
-  }
-}
-
 async function scrollToBottom() {
   await nextTick()
-  if (chatScrollRef.value) chatScrollRef.value.scrollTop = chatScrollRef.value.scrollHeight
+  if (followingBottom.value && chatScrollRef.value) chatScrollRef.value.scrollTop = chatScrollRef.value.scrollHeight
 }
 
 function formatConversationTime(value: string) {
@@ -1633,11 +1592,12 @@ function referenceIconKind(fileName: string) {
 }
 
 onBeforeUnmount(() => {
-  const sessionId = answerSessionId.value
-  if (answering.value) stopRequested.value = true
-  if (answering.value && sessionId) {
-    void store.stopEngineeringDocumentAnswer(sessionId).catch(() => undefined)
-  }
+  turnEpoch += 1
+  const wasWorking = answering.value || recoveringRun.value
+  stopRecoveryPolling()
+  if (progressClock) clearInterval(progressClock)
+  const id = activeConversation.value?.agentConversationId
+  if (wasWorking && id) void api.post(`/agent-conversations/${id}/interrupt`).catch(() => undefined)
   activeStreamController?.abort()
   releaseResourceUrls()
 })

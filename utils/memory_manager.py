@@ -745,8 +745,11 @@ class MemoryManager:
             content = _msg_content(resp)
             parsed = parse_compress_response(content)
         except Exception:
-            parsed = {"summary": old_summary, "tasks": old_tasks,
-                      "decisions": [], "context_to_preserve": ""}
+            # A failed model request must never discard the unsummarized history.
+            return False
+
+        if not str(parsed.get("summary") or "").strip():
+            return False
 
         new_summary = parsed.get("summary", old_summary)
         new_tasks = parsed.get("tasks", old_tasks) or old_tasks

@@ -23,6 +23,8 @@ _SHELL_CANDIDATES = ("pwsh", "powershell.exe")
 class PowerShell(ToolBase):
     """Execute PowerShell commands through a workspace backend."""
 
+    display_name = "执行工作命令"
+
     name: str = "PowerShell"
     """The tool name presented to the agent."""
 

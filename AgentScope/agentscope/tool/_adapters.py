@@ -61,6 +61,7 @@ class FunctionTool(ToolBase):
         is_read_only: bool = False,
         is_state_injected: bool = False,
         middlewares: list[ToolMiddlewareBase] | None = None,
+        display_name: str | None = None,
     ) -> None:
         """Initialize the FunctionTool.
 
@@ -82,9 +83,12 @@ class FunctionTool(ToolBase):
                 Whether this tool requires agent state injection.
             middlewares (`list[ToolMiddlewareBase] | None`, optional):
                 Tool middlewares wrapping the tool execution.
+            display_name (`str | None`, optional):
+                Short user-facing action title, separate from model instructions.
         """
         super().__init__(middlewares=middlewares)
         self.name = name or func.__name__
+        self.display_name = display_name
         self.description = description or _extract_func_description(
             func.__doc__ or "",
         )
@@ -241,6 +245,9 @@ class MCPTool(ToolBase):
             )
 
         self.description = tool.description or ""
+        self.display_name = getattr(tool, "title", None) or getattr(
+            tool.annotations, "title", None,
+        )
 
         # Preserve the full inputSchema (including $defs, anyOf, oneOf, etc.)
         # rather than only copying "properties" and "required", which would

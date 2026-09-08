@@ -43,7 +43,10 @@ export type BusinessConfirmationPreview = {
   changes: Array<{ field: string; before: unknown; after: unknown }>
 }
 
+export type AgentWorkPresentation = { label: string; source: string; category: string }
+
 export type AgentToolCallBlock = {
+  presentation?: AgentWorkPresentation | null
   type: 'tool_call'
   id: string
   name: string
@@ -103,6 +106,7 @@ export type AgentTasksContext = {
 }
 
 export type AgentCollaborationActivity = {
+  presentation?: AgentWorkPresentation | null
   kind: 'started' | 'analysis' | 'tool' | 'waiting' | 'finished' | string
   label: string
   state: 'running' | 'waiting' | 'success' | 'error' | 'completed' | 'failed' | 'interrupted' | string
@@ -204,6 +208,7 @@ function cloneContentBlock(block: AgentContentBlock): AgentContentBlock {
   if (block.type === 'tool_call') {
     return {
       ...block,
+      presentation: block.presentation ? { ...block.presentation } : block.presentation,
       suggested_rules: block.suggested_rules?.map(rule => ({ ...rule })),
     }
   }
@@ -636,6 +641,7 @@ function applyAgentRuntimeEventMutable(
         type: 'tool_call',
         id: String(event.tool_call_id),
         name: String(event.tool_call_name || 'Tool'),
+        presentation: event.presentation ? { ...(event.presentation as AgentWorkPresentation) } : null,
         input: '',
         state: 'pending',
         suggested_rules: [],

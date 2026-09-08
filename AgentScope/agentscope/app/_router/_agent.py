@@ -2227,6 +2227,22 @@ async def _synchronise_task_assistant_role(
     )
 
 
+async def _synchronise_knowledge_assistant_role(
+    storage: StorageBase,
+    global_config_id: str,
+    selected_agent_id: str | None,
+) -> None:
+    """Hide the dedicated entry without expanding its memory permissions."""
+    if selected_agent_id is None:
+        return
+    record = await storage.get_agent(global_config_id, selected_agent_id)
+    if record is not None:
+        await _synchronise_project_initializer_role(
+            storage, global_config_id, selected_agent_id,
+            agent_level=record.data.platform_config.agent_level,
+        )
+
+
 async def _load_platform_settings(
     storage: StorageBase,
     global_config_id: str,
@@ -2248,6 +2264,9 @@ async def _load_platform_settings(
             storage,
             global_config_id,
             existing.data.task_assistant_agent_id,
+        )
+        await _synchronise_knowledge_assistant_role(
+            storage, global_config_id, existing.data.knowledge_assistant_agent_id,
         )
         return existing
 
@@ -2551,6 +2570,7 @@ async def get_platform_agent_catalog(
     selected_id = settings.data.global_main_agent_id
     initializer_id = settings.data.project_initializer_agent_id
     task_assistant_id = settings.data.task_assistant_agent_id
+    knowledge_assistant_id = settings.data.knowledge_assistant_agent_id
     entries = await access.list_resource(user_id, ResourceKind.AGENT)
     items = [_catalog_item(entry) for entry in entries]
     selected_item = next(
@@ -2594,6 +2614,15 @@ async def get_platform_agent_catalog(
         task_assistant_item = task_assistant_item.model_copy(
             update={"role": "system_internal", "published": False},
         )
+    knowledge_assistant_item = next(
+        (item for item in items if item.id == knowledge_assistant_id
+         and item.id not in {selected_id, initializer_id, task_assistant_id}
+         and item.enabled), None,
+    )
+    if knowledge_assistant_item is not None:
+        knowledge_assistant_item = knowledge_assistant_item.model_copy(
+            update={"name": "资料助手", "role": "system_internal", "published": False},
+        )
     business_agents = sorted(
         (
             item
@@ -2601,6 +2630,7 @@ async def get_platform_agent_catalog(
             if item.id != selected_id
             and item.id != initializer_id
             and item.id != task_assistant_id
+            and item.id != knowledge_assistant_id
             and item.role == "business"
             and item.enabled
             and item.published
@@ -2613,6 +2643,7 @@ async def get_platform_agent_catalog(
             for item in items
             if item.id != initializer_id
             and item.id != task_assistant_id
+            and item.id != knowledge_assistant_id
             and item.role == "system_internal"
             and item.enabled
             and item.initialization_role in {
@@ -2630,6 +2661,7 @@ async def get_platform_agent_catalog(
         global_main=selected_item,
         project_initializer=initializer_item,
         task_assistant=task_assistant_item,
+        knowledge_assistant=knowledge_assistant_item,
         initialization_workers=initialization_workers,
         business_agents=business_agents,
         total=len(business_agents),
@@ -2660,6 +2692,7 @@ async def get_platform_settings(
             settings.data.project_initializer_agent_id
         ),
         task_assistant_agent_id=settings.data.task_assistant_agent_id,
+        knowledge_assistant_agent_id=settings.data.knowledge_assistant_agent_id,
         project_initializer_validation_mcp=(
             settings.data.project_initializer_validation_mcp
         ),
@@ -2767,7 +2800,8 @@ async def update_memory_settings(
         access,
     )
     normalized_settings = body.settings.model_copy(
-        update={"memory_model_config": memory_model_config},
+        update={"memory_model_config": memory_model_config,
+                "learning_model_config": await _validate_memory_model_config(user_id,body.settings.learning_model_config,access)},
     )
     updated_data = current.data.model_copy(
         update={
@@ -4205,6 +4239,7 @@ async def update_platform_settings(
         current.data.project_initializer_agent_id
     )
     task_assistant_agent_id = current.data.task_assistant_agent_id
+    knowledge_assistant_agent_id = current.data.knowledge_assistant_agent_id
     validation_mcp = current.data.project_initializer_validation_mcp
     previous_validation_mcp = validation_mcp
 
@@ -4258,6 +4293,15 @@ async def update_platform_settings(
                 "task assistant",
             )
         task_assistant_agent_id = body.task_assistant_agent_id
+    if "knowledge_assistant_agent_id" in body.model_fields_set:
+        if body.knowledge_assistant_agent_id is not None:
+            selected = await validate_candidate(body.knowledge_assistant_agent_id, "knowledge assistant")
+            if not selected.data.platform_config.project_knowledge_enabled:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="请先在所选智能体的配置中开启「启用项目资料查询」。",
+                )
+        knowledge_assistant_agent_id = body.knowledge_assistant_agent_id
     if "project_initializer_validation_mcp" in body.model_fields_set:
         requested_binding = body.project_initializer_validation_mcp
         if requested_binding is not None:
@@ -4302,6 +4346,13 @@ async def update_platform_settings(
                 "platform main agent and project initializer."
             ),
         )
+    if knowledge_assistant_agent_id is not None and knowledge_assistant_agent_id in {
+        global_main_agent_id, project_initializer_agent_id, task_assistant_agent_id,
+    }:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="资料助手须使用独立智能体，不能与平台总控、项目初始化或任务助手共用。",
+        )
     if project_initializer_agent_id is not None and validation_mcp is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -4329,6 +4380,7 @@ async def update_platform_settings(
                 "global_main_agent_id": global_main_agent_id,
                 "project_initializer_agent_id": project_initializer_agent_id,
                 "task_assistant_agent_id": task_assistant_agent_id,
+                "knowledge_assistant_agent_id": knowledge_assistant_agent_id,
                 "project_initializer_validation_mcp": validation_mcp,
             },
         ),
@@ -4356,12 +4408,16 @@ async def update_platform_settings(
         user_id,
         settings.data.task_assistant_agent_id,
     )
+    await _synchronise_knowledge_assistant_role(
+        storage, user_id, settings.data.knowledge_assistant_agent_id,
+    )
     return PlatformSettingsResponse(
         global_main_agent_id=settings.data.global_main_agent_id,
         project_initializer_agent_id=(
             settings.data.project_initializer_agent_id
         ),
         task_assistant_agent_id=settings.data.task_assistant_agent_id,
+        knowledge_assistant_agent_id=settings.data.knowledge_assistant_agent_id,
         project_initializer_validation_mcp=(
             settings.data.project_initializer_validation_mcp
         ),

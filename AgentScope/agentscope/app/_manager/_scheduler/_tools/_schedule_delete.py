@@ -33,6 +33,8 @@ class ScheduleDelete(ToolBase):
     purged. The job cannot be recovered after removal.
     """
 
+    display_name = "删除定时安排"
+
     name: str = "ScheduleDelete"
 
     description: str = (

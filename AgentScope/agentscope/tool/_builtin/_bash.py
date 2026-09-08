@@ -25,6 +25,9 @@ from ._backend import BackendBase
 class Bash(ToolBase):
     """The bash tool."""
 
+    display_name = "执行工作命令"
+    presentation_category = "workspace"
+
     name: str = "Bash"
     """The tool name presented to the agent."""
 

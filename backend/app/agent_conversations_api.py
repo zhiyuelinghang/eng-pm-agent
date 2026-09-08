@@ -20,6 +20,7 @@ from .agentscope_client import (
 )
 from .agentscope_stream_completion import AgentScopeCompletionRelay
 from .agent_api_support import (
+    _turn_platform_context,
     INITIALIZATION_FILE_MAX_BYTES,
     INITIALIZATION_FILE_SUFFIXES,
     _agent_conversation_or_404,
@@ -58,7 +59,7 @@ from .initialization_attachment_store import (
     store_failed_initialization_attachment,
     store_parsed_initialization_attachment,
 )
-from .models import AgentConversation, Project, ProjectInitializationFile, User
+from .models import AgentConversation, EngineeringKnowledgeConversation, Project, ProjectInitializationFile, User
 from .schemas import (
     AgentConversationConfirmInput,
     AgentConversationInput,
@@ -69,57 +70,12 @@ from .system_attachment_parser import (
     parse_uploaded_attachment,
 )
 from .runtime_observability import RuntimeStageTracker, runtime_stage_event
+from .knowledge_agent_support import knowledge_entry_prompt
 
 
 router = APIRouter(prefix="/api", tags=["agent-conversations"])
 
 
-def _turn_platform_context(
-    db: Session,
-    user: User,
-    project: Project,
-    conversation: AgentConversation,
-    content: str,
-) -> tuple[dict[str, Any], bool | None]:
-    """Build a fresh authorization envelope for one agent turn."""
-    if conversation.conversation_type != "general":
-        return (
-            _platform_session_context(user, project, conversation, db),
-            None,
-        )
-    explicit_agents = list(
-        dict.fromkeys(
-            re.findall(r"(?:^|\s)@([^\s@，。！？；：,.!?;:]+)", content),
-        ),
-    )
-    if len(explicit_agents) > 1:
-        raise HTTPException(
-            status_code=422,
-            detail="每条消息最多只能明确提及一个智能体",
-        )
-    if explicit_agents == ["任务助手"]:
-        raise HTTPException(
-            status_code=409,
-            detail="任务助手需要先生成私有草稿，请通过首页任务助手入口发起。",
-        )
-    if explicit_agents:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"明确 @{explicit_agents[0]} 必须直接进入目标智能体会话，"
-                "不能经过 Dobby 路由。"
-            ),
-        )
-    # Discovery does not need a project-document snapshot. A knowledge agent
-    # resolves the current document allowlist only when its tool is called.
-    platform_context = _platform_session_context(
-        user,
-        project,
-        conversation,
-        db,
-        knowledge_query_enabled=False,
-    )
-    return platform_context, None
 
 
 @router.get("/agents/catalog")
@@ -127,6 +83,7 @@ def get_agent_catalog(
     _: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Expose AgentScope's safe publication catalogue to the platform UI."""
+    from .knowledge_agent_support import public_knowledge_assistant
     try:
         catalog = _agentscope_client().get_catalog()
     except AgentScopeGatewayError as exc:
@@ -150,6 +107,7 @@ def get_agent_catalog(
             "task_assistant": _public_task_assistant_catalog_item(
                 catalog.get("task_assistant"),
             ),
+            "knowledge_assistant": public_knowledge_assistant(catalog.get("knowledge_assistant")),
             "initialization_workers": initialization_workers,
             "business_agents": business_agents,
             "total": len(business_agents),
@@ -173,6 +131,9 @@ def list_agent_conversations(
         AgentConversation.project_id == project_id,
         AgentConversation.user_id == user.id,
         AgentConversation.conversation_type != "group_chat",
+        ~select(EngineeringKnowledgeConversation.id).where(
+            EngineeringKnowledgeConversation.agent_conversation_id == AgentConversation.id,
+        ).exists(),
     )
     if conversation_type:
         statement = statement.where(
@@ -571,6 +532,7 @@ def create_agent_conversation_message(
         selected_agent = _catalog_agent_for_conversation(
             catalog,
             conversation,
+            db=db,
         )
         client.sync_session(
             agent=selected_agent,
@@ -600,6 +562,7 @@ def create_agent_conversation_message(
             user,
             knowledge_query_enabled=knowledge_query_enabled,
         )
+        + knowledge_entry_prompt(db, conversation)
         + attachment_manifest
         + "\n<user-request>\n"
         + payload.content
@@ -726,6 +689,7 @@ def stream_agent_conversation_message(
         selected_agent = _catalog_agent_for_conversation(
             catalog,
             conversation,
+            db=db,
         )
         stage_tracker.finish(catalog_stage)
         sync_stage = stage_tracker.start("session_sync", "AgentScope 会话同步")
@@ -759,6 +723,7 @@ def stream_agent_conversation_message(
             user,
             knowledge_query_enabled=knowledge_query_enabled,
         )
+        + knowledge_entry_prompt(db, conversation)
         + attachment_manifest
         + "\n<user-request>\n"
         + payload.content
@@ -1169,7 +1134,7 @@ def confirm_agent_conversation_tool(
     try:
         client = _agentscope_client()
         catalog = client.get_catalog()
-        _catalog_agent_for_conversation(catalog, conversation)
+        _catalog_agent_for_conversation(catalog, conversation, db=db)
         reply = client.confirm_tool_call(
             agent_id=conversation.agent_id,
             session_id=conversation.agentscope_session_id,
@@ -1215,7 +1180,7 @@ def stream_agent_conversation_tool_confirmation(
     client = _agentscope_client()
     try:
         catalog = client.get_catalog()
-        _catalog_agent_for_conversation(catalog, conversation)
+        _catalog_agent_for_conversation(catalog, conversation, db=db)
     except AgentScopeGatewayError as exc:
         _raise_agentscope_http_error(exc)
 

@@ -19,6 +19,9 @@ from ._backend import BackendBase, _normalize_newlines
 class Read(ToolBase):
     """The read tool."""
 
+    display_name = "读取文件"
+    presentation_category = "workspace"
+
     name: str = "Read"
     """The tool name presented to the agent."""
 

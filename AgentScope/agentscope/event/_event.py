@@ -306,6 +306,8 @@ class ToolCallStartEvent(EventBase):
     """Unique identifier of the tool call."""
     tool_call_name: str
     """Name of the tool being called."""
+    presentation: dict[str, str] | None = None
+    """User-facing title snapshot, independent of model arguments."""
 
 
 class ToolCallDeltaEvent(EventBase):

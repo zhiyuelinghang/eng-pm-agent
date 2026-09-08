@@ -39,6 +39,9 @@ class RipgrepTimeoutError(Exception):
 class Grep(ToolBase):
     """The grep tool for searching file contents using ripgrep."""
 
+    display_name = "检索内容"
+    presentation_category = "workspace"
+
     name: str = "Grep"
     """The tool name presented to the agent."""
 

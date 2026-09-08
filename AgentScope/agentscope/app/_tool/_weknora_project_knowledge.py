@@ -27,12 +27,16 @@ logger = logging.getLogger(__name__)
 class WeKnoraProjectKnowledgeTool(ToolBase):
     """Ask only the WeKnora robot bound to the current platform project."""
 
+    display_name = "查询项目知识库"
+
     name = "weknora_query_project_knowledge"
     description = (
         "查询当前工程项目绑定的 WeKnora 机器人。仅向用户明确点名或"
         "Dobby 动态调用的受权资料助手提供。查询范围已由平台后端按当前用户"
         "权限锁定，"
-        "不得扩大或改写。返回答案与资料引用后，应结合用户问题组织最终回复。"
+        "不得扩大或改写。仅在问题需要工程资料依据时调用，普通问候、感谢、"
+        "称呼偏好或上下文已足够的追问无需调用。返回答案与资料引用后，应结合"
+        "用户问题组织最终回复，保留引用标记和资料来源链接。"
     )
     input_schema = {
         "type": "object",

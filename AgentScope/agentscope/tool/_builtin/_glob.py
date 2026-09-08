@@ -42,6 +42,9 @@ def _default_glob_helper_path() -> str:
 class Glob(ToolBase):
     """The glob tool for fast file pattern matching."""
 
+    display_name = "查找文件"
+    presentation_category = "workspace"
+
     name: str = "Glob"
     """The tool name presented to the agent."""
 

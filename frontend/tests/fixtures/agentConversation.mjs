@@ -1,6 +1,12 @@
 export const at = seconds => `2026-09-05T08:00:${String(seconds).padStart(2, '0')}.000Z`
 export const textBlock = (text, id = text) => ({ type: 'text', id, text })
-export const toolCall = (id, name, input = {}, state = 'finished') => ({ type: 'tool_call', id, name, input: JSON.stringify(input), state })
+// Simulated server-provided snapshots; the production renderer has no name dictionary.
+export const workPresentation = label => ({ label, source: 'registration', category: 'general' })
+const fixtureTitles = { Read: '读取文件', dobby_get_project_basic_info_status: '读取项目基本信息',
+  agent_invoke: '协同处理任务', weknora_search: '检索知识库', dobby_update_document_classification: '修改资料分类',
+  dobby_list_project_personnel: '查看项目人员', dobby_list_project_tasks: '查看项目任务' }
+export const toolCall = (id, name, input = {}, state = 'finished') => ({ type: 'tool_call', id, name,
+  presentation: fixtureTitles[name] ? workPresentation(fixtureTitles[name]) : null, input: JSON.stringify(input), state })
 export const toolResult = (id, name, metadata = {}, state = 'success') => ({ type: 'tool_result', id, name, state, metadata, output: '操作完成' })
 export const message = (id, content, second = 0) => ({ id, name: 'Dobby', role: 'assistant', content, created_at: at(second), finished_at: at(second + 1) })
 export const trace = (messages = [], overrides = {}) => ({
@@ -8,7 +14,7 @@ export const trace = (messages = [], overrides = {}) => ({
   stages: [], status: 'completed', turnStartedAt: at(0), turnFinishedAt: at(6), ...overrides,
 })
 export const activity = (name, state = 'success') => ({ kind: 'tool', label: '工具执行完成', state,
-  tool_name: name, tool_call_id: name, reply_id: 'worker-reply', created_at: at(3) })
+  tool_name: name, presentation: fixtureTitles[name] ? workPresentation(fixtureTitles[name]) : null, tool_call_id: name, reply_id: 'worker-reply', created_at: at(3) })
 export const member = (overrides = {}) => ({
   team_id: 'team', team_name: '资料协同', worker_session_id: 'worker-session', worker_agent_id: 'documents',
   worker_agent_name: '资料助手', work_revision: 1, work_status: 'reported', assigned_at: at(1), started_at: at(2),

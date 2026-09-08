@@ -1,3 +1,4 @@
+import { ToolPresentationInfo } from './ToolPresentationInfo';
 import { Search, SearchX, Wrench } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
@@ -143,6 +144,7 @@ export function ToolPanel({ agent, tools, loading = false }: ToolPanelProps) {
 						</DialogHeader>
 
 						<div className="min-h-0 flex-1 space-y-5 overflow-y-auto py-1">
+<ToolPresentationInfo value={selectedTool.presentation} />
 							<section className="space-y-2">
 								<h3 className="text-sm font-medium">{t('panel.tool.details')}</h3>
 								<p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">

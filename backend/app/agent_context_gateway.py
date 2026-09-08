@@ -12,7 +12,7 @@ import hmac
 import json
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
 import httpx
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -45,6 +45,10 @@ from .wecom_notification_gateway import (
 
 
 router = APIRouter(prefix="/api/internal/agent-tools", tags=["internal-agent-context"])
+
+
+class GroupLearningValidation(BaseModel):
+    snapshot: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -187,6 +191,31 @@ def get_agent_tool_context(
     )
 
 
+@router.get('/group-learning/channels', dependencies=[Depends(require_service_token)])
+def group_learning_channels(after_channel: int = Query(0, ge=0), db: Session = Depends(get_db)):
+    from .group_learning_source import list_sources
+    return ok(list_sources(db, after_channel))
+
+
+@router.get('/group-learning/channels/{channel_id}', dependencies=[Depends(require_service_token)])
+def group_learning_source(channel_id: int, after_revision: int = Query(0, ge=0),
+                          limit: int = Query(50, ge=1, le=100), db: Session = Depends(get_db)):
+    from .group_learning_source import read_source
+    return ok(read_source(db, channel_id, after_revision, limit))
+
+
+@router.post('/group-learning/validate', dependencies=[Depends(require_service_token)])
+def group_learning_validate(body: GroupLearningValidation, db: Session = Depends(get_db)):
+    from .group_learning_source import validate_source
+    return ok(validate_source(db, body.snapshot))
+
+
+@router.get('/group-learning/channels/{channel_id}/changes', dependencies=[Depends(require_service_token)])
+def group_learning_changes(channel_id: int, after_revision: int = Query(0, ge=0), db: Session = Depends(get_db)):
+    from .group_learning_source import source_changes
+    return ok(source_changes(db, channel_id, after_revision))
+
+
 @router.get("/knowledge-scope", dependencies=[Depends(require_service_token)])
 def get_agent_knowledge_scope(
     agentscope_session_id: str,
@@ -201,6 +230,8 @@ def get_agent_knowledge_scope(
         context.user, context.project, context.conversation, db,
         knowledge_query_enabled=True,
     )
+    from .knowledge_agent_support import constrain_knowledge_scope
+    envelope = constrain_knowledge_scope(db, context.conversation, envelope)
     scope = {
         key: value for key, value in envelope.items()
         if key.startswith("weknora_")
@@ -215,6 +246,45 @@ def get_agent_knowledge_scope(
     ))
     db.commit()
     return ok(scope)
+
+
+@router.get("/memory-scope", dependencies=[Depends(require_service_token)])
+def get_agent_memory_scope(
+    agentscope_session_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Revalidate membership for every memory operation, including group invocations."""
+    context = resolve_tool_context(db, agentscope_session_id)
+    private = context.conversation.conversation_type != "group_chat"
+    from .models import ChatAgentThread
+    from .group_learning_source import visible_channels
+    sources, shared = visible_channels(db, context.project.id, context.user.id)
+    group_shared = False
+    if not private:
+        thread = db.scalar(select(ChatAgentThread).where(ChatAgentThread.agentscope_session_id == agentscope_session_id))
+        group_shared = thread is not None and str(thread.channel_id) in shared
+    return ok({
+        "user_id": str(context.user.id),
+        "project_id": str(context.project.id),
+        "private": private,
+        "project_read": True,
+        # Private conversations retain the admin boundary. Full-group evidence
+        # is already shared with the project, regardless of the speaker's role.
+        "project_write": (context.is_admin and context.conversation.conversation_type in {"general", "business"}) or group_shared,
+        "group_source_channels": sources,
+        "group_shared_channels": shared,
+    })
+
+
+@router.get("/memory-catalog", dependencies=[Depends(require_service_token)])
+def get_memory_identity_catalog(db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Current identities and memberships for authenticated memory administrators."""
+    return ok({
+        "users": [{"user_id":str(u.id),"username":u.username,"display_name":u.real_name,"role":u.role}
+                  for u in db.scalars(select(User)).all()],
+        "projects": [{"project_id":str(p.id),"project_name":p.name} for p in db.scalars(select(Project)).all()],
+        "memberships": [{"user_id":str(m.user_id),"project_id":str(m.project_id)} for m in db.scalars(select(ProjectMember)).all()],
+    })
 
 
 @router.post(

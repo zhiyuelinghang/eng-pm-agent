@@ -287,6 +287,11 @@ export function defaultAgentFormValues(schema: AgentSchemaV2Response): AgentForm
 		platform_config: {
 			role: 'business',
 			agent_level: 'worker',
+			memory_read_scopes: ['user', 'user_project', 'project'],
+			memory_write_scopes: ['user', 'user_project', 'project'],
+			learning_capture: true,
+			learning_process: true,
+			learning_use: true,
 			enabled: true,
 			published: true,
 			allow_global_main_call: false,

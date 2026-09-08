@@ -1497,6 +1497,12 @@ class Agent:
             finished_reason=completed_response.finished_reason,
         )
 
+        # Permission/resume events are built from context, not streamed blocks.
+        # Keep the same trusted title when those events replace a call in the UI.
+        for block in completed_response.content:
+            if isinstance(block, ToolCallBlock):
+                block.presentation = self.toolkit.get_tool_presentation(block.name)
+
         self._save_to_context(
             list(completed_response.content),
             completed_response.usage,
@@ -3460,6 +3466,7 @@ class Agent:
                     reply_id=self.state.reply_id,
                     tool_call_id=tool_call.id,
                     tool_call_name=tool_call.name,
+                    presentation=self.toolkit.get_tool_presentation(tool_call.name),
                 )
             yield ToolCallDeltaEvent(
                 reply_id=self.state.reply_id,

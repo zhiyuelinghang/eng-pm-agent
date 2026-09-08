@@ -173,6 +173,7 @@ class PlatformAgentCatalogResponse(BaseModel):
     global_main: PlatformAgentCatalogItem | None = None
     project_initializer: PlatformAgentCatalogItem | None = None
     task_assistant: PlatformAgentCatalogItem | None = None
+    knowledge_assistant: PlatformAgentCatalogItem | None = None
     initialization_workers: list[PlatformAgentCatalogItem] = Field(
         default_factory=list,
     )
@@ -197,6 +198,7 @@ class PlatformSettingsResponse(BaseModel):
         default=None,
         description="The hidden agent assigned to the Task Assistant role.",
     )
+    knowledge_assistant_agent_id: str | None = None
     project_initializer_validation_mcp: PlatformMCPVersionBinding | None = Field(
         default=None,
         description=(
@@ -214,6 +216,8 @@ class MemoryInfrastructureResponse(BaseModel):
     embedding_model: str
     embedding_dimensions: int
     mem0_collection: str
+    record_table: str = "memory.memory_records"
+    write_mode: str = "direct_transaction"
     change_notice: str = (
         "修改嵌入模型或维度需要重建全部记忆向量，不能作为普通在线配置生效。"
     )
@@ -571,6 +575,7 @@ class UpdatePlatformSettingsRequest(BaseModel):
             "platform Task Assistant responsibility."
         ),
     )
+    knowledge_assistant_agent_id: str | None = Field(default=None, min_length=1)
     project_initializer_validation_mcp: PlatformMCPVersionBinding | None = Field(
         default=None,
         description=(

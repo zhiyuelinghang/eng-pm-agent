@@ -85,6 +85,26 @@ class DatabaseInteractionManager:
                 return None
             raise
 
+    async def resolve_memory_scope(self, session_id: str) -> dict[str, Any]:
+        return await self._request("GET", "/agent-tools/memory-scope",
+                                   params={"agentscope_session_id": session_id}, timeout=5)
+
+    async def memory_identity_catalog(self) -> dict[str, Any]:
+        return await self._request("GET", "/agent-tools/memory-catalog", timeout=5)
+
+    async def group_learning_channels(self, after_channel: int = 0):
+        return await self._request('GET', '/agent-tools/group-learning/channels', params={'after_channel': after_channel})
+
+    async def group_learning_source(self, channel_id: int, after_revision: int, limit: int = 50):
+        return await self._request('GET', f'/agent-tools/group-learning/channels/{channel_id}',
+            params={'after_revision': after_revision, 'limit': limit})
+
+    async def group_learning_validate(self, snapshot: dict):
+        return await self._request('POST', '/agent-tools/group-learning/validate', payload={'snapshot': snapshot})
+
+    async def group_learning_changes(self, channel_id: int, after_revision: int):
+        return await self._request('GET', f'/agent-tools/group-learning/channels/{channel_id}/changes', params={'after_revision': after_revision})
+
     async def list_catalog(
         self,
         agent_id: str,

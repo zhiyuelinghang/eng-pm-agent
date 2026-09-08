@@ -29,6 +29,8 @@ class ScheduleView(ToolBase):
     it with the ``next_run_time`` from the in-memory APScheduler job.
     """
 
+    display_name = "查看定时安排详情"
+
     name: str = "ScheduleView"
 
     description: str = (

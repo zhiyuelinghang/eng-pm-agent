@@ -245,6 +245,9 @@ class AgentOnlyToolCatalogTest(IsolatedAsyncioTestCase):
         self.assertTrue(by_name["Read"].read_only)
         system_tool = by_name["parse_attachment"]
         self.assertEqual(system_tool.display_name, "解析附件")
+        self.assertEqual(system_tool.presentation["label"], "解析附件")
+        self.assertEqual(system_tool.presentation["source"], "mcp_title")
+        self.assertEqual(by_name["Read"].presentation["label"], "读取文件")
         self.assertEqual(system_tool.source, "platform")
         self.assertEqual(system_tool.category, "general")
         self.assertTrue(system_tool.assigned)

@@ -3,7 +3,8 @@
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+from ...tool._presentation import tool_presentation
 
 
 _MCP_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
@@ -145,6 +146,12 @@ class MCPPackageTool(BaseModel):
     description: str = ""
     input_schema: dict = Field(default_factory=dict)
     read_only: bool = False
+
+    @computed_field
+    @property
+    def presentation(self) -> dict[str, str]:
+        return tool_presentation(name=self.name, display_name=self.display_name,
+                                 category="mcp", read_only=self.read_only, source="mcp_title")
 
 
 class MCPPackageRecord(BaseModel):

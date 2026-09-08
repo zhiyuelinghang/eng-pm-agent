@@ -29,11 +29,18 @@ export function ToolStateIcon({ state }: { state: ToolResultBlock['state'] | und
  */
 export function getResultText(result?: ToolResultBlock): string {
 	if (!result) return '';
-	if (typeof result.output === 'string') return result.output;
-	if (Array.isArray(result.output)) {
-		return result.output.map((b) => (b.type === 'text' ? b.text : '')).join('\n');
-	}
-	return '';
+	const raw = typeof result.output === 'string' ? result.output : Array.isArray(result.output)
+		? result.output.map((b) => (b.type === 'text' ? b.text : '')).join('\n') : '';
+	try {
+		const data = JSON.parse(raw);
+		if (!data.request_id || typeof data.duration_ms !== 'number' || typeof data.message !== 'string') return raw;
+		const scopes: Record<string, string> = { user: '用户级', user_project: '用户＋项目级', project: '项目级' };
+		const rows = Array.isArray(data.results) ? data.results : [];
+		return [data.message, ...rows.map((row: { status?: string; memory?: { scope_type: string; content: string }; scope_type?: string; content?: string }) => {
+			const item = row.memory || row;
+			return `${row.status === 'unchanged' ? '未变化 · ' : ''}${scopes[item.scope_type || ''] || ''}：${item.content || ''}`;
+		})].join('\n');
+	} catch { return raw; }
 }
 
 /**

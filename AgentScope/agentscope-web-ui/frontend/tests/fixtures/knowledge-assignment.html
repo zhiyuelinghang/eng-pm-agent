@@ -1,0 +1,22 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>资料助手职责 · 独立测试</title></head><body><div style="height:30px;padding:5px 16px;font-size:12px;background:#eef5f0">本地独立测试 · 配置仅存于当前测试页 · 不访问业务接口</div><div id="root" style="height:calc(100dvh - 30px)"></div><script type="module">
+import React from 'react'
+import {createRoot} from 'react-dom/client'
+import {Toaster} from 'sonner'
+import '../../src/index.css'
+import i18n from '../../src/i18n'
+import {agentApi,mcpRegistryApi} from '../../src/api'
+import {PlatformSettingsPage} from '../../src/pages/platform-settings'
+await i18n.changeLanguage('zh')
+window.fetch=async()=>{throw new Error('独立测试禁止访问业务接口')}
+const make=(id,name,knowledge=true)=>({id,editable:true,data:{name,platform_config:{enabled:true,published:true,role:'business',agent_level:'management',sort_order:1,project_knowledge_enabled:knowledge,category:'测试职责',description:'仅用于验证职责配置'},model_policy:{mode:'fixed',chat_model_config:{model:'本地模拟模型'}},invite_config:{invite_description:''}}})
+const agents=[make('main-test','测试总控'),make('task-test','测试任务助手'),make('docs-test','测试资料智能体'),make('disabled-knowledge-test','未开启资料查询的测试智能体',false)]
+let settings=JSON.parse(sessionStorage.getItem('knowledge-duty-fixture')||'null')||{global_main_agent_id:'main-test',project_initializer_agent_id:null,task_assistant_agent_id:'task-test',knowledge_assistant_agent_id:null,project_initializer_validation_mcp:null}
+agentApi.list=async()=>({agents,total:agents.length})
+agentApi.getPlatformSettings=async()=>({...settings})
+agentApi.updatePlatformSettings=async body=>{
+  if(Object.keys(body).some(k=>k!=='knowledge_assistant_agent_id'))throw new Error('测试页仅允许保存资料助手职责')
+  settings={...settings,...body};sessionStorage.setItem('knowledge-duty-fixture',JSON.stringify(settings));return {...settings}
+}
+mcpRegistryApi.getInitializationValidationConfig=async()=>({current:null,versions:[]})
+createRoot(document.getElementById('root')).render(React.createElement(React.Fragment,null,React.createElement(PlatformSettingsPage),React.createElement(Toaster)))
+</script></body></html>

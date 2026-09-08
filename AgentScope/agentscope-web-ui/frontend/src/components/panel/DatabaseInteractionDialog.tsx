@@ -1,3 +1,4 @@
+import { ToolPresentationInfo } from './ToolPresentationInfo';
 import {
 	CircleAlert,
 	Link2,
@@ -488,6 +489,8 @@ export function DatabaseInteractionDialog({
 								<Field>
 									<FieldLabel htmlFor="database-interaction-name">{t('panel.database.editor.name')}</FieldLabel>
 									<Input id="database-interaction-name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} readOnly={!canEditFields} />
+<FieldDescription>此名称用于用户聊天中的工作记录，请填写简短的业务描述，例如“查看项目人员”。保存后对新调用生效。</FieldDescription>
+{interaction && <ToolPresentationInfo value={interaction.presentation} />}
 								</Field>
 								<Field>
 									<FieldLabel htmlFor="database-interaction-key">{t('panel.database.editor.key')}</FieldLabel>

@@ -18,6 +18,8 @@ from ...state import AgentState
 class SkillViewer(ToolBase):
     """The builtin skill viewer tool."""
 
+    display_name = "查看技能指南"
+
     name: str = "Skill"
     """The name of the skill viewer tool to the agent."""
 

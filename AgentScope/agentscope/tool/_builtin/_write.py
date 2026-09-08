@@ -26,6 +26,9 @@ from ._backend import BackendBase
 class Write(ToolBase):
     """The write tool."""
 
+    display_name = "写入文件"
+    presentation_category = "workspace"
+
     name: str = "Write"
     """The tool name presented to the agent."""
 

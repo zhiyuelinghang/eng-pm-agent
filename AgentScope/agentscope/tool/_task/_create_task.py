@@ -25,6 +25,8 @@ class _TaskCreateParams(BaseModel):
 class TaskCreate(_TaskToolBase):
     """Create a task for the agent to perform."""
 
+    display_name = "创建执行计划"
+
     name: str = "TaskCreate"
 
     description: str = """Use this tool to create a structured task list for \

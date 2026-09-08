@@ -96,6 +96,9 @@ class ToolBase(ABC):
 
     name: str
     """The name presented to the agent."""
+    display_name: str | None = None
+    """Short user-facing action title; never include arguments or credentials."""
+    presentation_category: str = "general"
     description: str
     """The agent-oriented tool description."""
     input_schema: dict[str, Any]

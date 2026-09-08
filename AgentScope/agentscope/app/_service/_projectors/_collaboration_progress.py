@@ -93,13 +93,16 @@ class CollaborationProgressProjector:
                 "reply_id": event.reply_id,
                 "tool_call_id": event.tool_call_id,
                 "tool_name": event.tool_call_name,
+                "presentation": event.presentation,
                 "created_at": now,
             }
         if isinstance(event, ToolResultEndEvent):
             tool_name = None
+            presentation = None
             for activity in reversed((existing or {}).get("activities") or []):
-                if activity.get("tool_call_id") == event.tool_call_id:
+                if activity.get("tool_call_id") == event.tool_call_id and activity.get("reply_id") == event.reply_id:
                     tool_name = activity.get("tool_name")
+                    presentation = activity.get("presentation")
                     break
             succeeded = str(event.state) == "success"
             return {
@@ -109,6 +112,7 @@ class CollaborationProgressProjector:
                 "reply_id": event.reply_id,
                 "tool_call_id": event.tool_call_id,
                 "tool_name": tool_name,
+                "presentation": presentation,
                 "created_at": now,
             }
         if isinstance(event, RequireUserConfirmEvent):

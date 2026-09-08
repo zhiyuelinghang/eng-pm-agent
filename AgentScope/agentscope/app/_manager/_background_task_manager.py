@@ -73,6 +73,8 @@ class _ToolStopParams(BaseModel):
 class ToolStop(ToolBase):
     """A tool to stop a running background tool execution."""
 
+    display_name = "停止后台操作"
+
     name: str = "ToolStop"
     """The tool name."""
 

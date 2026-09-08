@@ -29,7 +29,8 @@ if not defined AGENTSCOPE_WEBUI_HELPER_PORT set "AGENTSCOPE_WEBUI_HELPER_PORT=23
 if not exist "%PYTHON_EXE%" goto ERROR_PYTHON
 if not exist "%AGENTSCOPE_CORE_HOME%\__init__.py" goto ERROR_CORE
 
-"%PYTHON_EXE%" -c "import agentscope; from agentscope.app.storage import AsyncSQLAlchemyStorage; assert agentscope.__version__ == '2.0.7'" >nul
+rem Embedded Python ignores cwd/PYTHONPATH; match the service's --app-dir.
+"%PYTHON_EXE%" -c "import os, sys; sys.path.insert(0, os.environ['PROJECT_ROOT']); import agentscope; from agentscope.app.storage import AsyncSQLAlchemyStorage; assert agentscope.__version__ == '2.0.7'" >nul
 if errorlevel 1 goto ERROR_CORE_IMPORT
 
 "%PYTHON_EXE%" -c "import aiosqlite, asyncpg, alembic, psycopg, pgvector, sqlalchemy, pypdf, pandas, pptx, openpyxl, xlrd, docx, pdfplumber, pypdfium2, PIL, rapidocr_onnxruntime, langgraph, graphiti_core, neo4j, sentence_transformers, torch, tiktoken, lightrag" >nul

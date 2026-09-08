@@ -18,6 +18,8 @@ class _TaskGetParams(BaseModel):
 class TaskGet(_TaskToolBase):
     """Retrieve a task by its ID from the task list."""
 
+    display_name = "查看计划详情"
+
     name: str = "TaskGet"
 
     description: str = """Use this tool to retrieve a task by its ID from the task list.

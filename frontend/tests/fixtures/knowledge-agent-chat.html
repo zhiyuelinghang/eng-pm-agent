@@ -1,0 +1,85 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>资料助手独立测试</title><style>body{margin:0;font:14px "Microsoft YaHei",sans-serif;background:#f4f8f6;color:#24413c}#app{height:100dvh}.test-banner{padding:8px 20px;font-size:12px;background:#e3eee8}.test-shell{height:calc(100dvh - 34px)}.test-shell>section{height:100%}</style></head><body><div id="app"></div><script type="module">
+import { createApp, h } from 'vue'
+import { createPinia, setActivePinia } from 'pinia'
+import { NMessageProvider, NDialogProvider } from 'naive-ui'
+import Chat from '../../src/components/business/ProjectKnowledgeChat.vue'
+import api from '../../src/api/client'
+import { useAppStore } from '../../src/stores/app'
+import { createEmptyRuntimeTrace, applyAgentRuntimeEvents } from '../../src/types/agentRuntime'
+const pinia=createPinia();setActivePinia(pinia)
+const store=useAppStore()
+store.currentProjectId='999'
+store.projects=[{id:'999',name:'资料助手测试工程'}]
+store.weknoraKnowledgeBases=[{id:'kb-test',name:'测试知识库'}]
+store.documentFolders=[{id:'root',name:'测试知识库',knowledgeBaseId:'kb-test',isKnowledgeBase:true,path:'',totalCount:1}]
+store.attachments=[{id:'doc-test',fileName:'测试施工方案.pdf',knowledgeBaseId:'kb-test',folderId:'root',fileSize:12000}]
+let conversations=[], legacy=new Map(), histories=new Map(), count=0, activeStop=null
+const now=()=>new Date().toISOString()
+const wrap=(config,data)=>({status:200,statusText:'OK',config,headers:{},data:{data}})
+api.defaults.adapter=async config=>{
+  const path=config.url;const body=typeof config.data==='string'?JSON.parse(config.data):config.data||{}
+  if(path==='/agents/catalog') return wrap(config,{knowledge_assistant:{id:'docs-test',name:'资料助手',enabled:true,published:false,model_ready:true,project_knowledge_enabled:true},business_agents:[]})
+  if(path.endsWith('/engineering-knowledge-conversations')&&config.method==='get') return wrap(config,conversations)
+  if(path.endsWith('/engineering-knowledge-conversations')&&config.method==='post'){
+    const row={id:++count,title:body.title,scope_type:body.scope_type,scope_items:body.scope_items,knowledge_id:body.knowledge_id,knowledge_base_id:body.knowledge_base_id,folder_path:body.folder_path,created_at:now(),updated_at:now()}
+    const msg={id:'legacy-'+count,role:'user',content:body.first_message,created_at:now(),references:[]}
+    conversations.unshift(row);legacy.set(row.id,[msg]);return wrap(config,{conversation:row,messages:[msg]})
+  }
+  const link=path.match(/engineering-knowledge-conversations\/(\d+)\/agent$/)
+  if(link){const row=conversations.find(c=>c.id===Number(link[1]));row.agent_conversation_id=100+row.id;return wrap(config,{id:row.agent_conversation_id})}
+  const old=path.match(/engineering-knowledge-conversations\/(\d+)\/messages$/)
+  if(old)return wrap(config,legacy.get(Number(old[1]))||[])
+  const msgs=path.match(/agent-conversations\/(\d+)\/messages$/)
+  if(msgs)return wrap(config,histories.get(Number(msgs[1]))||[])
+  if(path.endsWith('/interrupt')){activeStop?.();return wrap(config,{stopped:true})}
+  const del=path.match(/engineering-knowledge-conversations\/(\d+)$/)
+  if(del&&config.method==='delete'){conversations=conversations.filter(c=>c.id!==Number(del[1]));return wrap(config,{})}
+  throw new Error('测试页禁止未模拟的接口：'+path)
+}
+window.fetch=async (url,options)=>{
+  const match=String(url).match(/agent-conversations\/(\d+)\/messages\/stream$/)
+  if(!match)throw new Error('测试页禁止外部请求：'+url)
+  const cid=Number(match[1]), body=JSON.parse(options.body), content=body.content
+  const user={id:'user-'+Date.now(),role:'user',content,created_at:now()}
+  const records=histories.get(cid)||[]; records.push(user);histories.set(cid,records)
+  const reply='reply-'+Date.now(), encoder=new TextEncoder()
+  let run=createEmptyRuntimeTrace(), ended=false, controller
+  const emit=(name,payload)=>{if(!ended)controller.enqueue(encoder.encode('event: '+name+'\ndata: '+JSON.stringify(payload)+'\n\n'))}
+  const event=payload=>{const e={reply_id:reply,created_at:now(),...payload};run=applyAgentRuntimeEvents(run,[e]);emit('agent_event',e)}
+  const finish=(stopped=false)=>{
+    if(ended)return
+    event({type:'REPLY_END',finished_reason:stopped?'interrupted':'stop',finished_at:now()})
+    run.status=stopped?'interrupted':'finished'
+    const text=run.messages.flatMap(m=>m.content.filter(b=>b.type==='text').map(b=>b.text)).join('\n')
+    const msg={id:reply,role:'assistant',content:text,created_at:now(),extra_data:{status:run.status,agentscope_messages:run.messages,runtime_trace:{turn_started_at:run.turnStartedAt,turn_finished_at:now()}}}
+    records.push(msg);emit('done',{message:msg,runtime_status:run.status});ended=true;controller.close()
+  }
+  const stream=new ReadableStream({start(c){
+    controller=c;activeStop=()=>finish(true)
+    emit('accepted',{conversation_id:cid,user_message:user,runtime_status:'running'})
+    event({type:'REPLY_START',name:'资料助手'})
+    event({type:'THINKING_BLOCK_START',block_id:'think'})
+    event({type:'THINKING_BLOCK_DELTA',block_id:'think',delta:content.includes('你好')?'这是普通问候，直接回应即可。':'先核对所需信息，按授权范围查询。'})
+    setTimeout(()=>{
+      if(ended)return
+      event({type:'THINKING_BLOCK_END',block_id:'think'})
+      const knowledge=content.includes('资料')||content.includes('方案'), project=content.includes('任务')
+      if(knowledge||project){
+        const name=knowledge?'weknora_query_project_knowledge':'dobby_list_project_tasks'
+        event({type:'TOOL_CALL_START',tool_call_id:'lookup',tool_call_name:name,presentation:{label:knowledge?'查询项目知识库':'查询项目任务',category:knowledge?'knowledge':'database',source:'registration'}})
+        event({type:'TOOL_RESULT_START',tool_call_id:'lookup',tool_call_name:name})
+        event({type:'TOOL_RESULT_TEXT_DELTA',tool_call_id:'lookup',delta:JSON.stringify({answer:'测试结果',references:knowledge?[{id:'ref-test',knowledge_id:'doc-test',chunk_id:'chunk-test',title:'测试施工方案.pdf',content:'安全检查应在作业前完成。'}]:[]})})
+        event({type:'TOOL_RESULT_END',tool_call_id:'lookup',state:'success',metadata:{operation:knowledge?'weknora_query_project_knowledge':name}})
+      }
+      event({type:'TEXT_BLOCK_START',block_id:'answer'})
+      event({type:'TEXT_BLOCK_DELTA',block_id:'answer',delta:content.includes('你好')?'你好，我是项目资料助手。可以帮你梳理资料，也可以按授权查询项目动态。':project?'当前有 3 项任务：2 项进行中，1 项待处理。以上是独立测试数据。':'依据《测试施工方案.pdf》，作业前应完成安全检查。\n\n本回答使用独立测试资料，来源见下方。'})
+      setTimeout(()=>finish(),1200)
+    },content.includes('慢')?20000:2500)
+  }})
+  return new Response(stream,{headers:{'Content-Type':'text/event-stream'}})
+}
+createApp({render:()=>h(NMessageProvider,null,{default:()=>h(NDialogProvider,null,{default:()=>[
+  h('div',{class:'test-banner'},'独立本地测试 · 所有接口均为内存模拟 · 不调用模型或业务服务'),
+  h('div',{class:'test-shell'},[h(Chat)])
+]})})}).use(pinia).mount('#app')
+</script></body></html>

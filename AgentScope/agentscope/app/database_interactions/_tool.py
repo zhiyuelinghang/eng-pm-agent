@@ -152,6 +152,7 @@ class DatabaseInteractionTool(ToolBase):
     ) -> None:
         super().__init__()
         self.name = str(definition["key"])
+        self.display_name = definition.get("display_name")
         self.description = str(definition.get("description") or "")
         self.input_schema = dict(definition.get("input_schema") or {})
         self.is_read_only = bool(definition.get("read_only", True))

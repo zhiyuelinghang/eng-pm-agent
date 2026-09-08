@@ -6,7 +6,7 @@ from ..tool import ToolBase
 
 _DOBBY_TOOLS = frozenset({
     "agent_search", "agent_invoke", "agent_run_status", "agent_cancel",
-    "agent_retry_or_switch", "search_memory", "add_memory", "reset_tools",
+    "agent_retry_or_switch", "search_memory", "add_memory", "forget_memory", "learn_from_task", "learning_feedback", "reset_tools",
 })
 _TASK_DRAFT_TOOLS = frozenset({"generate_task_flow", "list_templates", "create_flow_from_template"})
 
@@ -19,7 +19,7 @@ class PlatformToolPolicy:
     def __call__(self, tool: ToolBase) -> bool:
         if tool.name in {"AgentCreate", "PowerShell"}:
             return False
-        if not self.management and tool.name in {"search_memory", "add_memory"}:
+        if not self.management and tool.name in {"search_memory", "add_memory", "forget_memory", "learn_from_task", "learning_feedback"}:
             return False
         if isinstance(tool, DatabaseInteractionTool) and tool.table_name == "tasks" and not tool.is_read_only:
             return False

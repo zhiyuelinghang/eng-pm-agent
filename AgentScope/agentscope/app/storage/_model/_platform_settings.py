@@ -197,6 +197,30 @@ class MemorySettingsData(BaseModel):
     )
 
     recall_top_k: int = Field(default=5, ge=1, le=50)
+    memory_profile_enabled: bool = True
+    memory_semantic_search_enabled: bool = True
+    memory_index_enabled: bool = True
+    learning_enabled: bool = True
+    group_learning_enabled: bool = True
+    group_learning_scan_seconds: int = Field(default=300, ge=30, le=3600)
+    group_learning_message_threshold: int = Field(default=20, ge=1, le=100)
+    group_learning_idle_seconds: int = Field(default=600, ge=60, le=86400)
+    group_learning_max_wait_seconds: int = Field(default=3600, ge=300, le=86400)
+    group_learning_batch_size: int = Field(default=50, ge=1, le=100)
+    group_learning_daily_limit: int = Field(default=100, ge=1, le=2000)
+    learning_auto_consolidate: bool = True
+    learning_model_config: ChatModelConfig | None = None
+    learning_capture_corrections: bool = True
+    learning_capture_failures: bool = True
+    learning_capture_verified_tasks: bool = True
+    learning_capture_patterns: bool = True
+    learning_daily_job_limit: int = Field(default=30,ge=1,le=200)
+    learning_cooldown_seconds: int = Field(default=60,ge=0,le=3600)
+    learning_pattern_threshold: int = Field(default=3,ge=2,le=20)
+    learning_timeout_seconds: int = Field(default=90,ge=10,le=180)
+    learning_input_char_limit: int = Field(default=16000,ge=4000,le=60000)
+    learning_review_days: int = Field(default=90,ge=7,le=365)
+    learning_skill_limit: int = Field(default=3,ge=0,le=10)
     recall_threshold: float = Field(default=0.3, ge=0.0, le=1.0)
     recall_reinforce_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
 
@@ -252,27 +276,11 @@ class MemorySettingsData(BaseModel):
         min_length=1,
         max_length=50_000,
     )
-    memory_scope_prompt: str = Field(
-        default=DEFAULT_MEMORY_SCOPE_PROMPT,
-        min_length=1,
-        max_length=50_000,
-    )
 
     @model_validator(mode="after")
     def _validate_policy(self) -> "MemorySettingsData":
         if self.emergency_compression_ratio <= self.compression_trigger_ratio:
             raise ValueError("紧急压缩比例必须大于普通压缩触发比例。")
-        if not any(
-            value > 0
-            for value in (
-                self.fusion_weight_mem0,
-                self.fusion_weight_kb,
-                self.fusion_weight_timeline,
-                self.fusion_weight_experience,
-                self.fusion_weight_graphrag,
-            )
-        ):
-            raise ValueError("至少保留一个大于 0 的记忆融合权重。")
         required = {"existing_summary", "existing_tasks", "recent_messages"}
         for label, template in (
             ("压缩提示词", self.compression_user_prompt),
@@ -289,42 +297,6 @@ class MemorySettingsData(BaseModel):
                 )
             except (KeyError, IndexError, ValueError) as exc:
                 raise ValueError(f"{label}格式无效：{exc}") from exc
-        scope_required = {"content", "project_context"}
-        scope_missing = [
-            name
-            for name in scope_required
-            if "{" + name + "}" not in self.memory_scope_prompt
-        ]
-        if scope_missing:
-            raise ValueError(
-                "记忆作用域判断提示词缺少占位符："
-                + ", ".join(sorted(scope_missing)),
-            )
-        routing_fields = {
-            "user",
-            "user_project",
-            "content",
-            "evidence",
-            "stable",
-            "confidence",
-        }
-        missing_fields = [
-            name
-            for name in routing_fields
-            if f'"{name}"' not in self.memory_scope_prompt
-        ]
-        if missing_fields:
-            raise ValueError(
-                "记忆作用域判断提示词缺少输出字段："
-                + ", ".join(sorted(missing_fields)),
-            )
-        try:
-            self.memory_scope_prompt.format(
-                content="content",
-                project_context="project",
-            )
-        except (KeyError, IndexError, ValueError) as exc:
-            raise ValueError(f"记忆作用域判断提示词格式无效：{exc}") from exc
         return self
 
 
@@ -353,6 +325,10 @@ class PlatformSettingsData(BaseModel):
             "responsibility named Task Assistant. The engineering platform "
             "never exposes the selected agent's own display name."
         ),
+    )
+    knowledge_assistant_agent_id: str | None = Field(
+        default=None,
+        description="The agent assigned to the platform's Knowledge Assistant responsibility.",
     )
     project_initializer_validation_mcp: PlatformMCPVersionBinding | None = Field(
         default=None,

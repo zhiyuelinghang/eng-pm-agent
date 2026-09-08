@@ -141,6 +141,8 @@ class _AgentCreateParams(ParamsBase):
 class AgentCreate(_TeamToolBase):
     """Spawn a new worker member into the team you lead."""
 
+    display_name = "创建协同助手"
+
     name: str = "AgentCreate"
     is_state_injected: bool = True
 
