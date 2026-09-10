@@ -40,6 +40,7 @@ from ...tool import (
 from ...workspace import WorkspaceBase
 from ..access import ResourceKind
 from ._access import ResourceAccessService
+from ._model import resolve_effective_chat_model_config
 
 
 _GLOBALLY_DISABLED_TOOL_NAMES = frozenset({"PowerShell"})
@@ -147,7 +148,7 @@ async def get_toolkit(
     4. Schedule control (:class:`ScheduleCreate` / :class:`ScheduleView`
        / :class:`ScheduleDelete` / :class:`ScheduleList`, from
        :meth:`SchedulerManager.list_tools`). Only attached when the
-       session has a model configured (Schedule tools need a model to
+       agent has an effective model configured (Schedule tools need a model to
        fire new chats with).
     5. Team tools — variant based on the *session's* team role, not
        the agent's ``source``. This matters because a borrowed
@@ -213,12 +214,11 @@ async def get_toolkit(
 
     tool_groups = []
     platform_context = getattr(session_record.config, "platform_context", None)
-    from ._platform_settings import get_global_main_agent_id
+    from ._platform_settings import get_global_main_agent_id, get_platform_duties
 
     global_main_agent_id = await get_global_main_agent_id(
         storage,
         user_id,
-        legacy_record=agent_record,
     )
     caller_is_global_main = global_main_agent_id == agent_record.id
     is_platform_dobby = caller_is_global_main
@@ -252,12 +252,12 @@ async def get_toolkit(
             session_id=session_record.id,
         )
 
-    # Schedule control. Requires a model config on this session because
+    # Schedule control. Resolve the current agent policy because
     # ``ScheduleCreate`` records it into new ``ScheduleRecord`` instances.
-    if (
-        not is_platform_dobby
-        and session_record.config.chat_model_config is not None
-    ):
+    effective_chat_model = resolve_effective_chat_model_config(
+        agent_record.data, session_record.config,
+    )
+    if not is_platform_dobby and effective_chat_model is not None:
         # Add schedule tools as a tool group
         tool_groups.append(
             ToolGroup(
@@ -277,7 +277,7 @@ time or interval"
                 tools=await scheduler_manager.list_tools(
                     user_id=user_id,
                     agent_id=agent_record.id,
-                    chat_model_config=session_record.config.chat_model_config,
+                    chat_model_config=effective_chat_model,
                 ),
             ),
         )
@@ -305,9 +305,14 @@ time or interval"
             team_role = (
                 "leader" if team.session_id == session_record.id else "worker"
             )
-    if team_role == "worker":
-        tools.append(TeamSay(**team_tool_kwargs, role="worker"))
-    elif caller_is_global_main:
+    from ._platform_settings import ensure_fixed_agent_entry
+
+    memory_settings = await get_platform_duties(storage, user_id)
+    ensure_fixed_agent_entry(
+        memory_settings, agent_record.id, platform_context,
+        delegated=team_role == 'worker',
+    )
+    if caller_is_global_main:
         orchestration_kwargs = {
             **team_tool_kwargs,
             "resource_access_service": resource_access_service,
@@ -320,6 +325,8 @@ time or interval"
             AgentCancel(**orchestration_kwargs),
             AgentRetryOrSwitch(**orchestration_kwargs),
         ]
+    elif team_role == "worker":
+        tools.append(TeamSay(**team_tool_kwargs, role="worker"))
     else:
         tools.append(TeamCreate(**team_tool_kwargs))
         tools += [
@@ -342,14 +349,13 @@ time or interval"
             user_id,
             ResourceKind.AGENT,
         )
+        from .._agent_collaboration import can_delegate
+        duties = await get_platform_duties(storage, user_id)
+
         invitable_pool = [
             view
             for view in visible_agents
-            if view.id != agent_record.id
-            and view.data.platform_config.enabled
-            and agent_record.data.call_config.allows(view.id)
-            and view.data.invite_config.invitable
-            and (view.data.invite_config.invite_description or "").strip()
+            if can_delegate(agent_record, view, global_main_agent_id, duties)
         ]
         if invitable_pool:
             tools.append(
@@ -455,6 +461,18 @@ time or interval"
         if skill.name not in managed_skill_names
     ] + managed_skills
 
+    from ..memory._policy import memory_duty, memory_rules
+    from ..memory._run_context import session_chain
+
+    # Discovery uses system rules; each tool rechecks live permissions and
+    # request exclusions when invoked.
+    memory_chain = await session_chain(storage, user_id, session_record)
+    root_context = memory_chain[-1].config.platform_context
+    memory_rule = memory_rules(
+        duties=[memory_duty(memory_settings, node.agent_id) for node in memory_chain],
+        entry_kind=root_context.conversation_type if root_context is not None else 'debug',
+        delegated=len(memory_chain) > 1,
+    )
     return Toolkit(
         tools=tools,
         skills_or_loaders=resolved_skills,
@@ -462,6 +480,9 @@ time or interval"
         tool_groups=tool_groups,
         tool_policy=PlatformToolPolicy(
             global_main=caller_is_global_main,
-            management=agent_record.data.platform_config.agent_level == "management",
+            memory_read_scopes=memory_rule.read_scopes,
+            memory_write_scopes=memory_rule.write_scopes,
+            learning_enabled=memory_rule.learning_enabled,
+            learning_use=memory_rule.learning_use,
         ),
     )

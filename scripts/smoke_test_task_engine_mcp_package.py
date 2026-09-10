@@ -30,9 +30,6 @@ def _load_host_environment() -> None:
     os.environ.setdefault("DATABASE_URL", settings.database_url)
     os.environ.setdefault("TASK_ENGINE_SCHEMA", settings.task_engine_schema)
     os.environ.setdefault("TASK_ENGINE_TZ", settings.task_engine_tz)
-    os.environ.setdefault("AI_API_KEY", settings.ai_api_key)
-    os.environ.setdefault("AI_BASE_URL", settings.ai_base_url)
-    os.environ.setdefault("AI_MODEL", settings.ai_model)
 
 
 async def _run(archive: Path) -> None:

@@ -5,7 +5,10 @@ from tempfile import TemporaryDirectory
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock
 
-from agentscope.app._router._workspace import list_workspace_tools
+from fastapi import HTTPException
+
+from agentscope.app._auth import AgentScopePrincipal
+from agentscope.app._router._workspace import list_system_tools, list_workspace_tools
 from agentscope.app._router._schema._agent import (
     CreateAgentRequest,
     UpdateAgentRequest,
@@ -164,6 +167,45 @@ class LocalWorkspaceToolPolicyTest(IsolatedAsyncioTestCase):
 
 class AgentOnlyToolCatalogTest(IsolatedAsyncioTestCase):
     """Fixed platform tools are visible before a chat session exists."""
+
+    async def test_system_catalog_needs_no_agent_or_session(self) -> None:
+        tools = await list_system_tools(
+            principal=AgentScopePrincipal(kind="management", subject="admin"),
+            mcp_registry_manager=None,
+        )
+        by_name = {tool.name: tool for tool in tools}
+        self.assertIn("Read", by_name)
+        self.assertIn("Write", by_name)
+        self.assertNotIn("PowerShell", by_name)
+        self.assertTrue(by_name["Read"].read_only)
+        self.assertFalse(by_name["Write"].read_only)
+
+    async def test_system_catalog_discovers_fixed_packages_without_executing_them(self) -> None:
+        registry = SimpleNamespace(list_system_tool_records=AsyncMock(return_value=[
+            SimpleNamespace(tools=[SimpleNamespace(
+                name="parse_attachment", display_name="解析附件",
+                description="解析当前会话授权附件。", read_only=True,
+                input_schema={"type": "object", "properties": {"attachment_id": {"type": "string"}}},
+            )]),
+        ]))
+        tools = await list_system_tools(
+            principal=AgentScopePrincipal(kind="management", subject="admin"),
+            mcp_registry_manager=registry,
+        )
+        parser = next(tool for tool in tools if tool.name == "parse_attachment")
+        self.assertEqual(parser.display_name, "解析附件")
+        self.assertIn("attachment_id", parser.input_schema["properties"])
+        registry.list_system_tool_records.assert_awaited_once()
+
+    async def test_system_catalog_rejects_platform_service_principal(self) -> None:
+        registry = SimpleNamespace(list_system_tool_records=AsyncMock())
+        with self.assertRaises(HTTPException) as error:
+            await list_system_tools(
+                principal=AgentScopePrincipal(kind="service", subject="platform"),
+                mcp_registry_manager=registry,
+            )
+        self.assertEqual(error.exception.status_code, 403)
+        registry.list_system_tool_records.assert_not_awaited()
 
     async def test_platform_catalog_is_available_without_session(self) -> None:
         storage = SimpleNamespace(

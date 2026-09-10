@@ -1,6 +1,12 @@
 import type { JSONSchema, JSONSchemaProperty } from '@/api';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field.tsx';
+import {
+	Field,
+	FieldContent,
+	FieldDescription,
+	FieldGroup,
+	FieldLabel,
+} from '@/components/ui/field.tsx';
 import { Input } from '@/components/ui/input';
 import {
 	Select,
@@ -109,11 +115,20 @@ export function SchemaForm({
 								id={fieldId}
 								checked={!!current}
 								onCheckedChange={(checked) => onChange(key, !!checked)}
+								aria-describedby={
+									description ? `${fieldId}-description` : undefined
+								}
 							/>
-							<FieldLabel htmlFor={fieldId} className="font-normal">
-								{label}
-							</FieldLabel>
-							{description && <FieldDescription>{description}</FieldDescription>}
+							<FieldContent>
+								<FieldLabel htmlFor={fieldId} className="font-normal">
+									{label}
+								</FieldLabel>
+								{description && (
+									<FieldDescription id={`${fieldId}-description`}>
+										{description}
+									</FieldDescription>
+								)}
+							</FieldContent>
 						</Field>
 					);
 				}

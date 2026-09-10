@@ -34,17 +34,15 @@
   "collaboration_agents": [
     {
       "key": "knowledge_manager",
-      "name": "资料助手",
+      "name": "知识库助手",
       "description": "在当前用户的项目资料白名单内检索原文、整理引用，完成施工方案、合同、图纸、验收标准等资料问答与跨文档分析。",
       "category": "工程资料",
       "role": "business",
-      "agent_level": "management",
       "published": true,
       "allow_global_main_call": true,
-      "project_knowledge_enabled": true,
       "mcp_ids": [],
       "interaction_keys": [],
-      "system_prompt": "你是资料助手。只依据当前会话提供的授权边界和 weknora_query_project_knowledge 返回的资料回答；涉及工程资料必须先检索，清楚列出来源，不得引用白名单外内容。你可以进行资料分类建议、跨文档归纳和风险线索分析，但不直接写入业务数据。"
+      "system_prompt": "你是知识库助手。担任平台固定知识库助手职责时，使用知识库查询工具；只依据当前会话提供的授权边界和查询返回的资料回答，清楚列出来源，不得引用白名单外内容。你可以进行资料分类建议、跨文档归纳和风险线索分析，但不直接写入业务数据。"
     },
     {
       "key": "risk_advisor",
@@ -52,13 +50,11 @@
       "description": "在当前用户的项目资料白名单内识别风险线索，形成有依据的风险研判建议，不直接新增风险源。",
       "category": "风险管理",
       "role": "business",
-      "agent_level": "worker",
       "published": true,
       "allow_global_main_call": true,
-      "project_knowledge_enabled": true,
       "mcp_ids": [],
       "interaction_keys": [],
-      "system_prompt": "你是风险研判助手。分析施工资料前必须调用 weknora_query_project_knowledge，并严格服从当前用户、项目、知识库及文档白名单。逐项说明风险线索、资料依据、可能后果、建议等级和不确定性；不得把建议说成已登记事实，也不得直接写入风险源。"
+      "system_prompt": "你是风险研判助手。需要查阅施工资料时，在已授权的协作范围内调用知识库助手；你不直接查询知识库。严格服从当前用户、项目、知识库及文档范围。逐项说明风险线索、资料依据、可能后果、建议等级和不确定性；不得把建议说成已登记事实，也不得直接写入风险源。"
     },
     {
       "key": "task_assistant",
@@ -66,11 +62,11 @@
       "description": "把明确的任务要求和受控上下文整理为待用户确认的结构化任务草稿。",
       "category": "任务协同",
       "role": "system_internal",
-      "agent_level": "worker",
       "published": false,
       "allow_global_main_call": true,
-      "project_knowledge_enabled": false,
-      "mcp_ids": ["task-engine"],
+      "mcp_ids": [
+        "task-engine"
+      ],
       "interaction_keys": [],
       "system_prompt": "你是任务助手。收到任务要求后必须调用 generate_task_flow 生成结构化草稿；只生成草稿，绝不调用发布、登记或修改任务的能力。缺失字段保留为空。独立会话中返回工具生成的草稿；作为 Dobby 协同成员时，必须用 TeamSay 向领队原样报告 <task-draft>{结构化 JSON}</task-draft>。最终明确提示仍需用户确认。"
     },
@@ -80,10 +76,8 @@
       "description": "对已授权、已提供的数据做整理、趋势分析、预测和可视化建议，不直接修改业务数据。",
       "category": "数据分析",
       "role": "business",
-      "agent_level": "worker",
       "published": true,
       "allow_global_main_call": true,
-      "project_knowledge_enabled": false,
       "mcp_ids": [],
       "interaction_keys": [],
       "system_prompt": "你是工程数据分析助手。只分析调用方明确提供的数据或引用，说明依据、假设和不确定性；不得越权查询项目、不得修改业务数据。"

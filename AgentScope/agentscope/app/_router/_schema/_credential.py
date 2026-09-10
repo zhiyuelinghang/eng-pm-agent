@@ -34,7 +34,7 @@ class CreateCredentialResponse(BaseModel):
 class UpdateCredentialRequest(BaseModel):
     """Request body for updating an existing credential."""
 
-    data: dict = Field(description="New credential payload.")
+    data: dict = Field(description="Credential fields to update; omitted fields are retained.")
 
 
 class ListCredentialsResponse(BaseModel):
@@ -140,8 +140,11 @@ class PermissionReviewerConfigResponse(BaseModel):
 class UpdatePermissionReviewerConfigRequest(PermissionReviewerConfigData):
     """Replace the built-in permission reviewer configuration."""
 
+    credential_id: str = Field(min_length=1)
+    model: str = Field(min_length=1)
 
-class TestPermissionReviewerConfigRequest(PermissionReviewerConfigData):
+
+class TestPermissionReviewerConfigRequest(UpdatePermissionReviewerConfigRequest):
     """Test a reviewer binding without persisting it."""
 
 

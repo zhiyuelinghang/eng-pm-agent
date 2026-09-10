@@ -116,3 +116,21 @@ test('切换项目后旧请求不能恢复旧消息或清除新请求的停止�
   await chat.stopHomeAgent(); await second
   assert.equal(state.streamCalls, 0)
 })
+
+test('本次选中图片原数据随对话发送，资料上传保留且后续消息不夹带旧图片', async t => {
+  const { state, chat } = await fixture(t), uploads = [], requests = []
+  const image = { name: '现场.png', size: 4, lastModified: 1, type: 'image/png', arrayBuffer: async () => Uint8Array.from([1, 2, 3, 4]).buffer }
+  const document = { name: '说明.pdf', size: 100, lastModified: 2, type: 'application/pdf' }
+  state.store.uploadAttachment = async file => { uploads.push(file.name) }
+  state.stream = async (_id, _content, handlers, _signal, extras) => {
+    requests.push(extras)
+    handlers.onDone({ message: { id: 40, content: '已收到', extra_data: {} }, runtime_status: 'completed' })
+  }
+  chat.quickCommand.value = '分析本次图片'; chat.quickFiles.value = [image, document]
+  await chat.dispatchQuickCommand()
+  assert.deepEqual(uploads, ['现场.png', '说明.pdf'])
+  assert.deepEqual(requests[0], { image_attachments: [{ name: '现场.png', media_type: 'image/png', data: 'AQIDBA==' }] })
+  chat.quickCommand.value = '继续说明'; chat.quickFiles.value = []
+  await chat.dispatchQuickCommand()
+  assert.deepEqual(requests[1], {})
+})

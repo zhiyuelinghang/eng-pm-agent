@@ -340,8 +340,10 @@ class OpenAIResponseModel(ChatModelBase):
                             input=event.delta or "",
                         )
 
-                elif event_type == "response.completed":
+                elif event_type in ("response.completed", "response.incomplete"):
                     resp = event.response
+                    if getattr(getattr(resp, "incomplete_details", None), "reason", None) == "max_output_tokens":
+                        delta_res.metadata["output_truncated"] = True
                     if resp.usage:
                         u = resp.usage
                         details = getattr(u, "input_tokens_details", None)
@@ -386,7 +388,7 @@ class OpenAIResponseModel(ChatModelBase):
                                     ),
                                 )
 
-                if delta_res.content or usage:
+                if delta_res.content or usage or delta_res.metadata:
                     delta_res.usage = usage
                     yield delta_res
 
@@ -469,6 +471,7 @@ class OpenAIResponseModel(ChatModelBase):
             "content": content_blocks,
             "is_last": True,
             "usage": usage,
+            "metadata": {"output_truncated": getattr(getattr(response, "incomplete_details", None), "reason", None) == "max_output_tokens"},
         }
         response_id = getattr(response, "id", None)
         if response_id:

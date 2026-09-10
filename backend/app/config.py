@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     environment: str = "development"
     database_url: str
     database_schema: str = "platform"
+    memory_database_url: str = ""
+    memory_database_schema: str = "memory"
+    memory_tenant_id: str = ""
+    agentscope_global_config_id: str = ""
     jwt_secret: str = "change-this-in-production"
     connector_secret_key: str = ""
     jwt_expire_minutes: int = 480
@@ -22,9 +26,6 @@ class Settings(BaseSettings):
     centrifugo_bind_address: str = "0.0.0.0"
     centrifugo_port: int = 38431
     upload_dir: Path = Path("data/uploads")
-    ai_api_key: str = ""
-    ai_base_url: str = "https://api.openai.com/v1"
-    ai_model: str = "gpt-4.1-mini"
     agentscope_base_url: str = "http://127.0.0.1:18642"
     agentscope_service_token: str = ""
     dobby_agent_tool_token: str = ""

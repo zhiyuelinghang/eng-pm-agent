@@ -32,7 +32,7 @@ class WeKnoraProjectKnowledgeTool(ToolBase):
     name = "weknora_query_project_knowledge"
     description = (
         "查询当前工程项目绑定的 WeKnora 机器人。仅向用户明确点名或"
-        "Dobby 动态调用的受权资料助手提供。查询范围已由平台后端按当前用户"
+        "Dobby 动态调用的受权知识库助手提供。查询范围已由平台后端按当前用户"
         "权限锁定，"
         "不得扩大或改写。仅在问题需要工程资料依据时调用，普通问候、感谢、"
         "称呼偏好或上下文已足够的追问无需调用。返回答案与资料引用后，应结合"

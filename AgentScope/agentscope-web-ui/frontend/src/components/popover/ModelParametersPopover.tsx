@@ -1,7 +1,6 @@
 import { ChevronDown, SlidersHorizontal } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
 
-import type { ChatModelConfig, ModelCard, TTSModelCard, TTSModelConfig } from '@/api';
+import type { ChatModelConfig, TTSModelCard, TTSModelConfig } from '@/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -196,12 +195,8 @@ function StringField({ id, label, required, prop, value, onChange }: FieldProps)
 // ---------------------------------------------------------------------------
 
 interface Props {
-	/** Currently selected primary model — used to read the parameter schema. */
+	/** Currently selected primary model. */
 	selectedModel: ChatModelConfig | null;
-	/** Model card describing the primary model's parameter schema. */
-	modelCard: ModelCard | null;
-	/** Called when the user edits the primary model's parameters. */
-	onChange: (parameters: Record<string, unknown>) => void;
 	/** Currently selected fallback model. `null` means no fallback configured. */
 	selectedFallbackModel: ChatModelConfig | null;
 	/** Called when the user picks a fallback model or clears the selection. */
@@ -210,54 +205,19 @@ interface Props {
 	selectedTTSModel: TTSModelConfig | null;
 	/** Called when the user picks a TTS model+voice or disables TTS. */
 	onTTSChange: (config: TTSModelConfig | null) => void;
-	/** Whether the conversation may override primary-model parameters. */
-	showPrimaryParameters?: boolean;
 }
 
-/**
- * A unified settings dropdown for the active chat model. Exposes two
- * sub-menus:
- *   - "Fallback model": pick a backup model invoked when the primary fails.
- *   - "Parameters": edit the primary model's inference parameters inline.
- *
- * The trigger is disabled until a primary model is selected, since both
- * sub-menus are meaningless without one.
- */
+/** Conversation options for fallback models and speech playback. */
 export function ModelParametersPopover({
 	selectedModel,
-	modelCard,
-	onChange,
 	selectedFallbackModel,
 	onFallbackChange,
 	selectedTTSModel,
 	onTTSChange,
-	showPrimaryParameters = false,
 }: Props) {
-	const [values, setValues] = useState<Record<string, unknown>>({});
 	const { t } = useTranslation();
 	const { groups } = useAvailableModels();
 	const { groups: ttsGroups } = useAvailableTTSModels();
-
-	const schema = modelCard?.parameter_schema as ParameterSchema | undefined;
-	const properties = schema?.properties ?? {};
-	const required = schema?.required ?? [];
-	const entries = Object.entries(properties);
-
-	useEffect(() => {
-		setValues(selectedModel?.parameters ?? {});
-	}, [selectedModel?.credential_id, selectedModel?.model, selectedModel?.parameters]);
-
-	const handleChange = useCallback(
-		(key: string, value: unknown) => {
-			const next = { ...values, [key]: value };
-			if (value === '' || value === undefined) {
-				delete next[key];
-			}
-			setValues(next);
-			onChange(next);
-		},
-		[values, onChange],
-	);
 
 	const handleSelectFallback = (type: string, credentialId: string, model: string) => {
 		onFallbackChange({
@@ -274,7 +234,13 @@ export function ModelParametersPopover({
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
-				<Button variant="ghost" size="icon-sm" disabled={disabled}>
+				<Button
+					variant="ghost"
+					size="icon-sm"
+					disabled={disabled}
+					aria-label={t('model-parameters.settingsLabel')}
+					title={t('model-parameters.settingsLabel')}
+				>
 					<SlidersHorizontal />
 				</Button>
 			</DropdownMenuTrigger>
@@ -344,79 +310,6 @@ export function ModelParametersPopover({
 					</DropdownMenuSubContent>
 				</DropdownMenuSub>
 
-				{/* ----- Primary model parameters ----- */}
-				{showPrimaryParameters && (
-					<DropdownMenuSub>
-						<DropdownMenuSubTrigger>
-							{t('model-parameters.parametersLabel')}
-						</DropdownMenuSubTrigger>
-						<DropdownMenuSubContent className="w-80 max-h-96 overflow-y-auto p-3">
-							<div className="mb-3">
-								<p className="text-sm font-medium">{t('model-parameters.title')}</p>
-								<p className="text-muted-foreground text-xs">
-									{t('model-parameters.description')}
-								</p>
-							</div>
-							{entries.length === 0 ? (
-								<p className="text-muted-foreground text-xs">
-									{t('model-parameters.empty')}
-								</p>
-							) : (
-								<div
-									className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-3"
-									onPointerDown={(e) => e.stopPropagation()}
-									onKeyDown={(e) => e.stopPropagation()}
-								>
-									{entries.map(([key, prop]) => {
-										const { type: effectiveType, enumValues } =
-											resolveType(prop);
-										const label = prop.title ?? key;
-										const isRequired = required.includes(key);
-										const fieldProps: FieldProps = {
-											id: `param-${key}`,
-											label,
-											required: isRequired,
-											prop,
-											value:
-												values[key] ?? modelCard?.default_parameters?.[key],
-											onChange: (v) => handleChange(key, v),
-										};
-
-										let field: React.ReactNode;
-										if (effectiveType === 'boolean') {
-											field = <BooleanField {...fieldProps} />;
-										} else if (enumValues) {
-											field = <EnumField {...fieldProps} />;
-										} else if (
-											effectiveType === 'number' ||
-											effectiveType === 'integer'
-										) {
-											field = <NumberField {...fieldProps} />;
-										} else {
-											field = <StringField {...fieldProps} />;
-										}
-
-										return (
-											<Tooltip key={key}>
-												<TooltipTrigger asChild>
-													<div className="col-span-2 grid grid-cols-subgrid items-center">
-														{field}
-													</div>
-												</TooltipTrigger>
-												{prop.description && (
-													<TooltipContent side="left">
-														{prop.description}
-													</TooltipContent>
-												)}
-											</Tooltip>
-										);
-									})}
-								</div>
-							)}
-						</DropdownMenuSubContent>
-					</DropdownMenuSub>
-				)}
-
 				{/* ----- TTS ----- */}
 				<DropdownMenuSub>
 					<DropdownMenuSubTrigger>
@@ -472,7 +365,7 @@ export function ModelParametersPopover({
 													{m.realtime && (
 														<Badge
 															variant="outline"
-															className="ml-1.5 text-[10px] px-1 py-0"
+															className="ml-1.5 text-xs px-1 py-0"
 														>
 															Realtime
 														</Badge>

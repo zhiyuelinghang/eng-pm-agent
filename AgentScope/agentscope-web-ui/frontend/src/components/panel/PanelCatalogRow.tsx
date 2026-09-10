@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 
+import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 
 interface PanelCatalogCheckbox {
@@ -33,10 +35,14 @@ export function PanelCatalogRow({
 	onOpen,
 	openLabel,
 }: PanelCatalogRowProps) {
+	const { i18n } = useTranslation();
 	const content = (
 		<>
 			<span className="flex min-w-0 items-center gap-2">
-				<span className="block min-w-0 flex-1 truncate text-sm font-medium" title={title}>
+				<span
+					className="block min-w-0 flex-1 break-words text-sm font-medium"
+					title={title}
+				>
 					{title}
 				</span>
 				{badge ? <span className="shrink-0">{badge}</span> : null}
@@ -72,17 +78,17 @@ export function PanelCatalogRow({
 					className="mt-0.5"
 				/>
 			) : null}
-			{onOpen ? (
-				<button
-					type="button"
-					className="min-w-0 flex-1 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+			<div className="min-w-0 flex-1">{content}</div>
+			{onOpen && (
+				<Button
+					variant="ghost"
+					size="sm"
+					className="shrink-0 text-[#c95622]"
 					onClick={onOpen}
-					aria-label={openLabel ?? title}
+					aria-label={`${i18n.language.startsWith('zh') ? '查看详情' : 'View details'} · ${openLabel ?? title}`}
 				>
-					{content}
-				</button>
-			) : (
-				<div className="min-w-0 flex-1">{content}</div>
+					{i18n.language.startsWith('zh') ? '查看详情' : 'View details'}
+				</Button>
 			)}
 		</div>
 	);

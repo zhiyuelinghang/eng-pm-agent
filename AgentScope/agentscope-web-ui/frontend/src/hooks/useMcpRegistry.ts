@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { mcpRegistryApi } from '@/api';
 import type { ManagedMCPPackage } from '@/api';
@@ -6,22 +6,31 @@ import type { ManagedMCPPackage } from '@/api';
 export function useMcpRegistry(agentId: string | null) {
 	const [packages, setPackages] = useState<ManagedMCPPackage[]>([]);
 	const [loading, setLoading] = useState(false);
+	const [loadedAgentId, setLoadedAgentId] = useState<string | null>(null);
+	const request = useRef(0);
 	const [uploading, setUploading] = useState(false);
 	const [error, setError] = useState<Error | null>(null);
 
 	const refetch = useCallback(async () => {
+		const ticket = ++request.current;
 		if (!agentId) {
 			setPackages([]);
+			setLoadedAgentId(null);
+			setLoading(false);
 			return;
 		}
 		setLoading(true);
 		setError(null);
 		try {
-			setPackages(await mcpRegistryApi.list(agentId));
+			const next = await mcpRegistryApi.list(agentId);
+			if (ticket === request.current) setPackages(next);
 		} catch (reason) {
-			setError(reason as Error);
+			if (ticket === request.current) setError(reason as Error);
 		} finally {
-			setLoading(false);
+			if (ticket === request.current) {
+				setLoadedAgentId(agentId);
+				setLoading(false);
+			}
 		}
 	}, [agentId]);
 
@@ -53,7 +62,7 @@ export function useMcpRegistry(agentId: string | null) {
 
 	return {
 		packages,
-		loading,
+		loading: loading || (agentId !== null && loadedAgentId !== agentId),
 		uploading,
 		error,
 		refetch,

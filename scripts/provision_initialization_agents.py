@@ -47,10 +47,8 @@ class CollaborationAgentSpec:
     description: str
     category: str
     role: str
-    agent_level: str
     published: bool
     allow_global_main_call: bool
-    project_knowledge_enabled: bool
     mcp_ids: tuple[str, ...]
     interaction_keys: tuple[str, ...]
     system_prompt: str
@@ -105,21 +103,14 @@ def _agent_spec(payload: dict[str, Any]) -> InitializationAgentSpec:
 
 
 def _collaboration_agent_spec(payload: dict[str, Any]) -> CollaborationAgentSpec:
-    level = str(payload.get("agent_level") or "")
-    if level not in {"management", "worker"}:
-        raise RuntimeError(f"协同智能体“{payload.get('name')}”层级无效。")
     return CollaborationAgentSpec(
         key=str(payload["key"]),
         name=str(payload["name"]),
         description=str(payload["description"]),
         category=str(payload["category"]),
         role=str(payload["role"]),
-        agent_level=level,
         published=bool(payload.get("published", True)),
         allow_global_main_call=bool(payload.get("allow_global_main_call", False)),
-        project_knowledge_enabled=bool(
-            payload.get("project_knowledge_enabled", False),
-        ),
         mcp_ids=tuple(str(value) for value in payload.get("mcp_ids") or []),
         interaction_keys=tuple(
             str(value) for value in payload.get("interaction_keys") or []
@@ -225,15 +216,9 @@ def _platform_config(
     config.update(
         {
             "role": "system_internal",
-            "agent_level": (
-                "management"
-                if spec.initialization_role == "orchestrator"
-                else "worker"
-            ),
             "enabled": True,
             "published": False,
             "allow_global_main_call": False,
-            "project_knowledge_enabled": False,
             "initialization_role": spec.initialization_role,
             "description": spec.description,
             "category": "项目初始化",
@@ -482,9 +467,9 @@ _DOBBY_POLICY = f"""{_DOBBY_POLICY_START}
 使用运行时新建智能体。用户明确 @ 某个智能体时由平台直接路由，不得重复转交。
 普通问候直接回答，不激活项目数据库工具组，不调用记忆或专业智能体。查询基本信息
 上传情况直接调用 dobby_get_project_basic_info_status，不启动子智能体。指定文件和目标
-分类时直接形成修改确认；要求分析资料分类时先调用资料助手。用户已明确风险字段时
+分类时直接形成修改确认；要求分析资料分类时先调用知识库助手。用户已明确风险字段时
 直接形成新增确认；要求从施工资料识别风险时先调用风险研判助手。普通工程资料问题
-需要动态搜索并调用资料助手，不得由你假装已检索资料。
+需要动态搜索并调用知识库助手，不得由你假装已检索资料。
 所有写操作必须通过登记的语义化工具并等待用户确认。任务安排必须交给任务助手
 生成草稿，确认前不得发布。专业智能体失败时先检查 agent_run_status，再自行重试、
 切换或在无法恢复时向用户说明。不得把子智能体原始错误直接甩给用户。只传目标
@@ -533,11 +518,9 @@ def _upsert_collaboration_agent(
     platform_config.update(
         {
             "role": spec.role,
-            "agent_level": spec.agent_level,
             "enabled": True,
             "published": spec.published,
             "allow_global_main_call": spec.allow_global_main_call,
-            "project_knowledge_enabled": spec.project_knowledge_enabled,
             "description": spec.description,
             "category": spec.category,
             "sort_order": int(platform_config.get("sort_order") or 200),
@@ -647,12 +630,6 @@ def provision(base_url: str, *, replace_skills: bool = False) -> None:
             raise RuntimeError("全局主智能体必须先配置固定对话模型。")
 
         dobby_platform_config = dict(template_data.get("platform_config") or {})
-        dobby_platform_config.update(
-            {
-                "agent_level": "management",
-                "project_knowledge_enabled": False,
-            },
-        )
         _request(
             client,
             "PATCH",

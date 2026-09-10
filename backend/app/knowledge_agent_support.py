@@ -64,7 +64,7 @@ def knowledge_entry_prompt(db, conversation):
         return ''
     return (
         '\n<knowledge-chat-entry>\n'
-        '当前入口为工程平台的项目资料问答，你是管理端配置的资料助手。'
+        '当前入口为工程平台的项目资料问答，你是管理端配置的知识库助手。'
         '保持平台身份，不以 WeKnora 或检索服务自称。'
         '普通问候、感谢、称呼偏好及已有上下文足够的追问直接处理，不为这些消息查询资料。'
         '问题涉及工程文件、规范、合同或需核实资料依据时，按需调用项目知识库工具；'
@@ -82,7 +82,7 @@ def public_knowledge_assistant(item):
     if item is None:
         return None
     from .agent_api_support import _public_agent_catalog_item
-    return {**_public_agent_catalog_item(item), 'name': '资料助手',
+    return {**_public_agent_catalog_item(item), 'name': '知识库助手',
             'description': '查阅项目资料，结合已授权的项目工具回答问题。'}
 
 
@@ -90,9 +90,9 @@ def require_knowledge_agent(catalog, agent_id=None):
     """Only the platform assignment can choose the knowledge-chat agent."""
     selected = catalog.get('knowledge_assistant')
     if not selected or not selected.get('enabled'):
-        raise HTTPException(status_code=409, detail='资料助手尚未分配或已停用，请在智能体管理端「平台设置 → 资料助手」中配置。')
+        raise HTTPException(status_code=409, detail='知识库助手暂不可用，请在智能体管理端「平台主智能体 → 知识库助手」中检查配置。')
     if agent_id is not None and selected.get('id') != agent_id:
-        raise HTTPException(status_code=409, detail='平台指定的资料助手已变更，请新建对话。原有记录仍可查看。')
+        raise HTTPException(status_code=409, detail='平台指定的知识库助手已变更，请新建对话。原有记录仍可查看。')
     if not selected.get('model_ready') or not selected.get('project_knowledge_enabled'):
-        raise HTTPException(status_code=409, detail='资料助手配置不完整，请检查固定模型和「启用项目资料查询」。')
+        raise HTTPException(status_code=409, detail='知识库助手配置不完整，请检查固定模型和外部知识库连接。')
     return public_knowledge_assistant(selected)

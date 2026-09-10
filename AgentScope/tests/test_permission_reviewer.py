@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import IsolatedAsyncioTestCase, TestCase
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from agentscope.agent import Agent
 from agentscope.app import create_app
@@ -15,6 +15,7 @@ from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app._service._permission_review import (
     ModelPermissionReviewer,
     PermissionReviewerMiddleware,
+    PermissionReviewService,
 )
 from agentscope.app.storage import (
     AsyncSQLAlchemyStorage,
@@ -44,7 +45,6 @@ from agentscope.permission import (
 )
 from agentscope.state import AgentState
 from agentscope.tool import ToolBase, ToolChunk, Toolkit
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 
@@ -103,12 +103,12 @@ class AgentPermissionReviewerIntegrationTest(IsolatedAsyncioTestCase):
 
     async def _execute(
         self,
-        action: PermissionReviewAction,
+        action: PermissionReviewAction | None,
         *,
         bypass_immune: bool = False,
         mode: PermissionMode = PermissionMode.AUTO,
-    ) -> tuple[list, _FixedReviewer]:
-        reviewer = _FixedReviewer(action)
+    ) -> tuple[list, _FixedReviewer | None]:
+        reviewer = _FixedReviewer(action) if action is not None else None
         tool = _AskTool(bypass_immune=bypass_immune)
         tool_call = ToolCallBlock(
             id="tool-call",
@@ -131,12 +131,18 @@ class AgentPermissionReviewerIntegrationTest(IsolatedAsyncioTestCase):
             model=model,
             toolkit=Toolkit(tools=[tool]),
             state=state,
-            middlewares=[PermissionReviewerMiddleware(reviewer)],
+            middlewares=[PermissionReviewerMiddleware(reviewer)] if reviewer is not None else [],
         )
         events = [
             event async for event in agent._execute_tool_call(tool_call)
         ]
         return events, reviewer
+
+    async def test_auto_without_reviewer_still_requires_user_confirmation(self) -> None:
+        events, reviewer = await self._execute(None)
+        self.assertIsNone(reviewer)
+        self.assertTrue(any(isinstance(event, RequireUserConfirmEvent) for event in events))
+        self.assertFalse(any(isinstance(event, ToolResultEndEvent) for event in events))
 
     async def test_allow_once_executes_without_human_prompt(self) -> None:
         events, reviewer = await self._execute(
@@ -184,105 +190,24 @@ class AgentPermissionReviewerIntegrationTest(IsolatedAsyncioTestCase):
 
 
 class AutoPermissionModeRouterTest(IsolatedAsyncioTestCase):
-    """Ensure Auto cannot be selected without an enabled reviewer."""
+    """Auto can be saved independently of whether its reviewer is configured."""
 
-    @staticmethod
-    def _access() -> SimpleNamespace:
-        return SimpleNamespace(
-            resolve_agent=AsyncMock(
-                return_value=SimpleNamespace(
-                    data=SimpleNamespace(
-                        model_policy=SimpleNamespace(
-                            mode="inherit_session",
-                        ),
-                    ),
-                ),
-            ),
-        )
-
-    async def test_auto_mode_rejected_when_reviewer_is_disabled(self) -> None:
-        session = SessionRecord(
-            user_id="user",
-            agent_id="agent",
-            config=SessionConfig(workspace_id="workspace"),
-        )
-        storage = SimpleNamespace(
-            get_session=AsyncMock(return_value=session),
-            upsert_session=AsyncMock(),
-        )
-        reviewer_service = SimpleNamespace(
-            get_config=AsyncMock(
-                return_value=SimpleNamespace(
-                    data=PermissionReviewerConfigData(enabled=False),
-                ),
-            ),
-        )
-
-        with self.assertRaises(HTTPException) as raised:
-            await update_session(
-                session_id=session.id,
-                body=UpdateSessionRequest(
-                    permission_mode=PermissionMode.AUTO,
-                ),
-                agent_id=session.agent_id,
-                user_id=session.user_id,
-                storage=storage,
-                access=self._access(),
-                permission_review_service=reviewer_service,
-                principal=AgentScopePrincipal(
-                    kind="management",
-                    subject=session.user_id,
-                ),
-            )
-
-        self.assertEqual(raised.exception.status_code, 422)
-        storage.upsert_session.assert_not_awaited()
-
-    async def test_auto_mode_is_persisted_when_reviewer_is_enabled(
-        self,
-    ) -> None:
-        session = SessionRecord(
-            user_id="user",
-            agent_id="agent",
-            config=SessionConfig(workspace_id="workspace"),
-        )
-        storage = SimpleNamespace(
-            get_session=AsyncMock(return_value=session),
-            upsert_session=AsyncMock(return_value=session),
-        )
-        reviewer_service = SimpleNamespace(
-            get_config=AsyncMock(
-                return_value=SimpleNamespace(
-                    data=PermissionReviewerConfigData(
-                        enabled=True,
-                        credential_id="credential",
-                        model="reviewer-model",
-                    ),
-                ),
-            ),
-        )
-
-        await update_session(
-            session_id=session.id,
-            body=UpdateSessionRequest(
-                permission_mode=PermissionMode.AUTO,
-            ),
-            agent_id=session.agent_id,
-            user_id=session.user_id,
-            storage=storage,
-            access=self._access(),
-            permission_review_service=reviewer_service,
-            principal=AgentScopePrincipal(
-                kind="management",
-                subject=session.user_id,
-            ),
-        )
-
-        persisted_state = storage.upsert_session.await_args.kwargs["state"]
-        self.assertEqual(
-            persisted_state.permission_context.mode,
-            PermissionMode.AUTO,
-        )
+    async def test_auto_mode_is_persisted_without_a_configured_reviewer(self) -> None:
+        session = SessionRecord(user_id="user", agent_id="agent",
+            config=SessionConfig(workspace_id="workspace"))
+        storage = SimpleNamespace(get_session=AsyncMock(return_value=session),
+            get_platform_settings=AsyncMock(return_value=None),
+            upsert_session=AsyncMock(return_value=session))
+        access = SimpleNamespace(resolve_agent=AsyncMock(return_value=SimpleNamespace(
+            data=SimpleNamespace(platform_config=SimpleNamespace(permission_mode=PermissionMode.AUTO),
+                model_policy=SimpleNamespace(mode="inherit_session")))))
+        await update_session(session_id=session.id,
+            body=UpdateSessionRequest(permission_mode=PermissionMode.AUTO),
+            agent_id=session.agent_id, user_id=session.user_id,
+            storage=storage, access=access,
+            principal=AgentScopePrincipal(kind="management", subject=session.user_id))
+        persisted = storage.upsert_session.await_args.kwargs["state"]
+        self.assertEqual(persisted.permission_context.mode, PermissionMode.AUTO)
 
 
 class ModelPermissionReviewerTest(IsolatedAsyncioTestCase):
@@ -315,9 +240,8 @@ class ModelPermissionReviewerTest(IsolatedAsyncioTestCase):
             ),
         )
         reviewer = ModelPermissionReviewer(
-            models=[("review-model", model)],
+            model_name="review-model", model=model,
             config=PermissionReviewerConfigData(
-                enabled=True,
                 credential_id="credential",
                 model="review-model",
             ),
@@ -340,9 +264,8 @@ class ModelPermissionReviewerTest(IsolatedAsyncioTestCase):
             ),
         )
         reviewer = ModelPermissionReviewer(
-            models=[("review-model", model)],
+            model_name="review-model", model=model,
             config=PermissionReviewerConfigData(
-                enabled=True,
                 credential_id="credential",
                 model="review-model",
                 confidence_threshold=0.9,
@@ -362,9 +285,8 @@ class ModelPermissionReviewerTest(IsolatedAsyncioTestCase):
             generate_structured_output=AsyncMock(),
         )
         reviewer = ModelPermissionReviewer(
-            models=[("review-model", model)],
+            model_name="review-model", model=model,
             config=PermissionReviewerConfigData(
-                enabled=True,
                 credential_id="credential",
                 model="review-model",
             ),
@@ -386,9 +308,8 @@ class ModelPermissionReviewerTest(IsolatedAsyncioTestCase):
             generate_structured_output=AsyncMock(),
         )
         reviewer = ModelPermissionReviewer(
-            models=[("review-model", model)],
+            model_name="review-model", model=model,
             config=PermissionReviewerConfigData(
-                enabled=True,
                 credential_id="credential",
                 model="review-model",
             ),
@@ -403,50 +324,23 @@ class ModelPermissionReviewerTest(IsolatedAsyncioTestCase):
         self.assertEqual(result.source, "hard_rule")
         model.generate_structured_output.assert_not_awaited()
 
-    async def test_fallback_model_is_used_when_primary_fails(self) -> None:
-        primary = SimpleNamespace(
-            generate_structured_output=AsyncMock(
-                side_effect=RuntimeError("primary unavailable"),
-            ),
-        )
-        fallback = SimpleNamespace(
-            generate_structured_output=AsyncMock(
-                return_value=SimpleNamespace(
-                    content={
-                        "action": "allow_once",
-                        "risk": "low",
-                        "confidence": 0.98,
-                        "reason": "备用模型判断为安全。",
-                    },
-                ),
-            ),
-        )
-        reviewer = ModelPermissionReviewer(
-            models=[
-                ("primary-model", primary),
-                ("fallback-model", fallback),
-            ],
-            config=PermissionReviewerConfigData(
-                enabled=True,
-                credential_id="credential",
-                model="primary-model",
-                fallback_credential_id="fallback-credential",
-                fallback_model="fallback-model",
-            ),
-        )
+    async def test_single_model_failure_requires_human_confirmation(self) -> None:
+        primary = SimpleNamespace(generate_structured_output=AsyncMock(
+            side_effect=RuntimeError("primary unavailable")))
+        reviewer = ModelPermissionReviewer(model_name="primary-model", model=primary,
+            config=PermissionReviewerConfigData(credential_id="credential", model="primary-model"))
         result = await reviewer.review(self._request())
-        self.assertEqual(result.action, PermissionReviewAction.ALLOW_ONCE)
-        self.assertEqual(result.model, "fallback-model")
-        self.assertEqual(result.source, "fallback_model")
+        self.assertEqual(result.action, PermissionReviewAction.HUMAN_REQUIRED)
+        self.assertEqual(result.source, "model_error")
+        primary.generate_structured_output.assert_awaited_once()
 
     async def test_credential_fields_are_human_only(self) -> None:
         model = SimpleNamespace(
             generate_structured_output=AsyncMock(),
         )
         reviewer = ModelPermissionReviewer(
-            models=[("review-model", model)],
+            model_name="review-model", model=model,
             config=PermissionReviewerConfigData(
-                enabled=True,
                 credential_id="credential",
                 model="review-model",
             ),
@@ -474,9 +368,8 @@ class ModelPermissionReviewerTest(IsolatedAsyncioTestCase):
             ),
         )
         reviewer = ModelPermissionReviewer(
-            models=[("review-model", model)],
+            model_name="review-model", model=model,
             config=PermissionReviewerConfigData(
-                enabled=True,
                 credential_id="credential",
                 model="review-model",
             ),
@@ -502,7 +395,6 @@ class PermissionReviewerSQLStorageTest(IsolatedAsyncioTestCase):
         )
         async with storage:
             config = PermissionReviewerConfigData(
-                enabled=True,
                 credential_id="credential",
                 model="review-model",
             )
@@ -552,7 +444,7 @@ class PermissionReviewerSQLStorageTest(IsolatedAsyncioTestCase):
 class PermissionReviewerRouterTest(TestCase):
     """Smoke-test the real FastAPI routes and lifespan wiring."""
 
-    def test_get_and_update_disabled_config(self) -> None:
+    def test_unconfigured_get_and_complete_binding_save(self) -> None:
         with TemporaryDirectory() as temp_dir:
             db_path = Path(temp_dir) / "router.db"
             storage = AsyncSQLAlchemyStorage(
@@ -573,26 +465,22 @@ class PermissionReviewerRouterTest(TestCase):
                     headers=headers,
                 )
                 self.assertEqual(initial.status_code, 200)
-                self.assertFalse(initial.json()["config"]["enabled"])
+                self.assertIsNone(initial.json()["config"]["credential_id"])
+                self.assertIsNone(initial.json()["config"]["model"])
+                self.assertIsNone(initial.json()["updated_at"])
+                self.assertNotIn("enabled", initial.json()["config"])
 
-                updated = client.put(
-                    "/credential/system/permission-reviewer",
-                    headers=headers,
-                    json={
-                        "enabled": False,
-                        "credential_id": None,
-                        "model": None,
-                        "parameters": {},
-                        "fallback_credential_id": None,
-                        "fallback_model": None,
-                        "fallback_parameters": {},
-                        "confidence_threshold": 0.9,
-                        "max_auto_risk": "low",
-                        "timeout_seconds": 20,
-                    },
-                )
+                invalid = client.put("/credential/system/permission-reviewer",
+                    headers=headers, json={"credential_id": None, "model": None})
+                self.assertEqual(invalid.status_code, 422)
+                payload = {"credential_id": "credential", "model": "review-model", "parameters": {},
+                    "confidence_threshold": 0.9, "max_auto_risk": "low", "timeout_seconds": 20}
+                for old_key in ("enabled", "fallback_credential_id", "fallback_model", "fallback_parameters"):
+                    invalid = client.put("/credential/system/permission-reviewer",
+                        headers=headers, json={**payload, old_key: None})
+                    self.assertEqual(invalid.status_code, 422)
+                with patch.object(PermissionReviewService, "_validate_binding", AsyncMock(return_value="test")):
+                    updated = client.put("/credential/system/permission-reviewer", headers=headers, json=payload)
                 self.assertEqual(updated.status_code, 200)
-                self.assertEqual(
-                    updated.json()["config"]["confidence_threshold"],
-                    0.9,
-                )
+                self.assertEqual(updated.json()["config"], payload)
+                self.assertIsNotNone(updated.json()["updated_at"])

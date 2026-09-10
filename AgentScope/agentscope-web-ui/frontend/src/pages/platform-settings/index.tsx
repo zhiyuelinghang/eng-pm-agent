@@ -38,7 +38,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useAgents } from '@/hooks/useAgents';
 import { useTranslation } from '@/i18n/useI18n';
 
-type AssignmentKey = 'main' | 'initializer' | 'taskAssistant' | 'knowledgeAssistant';
+export type AssignmentKey = 'main' | 'initializer' | 'taskAssistant' | 'knowledgeAssistant';
 
 const validationVersionKey = (binding: PlatformMCPVersionBinding) =>
 	`${binding.package_id}@${binding.version}`;
@@ -57,9 +57,21 @@ function isMainCandidate(agent: AgentView) {
 	);
 }
 
-export function PlatformSettingsPage() {
+export function PlatformSettingsPage({
+	initialAssignment = 'main',
+	embedded = false,
+	validationOnly = false,
+	onDirtyChange,
+	onBusyChange,
+}: {
+	initialAssignment?: AssignmentKey;
+	embedded?: boolean;
+	validationOnly?: boolean;
+	onDirtyChange?: (dirty: boolean) => void;
+	onBusyChange?: (busy: boolean) => void;
+} = {}) {
 	const { t } = useTranslation();
-	const { agents, loading: agentsLoading, refetch } = useAgents();
+	const { agents, loading: agentsLoading, error: agentsError, refetch } = useAgents();
 	const [settings, setSettings] = useState<PlatformSettings | null>(null);
 	const [validationConfig, setValidationConfig] =
 		useState<ProjectInitializationValidationMCPConfig | null>(null);
@@ -70,12 +82,14 @@ export function PlatformSettingsPage() {
 		null,
 	);
 	const validationUploadRef = useRef<HTMLInputElement>(null);
-	const [activeAssignment, setActiveAssignment] = useState<AssignmentKey>('main');
+	const [activeAssignment, setActiveAssignment] = useState<AssignmentKey>(initialAssignment);
 	const [mainSelectedId, setMainSelectedId] = useState<string>('');
 	const [initializerSelectedId, setInitializerSelectedId] = useState<string>('');
 	const [taskAssistantSelectedId, setTaskAssistantSelectedId] = useState<string>('');
 	const [knowledgeAssistantSelectedId, setKnowledgeAssistantSelectedId] = useState('');
 	const [loading, setLoading] = useState(true);
+	const [loadError, setLoadError] = useState('');
+	const [attempt, setAttempt] = useState(0);
 	const [savingMain, setSavingMain] = useState(false);
 	const [savingInitializer, setSavingInitializer] = useState(false);
 	const [savingTaskAssistant, setSavingTaskAssistant] = useState(false);
@@ -83,6 +97,8 @@ export function PlatformSettingsPage() {
 
 	useEffect(() => {
 		let active = true;
+		setLoading(true);
+		setLoadError('');
 		Promise.all([
 			agentApi.getPlatformSettings(),
 			mcpRegistryApi.getInitializationValidationConfig(),
@@ -102,14 +118,16 @@ export function PlatformSettingsPage() {
 				);
 				await refetch();
 			})
-			.catch(() => undefined)
+			.catch((error) => {
+				if (active) setLoadError(error instanceof Error ? error.message : '配置加载失败');
+			})
 			.finally(() => {
 				if (active) setLoading(false);
 			});
 		return () => {
 			active = false;
 		};
-	}, [refetch]);
+	}, [refetch, attempt]);
 
 	const refreshValidationConfig = async () => {
 		const next = await mcpRegistryApi.getInitializationValidationConfig();
@@ -129,22 +147,37 @@ export function PlatformSettingsPage() {
 		[agents],
 	);
 	const mainCandidates = candidates.filter(
-		(agent) => ![initializerSelectedId, taskAssistantSelectedId, knowledgeAssistantSelectedId].includes(agent.id),
+		(agent) =>
+			![
+				initializerSelectedId,
+				taskAssistantSelectedId,
+				knowledgeAssistantSelectedId,
+			].includes(agent.id),
 	);
 	const initializerCandidates = candidates.filter(
-		(agent) => ![mainSelectedId, taskAssistantSelectedId, knowledgeAssistantSelectedId].includes(agent.id),
+		(agent) =>
+			![mainSelectedId, taskAssistantSelectedId, knowledgeAssistantSelectedId].includes(
+				agent.id,
+			),
 	);
 	const taskAssistantCandidates = candidates.filter(
-		(agent) => ![mainSelectedId, initializerSelectedId, knowledgeAssistantSelectedId].includes(agent.id),
+		(agent) =>
+			![mainSelectedId, initializerSelectedId, knowledgeAssistantSelectedId].includes(
+				agent.id,
+			),
 	);
 	const knowledgeAssistantCandidates = candidates.filter(
-		(agent) => ![mainSelectedId, initializerSelectedId, taskAssistantSelectedId].includes(agent.id),
+		(agent) =>
+			![mainSelectedId, initializerSelectedId, taskAssistantSelectedId].includes(agent.id),
 	);
-	const selectedKnowledgeAssistant = agents.find((agent) => agent.id === knowledgeAssistantSelectedId) ?? null;
-	const currentKnowledgeAssistant = agents.find((agent) => agent.id === settings?.knowledge_assistant_agent_id) ?? null;
-	const knowledgeAssistantIsValid = selectedKnowledgeAssistant !== null && isMainCandidate(selectedKnowledgeAssistant)
-		&& selectedKnowledgeAssistant.data.platform_config.project_knowledge_enabled;
-	const knowledgeAssistantUnchanged = knowledgeAssistantSelectedId === (settings?.knowledge_assistant_agent_id ?? '');
+	const selectedKnowledgeAssistant =
+		agents.find((agent) => agent.id === knowledgeAssistantSelectedId) ?? null;
+	const currentKnowledgeAssistant =
+		agents.find((agent) => agent.id === settings?.knowledge_assistant_agent_id) ?? null;
+	const knowledgeAssistantIsValid =
+		selectedKnowledgeAssistant !== null && isMainCandidate(selectedKnowledgeAssistant);
+	const knowledgeAssistantUnchanged =
+		knowledgeAssistantSelectedId === (settings?.knowledge_assistant_agent_id ?? '');
 	const selectedAgent = agents.find((agent) => agent.id === mainSelectedId) ?? null;
 	const selectedInitializer = agents.find((agent) => agent.id === initializerSelectedId) ?? null;
 	const selectedTaskAssistant =
@@ -203,11 +236,15 @@ export function PlatformSettingsPage() {
 	};
 
 	const saveInitializer = async () => {
-		if (!initializerSelectedId || !initializerIsValid || !selectedValidationVersion) return;
+		if (
+			!selectedValidationVersion ||
+			(!validationOnly && (!initializerSelectedId || !initializerIsValid))
+		)
+			return;
 		setSavingInitializer(true);
 		try {
 			const updated = await agentApi.updatePlatformSettings({
-				project_initializer_agent_id: initializerSelectedId,
+				...(!validationOnly ? { project_initializer_agent_id: initializerSelectedId } : {}),
 				project_initializer_validation_mcp: bindingFromVersion(selectedValidationVersion),
 			});
 			setSettings(updated);
@@ -308,45 +345,72 @@ export function PlatformSettingsPage() {
 		? selectedAgent
 		: isInitializer
 			? selectedInitializer
-			: isTaskAssistant ? selectedTaskAssistant : selectedKnowledgeAssistant;
+			: isTaskAssistant
+				? selectedTaskAssistant
+				: selectedKnowledgeAssistant;
 	const activeCandidates = isMain
 		? mainCandidates
 		: isInitializer
 			? initializerCandidates
-			: isTaskAssistant ? taskAssistantCandidates : knowledgeAssistantCandidates;
+			: isTaskAssistant
+				? taskAssistantCandidates
+				: knowledgeAssistantCandidates;
 	const activeSelectedId = isMain
 		? mainSelectedId
 		: isInitializer
 			? initializerSelectedId
-			: isTaskAssistant ? taskAssistantSelectedId : knowledgeAssistantSelectedId;
+			: isTaskAssistant
+				? taskAssistantSelectedId
+				: knowledgeAssistantSelectedId;
 	const activeValid = isMain
 		? selectedIsValid
 		: isInitializer
 			? initializerIsValid
-			: isTaskAssistant ? taskAssistantIsValid : knowledgeAssistantIsValid;
+			: isTaskAssistant
+				? taskAssistantIsValid
+				: knowledgeAssistantIsValid;
 	const activeUnchanged = isMain
 		? mainUnchanged
 		: isInitializer
 			? initializerUnchanged
-			: isTaskAssistant ? taskAssistantUnchanged : knowledgeAssistantUnchanged;
+			: isTaskAssistant
+				? taskAssistantUnchanged
+				: knowledgeAssistantUnchanged;
 	const activeSaving = isMain
 		? savingMain
 		: isInitializer
 			? savingInitializer
-			: isTaskAssistant ? savingTaskAssistant : savingKnowledgeAssistant;
+			: isTaskAssistant
+				? savingTaskAssistant
+				: savingKnowledgeAssistant;
+	useEffect(() => {
+		onDirtyChange?.(!loading && !activeUnchanged);
+	}, [loading, activeUnchanged, onDirtyChange]);
+	useEffect(() => {
+		onBusyChange?.(activeSaving || uploadingValidation);
+	}, [activeSaving, uploadingValidation, onBusyChange]);
 	const activeCurrent = isMain
 		? currentAgent
 		: isInitializer
 			? currentInitializer
-			: isTaskAssistant ? currentTaskAssistant : currentKnowledgeAssistant;
-	const activeCurrentInvalid = activeCurrent !== null && (!isMainCandidate(activeCurrent)
-		|| (isKnowledgeAssistant && !activeCurrent.data.platform_config.project_knowledge_enabled));
+			: isTaskAssistant
+				? currentTaskAssistant
+				: currentKnowledgeAssistant;
+	const activeCurrentInvalid = activeCurrent !== null && !isMainCandidate(activeCurrent);
 	const activePrefix = isMain
 		? 'platform-settings.main'
 		: isInitializer
 			? 'platform-settings.initializer'
-			: isTaskAssistant ? 'platform-settings.taskAssistant' : 'platform-settings.knowledgeAssistant';
-	const ActiveIcon = isMain ? Bot : isInitializer ? FileSearch : isTaskAssistant ? ListTodo : BookOpen;
+			: isTaskAssistant
+				? 'platform-settings.taskAssistant'
+				: 'platform-settings.knowledgeAssistant';
+	const ActiveIcon = isMain
+		? Bot
+		: isInitializer
+			? FileSearch
+			: isTaskAssistant
+				? ListTodo
+				: BookOpen;
 	const handleAgentSelection = (agentId: string) => {
 		if (isMain) {
 			setMainSelectedId(agentId);
@@ -362,7 +426,9 @@ export function PlatformSettingsPage() {
 		? saveMain
 		: isInitializer
 			? saveInitializer
-			: isTaskAssistant ? saveTaskAssistant : saveKnowledgeAssistant;
+			: isTaskAssistant
+				? saveTaskAssistant
+				: saveKnowledgeAssistant;
 	const selectedValidationIsCurrent = Boolean(
 		selectedValidationVersion &&
 		settings?.project_initializer_validation_mcp &&
@@ -410,9 +476,19 @@ export function PlatformSettingsPage() {
 		},
 	];
 
+	if (loadError || agentsError)
+		return (
+			<div role="alert" className="space-y-4 p-6">
+				<p>{loadError || agentsError?.message}</p>
+				<Button onClick={() => setAttempt((n) => n + 1)}>重新加载</Button>
+			</div>
+		);
 	return (
 		<div className="flex h-full min-h-0 flex-col bg-muted/25">
-			<header className="flex h-16 shrink-0 items-center border-b bg-background px-5">
+			<header
+				hidden={embedded}
+				className="flex h-16 shrink-0 items-center border-b bg-background px-5"
+			>
 				<div>
 					<div className="flex items-center gap-2">
 						<Crown className="size-5 text-primary" />
@@ -425,8 +501,13 @@ export function PlatformSettingsPage() {
 			</header>
 
 			<main className="flex min-h-0 flex-1 flex-col p-4">
-				<div className="grid min-h-0 flex-1 overflow-hidden rounded-xl border bg-background lg:grid-cols-[17.5rem_minmax(0,1fr)]">
-					<aside className="flex min-h-0 flex-col border-b bg-muted/20 lg:border-r lg:border-b-0">
+				<div
+					className={`grid min-h-0 flex-1 overflow-hidden rounded-xl border bg-background ${embedded ? '' : 'lg:grid-cols-[17.5rem_minmax(0,1fr)]'}`}
+				>
+					<aside
+						hidden={embedded}
+						className="flex min-h-0 flex-col border-b bg-muted/20 lg:border-r lg:border-b-0"
+					>
 						<div className="border-b px-5 py-5">
 							<div className="flex items-center justify-between gap-3">
 								<h2 className="font-semibold">
@@ -512,7 +593,10 @@ export function PlatformSettingsPage() {
 					</aside>
 
 					<section className="flex min-h-0 flex-col">
-						<header className="flex flex-wrap items-start justify-between gap-4 border-b px-6 py-5 sm:px-8 sm:py-6">
+						<header
+							hidden={embedded}
+							className="flex flex-wrap items-start justify-between gap-4 border-b px-6 py-5 sm:px-8 sm:py-6"
+						>
 							<div className="flex min-w-0 items-start gap-3">
 								<div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted text-foreground">
 									<ActiveIcon className="size-5" />
@@ -545,7 +629,7 @@ export function PlatformSettingsPage() {
 								</div>
 							) : (
 								<div className="space-y-6">
-									<div className="space-y-2">
+									<div hidden={validationOnly} className="space-y-2">
 										<label
 											className="text-sm font-medium"
 											htmlFor={`${activeAssignment}-agent`}
@@ -553,7 +637,7 @@ export function PlatformSettingsPage() {
 											{t(`${activePrefix}.selector`)}
 										</label>
 										<Select
-											value={isKnowledgeAssistant && !activeSelectedId ? '__unassigned__' : activeSelectedId}
+											value={activeSelectedId}
 											onValueChange={handleAgentSelection}
 										>
 											<SelectTrigger
@@ -565,7 +649,6 @@ export function PlatformSettingsPage() {
 												/>
 											</SelectTrigger>
 											<SelectContent>
-												{isKnowledgeAssistant && <SelectItem value="__unassigned__">{t('platform-settings.knowledgeAssistant.clear')}</SelectItem>}
 												{activeCandidates.map((agent) => (
 													<SelectItem key={agent.id} value={agent.id}>
 														{agent.data.name}
@@ -576,112 +659,118 @@ export function PlatformSettingsPage() {
 										<p className="text-xs leading-relaxed text-muted-foreground">
 											{t(`${activePrefix}.requirement`)}
 										</p>
-										{isKnowledgeAssistant && activeAgent && !activeAgent.data.platform_config.project_knowledge_enabled && (
-											<p role="alert" className="text-sm text-destructive">{t('platform-settings.knowledgeAssistant.missingCapability')}</p>
-										)}
 									</div>
 
-									{activeAgent ? (
-										<section className="rounded-xl border bg-muted/20 p-4 sm:p-5">
-											<div className="flex flex-wrap items-start justify-between gap-4">
-												<div className="flex min-w-0 items-start gap-3">
-													<div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-background shadow-sm ring-1 ring-border">
-														<Bot className="size-5 text-muted-foreground" />
-													</div>
-													<div className="min-w-0">
-														<div className="flex flex-wrap items-center gap-2">
-															<h3 className="font-semibold">
-																{activeAgent.data.name}
-															</h3>
-															<Badge variant="secondary">
-																{isMain
-																	? activeAgent.data
-																			.platform_config
-																			.category
-																	: isInitializer
-																		? t(
-																				'platform-settings.initializer.internal',
-																			)
-																		: (isTaskAssistant || isKnowledgeAssistant)
-																			? t(
-																					`${activePrefix}.roleBadge`,
-																				)
-																			: null}
-															</Badge>
-														</div>
-														<p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-															{activeAgent.data.platform_config
-																.description ||
-																activeAgent.data.invite_config
-																	.invite_description ||
-																t(
-																	'platform-settings.main.noDescription',
-																)}
-														</p>
-													</div>
-												</div>
-												{activeValid && (
-													<Badge
-														variant="outline"
-														className="gap-1.5 bg-background"
-													>
-														<span className="size-1.5 rounded-full bg-emerald-500" />
-														{t(
-															'platform-settings.assignments.available',
-														)}
-													</Badge>
-												)}
-											</div>
-
-											<dl
-												className={`mt-5 grid gap-3 ${isMain ? 'sm:grid-cols-2' : ''}`}
+									{!validationOnly &&
+										(activeAgent ? (
+											<section
+												hidden={embedded}
+												className="rounded-xl border bg-muted/20 p-4 sm:p-5"
 											>
-												<div className="rounded-lg bg-background px-3.5 py-3 ring-1 ring-border/70">
-													<dt className="text-xs text-muted-foreground">
-														{t('platform-settings.main.model')}
-													</dt>
-													<dd className="mt-1 font-mono text-sm font-medium">
-														{activeAgent.data.model_policy
-															.chat_model_config?.model ??
-															t(
-																'platform-settings.main.notConfigured',
+												<div className="flex flex-wrap items-start justify-between gap-4">
+													<div className="flex min-w-0 items-start gap-3">
+														<div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-background shadow-sm ring-1 ring-border">
+															<Bot className="size-5 text-muted-foreground" />
+														</div>
+														<div className="min-w-0">
+															<div className="flex flex-wrap items-center gap-2">
+																<h3 className="font-semibold">
+																	{activeAgent.data.name}
+																</h3>
+																<Badge variant="secondary">
+																	{isMain
+																		? activeAgent.data
+																				.platform_config
+																				.category
+																		: isInitializer
+																			? t(
+																					'platform-settings.initializer.internal',
+																				)
+																			: isTaskAssistant ||
+																				  isKnowledgeAssistant
+																				? t(
+																						`${activePrefix}.roleBadge`,
+																					)
+																				: null}
+																</Badge>
+															</div>
+															<p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+																{activeAgent.data.platform_config
+																	.description ||
+																	activeAgent.data.invite_config
+																		.invite_description ||
+																	t(
+																		'platform-settings.main.noDescription',
+																	)}
+															</p>
+														</div>
+													</div>
+													{activeValid && (
+														<Badge
+															variant="outline"
+															className="gap-1.5 bg-background"
+														>
+															<span className="size-1.5 rounded-full bg-emerald-500" />
+															{t(
+																'platform-settings.assignments.available',
 															)}
-													</dd>
+														</Badge>
+													)}
 												</div>
-												{isMain && (
+
+												<dl
+													className={`mt-5 grid gap-3 ${isMain ? 'sm:grid-cols-2' : ''}`}
+												>
 													<div className="rounded-lg bg-background px-3.5 py-3 ring-1 ring-border/70">
 														<dt className="text-xs text-muted-foreground">
-															{t('platform-settings.main.permission')}
+															{t('platform-settings.main.model')}
 														</dt>
 														<dd className="mt-1 font-mono text-sm font-medium">
-															{
-																activeAgent.data.platform_config
-																	.permission_mode
-															}
+															{activeAgent.data.model_policy
+																.chat_model_config?.model ??
+																t(
+																	'platform-settings.main.notConfigured',
+																)}
 														</dd>
 													</div>
+													{isMain && (
+														<div className="rounded-lg bg-background px-3.5 py-3 ring-1 ring-border/70">
+															<dt className="text-xs text-muted-foreground">
+																{t(
+																	'platform-settings.main.permission',
+																)}
+															</dt>
+															<dd className="mt-1 font-mono text-sm font-medium">
+																{
+																	activeAgent.data.platform_config
+																		.permission_mode
+																}
+															</dd>
+														</div>
+													)}
+												</dl>
+											</section>
+										) : (
+											<Alert>
+												{isMain ? (
+													<ShieldCheck />
+												) : isInitializer ? (
+													<FileSearch />
+												) : isTaskAssistant ? (
+													<ListTodo />
+												) : (
+													<BookOpen />
 												)}
-											</dl>
-										</section>
-									) : (
-										<Alert>
-											{isMain ? (
-												<ShieldCheck />
-											) : isInitializer ? (
-												<FileSearch />
-											) : isTaskAssistant ? (
-												<ListTodo />
-											) : <BookOpen />}
-											<AlertTitle>
-												{t(`${activePrefix}.unconfiguredTitle`)}
-											</AlertTitle>
-											<AlertDescription>
-												{activeCandidates.length === 0
-													? t(`${activePrefix}.noCandidates`)
-													: t(`${activePrefix}.unconfigured`)}
-											</AlertDescription>
-										</Alert>
-									)}
+												<AlertTitle>
+													{t(`${activePrefix}.unconfiguredTitle`)}
+												</AlertTitle>
+												<AlertDescription>
+													{activeCandidates.length === 0
+														? t(`${activePrefix}.noCandidates`)
+														: t(`${activePrefix}.unconfigured`)}
+												</AlertDescription>
+											</Alert>
+										))}
 
 									{isInitializer && (
 										<section className="rounded-xl border bg-muted/20 p-4 sm:p-5">
@@ -862,7 +951,7 @@ export function PlatformSettingsPage() {
 										</section>
 									)}
 
-									{activeCurrentInvalid && (
+									{!validationOnly && activeCurrentInvalid && (
 										<Alert variant="destructive">
 											<AlertTitle>
 												{t(`${activePrefix}.invalidCurrentTitle`)}
@@ -878,15 +967,26 @@ export function PlatformSettingsPage() {
 
 						<footer className="flex flex-col items-stretch justify-between gap-4 border-t bg-muted/20 px-6 py-4 sm:flex-row sm:items-center sm:px-8">
 							<p className="max-w-2xl text-xs leading-relaxed text-muted-foreground">
-								{t(`${activePrefix}.effect`)}
+								{validationOnly
+									? t('platform-settings.initializer.validation.description')
+									: t(`${activePrefix}.effect`)}
 							</p>
 							<Button
 								onClick={saveActiveAssignment}
-								disabled={busy || activeSaving || activeUnchanged || (!activeValid && !(isKnowledgeAssistant && !activeSelectedId))}
+								disabled={
+									busy ||
+									activeSaving ||
+									activeUnchanged ||
+									(validationOnly ? !selectedValidationVersion : !activeValid)
+								}
 								className="shrink-0"
 							>
 								{activeSaving && <Loader2 className="animate-spin" />}
-								{activeSaving ? t('common.saving') : t(`${activePrefix}.save`)}
+								{activeSaving
+									? t('common.saving')
+									: validationOnly
+										? t('common.save')
+										: t(`${activePrefix}.save`)}
 							</Button>
 						</footer>
 					</section>

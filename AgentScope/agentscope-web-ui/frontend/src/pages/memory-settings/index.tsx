@@ -1,107 +1,777 @@
-import { BrainCircuit, Loader2, Save, RotateCcw } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { BrainCircuit, Loader2, RefreshCw, RotateCcw, Save } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useBeforeUnload, useBlocker, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+
 import { agentApi } from '@/api/agent';
+import { ApiError } from '@/api/client';
 import type { MemorySettings, MemorySettingsResponse } from '@/api/types';
 import { LlmSelect } from '@/components/select/LlmSelect';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogFooter,
+	DialogHeader,
+	DialogTitle,
+} from '@/components/ui/dialog';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
+import { useAvailableModels } from '@/hooks/useAvailableModels';
 import { useTranslation } from '@/i18n/useI18n';
 import { formatApiErrorForAlert } from '@/lib/api-error';
+import {
+	memorySettingsChanges,
+	memorySettingsRequest,
+	mergeMemorySettings,
+	pickMemorySettings,
+	sameMemoryValue,
+	validateMemorySettings,
+	type MemorySettingsKey,
+	type MemoryValidationError,
+} from '@/lib/memory-settings';
+
+type BooleanSetting =
+	| 'learning_enabled'
+	| 'learning_interactions_enabled'
+	| 'learning_business_events_enabled'
+	| 'group_learning_enabled';
+type Conflict = { latest: MemorySettingsResponse | null; error: string };
 
 export function MemorySettingsPage() {
 	const { i18n } = useTranslation();
 	const zh = i18n.language.startsWith('zh');
-	const text = (cn: string, en: string) => zh ? cn : en;
+	const text = (cn: string, en: string) => (zh ? cn : en);
 	const navigate = useNavigate();
+	const catalogue = useAvailableModels();
+	const availableModels = useMemo(
+		() =>
+			Object.entries(catalogue.groups).flatMap(([type, credentials]) =>
+				credentials.flatMap(({ credential, models }) =>
+					models.map((model) => ({
+						type,
+						credential_id: credential.id,
+						model: model.name,
+					})),
+				),
+			),
+		[catalogue.groups],
+	);
 	const [response, setResponse] = useState<MemorySettingsResponse | null>(null);
 	const [settings, setSettings] = useState<MemorySettings | null>(null);
-	const [error, setError] = useState('');
-	const [busy, setBusy] = useState(false);
-	useEffect(() => { let active = true; agentApi.getMemorySettings().then((value) => {
-		if (active) { setResponse(value); setSettings(value.settings); }
-	}).catch((err) => { if (active) setError(formatApiErrorForAlert(err)); }); return () => { active = false; }; }, []);
-	const update = <K extends keyof MemorySettings>(key: K, value: MemorySettings[K]) => setSettings((old) => old ? { ...old, [key]: value } : old);
-	const save = async (reset = false) => {
-		if (!settings || !response) return;
-		if (reset && !window.confirm(text('恢复设置默认值？已有记忆不会删除。', 'Reset settings? Existing memories will be preserved.'))) return;
-		setBusy(true);
-		try { const value = reset ? await agentApi.resetMemorySettings(response.revision) : await agentApi.updateMemorySettings({ settings, expected_revision: response.revision });
-			setResponse(value); setSettings(value.settings); toast.success(text('设置已保存', 'Settings saved'));
-		} catch (err) { toast.error(formatApiErrorForAlert(err)); } finally { setBusy(false); }
+	const [loadVersion, setLoadVersion] = useState(0);
+	const [loading, setLoading] = useState(true);
+	const [loadError, setLoadError] = useState('');
+	const [saveError, setSaveError] = useState('');
+	const [validation, setValidation] = useState<MemoryValidationError[]>([]);
+	const [saving, setSaving] = useState(false);
+	const savingRef = useRef(false);
+	const [refreshing, setRefreshing] = useState(false);
+	const [conflict, setConflict] = useState<Conflict | null>(null);
+	const [choices, setChoices] = useState<Partial<Record<MemorySettingsKey, 'local' | 'remote'>>>(
+		{},
+	);
+	const busy = saving || refreshing;
+	const dirty = Boolean(
+		settings && response && !sameMemoryValue(settings, pickMemorySettings(response.settings)),
+	);
+	const blocker = useBlocker(
+		({ currentLocation, nextLocation }) =>
+			(dirty || busy) &&
+			(currentLocation.pathname !== nextLocation.pathname ||
+				currentLocation.search !== nextLocation.search ||
+				currentLocation.hash !== nextLocation.hash),
+	);
+	useBeforeUnload(
+		useCallback(
+			(event) => {
+				if (dirty || busy) {
+					event.preventDefault();
+					event.returnValue = '';
+				}
+			},
+			[dirty, busy],
+		),
+	);
+
+	useEffect(() => {
+		let active = true;
+		setLoading(true);
+		setLoadError('');
+		agentApi
+			.getMemorySettings({ silent: true })
+			.then((value) => {
+				if (active) {
+					setResponse(value);
+					setSettings(pickMemorySettings(value.settings));
+				}
+			})
+			.catch((error) => {
+				if (active) setLoadError(formatApiErrorForAlert(error));
+			})
+			.finally(() => {
+				if (active) setLoading(false);
+			});
+		return () => {
+			active = false;
+		};
+	}, [loadVersion]);
+
+	const readLatest = async () => {
+		setRefreshing(true);
+		try {
+			const latest = await agentApi.getMemorySettings({ silent: true });
+			setConflict({ latest, error: '' });
+			setChoices({});
+		} catch (error) {
+			setConflict({ latest: null, error: formatApiErrorForAlert(error) });
+		} finally {
+			setRefreshing(false);
+		}
 	};
-	if (error) return <div role="alert" className="p-6 text-sm text-destructive">{error}</div>;
-	if (!settings || !response) return <div className="flex items-center gap-2 p-6 text-sm"><Loader2 className="size-4 animate-spin" />{text('正在读取设置', 'Loading settings')}</div>;
-	const number = (key: keyof MemorySettings, title: string, help: string, min: number, max: number, step = 1) => <label key={key} className="block space-y-2 rounded-lg border p-4">
-		<span className="text-sm font-medium">{title}</span><Input type="number" min={min} max={max} step={step} value={String(settings[key])} onChange={(e) => update(key, Number(e.target.value))} />
-		<span className="block text-xs leading-5 text-muted-foreground">{help}</span></label>;
-	const toggle = (key: 'memory_profile_enabled' | 'memory_semantic_search_enabled' | 'memory_index_enabled' | 'learning_enabled' | 'group_learning_enabled' | 'learning_auto_consolidate' | 'learning_capture_corrections' | 'learning_capture_failures' | 'learning_capture_verified_tasks' | 'learning_capture_patterns', title: string, help: string) => <div key={key} className="flex items-start justify-between gap-4 rounded-lg border p-4">
-		<div><label htmlFor={key} className="text-sm font-medium">{title}</label><p className="mt-1 text-xs leading-5 text-muted-foreground">{help}</p></div>
-		<Switch id={key} checked={settings[key]} onCheckedChange={(value) => update(key, value)} /></div>;
-	return <div className="flex h-full min-h-0 flex-col bg-muted/20 text-sm">
-		<header className="flex flex-wrap items-center justify-between gap-4 border-b bg-background px-6 py-4"><div><h1 className="flex items-center gap-2 text-lg font-semibold"><BrainCircuit className="size-5" />{text('记忆设置', 'Memory settings')}</h1>
-			<p className="mt-1 text-xs text-muted-foreground">{text('主模型决定保存内容，正文直接落库，后台建立索引。', 'The main model selects facts; content is saved directly and indexed in the background.')}</p></div>
-			<div className="flex gap-2"><Button variant="outline" disabled={busy} onClick={() => void save(true)}><RotateCcw className="size-4" />{text('恢复默认', 'Reset')}</Button><Button disabled={busy || JSON.stringify(settings) === JSON.stringify(response.settings)} onClick={() => void save()}><Save className="size-4" />{text('保存设置', 'Save')}</Button></div></header>
-		<main className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 sm:p-6">
-			<section className="space-y-4 rounded-xl border bg-background p-5"><h2 className="font-semibold">{text('三个抽屉的保存规则', 'Three-drawer storage')}</h2>
-				<p className="text-sm leading-7">{text('用户级保存跨项目个人资料；用户＋项目级保存项目内私人上下文；项目级保存已授权共享的事实。保存过程不调用分类模型，也不等待向量生成。', 'User memories span projects; user + project memories remain private; project memories contain authorized shared facts. Saving does not call a classification model or wait for embeddings.')}</p>
-				<Button variant="outline" onClick={() => navigate('/memory-management')}>{text('打开记忆管理', 'Open memory management')}</Button>
-			</section>
-			<section className="space-y-4 rounded-xl border bg-background p-5"><h2 className="font-semibold">{text('读取与后台索引', 'Retrieval and indexing')}</h2><div className="grid gap-3 lg:grid-cols-2">
-				{toggle('memory_profile_enabled', text('加载常用个人资料', 'Load essential profile'), text('只读取姓名、称呼和回答详略等明确字段；群聊不加载私人资料。', 'Read exact name, address and response preferences. Private profiles are excluded from group conversations.'))}
-				{toggle('memory_semantic_search_enabled', text('使用语义检索', 'Use semantic retrieval'), text('向量模型就绪时辅助文字检索；未就绪或超时时使用文本检索。', 'Use embeddings when ready; fall back to text retrieval if unavailable or slow.'))}
-				{toggle('memory_index_enabled', text('处理后台索引任务', 'Process index jobs'), text('关闭后暂停建立索引，正文仍可保存、修改及按字段查询；重新开启后继续处理。', 'Pause indexing without stopping content writes or exact lookup. Pending jobs resume when enabled.'))}
-				{number('recall_top_k', text('默认返回条数', 'Default result count'), text('工具单次最多返回 10 条，优先保留相关结果。', 'Return up to 10 relevant records per tool call.'), 1, 10)}
-			</div><p className="text-xs text-muted-foreground">{response.infrastructure.embedding_provider} · {response.infrastructure.embedding_model} · {response.infrastructure.embedding_dimensions} {text('维', 'dimensions')}</p>
-				<p className="text-xs leading-5 text-muted-foreground">{text('索引任务状态、失败原因及重试入口位于记忆管理页面。', 'Index job status, failures and retry controls are available in memory management.')}</p></section>
-			<section className="space-y-4 rounded-xl border bg-background p-5"><h2 className="font-semibold">{text('群聊持续学习', 'Continuous group learning')}</h2>
-				<p className="text-xs leading-6 text-muted-foreground">{text('所有成员的消息均可提供证据，无须 @ 智能体。后台检查不调用模型，满足条件后一次完成价值判断与提炼；允许没有成果，群内不发送总结通知。全体群可以产生项目记忆，子群仅产生有权成员的用户＋项目记忆，个人偏好仅归发言者本人。', 'All members contribute evidence. Scheduling is silent; one model call evaluates and extracts valuable results with visibility-based routing.')}</p>
-				{toggle('group_learning_enabled', text('自动学习群聊消息', 'Learn from group messages'), text('同时受后台学习总开关和全局主智能体的学习权限控制。恢复后继续未处理消息。', 'Also follows the global learning switch and main agent policy.'))}
-				<div className="grid gap-3 lg:grid-cols-2">
-					{number('group_learning_scan_seconds', text('检查间隔（秒）', 'Scan interval (seconds)'), text('默认每 5 分钟检查新增与变更消息；检查本身不调用模型。', 'Check new and changed messages without a model call.'), 30, 3600)}
-					{number('group_learning_message_threshold', text('累计消息触发条数', 'Message threshold'), text('达到条数即可排队；空闲或最长等待也可触发。', 'Queue after this count, idle time, or maximum wait.'), 1, 100)}
-					{number('group_learning_idle_seconds', text('群聊空闲触发（秒）', 'Idle time (seconds)'), text('有待处理消息且安静这么久后，整理尚未完成的讨论。', 'Process pending messages after the group becomes quiet.'), 60, 86400)}
-					{number('group_learning_max_wait_seconds', text('最长等待（秒）', 'Maximum wait (seconds)'), text('避免持续零星发言导致永远无法触发。', 'Prevent low-volume active groups from starving.'), 300, 86400)}
-					{number('group_learning_batch_size', text('每批最多变更条数', 'Changes per batch'), text('多余消息留给下一批；失败保留本批区间，重试不会覆盖已完成批次。', 'Leave excess changes for subsequent batches.'), 1, 100)}
-					{number('group_learning_daily_limit', text('每日群聊批次上限', 'Daily group batch limit'), text('独立于对话学习预算；超出时保留未处理消息。', 'Independent of interactive learning; retain pending messages beyond the limit.'), 1, 2000)}
-				</div><p className="text-xs leading-6 text-muted-foreground">{text('使用下方学习模型；未配置时使用全局主智能体的固定模型。群聊后台任务没有当前会话模型可回退。进度、证据、跳过原因、暂停和重试位于记忆管理。', 'Uses the learning model or the global main agent’s fixed model. Progress, evidence, pause and retry are available in memory management.')}</p>
-			</section>
-			<section className="space-y-4 rounded-xl border bg-background p-5"><h2 className="font-semibold">{text('后台学习', 'Background learning')}</h2>
-				<p className="text-xs leading-6 text-muted-foreground">{text('从实际纠正和任务证据生成反思、经验或操作技能，系统自动判断价值并校验，满足条件直接生效。私人对话按下列事件触发，群聊按上方持续学习策略处理。明确事实直接保存。每个智能体可分别关闭记录、提炼或使用。', 'Automatically evaluate and publish useful lessons from evidence. Private conversations use event triggers; groups use the continuous policy above.')}</p>
-				{toggle('learning_enabled', text('启用后台学习', 'Enable background learning'), text('暂停新素材记录和后台提炼时，保留现有成果与待处理任务。', 'Pausing preserves existing results and jobs.'))}
-				<div className="space-y-2"><p className="text-sm font-medium">{text('学习模型', 'Learning model')}</p><LlmSelect value={settings.learning_model_config} onChange={(value) => update('learning_model_config', value)} onAddCredential={() => navigate('/credential')} allowClear placeholder={text('使用来源智能体／会话模型', 'Use source agent/session model')} clearLabel={text('使用来源智能体／会话模型', 'Use source agent/session model')} /><p className="text-xs leading-5 text-muted-foreground">{text('与对话压缩模型独立。未配置时使用来源智能体固定模型或来源会话模型；不可用时保留任务供重试。', 'Independent of compression. Unavailable models leave retryable jobs.')}</p></div>
-				<div className="grid gap-3 lg:grid-cols-2">
-					{toggle('learning_capture_corrections', text('用户纠正触发', 'User corrections'), text('结合上一条回答记录纠正，不把普通记住指令当成错误。', 'Capture corrections with the previous answer.'))}
-					{toggle('learning_capture_failures', text('失败与修复触发', 'Failures and recovery'), text('单独失败只记录素材；观察到同一工具修复成功后再提炼。', 'Record isolated failures; generate lessons after recovery.'))}
-					{toggle('learning_capture_verified_tasks', text('任务完成触发', 'Task completion'), text('需要新完成的任务和实际工具结果，助手自称完成不够。', 'Require a completed task and actual tool results.'))}
-					{toggle('learning_capture_patterns', text('重复操作触发', 'Repeated patterns'), text('同一归属下重复工具操作达到阈值后提炼。', 'Generate after repeated patterns in the same owner scope.'))}
-					{toggle('learning_auto_consolidate', text('周期合并已验证经验', 'Periodic consolidation'), text('每小时检查；同一归属至少 3 条经验时生成合并候选，同一批版本不重复处理。', 'Check hourly and consolidate at least three lessons in one owner scope. Source versions are processed only once.'))}
-					{number('learning_daily_job_limit', text('每智能体每日自动任务上限', 'Daily jobs per agent'), text('超出后保留素材，可在管理端手动排队。', 'Keep evidence beyond the limit.'), 1, 200)}
-					{number('learning_cooldown_seconds', text('提炼等待／冷却秒数', 'Delay / cooldown seconds'), text('收集任务结果，减少相同事件重复调用模型。', 'Collect results and suppress duplicate calls.'), 0, 3600)}
-					{number('learning_pattern_threshold', text('重复模式触发次数', 'Pattern threshold'), text('重复触发候选提炼，不自动证明方法正确。', 'Repetition does not imply correctness.'), 2, 20)}
-					{number('learning_timeout_seconds', text('单次提炼超时秒数', 'Generation timeout'), text('失败最多自动尝试 3 次，可取消或手动重试。', 'Up to three attempts, with cancel and retry.'), 10, 180)}
-					{number('learning_input_char_limit', text('单次学习材料字符预算', 'Input character budget'), text('限制送入模型的材料长度；完整证据仍保留供审计。', 'Bound model input while retaining full audit evidence.'), 4000, 60000, 1000)}
-					{number('learning_review_days', text('学习成果复核周期（天）', 'Review interval (days)'), text('到期或收到失败反馈时标记复核，不自动删除明确事实。', 'Flag aging lessons and failures without deleting facts.'), 7, 365)}
-					{number('learning_skill_limit', text('单轮最多加载操作技能', 'Skills per turn'), text('仅匹配已启用技能；0 表示不自动加载。', 'Only relevant active skills; zero disables loading.'), 0, 10)}
+	const update = <K extends keyof MemorySettings>(key: K, value: MemorySettings[K]) => {
+		setSettings((previous) => (previous ? { ...previous, [key]: value } : previous));
+		setValidation([]);
+		setSaveError('');
+	};
+	const validationText = (error: MemoryValidationError) => {
+		if (error.code === 'model_required')
+			return text(
+				'启用后台学习前，请选择学习模型。',
+				'Select a learning model before enabling background learning.',
+			);
+		if (error.code === 'source_required')
+			return text(
+				'启用后台学习时，至少选择一个学习来源。',
+				'Enable at least one learning source.',
+			);
+		return text(
+			'该模型当前不可用，请重新选择或清空。',
+			'This model is unavailable. Select another model or clear the selection.',
+		);
+	};
+	const save = async (): Promise<boolean> => {
+		if (!settings || !response || savingRef.current || conflict) return false;
+		const needsCatalogue =
+			settings.learning_enabled ||
+			settings.learning_model_config !== null ||
+			settings.compression_model_config !== null;
+		if (needsCatalogue && (catalogue.loading || catalogue.error)) {
+			setSaveError(
+				text(
+					'模型目录暂不可用，请重新读取后再保存。草稿已保留。',
+					'The model catalogue is unavailable. Reload it before saving. Your draft is preserved.',
+				),
+			);
+			return false;
+		}
+		const errors = validateMemorySettings(settings, availableModels);
+		setValidation(errors);
+		if (errors.length) {
+			setSaveError(
+				text(
+					'请检查标出的设置后再保存。',
+					'Review the highlighted settings before saving.',
+				),
+			);
+			const target = document.getElementById(`memory-${errors[0].field}`);
+			(target?.querySelector<HTMLButtonElement>('button') ?? target)?.focus();
+			return false;
+		}
+		savingRef.current = true;
+		setSaving(true);
+		setSaveError('');
+		try {
+			const value = await agentApi.updateMemorySettings(
+				memorySettingsRequest(settings, response.revision),
+				{ silent: true },
+			);
+			setResponse(value);
+			setSettings(pickMemorySettings(value.settings));
+			toast.success(text('设置已保存', 'Settings saved'));
+			return true;
+		} catch (error) {
+			if (error instanceof ApiError && error.status === 409) {
+				setSaveError(
+					text(
+						'设置已被其他操作更新，尚未覆盖你的草稿。请核对最新设置。',
+						'The settings changed elsewhere. Your draft is preserved. Review the latest values.',
+					),
+				);
+				setConflict({ latest: null, error: '' });
+				await readLatest();
+			} else {
+				setSaveError(formatApiErrorForAlert(error));
+			}
+			return false;
+		} finally {
+			savingRef.current = false;
+			setSaving(false);
+		}
+	};
+	const discard = () => {
+		if (!response) return;
+		setSettings(pickMemorySettings(response.settings));
+		setValidation([]);
+		setSaveError('');
+	};
+	const fieldLabel = (key: MemorySettingsKey) =>
+		({
+			learning_enabled: text('启用后台学习', 'Background learning'),
+			learning_model_config: text('后台学习模型', 'Learning model'),
+			learning_interactions_enabled: text('智能体业务交互', 'Agent interactions'),
+			learning_business_events_enabled: text('已确认业务事件', 'Confirmed business events'),
+			group_learning_enabled: text('群聊消息', 'Group messages'),
+			compression_model_config: text('对话压缩模型', 'Conversation compression model'),
+		})[key];
+	const displayValue = (key: MemorySettingsKey, value: MemorySettings[MemorySettingsKey]) => {
+		if (typeof value === 'boolean') return value ? text('开启', 'On') : text('关闭', 'Off');
+		if (value === null)
+			return key === 'compression_model_config'
+				? text('使用当前对话模型', 'Use conversation model')
+				: text('未配置', 'Not configured');
+		const credential = Object.values(catalogue.groups)
+			.flat()
+			.find((item) => item.credential.id === value.credential_id)?.credential;
+		return `${value.model} · ${String(credential?.data.name || value.credential_id)}`;
+	};
+	const changes =
+		conflict?.latest && settings && response
+			? memorySettingsChanges(response.settings, settings, conflict.latest.settings)
+			: [];
+	const unresolved = changes.some((change) => change.conflict && !choices[change.key]);
+	const resolveConflict = (useLatest: boolean) => {
+		if (!response || !settings || !conflict?.latest) return;
+		const latest = conflict.latest;
+		setSettings(
+			useLatest
+				? pickMemorySettings(latest.settings)
+				: mergeMemorySettings(response.settings, settings, latest.settings, choices),
+		);
+		setResponse(latest);
+		setConflict(null);
+		setChoices({});
+		setValidation([]);
+		setSaveError('');
+	};
+	const fieldError = (field: MemoryValidationError['field']) => {
+		const error = validation.find((item) => item.field === field);
+		return error ? (
+			<p id={`memory-${field}-error`} className="text-sm text-destructive">
+				{validationText(error)}
+			</p>
+		) : null;
+	};
+	const toggle = (key: BooleanSetting, description: string) => (
+		<div key={key} className="flex items-start justify-between gap-6 py-4">
+			<div className="min-w-0 space-y-1">
+				<label htmlFor={`memory-${key}`} className="font-medium">
+					{fieldLabel(key)}
+				</label>
+				<p id={`memory-${key}-hint`} className="text-sm leading-6 text-muted-foreground">
+					{description}
+				</p>
+			</div>
+			<Switch
+				id={`memory-${key}`}
+				aria-describedby={`memory-${key}-hint`}
+				checked={settings?.[key] ?? false}
+				disabled={busy || Boolean(conflict)}
+				onCheckedChange={(value) => update(key, value)}
+				className="mt-1"
+			/>
+		</div>
+	);
+
+	return (
+		<div className="flex h-full min-h-0 flex-col bg-muted/20 text-sm">
+			<header className="shrink-0 border-b bg-background px-6 py-4">
+				<h1 className="flex items-center gap-2 text-lg font-semibold">
+					<BrainCircuit className="size-5" />
+					{text('记忆与学习', 'Memory and learning')}
+				</h1>
+				<p className="mt-2 text-sm leading-6 text-muted-foreground">
+					{text(
+						'系统按职责、业务入口和来源权限安排记忆。这里统一设置后台学习和长对话压缩。',
+						'The system manages memory by duty, entry point, and source permissions. Configure background learning and long-conversation compression here.',
+					)}
+				</p>
+			</header>
+			<main className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+				{loading ? (
+					<div
+						role="status"
+						aria-label={text('正在读取设置', 'Loading settings')}
+						className="space-y-5"
+					>
+						{[4, 2].map((rows, index) => (
+							<div
+								key={index}
+								aria-hidden="true"
+								className="space-y-5 rounded-xl border bg-background p-5"
+							>
+								<Skeleton className="h-5 w-32" />
+								{Array.from({ length: rows }, (_, row) => (
+									<div key={row} className="space-y-3">
+										<Skeleton className="h-4 w-44" />
+										<Skeleton className="h-4 w-3/4" />
+									</div>
+								))}
+							</div>
+						))}
+						<span className="sr-only">{text('正在读取设置', 'Loading settings')}</span>
+					</div>
+				) : loadError ? (
+					<div className="space-y-4 rounded-xl border bg-background p-5">
+						<p className="font-medium">
+							{text('暂时无法读取设置', 'Unable to load settings')}
+						</p>
+						<p role="alert" className="whitespace-pre-wrap text-sm text-destructive">
+							{loadError}
+						</p>
+						<Button
+							variant="outline"
+							onClick={() => setLoadVersion((value) => value + 1)}
+						>
+							<RefreshCw />
+							{text('重新读取', 'Retry')}
+						</Button>
+					</div>
+				) : settings && response ? (
+					<div className="space-y-5">
+						{saveError && (
+							<div
+								role="alert"
+								className="space-y-2 rounded-lg border border-destructive/30 bg-background p-4 text-sm"
+							>
+								<p className="whitespace-pre-wrap text-destructive">{saveError}</p>
+								<p className="text-muted-foreground">
+									{text(
+										'本地更改仍保留在此页面。',
+										'Your unsaved changes are preserved on this page.',
+									)}
+								</p>
+								{(catalogue.error ||
+									validation.some(
+										(item) => item.code === 'model_unavailable',
+									)) && (
+									<Button
+										variant="outline"
+										size="sm"
+										disabled={catalogue.loading}
+										onClick={() => void catalogue.refetch()}
+									>
+										{text('重新读取模型', 'Reload models')}
+									</Button>
+								)}
+							</div>
+						)}
+						{conflict && (
+							<section
+								aria-label={text('处理设置冲突', 'Resolve settings conflict')}
+								className="space-y-4 rounded-xl border bg-background p-5"
+							>
+								<h2 className="font-semibold">
+									{text('核对最新设置', 'Review latest settings')}
+								</h2>
+								<p className="leading-6 text-muted-foreground">
+									{text(
+										'仅一方修改的设置会自动保留；同一项有不同修改时，由你选择。应用选择后仍需点击保存。',
+										'Changes made on only one side are retained. Choose a value when both sides differ. Apply your choices, then save.',
+									)}
+								</p>
+								{refreshing ? (
+									<p className="flex items-center gap-2">
+										<Loader2 className="size-4 animate-spin" />
+										{text('正在读取最新版本', 'Loading latest version')}
+									</p>
+								) : conflict.latest ? (
+									<>
+										<div className="overflow-x-auto rounded-lg border">
+											<table className="w-full text-left text-sm">
+												<thead className="bg-muted/40">
+													<tr>
+														<th className="p-3 font-medium">
+															{text('设置', 'Setting')}
+														</th>
+														<th className="p-3 font-medium">
+															{text('最新保存', 'Latest saved')}
+														</th>
+														<th className="p-3 font-medium">
+															{text('我的草稿', 'My draft')}
+														</th>
+														<th className="p-3 font-medium">
+															{text('采用', 'Keep')}
+														</th>
+													</tr>
+												</thead>
+												<tbody>
+													{changes.map((change) => (
+														<tr key={change.key} className="border-t">
+															<td className="p-3">
+																{fieldLabel(change.key)}
+															</td>
+															<td className="p-3 break-words">
+																{displayValue(
+																	change.key,
+																	conflict.latest!.settings[
+																		change.key
+																	],
+																)}
+															</td>
+															<td className="p-3 break-words">
+																{displayValue(
+																	change.key,
+																	settings[change.key],
+																)}
+															</td>
+															<td className="p-3">
+																{change.conflict ? (
+																	<div className="flex flex-wrap gap-3">
+																		{(
+																			[
+																				'remote',
+																				'local',
+																			] as const
+																		).map((choice) => (
+																			<label
+																				key={choice}
+																				className="flex items-center gap-2 whitespace-nowrap"
+																			>
+																				<input
+																					type="radio"
+																					name={`conflict-${change.key}`}
+																					checked={
+																						choices[
+																							change
+																								.key
+																						] === choice
+																					}
+																					onChange={() =>
+																						setChoices(
+																							(
+																								previous,
+																							) => ({
+																								...previous,
+																								[change.key]:
+																									choice,
+																							}),
+																						)
+																					}
+																					className="size-4 accent-primary"
+																				/>
+																				{choice === 'local'
+																					? text(
+																							'我的草稿',
+																							'My draft',
+																						)
+																					: text(
+																							'最新设置',
+																							'Latest',
+																						)}
+																			</label>
+																		))}
+																	</div>
+																) : change.localChanged ? (
+																	text(
+																		'保留我的修改',
+																		'Keep my change',
+																	)
+																) : (
+																	text(
+																		'采用最新修改',
+																		'Keep latest change',
+																	)
+																)}
+															</td>
+														</tr>
+													))}
+												</tbody>
+											</table>
+										</div>
+										<div className="flex flex-wrap justify-end gap-2">
+											<Button
+												variant="outline"
+												onClick={() => resolveConflict(true)}
+											>
+												{text(
+													'使用最新，放弃草稿',
+													'Use latest and discard draft',
+												)}
+											</Button>
+											<Button
+												disabled={unresolved}
+												onClick={() => resolveConflict(false)}
+											>
+												{text(
+													'应用选择，继续编辑',
+													'Apply choices and continue',
+												)}
+											</Button>
+										</div>
+									</>
+								) : (
+									<div className="space-y-3">
+										<p role="alert" className="text-destructive">
+											{conflict.error ||
+												text(
+													'尚未取得最新版本。',
+													'The latest version has not been loaded.',
+												)}
+										</p>
+										<Button variant="outline" onClick={() => void readLatest()}>
+											<RefreshCw />
+											{text('重新读取最新设置', 'Reload latest settings')}
+										</Button>
+									</div>
+								)}
+							</section>
+						)}
+						<fieldset
+							disabled={busy || Boolean(conflict)}
+							aria-busy={saving}
+							className="space-y-5"
+						>
+							<section className="space-y-4 rounded-xl border bg-background p-5">
+								<div>
+									<h2 className="font-semibold">
+										{text('后台学习', 'Background learning')}
+									</h2>
+									<p className="mt-2 leading-6 text-muted-foreground">
+										{text(
+											'从有来源的交互和正式记录中提炼可复用经验，校验后保存。明确记忆的保存和读取不额外调用学习模型。',
+											'Extract reusable lessons from sourced interactions and confirmed records, then validate and save them. Explicit memory saves and retrieval do not require an extra learning-model call.',
+										)}
+									</p>
+								</div>
+								{toggle(
+									'learning_enabled',
+									text(
+										'关闭后暂停新的学习，保留已有记忆和待处理材料。',
+										'Pausing stops new learning and preserves existing memory and pending material.',
+									),
+								)}
+								<div
+									id="memory-learning_model_config"
+									role="group"
+									aria-labelledby="memory-learning-model-label"
+									tabIndex={-1}
+									className="space-y-2 border-t pt-5"
+								>
+									<p id="memory-learning-model-label" className="font-medium">
+										{fieldLabel('learning_model_config')}
+									</p>
+									<LlmSelect
+										value={settings.learning_model_config}
+										onChange={(value) => update('learning_model_config', value)}
+										onAddCredential={() => navigate('/credential')}
+										allowClear
+										disabled={busy || Boolean(conflict)}
+										catalogue={catalogue}
+										placeholder={text(
+											'请选择后台学习模型',
+											'Select a learning model',
+										)}
+										clearLabel={text('清空学习模型', 'Clear learning model')}
+									/>
+									<p className="leading-6 text-muted-foreground">
+										{text(
+											'独立用于提炼经验，不跟随总控或当前对话模型。启用学习时必须选择可用模型。',
+											'Used independently to extract lessons. It never follows the orchestrator or current conversation model. Enabling learning requires an available model.',
+										)}
+									</p>
+									{fieldError('learning_model_config')}
+								</div>
+								<div
+									id="memory-learning_sources"
+									tabIndex={-1}
+									className="border-t pt-5"
+								>
+									<h3 className="font-medium">
+										{text('学习来源', 'Learning sources')}
+									</h3>
+									<div className="divide-y">
+										{toggle(
+											'learning_interactions_enabled',
+											text(
+												'归集用户纠正和实际执行结果。多级协作按同一次业务运行处理。',
+												'Collect user corrections and actual execution results. Multi-agent collaboration is processed as one business run.',
+											),
+										)}
+										{toggle(
+											'learning_business_events_enabled',
+											text(
+												'使用初始化确认、任务发布和验收等正式事件；未确认草稿不作为业务事实。',
+												'Use confirmed initialization, task publication, and acceptance events. Unconfirmed drafts are not business facts.',
+											),
+										)}
+										{toggle(
+											'group_learning_enabled',
+											text(
+												'后台整理群聊中有价值的信息，不向群内发送总结；成果遵守原消息的可见范围。',
+												'Process valuable group messages in the background without sending summaries to the group. Results retain the original visibility restrictions.',
+											),
+										)}
+									</div>
+									{fieldError('learning_sources')}
+								</div>
+								<p
+									role="status"
+									className="rounded-lg bg-muted/40 p-4 leading-6 text-muted-foreground"
+								>
+									{settings.learning_enabled
+										? text(
+												'保存后按所选来源处理新学习。用户本次“不记忆／不学习”的要求继续生效。',
+												'Once saved, new learning uses the selected sources. Per-request memory and learning exclusions remain effective.',
+											)
+										: text(
+												'后台学习已设为暂停；模型与来源选择仍可保存，已有记忆的正常读取和明确保存继续可用。',
+												'Background learning is set to paused. Model and source selections can still be saved. Existing memory retrieval and explicit saves remain available.',
+											)}
+								</p>
+							</section>
+							<section className="space-y-4 rounded-xl border bg-background p-5">
+								<div>
+									<h2 className="font-semibold">
+										{text('长对话压缩', 'Long-conversation compression')}
+									</h2>
+									<p className="mt-2 leading-6 text-muted-foreground">
+										{text(
+											'对话变长时自动整理上下文，帮助继续完成当前任务。这与长期记忆学习分别运行。',
+											'Automatically summarize context as conversations grow so the current task can continue. This runs independently of long-term learning.',
+										)}
+									</p>
+								</div>
+								<div
+									id="memory-compression_model_config"
+									role="group"
+									aria-labelledby="memory-compression-model-label"
+									tabIndex={-1}
+									className="space-y-2"
+								>
+									<p id="memory-compression-model-label" className="font-medium">
+										{fieldLabel('compression_model_config')}
+									</p>
+									<LlmSelect
+										value={settings.compression_model_config}
+										onChange={(value) =>
+											update('compression_model_config', value)
+										}
+										onAddCredential={() => navigate('/credential')}
+										allowClear
+										disabled={busy || Boolean(conflict)}
+										catalogue={catalogue}
+										placeholder={text(
+											'使用当前对话模型',
+											'Use conversation model',
+										)}
+										clearLabel={text(
+											'使用当前对话模型',
+											'Use conversation model',
+										)}
+									/>
+									{fieldError('compression_model_config')}
+								</div>
+								<p className="leading-6 text-muted-foreground">
+									{text(
+										'不单独选择时，使用当前对话模型。压缩时机、保留内容和执行保护由系统管理。',
+										'Leave unselected to use the current conversation model. The system manages compression timing, retained context, and execution safeguards.',
+									)}
+								</p>
+							</section>
+						</fieldset>
+					</div>
+				) : null}
+			</main>
+			<footer className="flex shrink-0 items-center justify-between gap-4 border-t bg-background px-6 py-3">
+				<p role="status" className="text-sm text-muted-foreground">
+					{saving
+						? text('正在保存设置…', 'Saving settings…')
+						: conflict
+							? text('请先核对最新设置', 'Review the latest settings')
+							: dirty
+								? text('有未保存更改', 'Unsaved changes')
+								: loading
+									? text('正在读取设置', 'Loading settings')
+									: loadError
+										? text('设置尚未读取', 'Settings not loaded')
+										: text('当前设置已保存', 'Settings are saved')}
+				</p>
+				<div className="flex shrink-0 gap-2">
+					<Button
+						variant="outline"
+						disabled={!dirty || busy || Boolean(conflict)}
+						onClick={discard}
+					>
+						<RotateCcw />
+						{text('放弃更改', 'Discard changes')}
+					</Button>
+					<Button
+						disabled={!dirty || busy || Boolean(conflict)}
+						onClick={() => void save()}
+					>
+						{saving ? <Loader2 className="animate-spin" /> : <Save />}
+						{text('保存设置', 'Save settings')}
+					</Button>
 				</div>
-			</section>
-			<section className="space-y-4 rounded-xl border bg-background p-5"><h2 className="font-semibold">{text('长对话压缩', 'Long conversation compression')}</h2><p className="text-xs leading-5 text-muted-foreground">{text('此模型只处理长对话摘要和压缩，不审核或阻塞记忆保存。留空时沿用当前对话模型。', 'This model summarizes long conversations. It does not approve or block memory writes. Leave empty to use the conversation model.')}</p>
-				<LlmSelect value={settings.memory_model_config} onChange={(value) => update('memory_model_config', value)} onAddCredential={() => navigate('/credential')} allowClear placeholder={text('使用当前对话模型', 'Use conversation model')} clearLabel={text('使用当前对话模型', 'Use conversation model')} />
-				<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-					{number('compression_trigger_ratio', text('压缩触发比例', 'Compression trigger'), text('相对于当前对话模型的上下文窗口。', 'Relative to the conversation model context window.'), 0.1, 0.9, 0.01)}
-					{number('compression_keep_messages', text('保留近期消息', 'Keep recent messages'), text('优先完整保留最近的对话。', 'Preserve recent conversation messages.'), 2, 200)}
-					{number('emergency_compression_ratio', text('紧急压缩比例', 'Emergency compression'), text('必须高于普通触发比例。', 'Must exceed the regular trigger ratio.'), 0.9, 1, 0.01)}
-					{number('compression_max_consecutive', text('连续压缩上限', 'Consecutive compression limit'), text('防止连续压缩反复消耗模型调用。', 'Bound repeated compression calls.'), 1, 20)}
-					{number('compression_min_rounds_between', text('压缩最小间隔轮数', 'Minimum turn interval'), text('两次普通压缩之间的最少对话轮数。', 'Minimum turns between regular compressions.'), 0, 100)}
-					{number('compression_quality_threshold', text('摘要质量阈值', 'Summary quality threshold'), text('用于检查压缩结果。', 'Check the quality of compressed summaries.'), 0, 1, 0.01)}
-				</div><label className="block space-y-2"><span>{text('压缩方式', 'Compression mode')}</span><select className="block h-9 rounded-md border bg-background px-3 text-sm" value={settings.compression_mode} onChange={(e) => update('compression_mode', e.target.value as MemorySettings['compression_mode'])}><option value="incremental">{text('增量摘要', 'Incremental')}</option><option value="full">{text('完整摘要', 'Full')}</option></select></label>
-			</section>
-			<details className="space-y-4 rounded-xl border bg-background p-5"><summary className="cursor-pointer font-semibold">{text('高级：对话压缩提示词', 'Advanced: compression prompts')}</summary>
-				{(['compression_system_prompt', 'compression_user_prompt', 'compression_incremental_prompt'] as const).map((key) => <label key={key} className="block space-y-2"><span className="text-xs">{key}</span><Textarea rows={10} className="text-xs leading-6" value={settings[key]} onChange={(e) => update(key, e.target.value)} /></label>)}
-			</details>
-		</main>
-	</div>;
+			</footer>
+			<Dialog
+				open={blocker.state === 'blocked'}
+				onOpenChange={(open) => {
+					if (!open && !busy && blocker.state === 'blocked') blocker.reset();
+				}}
+			>
+				<DialogContent>
+					<DialogHeader>
+						<DialogTitle>{text('更改尚未保存', 'Unsaved changes')}</DialogTitle>
+						<DialogDescription>
+							{busy
+								? text(
+										'正在处理设置，请稍候。',
+										'Settings are being processed. Please wait.',
+									)
+								: text(
+										'离开会丢失本次更改。你可以继续编辑、放弃并离开，或保存后离开。',
+										'Leaving loses your changes. Continue editing, discard and leave, or save before leaving.',
+									)}
+						</DialogDescription>
+					</DialogHeader>
+					<DialogFooter>
+						<Button
+							variant="outline"
+							disabled={busy}
+							onClick={() => {
+								if (blocker.state === 'blocked') blocker.reset();
+							}}
+						>
+							{text('继续编辑', 'Keep editing')}
+						</Button>
+						<Button
+							variant="outline"
+							disabled={busy}
+							onClick={() => {
+								if (blocker.state === 'blocked') blocker.proceed();
+							}}
+						>
+							{text('放弃并离开', 'Discard and leave')}
+						</Button>
+						<Button
+							disabled={busy || Boolean(conflict)}
+							onClick={async () => {
+								if (blocker.state !== 'blocked') return;
+								const proceed = blocker.proceed;
+								const reset = blocker.reset;
+								if (await save()) proceed();
+								else reset();
+							}}
+						>
+							{saving && <Loader2 className="animate-spin" />}
+							{text('保存并离开', 'Save and leave')}
+						</Button>
+					</DialogFooter>
+				</DialogContent>
+			</Dialog>
+		</div>
+	);
 }

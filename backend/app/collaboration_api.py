@@ -3,12 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .api_common import audit, entity_or_404, get_current_user, ok, project_or_404, serialize
-from .config import get_settings
+from .agent_api_support import _agentscope_client
+from .agentscope_client import AgentScopeGatewayError
 from .db import get_db
 from .models import (
     Attachment,
@@ -78,21 +78,20 @@ def collaboration_reply(project_id: int, content: str, db: Session) -> tuple[str
         + "字段映射：" + ("；".join(f"{item.platform_name}:{item.source_field}→{item.target_field}" for item in field_mappings) or "暂无")
     )
     related = [task.id for task in tasks[:4]]
-    settings = get_settings()
-    if settings.ai_api_key:
-        prompt = (
-            "你是工程项目资料智能体。请只依据已入库资料和项目待办给出简洁、可执行、可追溯的建议。"
-            "优先说明：资料可归入的类别、可补全的项目字段、仍缺少的资料；未知内容必须明确标注为待确认，不能编造。"
-            f"\n用户请求：{content}\n项目当前数据：{project_context}\n已入库资料：{material_context}\n待办任务："
-            + "；".join(f"{task.title}（{task.state}，截止{task.due_at or '未设置'}）" for task in tasks[:8])
+    prompt = (
+        "你是工程项目资料智能体。请只依据已入库资料和项目待办给出简洁、可执行、可追溯的建议。"
+        "优先说明：资料可归入的类别、可补全的项目字段、仍缺少的资料；未知内容必须明确标注为待确认，不能编造。"
+        f"\n用户请求：{content}\n项目当前数据：{project_context}\n已入库资料：{material_context}\n待办任务："
+        + "；".join(f"{task.title}（{task.state}，截止{task.due_at or '未设置'}）" for task in tasks[:8])
+    )
+    try:
+        answer = _agentscope_client().complete_platform_text(
+            system_prompt="给出简洁、可执行、可追溯的工程资料补全建议。",
+            prompt=prompt,
         )
-        try:
-            response = httpx.post(f"{settings.ai_base_url.rstrip('/')}/chat/completions", headers={"Authorization": f"Bearer {settings.ai_api_key}"}, json={"model": settings.ai_model, "messages": [{"role": "system", "content": "给出简洁、可执行、可追溯的工程资料补全建议。"}, {"role": "user", "content": prompt}]}, timeout=30)
-            response.raise_for_status()
-            answer = response.json()["choices"][0]["message"]["content"]
-            return answer, related
-        except (httpx.HTTPError, KeyError, IndexError, TypeError):
-            pass
+        return answer, related
+    except (AgentScopeGatewayError, ValueError):
+        pass
     overdue = next((task for task in tasks if str(task.state) == "overdue"), None)
     focus = overdue or (tasks[0] if tasks else None)
     if focus:

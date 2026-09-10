@@ -52,7 +52,7 @@
 		"deleteDescription": "此操作无法撤销。"
 	},
 	"brand": {
-		"managementCenter": "Dobby 智能体管理中心"
+		"managementCenter": "Dobby 管理中心"
 	},
 	"platform-settings": {
 		"title": "平台设置",
@@ -138,22 +138,22 @@
 			"save": "保存任务助手配置"
 		},
 		"knowledgeAssistant": {
-			"title": "资料助手",
+			"title": "知识库助手",
 			"description": "负责项目资料问答，可按需调用已分配的项目工具。",
 			"selector": "资料问答智能体",
 			"placeholder": "选择一个专用智能体",
-			"requirement": "需配置固定模型，并在智能体的「平台接入配置」中开启「启用项目资料查询」。不能与其他平台职责共用同一个智能体。",
+			"requirement": "需配置固定模型。知识库查询由知识库助手的固定职责提供，无需单独授权。",
 			"roleBadge": "平台职责",
-			"saved": "资料助手配置已保存",
-			"unconfiguredTitle": "尚未设置资料助手",
+			"saved": "知识库助手配置已保存",
+			"unconfiguredTitle": "尚未设置知识库助手",
 			"unconfigured": "选择一个智能体并保存，项目资料问答将统一使用此助手。",
 			"noCandidates": "暂无符合条件的智能体。请先创建并启用一个配置了固定模型的智能体。",
-			"invalidCurrentTitle": "当前资料助手不可用",
-			"invalidCurrent": "请检查智能体是否启用、是否配置固定模型，以及是否开启项目资料查询。",
-			"effect": "新对话使用这里指定的资料助手；切换后旧对话仍可查看。项目工具和记忆权限沿用该智能体的配置。",
-			"save": "保存资料助手配置",
+			"invalidCurrentTitle": "当前知识库助手不可用",
+			"invalidCurrent": "请检查固定模型和外部知识库连接。",
+			"effect": "新对话使用这里指定的知识库助手；切换后旧对话仍可查看。项目工具和记忆权限沿用该智能体的配置。",
+			"save": "保存知识库助手配置",
 			"clear": "暂不分配",
-			"missingCapability": "所选智能体尚未开启项目资料查询，请先在该智能体的「平台接入配置」中开启。"
+			"missingCapability": "知识库查询由知识库助手的固定职责提供。"
 		}
 	},
 	"memory-settings": {
@@ -382,6 +382,7 @@
 		"pauseAudio": "暂停音频",
 		"running": "运行中...",
 		"hintSource": {
+			"System": "系统上下文",
 			"tool_output": "工具输出",
 			"team_message": "团队消息",
 			"schedule": "定时任务"
@@ -410,7 +411,7 @@
 		"subagentConfirmTitle": "{{name}} 请求确认",
 		"newSession": "新会话",
 		"noSessions": "暂无会话",
-		"greeting": "我们从哪儿开始？",
+		"greeting": "发送消息，开始调试。",
 		"agent": {
 			"selectPlaceholder": "选择 Agent",
 			"emptyTitle": "暂无 Agent",
@@ -427,12 +428,12 @@
 	},
 	"dialog-agent-create": {
 		"title": "创建 Agent",
-		"description": "定义新 Agent 的身份与行为。",
+		"description": "设置名称、工作指令与平台权限。",
 		"trigger": "创建 Agent"
 	},
 	"agent-form": {
 		"identity": {
-			"legend": "Agent 身份",
+			"legend": "智能体身份",
 			"description": "定义此 Agent 行为的名称和指令。",
 			"name": {
 				"label": "名称",
@@ -443,14 +444,15 @@
 			}
 		},
 		"model-policy": {
+			"managedDescription": "模型参数在「模型与连接」中统一设置，运行过程由系统自动管理。",
 			"legend": "模型配置",
-			"description": "为此智能体固定专用模型与参数；未固定时跟随当前会话选择。",
+			"description": "为此智能体选择固定模型，或跟随当前会话选择。",
 			"mode": {
 				"label": "模型策略",
 				"inherit": "跟随会话",
 				"fixed": "固定模型",
 				"inherit_sessionDescription": "使用聊天界面为当前会话选择的模型。",
-				"fixedDescription": "始终使用下方配置的模型和参数，聊天界面不能覆盖。"
+				"fixedDescription": "始终使用所选模型，聊天时不可切换。"
 			},
 			"credential": "模型凭证",
 			"credentialPlaceholder": "选择凭证",
@@ -469,40 +471,31 @@
 		},
 		"platform-config": {
 			"legend": "平台接入配置",
-			"description": "控制该智能体在工程管理平台中的角色、发布状态、权限和默认知识库。",
+			"description": "设置智能体的使用范围、运行状态和发布状态。",
 			"role": {
-				"label": "平台角色",
+				"label": "使用范围",
 				"options": {
 					"global_main": "平台总控智能体（由平台设置指定）",
-					"business": "业务智能体",
-					"system_internal": "系统内置智能体"
+					"business": "公开",
+					"system_internal": "内部"
 				},
 				"descriptions": {
 					"global_main": "承接平台普通对话，并可动态协同已明确开放给平台总智能体的非主智能体。",
-					"business": "发布后自动显示在平台“业务工具”页面，也可以被授权的智能体协同调用。",
-					"system_internal": "只供系统内部流程使用，不会显示在业务工具目录中。"
+					"business": "可面向平台用户提供服务；启用并勾选“发布到平台”后，才出现在业务智能体列表及 @ 候选中。",
+					"system_internal": "仅用于内部流程或已授权的智能体协作，不出现在用户端业务智能体列表，也不能被用户 @。"
 				}
-			},
-			"agentLevel": {
-				"label": "智能体层级",
-				"management": "管理层智能体",
-				"worker": "执行层智能体",
-				"managementDescription": "可在授权范围内组织协同并使用跨会话共享记忆。",
-				"workerDescription": "只执行边界明确的任务，不挂载长期记忆工具。"
 			},
 			"globalMainNotice": "该智能体当前由“平台设置”指定为总控。请前往平台设置切换；总控不能在此处直接停用或更改角色。",
 			"enabled": "允许平台运行",
 			"published": "发布到平台",
 			"allowGlobalMainCall": "允许平台总智能体调用",
 			"allowGlobalMainCallDescription": "开启后，该智能体才会进入平台总智能体的可协同范围；普通智能体仍按各自白名单控制。",
-			"projectKnowledge": "启用项目资料查询",
-			"projectKnowledgeDescription": "允许此智能体按需查阅项目授权资料。项目资料问答使用哪个智能体，请到「平台设置 → 资料助手」中指定；项目工具和记忆权限在本智能体中配置。",
 			"catalogDescription": "平台展示说明",
 			"descriptionPlaceholder": "说明该智能体面向业务用户提供什么能力。",
 			"category": "业务分类",
 			"sortOrder": "显示顺序",
-			"permissionMode": "平台会话权限模式",
-			"permissionModeDescription": "只影响工程管理平台创建的新会话；建议使用 Auto，由内置权限审核员先行判断。",
+			"permissionMode": "执行权限模式",
+			"permissionModeDescription": "调试每次运行都读取此配置，不能在会话中切换；工程管理平台创建会话时也采用此配置。Auto 由内置权限审核员先行判断。",
 			"permissionOptions": {
 				"auto": "Auto（自动审核）",
 				"default": "Default（逐项确认）",
@@ -519,7 +512,9 @@
 				"static": "Static（每轮自动检索）",
 				"topK": "召回条数"
 			},
-			"visibilityNotice": "业务工具目录只展示“业务智能体 + 已启用 + 已发布”；平台总控在独立的平台设置中指定，系统内置智能体始终隐藏。"
+			"visibilityNotice": "公开、内部决定用户可见范围；是否允许总控或其他智能体调用，在“协作设置”中分别配置。",
+			"enabledDescription": "控制此智能体能否在工程平台执行。关闭后，用户入口和智能体协作均不能使用；已保存的配置保留。",
+			"publishedDescription": "仅对“公开”智能体生效。开启且允许平台运行后，用户可在业务智能体列表、首页助手菜单和群聊 @ 中找到它；内部智能体不能发布。实际使用还需完成模型配置。"
 		},
 		"context-config": {
 			"legend": "上下文配置",
@@ -541,13 +536,28 @@
 			}
 		},
 		"react-config": {
-			"legend": "ReAct 配置",
-			"description": "控制推理和行动循环的行为。",
+			"legend": "推理与工具执行",
+			"description": "智能体会根据问题调用工具，再根据结果继续处理，直到完成回答。这一过程称为 ReAct；以下参数控制执行轮次和中断处理。",
 			"max-iters": {
-				"label": "最大迭代次数"
+				"label": "最大执行轮次",
+				"description": "单次回答的推理与工具执行轮次上限。任务完成即可提前结束；达到上限后，系统会尝试汇总已有结果。"
+			},
+			"structured-output-grace-iters": {
+				"label": "结构化结果追加轮次",
+				"description": "需要按指定格式输出结果时，达到执行上限后允许追加的轮次。普通文本回答不使用这项额度。"
 			},
 			"stop-on-reject": {
-				"label": "拒绝时停止"
+				"label": "工具调用被拒绝时停止",
+				"description": "此开关尚未接入当前执行流程，调整后暂不影响运行。"
+			},
+			"interruption-message": {
+				"label": "中断后的回复内容",
+				"description": "任务被中断时使用的快速回复。",
+				"placeholder": "输入任务中断时的回复内容"
+			},
+			"interruption-raise-cancelled-error": {
+				"label": "向调用方传递取消异常",
+				"description": "中断处理结束后，继续向调用方抛出取消异常。用于程序调用时的中断控制。"
 			}
 		},
 		"invite-config": {
@@ -585,8 +595,8 @@
 		}
 	},
 	"dialog-agent-edit": {
-		"title": "编辑 Agent",
-		"description": "更新此 Agent 的配置。"
+		"title": "编辑智能体",
+		"description": "配置身份、模型与平台权限。"
 	},
 	"dialog-agent-delete": {
 		"entity": "Agent",
@@ -611,10 +621,6 @@
 		"description": "为模型提供商添加凭证。",
 		"selectType": "提供商",
 		"selectTypePlaceholder": "选择提供商"
-	},
-	"dialog-credential-edit": {
-		"title": "编辑凭证",
-		"description": "更新该提供商已保存的凭证。"
 	},
 	"dialog-knowledge-base-create": {
 		"title": "创建知识库",
@@ -669,6 +675,21 @@
 		"description": "此操作将永久删除知识库 \"{{name}}\" 及其所有已索引文档，且无法撤销。"
 	},
 	"credential": {
+		"inlineEdit": {
+			"loadFailed": "凭证字段读取失败，请重试。",
+			"retry": "重试",
+			"unsavedTitle": "更改尚未保存",
+			"unsavedDescription": "离开后，本次未保存的更改将被放弃。",
+			"waitForOperation": "正在处理配置，请稍候。",
+			"keepEditing": "继续编辑",
+			"discardAndLeave": "放弃并离开",
+			"saved": "凭证已保存",
+			"saveFailed": "保存失败，修改已保留，请重试。",
+			"discard": "撤销修改",
+			"keepValue": "不修改则保留当前值",
+			"showSecret": "显示 {{field}}",
+			"hideSecret": "隐藏 {{field}}"
+		},
 		"noProviders": "暂无可用提供商",
 		"noConfigs": "暂无配置",
 		"selectHint": "未选择凭证",
@@ -694,7 +715,6 @@
 		"manualAdd": "手动添加",
 		"manualModelTitle": "手动添加模型",
 		"manualModelDescription": "选择用途并填写厂商要求的准确模型 ID；再次添加同名模型可更新其类型。",
-		"manualModelCustomParametersDescription": "如果该模型没有声明思考能力，可在添加时直接填写厂商要求的 JSON 参数；留空则不附加自定义参数，添加后仍可继续修改。",
 		"editModelTitle": "编辑模型",
 		"editModelDescription": "可修改模型 ID、显示名称和模型类型。模型 ID 是实际发送给厂商的值。",
 		"modelType": "模型类型",
@@ -731,54 +751,50 @@
 			"failed": "无法识别该 Embedding 模型，请检查模型 ID、API 地址和凭证。"
 		},
 		"modelDefaults": {
-			"action": "配置模型默认参数",
-			"title": "模型默认参数",
-			"description": "配置 {{model}} 的默认推理参数，包括思考模式和思考强度。",
-			"inheritanceTitle": "所有使用场景默认继承",
-			"inheritanceDescription": "业务智能体、团队成员、定时任务和系统内置智能体都会读取这里的默认值；会话或专用配置可以单独覆盖。",
+			"action": "模型设置",
+			"title": "模型设置",
+			"description": "{{model}} · 作为此模型的默认调用设置。",
 			"configured": "已配置 {{count}} 项",
-			"reset": "恢复厂商默认值",
-			"save": "保存默认参数",
+			"reset": "清除这些设置",
+			"save": "保存设置",
 			"saved": "模型默认参数已保存。",
-			"customTitle": "自定义请求参数（JSON）",
-			"customDescription": "模型未声明的厂商参数可在这里配置，并会合并进实际请求体。发生同名冲突时，此处的自定义值优先；模型、消息、工具等 AgentScope 核心字段不可覆盖。",
-			"customRequired": "未声明思考参数",
-			"customPlaceholder": "{\n  \"enable_thinking\": true\n}",
-			"customExamplesLabel": "按当前厂商选择一种写法，例如：",
-			"customExamples": "OpenAI 兼容：{\"enable_thinking\":true}\nResponses：{\"reasoning\":{\"effort\":\"low\"}}\nAnthropic：{\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":5000}}",
 			"customInvalid": "JSON 格式不正确，请检查括号、引号和逗号。",
-			"customObjectRequired": "自定义请求参数必须是一个 JSON 对象。"
+			"customObjectRequired": "自定义请求参数必须是一个 JSON 对象。",
+			"commonTab": "思考设置",
+			"invalidParameter": "请为“{{field}}”填写有效值，或恢复默认设置。",
+			"extensionsTab": "接口扩展",
+			"defaultValue": "未单独指定",
+			"unspecifiedEffort": "不指定思考强度",
+			"requestThinking": "请求开启思考",
+			"requestNoThinking": "请求关闭思考",
+			"noThinkingRequest": "不额外请求思考",
+			"useReasoningEffort": "使用指定思考强度",
+			"reasoningEffortHint": "使用指定思考强度时，需同时选择强度；未指定时不额外发送思考参数。",
+			"interfaceHint": "是否支持思考及可用强度，由所选模型决定。",
+			"noCommonSettings": "此模型无需额外设置，可直接使用。",
+			"customActive": "已配置服务商扩展参数，同名设置将以扩展参数为准。",
+			"extensionTitle": "服务商扩展参数",
+			"extensionHint": "仅在服务商要求额外参数时填写 JSON 对象。同名参数以此处为准，通常留空即可。"
 		},
 		"permissionReviewer": {
-			"systemGroup": "系统内置智能体",
-			"shortTitle": "权限审核员",
-			"builtIn": "内置",
-			"title": "系统权限审核员",
-			"subtitle": "为选择 Auto 权限模式的会话提供独立、隔离的智能审核。",
-			"systemBadge": "系统内置 · 不参与业务会话",
-			"securityTitle": "权限引擎仍是不可绕过的安全边界",
-			"securityDescription": "审核员只处理原权限结果为“需要确认”的操作。明确拒绝、危险路径和破坏性操作不会被自动放行；模型故障或判断不清时固定转人工。",
-			"bindingTitle": "独立模型绑定",
-			"bindingDescription": "审核模型不跟随聊天会话，可单独使用更强的模型与专用额度。",
-			"credential": "主审核凭证",
-			"model": "主审核模型",
+			"loadFailed": "审核配置加载失败",
+			"retryLoad": "重新加载",
+			"title": "权限审核配置",
+			"credential": "审核凭证",
+			"model": "审核模型",
 			"selectCredential": "选择凭证",
 			"selectModel": "选择对话模型",
-			"fallbackCredential": "备用凭证（可选）",
-			"fallbackModel": "备用模型（可选）",
-			"noFallback": "不使用备用模型",
-			"confidence": "自动决策最低置信度",
-			"maxRisk": "允许自动决策的最高风险",
-			"timeout": "单次审核超时",
+			"confidence": "最低置信度",
+			"maxRisk": "自动放行最高风险",
+			"timeout": "审核超时",
 			"seconds": "秒",
-			"test": "测试审核模型",
+			"test": "测试模型",
 			"testing": "正在测试…",
 			"save": "保存配置",
 			"saved": "权限审核员配置已保存。",
 			"testPassed": "审核链路测试通过 · {{latency}} ms",
 			"testFailed": "审核链路测试失败",
 			"auditTitle": "最近审核记录",
-			"auditDescription": "仅记录自动审核的结论；敏感字段会在发送和保存前脱敏。",
 			"noAudits": "暂无自动审核记录。",
 			"auditTotal": "共 {{count}} 条记录",
 			"auditPage": "第 {{current}} / {{total}} 页",
@@ -1113,6 +1129,9 @@
 		"pickModelFirst": "请先选择 Embedding 模型"
 	},
 	"permission-mode": {
+		"followsAgent": "权限随智能体已保存的配置生效，调试中不能更改。",
+		"followsSession": "使用此任务的权限配置。",
+		"configured": "随配置",
 		"placeholder": "选择权限模式",
 		"trigger-tooltip": "权限模式",
 		"label": "权限模式",
@@ -1188,6 +1207,7 @@
 		"wednesday": "周三"
 	},
 	"model-parameters": {
+		"settingsLabel": "会话设置",
 		"title": "模型参数",
 		"description": "调整所选模型的推理参数。",
 		"empty": "暂无可配置参数。",
@@ -1200,20 +1220,26 @@
 		"ttsParametersDescription": "调整所选语音合成模型的参数。",
 		"noTts": "不使用语音合成",
 		"fields": {
-			"max_tokens": "最大输出 Token",
-			"thinking_enable": "开启思考模式",
+			"max_tokens": "输出上限（词元）",
+			"thinking_enable": "思考模式",
 			"reasoning_effort": "思考强度",
-			"thinking_budget": "思考预算",
-			"temperature": "随机性（Temperature）",
-			"top_p": "Top P",
-			"top_k": "Top K",
-			"parallel_tool_calls": "允许并行工具调用",
-			"voice": "语音"
+			"thinking_budget": "思考预算（词元）",
+			"temperature": "回答随机性",
+			"top_p": "累计采样范围",
+			"top_k": "候选采样数量",
+			"parallel_tool_calls": "并行工具请求",
+			"voice": "语音音色"
 		},
 		"fieldDescriptions": {
-			"thinking_enable": "控制该模型是否启用深度思考或推理输出。",
-			"reasoning_effort": "控制模型投入到推理过程中的计算强度；具体档位由厂商和模型决定。",
-			"thinking_budget": "允许模型用于思考过程的最大 Token 数量。"
+			"thinking_enable": "",
+			"reasoning_effort": "",
+			"thinking_budget": "",
+			"max_tokens": "按模型目录上限与剩余上下文管理，通常无需填写。",
+			"temperature": "数值越低，输出通常越稳定。",
+			"top_p": "",
+			"top_k": "",
+			"parallel_tool_calls": "",
+			"voice": ""
 		},
 		"values": {
 			"none": "无",
@@ -1346,7 +1372,7 @@
 			"instructions": "执行说明",
 			"noInstructions": "暂无执行说明。",
 			"emptyTitle": "平台技能库为空",
-			"emptyDescription": "在线创建技能 Markdown，保存后即可分配给智能体。",
+			"emptyDescription": "在线创建技能，保存后即可分配给智能体。",
 			"assignLabel": "将技能 {{name}} 分配给当前智能体",
 			"selectedSummary": "已选择 {{count}} 个技能",
 			"saveChanges": "保存分配",
@@ -1367,7 +1393,7 @@
 			"description": "查看平台为所有智能体提供的文件读取、搜索和编辑等固定能力。",
 			"globalNotice": "系统工具全局可用，不支持按智能体修改或取消",
 			"searchPlaceholder": "搜索工具",
-			"platform": "业务工具",
+			"platform": "业务智能体",
 			"workspace": "工作区工具",
 			"back": "返回工具列表",
 			"catalogTitle": "系统工具",

@@ -31,10 +31,10 @@ class CredentialModelDefinition(BaseModel):
         gt=0,
         description="Context window used by AgentScope.",
     )
-    output_size: int = Field(
-        default=8_192,
+    output_size: int | None = Field(
+        default=None,
         gt=0,
-        description="Maximum output tokens used by AgentScope.",
+        description="Known maximum output tokens, or null when unknown.",
     )
     input_types: list[str] = Field(
         default_factory=lambda: ["text/plain"],

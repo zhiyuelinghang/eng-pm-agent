@@ -3,6 +3,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import ValidationError
 
 from ..access import ResourceKind
 from ..deps import (
@@ -109,7 +110,7 @@ async def get_permission_reviewer_config(
     record = await service.get_config(user_id)
     return PermissionReviewerConfigResponse(
         config=record.data,
-        updated_at=record.updated_at if record.data.enabled else None,
+        updated_at=record.updated_at if record.data.credential_id and record.data.model else None,
     )
 
 
@@ -446,11 +447,11 @@ async def update_credential(
     storage: StorageBase = Depends(get_storage),
     access: ResourceAccessService = Depends(get_resource_access_service),
 ) -> CredentialView:
-    """Replace the payload of an existing credential.
+    """Update explicitly submitted credential fields, retaining omitted values.
 
     Args:
         credential_id (`str`): The credential to update.
-        body (`UpdateCredentialRequest`): New credential payload.
+        body (`UpdateCredentialRequest`): Credential fields to update.
         user_id (`str`): Injected authenticated user ID.
         storage (`StorageBase`): Injected storage backend.
         access (`ResourceAccessService`): Injected access service — used
@@ -470,27 +471,44 @@ async def update_credential(
         credential_id,
     )
 
-    credential = CredentialFactory.from_dict(body.data)
-    credential.id = credential_id
-    if "model_catalog" not in body.data:
-        previous = CredentialFactory.from_dict(existing.data)
-        credential.model_catalog = previous.model_catalog
-    await storage.upsert_credential(owner_id, credential)
-    # ``resolve_for_edit`` proved the record existed under ``owner_id``
-    # and the upsert above just wrote back to the same key, so the read
-    # is a value refresh, not an existence check. If it still comes back
-    # empty (e.g. a concurrent delete), surface an explicit server error
-    # rather than relying on ``assert`` (which ``-O`` strips).
-    updated = await storage.get_credential(owner_id, credential_id)
-    if updated is None:
-        raise RuntimeError(
-            f"Credential {credential_id!r} for owner {owner_id!r} "
-            "disappeared immediately after a successful upsert.",
+    previous = CredentialFactory.from_dict(existing.data)
+    if "model_catalog" in body.data:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="模型目录请通过专用模型配置接口修改。",
         )
-    # Only reachable via ``resolve_for_edit``, so the caller has edit
-    # permission by construction.
-    return CredentialView.model_validate(
-        {**updated.model_dump(), "editable": True},
+    if "type" in body.data and body.data["type"] != previous.type:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="编辑凭证时不能更改服务类型，请另建凭证。",
+        )
+    if "id" in body.data and body.data["id"] != credential_id:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="编辑凭证时不能更改凭证标识。",
+        )
+    unknown = set(body.data) - set(type(previous).model_fields)
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="提交了当前凭证类型不支持的配置字段。",
+        )
+    try:
+        credential = CredentialFactory.from_dict(
+            {**existing.data, **body.data, "id": credential_id},
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.errors(include_input=False, include_context=False),
+        ) from exc
+    await storage.upsert_credential(owner_id, credential)
+    # Use the same viewer-relative projection as GET/list: shared editors can
+    # update a secret without receiving other existing secrets in the response.
+    return await access.get_resource(
+        user_id,
+        ResourceKind.CREDENTIAL,
+        credential_id,
     )
 
 

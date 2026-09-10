@@ -1,11 +1,11 @@
 <template>
   <main class="business-tools-page">
     <section class="business-tools-shell">
-      <aside class="tool-rail" aria-label="业务工具列表">
+      <aside class="tool-rail" aria-label="业务智能体列表">
         <header class="tool-rail-head">
           <div>
             <span>专业智能体</span>
-            <strong>业务工具</strong>
+            <strong>业务智能体</strong>
           </div>
           <em>{{ businessTools.length }}</em>
           <p>选择一个专业智能体，围绕当前项目继续分析和处理。</p>
@@ -34,7 +34,7 @@
 
       </aside>
 
-      <section class="tool-workspace" aria-label="业务工具对话区">
+      <section class="tool-workspace" aria-label="业务智能体对话区">
         <header class="tool-workspace-head">
           <div class="active-tool-icon"><n-icon :size="24"><component :is="selectedTool.icon" /></n-icon></div>
           <div class="active-tool-copy">
@@ -140,6 +140,7 @@
 </template>
 
 <script setup lang="ts">
+import { encodeAgentImageAttachments } from '@/utils/agentImageAttachments'
 import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import { NIcon, useMessage } from 'naive-ui'
 import { ChartBar, CircleCheck, Database, FileText, Loader, Paperclip, PlayerStop, Robot, Route, Send, ShieldCheck } from '@vicons/tabler'
@@ -230,7 +231,7 @@ const emptyTool: BusinessTool = {
   shortDescription: '',
   description: '请先在 AgentScope 中发布业务智能体。',
   emptyTitle: '暂无可用业务智能体',
-  emptyDescription: '配置为“业务智能体”，启用并发布后会自动出现在这里。',
+  emptyDescription: '在管理中心设置为“公开”，允许平台运行并发布后会显示在这里。',
   placeholder: '暂无可用智能体',
   starters: [],
   icon: Robot,
@@ -373,6 +374,7 @@ async function submitToolMessage() {
   stopping.value = false
   submitting.value = true
   try {
+    const imageAttachments = await encodeAgentImageAttachments(files)
     for (const file of files) await store.uploadAttachment(file, `业务工具/${selectedTool.value.name}`)
     const timestamp = Date.now()
     const attachments = files.map(file => ({ id: `${file.name}-${file.lastModified}`, name: file.name, size: file.size }))
@@ -403,7 +405,7 @@ async function submitToolMessage() {
       onDone: payload => {
         completion.message = payload.message
       },
-    })
+    }, undefined, imageAttachments.length ? { image_attachments: imageAttachments } : {})
     if (completion.message) {
       current.push({
         id: String(completion.message.id || `${agentId}-assistant-${timestamp + 1}`),

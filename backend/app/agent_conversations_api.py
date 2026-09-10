@@ -71,6 +71,7 @@ from .system_attachment_parser import (
 )
 from .runtime_observability import RuntimeStageTracker, runtime_stage_event
 from .knowledge_agent_support import knowledge_entry_prompt
+from .agent_image_attachments import image_attachment_refs, image_blocks_for_turn
 
 
 router = APIRouter(prefix="/api", tags=["agent-conversations"])
@@ -130,7 +131,7 @@ def list_agent_conversations(
     statement = select(AgentConversation).where(
         AgentConversation.project_id == project_id,
         AgentConversation.user_id == user.id,
-        AgentConversation.conversation_type != "group_chat",
+        AgentConversation.conversation_type.in_(("general", "business", "initialization")),
         ~select(EngineeringKnowledgeConversation.id).where(
             EngineeringKnowledgeConversation.agent_conversation_id == AgentConversation.id,
         ).exists(),
@@ -177,6 +178,8 @@ def create_agent_conversation(
                     detail="AgentScope 尚未配置已启用的全局主智能体",
                 )
         elif payload.conversation_type == "initialization":
+            if user.role != "admin":
+                raise HTTPException(status_code=403, detail="请由管理人员在初始化页面使用项目初始化助手")
             selected_agent = catalog.get("project_initializer")
             if selected_agent is None:
                 raise HTTPException(
@@ -551,9 +554,12 @@ def create_agent_conversation_message(
         conversation,
         payload.initialization_file_ids,
     )
+    image_blocks, native_image_ids = image_blocks_for_turn(payload.image_attachments,
+        initialization_files, upload_dir=get_settings().upload_dir)
     attachment_manifest = _initialization_attachment_manifest_context(
         db,
         initialization_files,
+        native_image_ids=native_image_ids,
     )
     injected_content = (
         _build_agent_project_context(
@@ -578,6 +584,7 @@ def create_agent_conversation_message(
         "platform_project_name": project.name,
         "conversation_id": conversation.id,
         "platform_display_content": payload.content,
+        "platform_image_attachments": image_attachment_refs(image_blocks),
         "platform_initialization_files": _initialization_file_refs(
             initialization_files,
         ),
@@ -588,7 +595,7 @@ def create_agent_conversation_message(
             "id": user_message_id,
             "name": user.real_name,
             "role": "user",
-            "content": [{"type": "text", "text": injected_content}],
+            "content": [{"type": "text", "text": injected_content}, *image_blocks],
             "metadata": user_message_metadata,
             "created_at": datetime.now(UTC).isoformat(),
         },
@@ -614,6 +621,7 @@ def create_agent_conversation_message(
             sender_name=user.real_name,
             metadata=user_message_metadata,
             user_message_id=user_message_id,
+            content_blocks=image_blocks,
         )
     except AgentScopeGatewayError as exc:
         conversation.status = "error"
@@ -712,9 +720,12 @@ def stream_agent_conversation_message(
         conversation,
         payload.initialization_file_ids,
     )
+    image_blocks, native_image_ids = image_blocks_for_turn(payload.image_attachments,
+        initialization_files, upload_dir=get_settings().upload_dir)
     attachment_manifest = _initialization_attachment_manifest_context(
         db,
         initialization_files,
+        native_image_ids=native_image_ids,
     )
     injected_content = (
         _build_agent_project_context(
@@ -743,6 +754,7 @@ def stream_agent_conversation_message(
         "platform_project_name": project.name,
         "conversation_id": conversation.id,
         "platform_display_content": payload.content,
+        "platform_image_attachments": image_attachment_refs(image_blocks),
         "platform_initialization_files": _initialization_file_refs(
             initialization_files,
         ),
@@ -753,7 +765,7 @@ def stream_agent_conversation_message(
             "id": user_message_id,
             "name": sender_name,
             "role": "user",
-            "content": [{"type": "text", "text": injected_content}],
+            "content": [{"type": "text", "text": injected_content}, *image_blocks],
             "metadata": metadata,
             "created_at": datetime.now(UTC).isoformat(),
         },
@@ -822,6 +834,7 @@ def stream_agent_conversation_message(
                     sender_name=sender_name,
                     metadata=metadata,
                     user_message_id=user_message_id,
+                    content_blocks=image_blocks,
                     completion=completion_relay.completion,
                 ),
             )

@@ -134,7 +134,7 @@ def _task_flow_from_agent_reply(reply: AgentScopeReply) -> dict[str, Any]:
     tool_called = any(
         isinstance(block, dict)
         and block.get("type") == "tool_call"
-        and block.get("name") == "generate_task_flow"
+        and block.get("name") in {"generate_task_flow", "mcp__task-engine__generate_task_flow"}
         for message in messages
         if isinstance(message, dict)
         for block in (message.get("content") or [])
@@ -172,7 +172,7 @@ def _task_assistant_platform_context(
         "chat_channel_id": str(channel_id) if channel_id is not None else None,
         "trigger": "explicit_agent_mention",
         "session_role": "primary",
-        "auto_allowed_tool_names": ["generate_task_flow"],
+        "auto_allowed_tool_names": ["generate_task_flow", "mcp__task-engine__generate_task_flow"],
     }
 
 

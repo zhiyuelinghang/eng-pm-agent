@@ -57,18 +57,23 @@ async def search_vector_if_ready(query: str) -> list[float] | None:
         return None
 
 
-async def run_memory_index_worker(settings_loader=None) -> None:
+async def run_memory_index_worker() -> None:
     """Jobs remain durable on cancellation. Expired leases are reclaimable."""
     repository = get_memory_repository()
+    next_warmup = 0.0
     while True:
         try:
-            if settings_loader is not None:
-                settings = await settings_loader()
-                if not settings.memory_index_enabled:
-                    await asyncio.sleep(5)
-                    continue
             job = await asyncio.to_thread(repository.claim_index_job)
             if job is None:
+                # Existing indexes must become usable after a restart even
+                # when there are no new writes to initialize the model.
+                now = asyncio.get_running_loop().time()
+                if _embedder is None and now >= next_warmup:
+                    next_warmup = now + 60
+                    try:
+                        await asyncio.to_thread(embed_memory, '记忆检索就绪')
+                    except Exception:
+                        logger.warning('Memory semantic retrieval is using text fallback')
                 await asyncio.sleep(3)
                 continue
             try:

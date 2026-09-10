@@ -111,7 +111,7 @@ const titleMap: Record<string, string> = {
   '/tasks':     '任务管理',
   '/project':   '项目状态',
   '/docs':      '工程资料',
-  '/tools':     '业务工具',
+  '/tools':     '业务智能体',
   '/profile':   '个人设置',
   '/settings':  '工程配置',
 }

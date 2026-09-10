@@ -119,7 +119,7 @@ export function SkillDetailDialog({
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			{skill ? (
-				<DialogContent className="grid h-[min(820px,calc(100dvh-2rem))] max-h-[calc(100dvh-2rem)] !w-[min(900px,calc(100vw-2rem))] !max-w-[900px] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0">
+				<DialogContent className="grid h-[min(820px,calc(100dvh-2rem))] max-h-[calc(100dvh-2rem)] !w-[min(1240px,calc(100vw-3rem))] !max-w-[1240px] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0">
 					<DialogHeader className="border-b px-6 py-5 pr-14">
 						<DialogTitle className="text-xl leading-tight">
 							{getSkillDisplayName(skill)}
@@ -130,10 +130,10 @@ export function SkillDetailDialog({
 						</DialogDescription>
 					</DialogHeader>
 
-					<div className="grid min-h-0 grid-cols-1 md:grid-cols-[12rem_minmax(0,1fr)]">
+					<div className="grid min-h-0 grid-cols-1 md:grid-cols-[minmax(260px,30%)_minmax(0,1fr)]">
 						<nav
 							aria-label={t('panel.skill.directory')}
-							className="flex gap-1 overflow-x-auto border-b bg-muted/20 p-3 md:flex-col md:overflow-x-hidden md:border-r md:border-b-0 md:px-3 md:py-5"
+							className="flex gap-1 overflow-x-auto border-b bg-muted/20 p-3 md:flex-col md:overflow-x-hidden md:overflow-y-auto md:border-r md:border-b-0 md:px-3 md:py-5"
 						>
 							{directorySections.map((section, index) => {
 								const active = activeSection === section.id;
@@ -143,7 +143,7 @@ export function SkillDetailDialog({
 										type="button"
 										aria-current={active ? 'location' : undefined}
 										onClick={() => scrollToSection(section.id)}
-										className={`group flex min-w-max items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring md:min-w-0 ${
+										className={`group flex min-w-max items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring md:min-w-0 md:items-start ${
 											active
 												? 'bg-background text-[#c95622] shadow-sm ring-1 ring-border/70'
 												: 'text-muted-foreground hover:bg-background/80 hover:text-foreground'
@@ -160,7 +160,9 @@ export function SkillDetailDialog({
 										>
 											{index === 0 ? 'i' : index}
 										</span>
-										<span className="truncate">{section.label}</span>
+										<span className="whitespace-normal break-words leading-5">
+											{section.label}
+										</span>
 									</button>
 								);
 							})}
@@ -178,7 +180,9 @@ export function SkillDetailDialog({
 									}}
 									className="scroll-mt-6 pb-7"
 								>
-									<h2 className="text-lg font-semibold">{t('panel.skill.details')}</h2>
+									<h2 className="text-lg font-semibold">
+										{t('panel.skill.details')}
+									</h2>
 									<p className="mt-3 max-w-[65ch] whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
 										{skill.description}
 									</p>

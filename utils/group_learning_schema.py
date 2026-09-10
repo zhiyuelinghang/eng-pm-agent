@@ -3,7 +3,7 @@
 GROUP_LEARNING_DDL = """
 ALTER TABLE learning_events DROP CONSTRAINT IF EXISTS learning_events_event_type_check;
 ALTER TABLE learning_events ADD CONSTRAINT learning_events_event_type_check CHECK (event_type IN
-    ('explicit','correction','tool_failure','recovery','verified_task','repeated_pattern','feedback','consolidate','skill_compile','group_chat'));
+    ('explicit','correction','tool_failure','recovery','verified_task','repeated_pattern','feedback','consolidate','skill_compile','group_chat','business_event'));
 CREATE TABLE IF NOT EXISTS group_learning_cursors (
     tenant_id text NOT NULL, channel_id bigint NOT NULL,
     project_id text NOT NULL, title text NOT NULL DEFAULT '',
@@ -16,13 +16,14 @@ CREATE TABLE IF NOT EXISTS group_learning_cursors (
 CREATE TABLE IF NOT EXISTS group_learning_batches (
     id uuid PRIMARY KEY, tenant_id text NOT NULL, channel_id bigint NOT NULL,
     from_revision bigint NOT NULL, to_revision bigint NOT NULL,
-    snapshot jsonb NOT NULL, agent_id text NOT NULL, config_owner text NOT NULL,
+    snapshot jsonb NOT NULL, config_owner text NOT NULL,
     state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','running','done','skipped','failed','cancelled')),
     attempts integer NOT NULL DEFAULT 0, lease_id uuid, lease_until timestamptz,
     available_at timestamptz NOT NULL DEFAULT now(), created_at timestamptz NOT NULL DEFAULT now(),
     finished_at timestamptz, error_code text, result jsonb NOT NULL DEFAULT '{}'::jsonb,
     UNIQUE(tenant_id,channel_id,from_revision,to_revision)
 );
+ALTER TABLE group_learning_batches DROP COLUMN IF EXISTS agent_id;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_group_learning_open_channel ON group_learning_batches(tenant_id,channel_id)
     WHERE state IN ('pending','running','failed');
 CREATE INDEX IF NOT EXISTS ix_group_learning_queue ON group_learning_batches(tenant_id,state,available_at);

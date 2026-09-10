@@ -8,9 +8,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from test_memory_repository import repository, access, write
+from memory_run_test_support import MemoryRunHarness
 from utils.learning_repository import LearningRepository, LearningOutput
 from utils.memory_repository import MemoryError, MemoryWrite
 from utils.learning_service import process_learning_job
+
+
+async def allow_fixture_context(_event, _access, rows):
+    # Source authorization is covered separately by the actual runtime-filter tests.
+    return rows
 
 
 def event(repo,actor=None,kind='explicit',**kwargs):
@@ -119,10 +125,10 @@ def test_worker_rechecks_permission_after_model_and_handles_invalid_output(repos
     async def auth(_event):
         nonlocal calls
         calls+=1
-        return access(learning_process=calls==1)
+        return access(learning_enabled=calls==1)
     async def model(*_args):
         return output().model_dump_json()
-    result=asyncio.run(process_learning_job(learning,job,authorize=auth,call_model=model,settings=SimpleNamespace(learning_timeout_seconds=10)))
+    result=asyncio.run(process_learning_job(learning,job,authorize=auth,filter_existing=allow_fixture_context,call_model=model,settings=SimpleNamespace(learning_timeout_seconds=10)))
     assert result['status']=='cancelled'
     assert repository.list(access(),status='candidate')['total']==0
 
@@ -134,18 +140,21 @@ def test_actual_middleware_greeting_is_silent_and_correction_queues(repository):
     from agentscope.event import ReplyEndEvent
     async def resolve():
         return access()
+    harness=MemoryRunHarness(repository)
     middleware=ThreeDrawerMemoryMiddleware(MagicMock(),MemoryRuntime().scope(project_id='p',platform_user_id='a',agent_id='agent',session_id='s'),
-        {'memory_profile_enabled':False,'learning_skill_limit':0},access_resolver=resolve,repository=repository,config_owner='owner')
+        {'learning_skill_limit':0},access_resolver=resolve,repository=repository,controller=harness.controller(),config_owner='owner')
     agent=SimpleNamespace(state=SimpleNamespace(context=[],tasks_context=SimpleNamespace(tasks=[]),middle_context={}))
     async def handler(**_kwargs):
         yield ReplyEndEvent(session_id='s',reply_id='reply')
     async def run():
         async for _ in middleware.on_reply(agent,{'inputs':[UserMsg('user','你好')]},handler):
             pass
+        await harness.finish()
         assert middleware.learning.dashboard(access(management=True))['total']==0
         agent.state.context=[AssistantMsg('assistant','先验收再检查清单')]
         async for _ in middleware.on_reply(agent,{'inputs':[UserMsg('user','不对，应该先检查附件清单再验收')]},handler):
             pass
+        await harness.finish()
         assert middleware.learning.dashboard(access(management=True))['events'][0]['event_type']=='correction'
     asyncio.run(run())
 
@@ -194,72 +203,80 @@ def test_management_learning_api_and_export_are_real_and_source_safe(repository,
         assert client.post(base+'/learning-review',json={'expected_version':2,'action':'suspend','note':'无权限'}).status_code==403
 
 
-def test_live_platform_authorization_respects_privacy_and_agent_switches():
+def test_live_platform_authorization_uses_authoritative_run_validation():
     from unittest.mock import AsyncMock
     from agentscope.app.memory._learning import PlatformLearningRuntime
-    from agentscope.app.storage import PlatformAgentConfig,MemorySettingsData
-    policy=PlatformAgentConfig(agent_level='management')
-    record=SimpleNamespace(data=SimpleNamespace(platform_config=policy))
-    storage=SimpleNamespace(get_agent=AsyncMock(return_value=record))
-    live={'user_id':'a','project_id':'p','private':True,'project_read':True,'project_write':True}
-    gateway=SimpleNamespace(resolve_memory_scope=AsyncMock(return_value=live))
-    runtime=PlatformLearningRuntime(storage=storage,gateway=gateway,resources=None,
-        settings_loader=AsyncMock(return_value=MemorySettingsData()),tenant_id='t')
-    e={'tenant_id':'t','config_owner':'owner','agent_id':'agent','identity_type':'business_user',
-       'session_id':'s','access_snapshot':{'user_id':'a','project_id':'p'}}
+    from agentscope.app.storage import MemorySettingsData
+    validator = AsyncMock(return_value=access())
+    runtime=PlatformLearningRuntime(storage=SimpleNamespace(),gateway=SimpleNamespace(),resources=None,
+        settings_loader=AsyncMock(return_value=MemorySettingsData(learning_enabled=True, learning_model_config={'type':'custom_openai_credential','credential_id':'test','model':'test','parameters':{}})),tenant_id='t',interaction_validator=validator)
+    e={'tenant_id':'t','source_type':'interaction','provenance':{'run_id':'run-1'},'access_snapshot':{}}
     async def run():
         assert (await runtime.authorize(e)).target('user_project',write=True)==('a','p')
-        live['private']=False
-        with pytest.raises(MemoryError):
-            (await runtime.authorize(e)).target('user_project',write=True)
-        policy.learning_process=False
-        assert (await runtime.authorize(e)).learning_process is False
-        live['user_id']='b'
+        validator.assert_awaited_once_with(e,existing=False)
+        validator.side_effect=MemoryError('identity_mismatch','学习来源会话的身份已经改变。',status=403)
         with pytest.raises(MemoryError,match='身份'):
             await runtime.authorize(e)
     asyncio.run(run())
 
 
-def test_real_tool_event_recovery_creates_learning_job(repository):
+@pytest.mark.parametrize('outcomes,event_type,job_state', [
+    (['error', 'success'], 'recovery', 'pending'),
+    (['success', 'error'], 'tool_failure', None),
+])
+def test_real_tool_event_recovery_creates_learning_job(repository, outcomes, event_type, job_state):
     from agentscope.app.memory._direct import ThreeDrawerMemoryMiddleware
     from agentscope.app.memory._runtime import MemoryRuntime
     from agentscope.message import UserMsg,TextBlock,ToolResultState
     from agentscope.tool import ToolChunk
+    harness=MemoryRunHarness(repository)
     middleware=ThreeDrawerMemoryMiddleware(MagicMock(),MemoryRuntime().scope(project_id='p',platform_user_id='a',agent_id='agent',session_id='s'),
-        {},access_resolver=lambda:asyncio.sleep(0,result=access()),repository=repository)
+        {},access_resolver=lambda:asyncio.sleep(0,result=access()),repository=repository,controller=harness.controller())
     middleware._input_sources={'u':'请修复并核对附件'}
     agent=SimpleNamespace(state=SimpleNamespace(context=[UserMsg('user','请修复并核对附件')],tasks_context=SimpleNamespace(tasks=[])))
     async def run():
-        for state in [ToolResultState.ERROR,ToolResultState.SUCCESS]:
+        await harness.start('请修复并核对附件',mid='u')
+        for call_id,outcome in zip(['z-first-call', 'a-second-call'], outcomes):
+            state=ToolResultState.ERROR if outcome=='error' else ToolResultState.SUCCESS
             async def handler(**_kwargs):
                 yield ToolChunk(content=[TextBlock(text='附件检查实际结果')],state=state,is_last=True)
-            async for _ in middleware.on_acting(agent,{'tool_call':SimpleNamespace(id=str(uuid4()),name='verify_attachments')},handler):
+            async for _ in middleware.on_acting(agent,{'tool_call':SimpleNamespace(id=call_id,name='verify_attachments')},handler):
                 pass
         await middleware.capture_learning_turn(agent)
+        await harness.finish()
         row=middleware.learning.dashboard(access(management=True))['events'][0]
-        assert row['event_type']=='recovery' and row['state']=='pending'
-        assert [e['outcome'] for e in row['evidence'] if e['kind']=='tool']==['error','success']
+        assert row['event_type']==event_type and row['state']==job_state
+        assert [e['outcome'] for e in row['evidence'] if e['kind']=='tool']==outcomes
     asyncio.run(run())
 
 
 def test_cross_turn_recovery_uses_only_current_owner_and_stops_repeating(repository):
     from agentscope.app.memory._direct import ThreeDrawerMemoryMiddleware
     from agentscope.app.memory._runtime import MemoryRuntime
+    harness=MemoryRunHarness(repository)
     middleware=ThreeDrawerMemoryMiddleware(MagicMock(),MemoryRuntime().scope(project_id='p',platform_user_id='a',agent_id='agent',session_id='s'),
-        {},access_resolver=lambda:asyncio.sleep(0,result=access()),repository=repository)
+        {},access_resolver=lambda:asyncio.sleep(0,result=access()),repository=repository,controller=harness.controller())
     middleware._input_sources={'u':'检查附件'}
     middleware._learning_trace=[{'id':'failed','kind':'tool','text':'附件缺失','outcome':'error','tool_name':'verify'}]
     agent=SimpleNamespace(state=SimpleNamespace(tasks_context=SimpleNamespace(tasks=[])))
     async def run():
+        await harness.start('检查附件',mid='u')
+        for evidence in middleware._learning_trace:
+            await harness.controller().record_tool(evidence)
         await middleware.capture_learning_turn(agent)
+        await harness.finish()
         assert middleware.learning.dashboard(access(management=True))['events'][0]['state'] is None
-        assert middleware.learning.recent_failures(access(user='b'),scope_type='user_project',agent_id='agent',session_id='s',tool_names=['verify'])==[]
+        assert middleware.learning.recent_failure_events(access(user='b'),scope_type='user_project',agent_id='agent',session_id='s',tool_names=['verify'])==[]
+        await harness.start('附件已补充，请重新检查',mid='u2')
         middleware._input_sources={'u2':'附件已补充，请重新检查'}
         middleware._learning_trace=[{'id':'success','kind':'tool','text':'附件齐全','outcome':'success','tool_name':'verify'}]
+        for evidence in middleware._learning_trace:
+            await harness.controller().record_tool(evidence)
         await middleware.capture_learning_turn(agent)
+        await harness.finish()
         rows=middleware.learning.dashboard(access(management=True))['events']
         assert rows[0]['event_type']=='recovery' and rows[0]['state']=='pending'
-        assert middleware.learning.recent_failures(access(),scope_type='user_project',agent_id='agent',session_id='s',tool_names=['verify'])==[]
+        assert middleware.learning.recent_failure_events(access(),scope_type='user_project',agent_id='agent',session_id='s',tool_names=['verify'])==[]
         await middleware.capture_learning_turn(agent)
         assert middleware.learning.dashboard(access(management=True))['total']==2
     asyncio.run(run())
@@ -277,7 +294,7 @@ def test_model_input_respects_budget_and_successful_worker_publishes_automatical
         assert 'user-1' in prompt and '助手说成功不能证明成功' in system
         return output().model_dump_json()
     result=asyncio.run(process_learning_job(learning,learning.claim('t'),authorize=lambda _:asyncio.sleep(0,result=access()),
-        call_model=model,settings=SimpleNamespace(learning_timeout_seconds=10)))
+        filter_existing=allow_fixture_context,call_model=model,settings=SimpleNamespace(learning_timeout_seconds=10)))
     assert result['candidates'][0]['status']=='active' and repository.search(access())
 
 
@@ -300,7 +317,7 @@ def test_periodic_consolidation_budget_idempotency_and_source_revocation(reposit
     learning.review(access(management=True),mid,expected_version=2,action='suspend',note='新增反例')
     model=MagicMock()
     result=asyncio.run(process_learning_job(learning,job,authorize=lambda _:asyncio.sleep(0,result=access()),
-        call_model=model,settings=SimpleNamespace(learning_timeout_seconds=10)))
+        filter_existing=allow_fixture_context,call_model=model,settings=SimpleNamespace(learning_timeout_seconds=10)))
     assert result['status']=='cancelled' and result['code']=='learning_source_changed'
     model.assert_not_called()
 
@@ -351,7 +368,7 @@ def test_platform_learning_uses_configured_model_and_streamed_final_content(monk
     from agentscope.app.memory import _learning as runtime_module
     from agentscope.app.storage import ChatModelConfig,MemorySettingsData
     selected=ChatModelConfig(type='custom_openai_credential',credential_id='learning-model',model='test',parameters={})
-    settings=MemorySettingsData(learning_model_config=selected)
+    settings=MemorySettingsData(learning_enabled=True, learning_model_config=selected)
     resources=SimpleNamespace(resolve_credential=AsyncMock(return_value=SimpleNamespace(data={})))
     monkeypatch.setattr(runtime_module.CredentialFactory,'from_dict',lambda _:SimpleNamespace(type=selected.type))
     monkeypatch.setattr(runtime_module,'build_credential_model_catalog',lambda _:[SimpleNamespace(name='test',enabled=True)])
@@ -363,7 +380,7 @@ def test_platform_learning_uses_configured_model_and_streamed_final_content(monk
     monkeypatch.setattr(runtime_module,'get_model',factory)
     runtime=runtime_module.PlatformLearningRuntime(storage=SimpleNamespace(),gateway=None,resources=resources,
         settings_loader=AsyncMock(return_value=settings),tenant_id='t')
-    result=asyncio.run(runtime.call_model({'config_owner':'owner'},'学习系统提示','学习证据'))
+    result=asyncio.run(runtime.call_model({'config_owner':'owner','source_type':'interaction'},'学习系统提示','学习证据'))
     assert result==output().model_dump_json()
     assert factory.await_args.args==('owner',selected,resources)
 
@@ -374,11 +391,10 @@ def test_relevant_verified_skill_is_injected_with_profile_and_cleaned_after_repl
     from agentscope.message import UserMsg
     from agentscope.event import ReplyStartEvent,ReplyEndEvent
     learning=LearningRepository(repository)
-    mid=candidate(repository,'skill')
-    learning.review(access(management=True),mid,expected_version=1,action='approve',note='验收通过')
     write(repository,key='profile.name')
+    harness=MemoryRunHarness(repository)
     middleware=ThreeDrawerMemoryMiddleware(MagicMock(),MemoryRuntime().scope(project_id='p',platform_user_id='a',agent_id='agent',session_id='s'),
-        {},access_resolver=lambda:asyncio.sleep(0,result=access()),repository=repository)
+        {},access_resolver=lambda:asyncio.sleep(0,result=access()),repository=repository,controller=harness.controller())
     agent=SimpleNamespace(state=SimpleNamespace(context=[],tasks_context=SimpleNamespace(tasks=[])))
     async def handler(**_kwargs):
         yield ReplyStartEvent(session_id='s',reply_id='r',name='agent')
@@ -386,9 +402,17 @@ def test_relevant_verified_skill_is_injected_with_profile_and_cleaned_after_repl
         assert '雷淦文' in texts and '先核对附件清单' in texts and '不授予工具权限' in texts
         yield ReplyEndEvent(session_id='s',reply_id='r')
     async def run():
+        await harness.start('请总结本次复盘：先核对附件清单，然后逐个验收。', mid='user-1')
+        await harness.controller().request_learning('explicit')
+        await harness.finish()
+        job=learning.claim('t')
+        assert job is not None
+        mid=learning.complete(job,access(),output('skill'))['candidates'][0]['memory_id']
+        learning.review(access(management=True),mid,expected_version=1,action='approve',note='验收通过')
         async for _ in middleware.on_reply(agent,{'inputs':[UserMsg('user','请帮助我核对附件清单并执行验收')]},handler):
             pass
-    asyncio.run(run())
+        return mid
+    mid=asyncio.run(run())
     assert agent.state.context==[] and repository.get(access(),mid)['use_count']==1
 
 
@@ -402,8 +426,9 @@ def test_profile_context_binds_preferred_address_to_authenticated_account(reposi
     write(repository,actor=actor,key='profile.name',content='用户的姓名是雷淦文')
     write(repository,actor=actor,key='profile.address',content='用户希望被称呼为「雷总」')
     write(repository,actor=access(user='18'),key='profile.address',content='另一个用户的称呼')
+    harness=MemoryRunHarness(repository,actor=actor)
     middleware=ThreeDrawerMemoryMiddleware(MagicMock(),MemoryRuntime().scope(project_id='p',platform_user_id='17',agent_id='agent',session_id='s'),
-        {'learning_skill_limit':0},access_resolver=lambda:asyncio.sleep(0,result=actor),repository=repository)
+        {'learning_skill_limit':0},access_resolver=lambda:asyncio.sleep(0,result=actor),repository=repository,controller=harness.controller())
     platform=SystemMsg('platform','当前登录用户ID：17；账号显示名：群聊测试甲；系统角色：admin')
     agent=SimpleNamespace(state=SimpleNamespace(context=[platform],tasks_context=SimpleNamespace(tasks=[])))
     async def handler(**_kwargs):
@@ -424,12 +449,42 @@ def test_profile_context_binds_preferred_address_to_authenticated_account(reposi
     assert agent.state.context==[platform]
 
 
+def test_delegated_agent_only_receives_current_project_preferences(repository):
+    import json
+    from agentscope.app.memory._direct import ThreeDrawerMemoryMiddleware
+    from agentscope.app.memory._runtime import MemoryRuntime
+    from agentscope.message import UserMsg
+    from agentscope.event import ReplyStartEvent, ReplyEndEvent
+    write(repository, key='profile.name', content='不应向协作节点注入的跨项目姓名')
+    write(repository, scope='user_project', key='preference.response_detail', content='本项目的报告要求简洁')
+    harness = MemoryRunHarness(repository, depth=2)
+    controller = harness.controller('child-1')
+    middleware = ThreeDrawerMemoryMiddleware(MagicMock(), MemoryRuntime().scope(
+        project_id='p', platform_user_id='a', agent_id='agent-1', session_id='child-1'),
+        {'learning_skill_limit': 0}, access_resolver=controller.access,
+        repository=repository, controller=controller)
+    agent = SimpleNamespace(state=SimpleNamespace(context=[], tasks_context=SimpleNamespace(tasks=[])))
+    async def handler(**_):
+        yield ReplyStartEvent(session_id='child-1', reply_id='child-reply', name='agent-1')
+        payload = json.loads(agent.state.context[-1].get_text_content().split('\n', 1)[1])
+        assert [(row['scope_type'], row['content']) for row in payload['preferences']] == [
+            ('user_project', '本项目的报告要求简洁')]
+        yield ReplyEndEvent(session_id='child-1', reply_id='child-reply')
+    async def run():
+        await harness.start('协助处理本项目的附件清单')
+        async for _ in middleware.on_reply(agent, {'inputs': [UserMsg('上级智能体', '执行附件检查')]}, handler):
+            pass
+    asyncio.run(run())
+    assert agent.state.context == []
+
+
 def test_completion_requires_tool_evidence_and_user_can_decline_learning(repository):
     from unittest.mock import AsyncMock
     from agentscope.app.memory._direct import ThreeDrawerMemoryMiddleware
     from agentscope.app.memory._runtime import MemoryRuntime
+    harness=MemoryRunHarness(repository)
     middleware=ThreeDrawerMemoryMiddleware(MagicMock(),MemoryRuntime().scope(project_id='p',platform_user_id='a',agent_id='agent',session_id='s'),
-        {},access_resolver=lambda:asyncio.sleep(0,result=access()),repository=repository)
+        {},access_resolver=lambda:asyncio.sleep(0,result=access()),repository=repository,controller=harness.controller())
     capture=AsyncMock();middleware.capture_learning=capture
     task=SimpleNamespace(model_dump=lambda **_:dict(id='task1',state='completed',subject='附件验收'))
     agent=SimpleNamespace(state=SimpleNamespace(tasks_context=SimpleNamespace(tasks=[task])))
@@ -439,8 +494,13 @@ def test_completion_requires_tool_evidence_and_user_can_decline_learning(reposit
         capture.assert_not_awaited()
         middleware._learning_trace=[dict(id='check',kind='tool',tool_name='verify',text='附件齐全',outcome='success')]
         await middleware.capture_learning_turn(agent)
-        assert capture.await_args.args[0]=='verified_task'
-        assert any(e['id']=='task:task1' for e in capture.await_args.args[1])
+        assert capture.await_args.args[0]=='recovery'
+        assert not any(e.get('id')=='task:task1' for e in capture.await_args.args[1])
+        middleware._learning_trace.extend([dict(id=f'check-{i}',kind='tool',tool_name='verify',text='实际复核成功',outcome='success') for i in (2,3)])
+        await middleware.capture_learning_turn(agent)
+        assert capture.await_args.args[0]=='recovery'
+        assert len([e for e in capture.await_args.args[1] if e['kind']=='tool'])==3
+        assert not any(e.get('id')=='task:task1' for e in capture.await_args.args[1])
         capture.reset_mock()
         middleware._input_sources={'u2':'本次不要复盘或学习'}
         await middleware.capture_learning_turn(agent)
@@ -463,7 +523,7 @@ def test_background_failures_retry_with_backoff_then_stop(repository,failure):
     async def run():
         for attempt in range(1,4):
             await process_learning_job(learning,learning.claim('t'),authorize=lambda _:asyncio.sleep(0,result=access()),
-                call_model=model,settings=SimpleNamespace(learning_timeout_seconds=0.001))
+                filter_existing=allow_fixture_context,call_model=model,settings=SimpleNamespace(learning_timeout_seconds=0.001))
             row=learning.dashboard(access(management=True))['events'][0]
             assert row['state']==('failed' if attempt==3 else 'pending')
             assert row['attempts']==attempt and row['error_code']
@@ -474,20 +534,26 @@ def test_background_failures_retry_with_backoff_then_stop(repository,failure):
     assert repository.list(access(),status='candidate')['total']==0
 
 
-def test_explicit_fact_correction_is_saved_without_duplicate_learning(repository):
+@pytest.mark.parametrize('depth', [1, 2])
+def test_explicit_fact_correction_is_saved_without_duplicate_learning(repository, depth):
     from agentscope.app.memory._direct import ThreeDrawerMemoryMiddleware
     from agentscope.app.memory._runtime import MemoryRuntime
     from agentscope.message import ToolResultState
+    harness=MemoryRunHarness(repository,depth=depth)
     middleware=ThreeDrawerMemoryMiddleware(MagicMock(),MemoryRuntime().scope(project_id='p',platform_user_id='a',agent_id='agent',session_id='s'),
-        {},access_resolver=lambda:asyncio.sleep(0,result=access()),repository=repository)
+        {},access_resolver=lambda:asyncio.sleep(0,result=access()),repository=repository,controller=harness.controller())
     middleware._input_sources={'u':'名字错了，我叫测试甲'}
     middleware._previous_answer='你好，测试乙'
     agent=SimpleNamespace(state=SimpleNamespace(tasks_context=SimpleNamespace(tasks=[])))
     async def run():
+        await harness.start('名字错了，我叫测试甲',mid='u')
         tool=(await middleware.list_tools())[0]
         result=await tool.call(items=[{'scope_type':'user','content':'测试甲','fact_key':'profile.name'}])
         assert result.state==ToolResultState.SUCCESS
+        assert bool(repository.search(access(),fact_key='profile.name')) is (depth == 1)
         await middleware.capture_learning_turn(agent)
+        assert middleware.learning.dashboard(access(management=True))['total']==0
+        await harness.finish()
         assert middleware.learning.dashboard(access(management=True))['total']==0
         assert repository.search(access(),fact_key='profile.name')[0]['content']=='测试甲'
     asyncio.run(run())
@@ -508,8 +574,8 @@ def test_idle_worker_does_not_repeat_hourly_maintenance_on_every_poll(monkeypatc
             raise asyncio.CancelledError
     monkeypatch.setattr(asyncio,'sleep',sleep)
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(run_learning_worker(repository,tenant_id='t',settings_loader=AsyncMock(return_value=MemorySettingsData()),
-            authorize=AsyncMock(),call_model=AsyncMock()))
+        asyncio.run(run_learning_worker(repository,tenant_id='t',settings_loader=AsyncMock(return_value=MemorySettingsData(learning_enabled=True, learning_model_config={'type':'custom_openai_credential','credential_id':'test','model':'test','parameters':{}})),
+            authorize=AsyncMock(),authorize_existing=AsyncMock(),filter_existing=AsyncMock(),call_model=AsyncMock()))
     repository.maintain.assert_called_once()
     assert repository.claim.call_count==2
 
@@ -525,7 +591,7 @@ def test_legacy_candidate_automatic_check_uses_live_authorization_and_cas(reposi
     async def authorize(e):
         calls.append(e['id'])
         return access()
-    asyncio.run(reconcile_automatic_memories(learning,'t',authorize))
+    asyncio.run(reconcile_automatic_memories(learning,'t',authorize,authorize))
     current=repository.get(access(),mid)
     assert calls and current['status']=='active' and current['version']==2
     assert learning.automatic_check_queue('t')==[]
@@ -542,14 +608,14 @@ def test_automatic_check_rejects_revoked_sources_and_defers_transient_errors(rep
         conn.execute("UPDATE memory_records SET status='candidate' WHERE id=%s",(mid,))
     async def unavailable(e):
         raise TimeoutError()
-    asyncio.run(reconcile_automatic_memories(learning,'t',unavailable))
+    asyncio.run(reconcile_automatic_memories(learning,'t',unavailable,unavailable))
     assert repository.get(access(),mid)['status']=='candidate'
     assert learning.automatic_check_queue('t')==[]
     with repository._connection() as conn:
         conn.execute("UPDATE memory_records SET learning=learning-'auto_check_after' WHERE id=%s",(mid,))
     async def revoked(e):
         raise MemoryError('learning_scope_changed','权限已改变',status=403)
-    asyncio.run(reconcile_automatic_memories(learning,'t',revoked))
+    asyncio.run(reconcile_automatic_memories(learning,'t',revoked,revoked))
     assert repository.get(access(),mid)['status']=='inactive'
     assert learning.automatic_check_queue('t')==[]
 
@@ -561,7 +627,7 @@ def test_automatic_check_revalidates_aging_without_waiting_for_a_person(reposito
     with repository._connection() as conn:
         conn.execute("UPDATE memory_records SET learning=learning || jsonb_build_object('reviewed_at',(now()-interval '100 days')::text) WHERE id=%s",(mid,))
     assert learning.maintain('t')['review_due']==1
-    asyncio.run(reconcile_automatic_memories(learning,'t',lambda _:asyncio.sleep(0,result=access())))
+    asyncio.run(reconcile_automatic_memories(learning,'t',lambda _:asyncio.sleep(0,result=access()),lambda _:asyncio.sleep(0,result=access())))
     assert repository.search(access())
     assert repository.get(access(management=True),mid)['learning']['validation_method']=='automatic_v1'
 

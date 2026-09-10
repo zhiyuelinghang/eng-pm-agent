@@ -11,6 +11,7 @@ from psycopg.types.json import Jsonb
 
 from .learning_repository import _digest
 from .learning_validation import automatic_validation
+from .learning_settings_guard import LearningPaused, lock_learning_settings
 from .memory_repository import MemoryAccess, MemoryError, _public, learning_fingerprint
 
 
@@ -74,8 +75,9 @@ class GroupLearningRepository:
                 (tenant_id, channel['channel_id'], str(channel.get('project_id') or ''), channel.get('title') or '已删除群聊', channel['revision'])).fetchone()
             return _public(row)
 
-    def enqueue(self, tenant_id, snapshot, *, agent_id, config_owner, daily_limit):
+    def enqueue(self, tenant_id, snapshot, *, config_owner, daily_limit):
         with self.memories._connection() as conn:
+            lock_learning_settings(conn, {(config_owner, 'group')})
             conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (f'group-budget:{tenant_id}',))
             cursor = conn.execute('SELECT * FROM group_learning_cursors WHERE tenant_id=%s AND channel_id=%s FOR UPDATE',
                 (tenant_id, snapshot['channel_id'])).fetchone()
@@ -89,9 +91,9 @@ class GroupLearningRepository:
                 conn.execute("UPDATE group_learning_cursors SET last_result=%s WHERE tenant_id=%s AND channel_id=%s",
                     (Jsonb({'reason': '已达每日群聊任务上限，未处理消息保留至下次。'}), tenant_id, snapshot['channel_id']))
                 return None
-            row = conn.execute('''INSERT INTO group_learning_batches(id,tenant_id,channel_id,from_revision,to_revision,snapshot,agent_id,config_owner)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(tenant_id,channel_id,from_revision,to_revision) DO NOTHING RETURNING *''',
-                (uuid4(), tenant_id, snapshot['channel_id'], snapshot['from_revision'], snapshot['to_revision'], Jsonb(snapshot), agent_id, config_owner)).fetchone()
+            row = conn.execute('''INSERT INTO group_learning_batches(id,tenant_id,channel_id,from_revision,to_revision,snapshot,config_owner)
+                VALUES(%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(tenant_id,channel_id,from_revision,to_revision) DO NOTHING RETURNING *''',
+                (uuid4(), tenant_id, snapshot['channel_id'], snapshot['from_revision'], snapshot['to_revision'], Jsonb(snapshot), config_owner)).fetchone()
             return _public(row) if row else None
 
     def claim(self, tenant_id):
@@ -129,6 +131,15 @@ class GroupLearningRepository:
                     available_at=now()+(%s * interval '1 second') WHERE id=%s''',
                     ('failed' if row['attempts'] >= 3 else 'pending', str(code)[:300], 86400 if row['attempts'] >= 3 else 20 * 2 ** row['attempts'], job['id']))
 
+    def defer(self, job, code):
+        with self.memories._connection() as conn:
+            if not self._lease(conn, job):
+                return False
+            conn.execute('''UPDATE group_learning_batches SET state='pending',attempts=greatest(0,attempts-1),
+                error_code=%s,lease_id=NULL,lease_until=NULL,available_at=now()+interval '5 seconds'
+                WHERE id=%s''', (str(code)[:300], job['id']))
+            return True
+
     def existing(self, job):
         with self.memories._connection() as conn:
             rows = conn.execute('''SELECT id,version,scope_type,platform_user_id,project_id,memory_type,content,fact_key,learning,source,status
@@ -156,25 +167,32 @@ class GroupLearningRepository:
                 self.memories._version(conn, changed, 'group_learning', 'source_invalidated')
                 self.memories._queue(conn, changed)
 
-    def complete(self, job, output, *, write_scopes):
-        snapshot = job['snapshot']
-        plans = []
-        for item in output.candidates:
-            targets, evidence = candidate_targets(item, snapshot)
-            if item.memory_type in {'reflection', 'experience', 'skill'} and (not item.conditions.strip() or not item.limitations.strip()):
-                raise MemoryError('learning_detail_required', '经验需要适用条件和限制。')
-            if item.memory_type == 'skill' and (not item.steps or any(not s.strip() or len(s)>2000 for s in item.steps)):
-                raise MemoryError('invalid_skill', '操作技能需要明确、有界的步骤。')
-            plans += [(item, target, evidence) for target in targets if target[0] in write_scopes]
-        results = []
-        anchors = {}
+    def complete(self, job, output):
         with self.memories._connection() as conn:
-            conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (f"group-channel:{job['tenant_id']}:{job['channel_id']}",))
-            if not self._lease(conn, job):
+            # Lock the batch once for the lease and its persisted owner/source.
+            # Do not first take SHARE then upgrade: competing completions could
+            # otherwise deadlock while one waits for the channel lock.
+            job = self._lease(conn, job)
+            if not job:
                 return {'status': 'stale'}
+            lock_learning_settings(conn, {(job['config_owner'], 'group')})
+            snapshot = job['snapshot']
+            plans = []
+            for item in output.candidates:
+                targets, evidence = candidate_targets(item, snapshot)
+                if item.memory_type in {'reflection', 'experience', 'skill'} and (not item.conditions.strip() or not item.limitations.strip()):
+                    raise MemoryError('learning_detail_required', '经验需要适用条件和限制。')
+                if item.memory_type == 'skill' and (not item.steps or any(not s.strip() or len(s)>2000 for s in item.steps)):
+                    raise MemoryError('invalid_skill', '操作技能需要明确、有界的步骤。')
+                plans += [(item, target, evidence) for target in targets]
+            results = []
+            anchors = {}
+            conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (f"group-channel:{job['tenant_id']}:{job['channel_id']}",))
             cursor = conn.execute('SELECT * FROM group_learning_cursors WHERE tenant_id=%s AND channel_id=%s FOR UPDATE', (job['tenant_id'], job['channel_id'])).fetchone()
-            if cursor['paused'] or cursor['cursor'] != job['from_revision']:
-                raise MemoryError('cursor_changed', '群聊学习已暂停或处理进度改变。')
+            if cursor['paused']:
+                raise LearningPaused('此群聊的学习已暂停，待处理批次将在恢复后继续。')
+            if cursor['cursor'] != job['from_revision']:
+                raise MemoryError('cursor_changed', '群聊处理进度已经改变。')
             for item, (scope, user, project), evidence in plans:
                 learned = item.memory_type in {'reflection', 'experience', 'skill'}
                 key = item.topic_key if scope == 'user' else 'group.' + _digest([job['channel_id'], item.topic_key])[:40]
@@ -220,16 +238,18 @@ class GroupLearningRepository:
                     'group_batch_id': str(job['id'])})
                 if learned:
                     detail = automatic_validation(item.memory_type, detail)
-                    access = MemoryAccess(job['tenant_id'], user, project, project_read=True, project_write=True,
+                    access = MemoryAccess(job['tenant_id'], user, project, private=scope != 'project',project_read=True, project_write=True,
+                        audience_user_ids=tuple(source['audience']),
                         group_source_channels=(str(job['channel_id']),), group_shared_channels=(str(job['channel_id']),) if scope=='project' else ())
                     event_id = uuid4()
                     event_key = _digest([str(job['id']), scope, user, key])
                     event = conn.execute('''INSERT INTO learning_events(id,tenant_id,identity_type,scope_type,platform_user_id,project_id,
-                        agent_id,session_id,config_owner,event_key,event_type,evidence,fingerprint,access_snapshot)
-                        VALUES(%s,%s,'business_user',%s,%s,%s,%s,%s,%s,%s,'group_chat',%s,%s,%s)
+                        agent_id,session_id,config_owner,event_key,event_type,evidence,fingerprint,access_snapshot,source_type,provenance)
+                        VALUES(%s,%s,'business_user',%s,%s,%s,'',%s,%s,%s,'group_chat',%s,%s,%s,'group',%s)
                         ON CONFLICT(tenant_id,identity_type,agent_id,session_id,event_key) DO UPDATE SET event_key=excluded.event_key RETURNING id''',
-                        (event_id, job['tenant_id'], scope, user, project, job['agent_id'], 'group:'+str(job['id']), job['config_owner'], event_key,
-                         Jsonb([{'id': m['id'], 'kind': 'task' if m['kind']!='user' else 'user', 'text': m['text'][:4000], 'outcome': m['outcome']} for m in evidence]), fingerprint, Jsonb(asdict(access)))).fetchone()
+                        (event_id, job['tenant_id'], scope, user, project, 'group:'+str(job['id']), job['config_owner'], event_key,
+                         Jsonb([{'id': m['id'], 'kind': 'task' if m['kind']!='user' else 'user', 'text': m['text'][:4000], 'outcome': m['outcome']} for m in evidence]), fingerprint, Jsonb(asdict(access)),
+                         Jsonb({'batch_id':str(job['id']), 'channel_id':str(job['channel_id'])}))).fetchone()
                     detail['event_id'] = str(event['id'])
                 if row:
                     row = conn.execute('''UPDATE memory_records SET content=%s,memory_type=%s,status=%s,source=%s,learning=%s,

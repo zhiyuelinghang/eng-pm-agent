@@ -975,6 +975,8 @@ export const useAppStore = defineStore('app', () => {
   async function updatePlatformMapping(mappingId: string, payload: Omit<PlatformFieldMapping, 'id' | 'projectId'>, projectId = currentProjectId.value) { await api.patch(`/platform-field-mappings/${mappingId}`, { platform_name: payload.platformName, source_field: payload.sourceField, target_field: payload.targetField, transform_rule: payload.transformRule, required: payload.required, enabled: payload.enabled }); if (projectId === currentProjectId.value) await loadProjectData(projectId) }
   async function removePlatformMapping(mappingId: string, projectId = currentProjectId.value) { await api.delete(`/platform-field-mappings/${mappingId}`); if (projectId === currentProjectId.value) await loadProjectData(projectId) }
   async function createTask(payload: {
+    generation_origin_token?: string
+    generation_id?: string
     title: string
     task_type: Task['type']
     risk_level?: Task['riskLevel']

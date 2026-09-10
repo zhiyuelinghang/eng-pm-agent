@@ -22,6 +22,7 @@ import jsonschema
 from pydantic import BaseModel
 
 from ._config import ContextConfig, ReActConfig, ModelConfig, InjectionConfig
+from ._execution import ExecutionGuard, ExecutionPolicy
 from ..state import AgentState
 from ..state._state import ReplyContext
 from ._utils import _ToolCallBatch, Acting, Exit, Reasoning, _resolve_timezone
@@ -125,6 +126,7 @@ class Agent:
         context_config: ContextConfig | None = None,
         react_config: ReActConfig | None = None,
         injection_config: InjectionConfig | None = None,
+        execution_policy: ExecutionPolicy | None = None,
     ) -> None:
         """Initialize the agent class in AgentScope.
 
@@ -166,6 +168,9 @@ class Agent:
         self._system_prompt = system_prompt
         self.model = model
         self.state = state or AgentState()
+        self._execution_guard = (
+            ExecutionGuard(execution_policy, self.state) if execution_policy else None
+        )
 
         self.model_config = model_config or ModelConfig()
         self.context_config = context_config or ContextConfig()
@@ -740,6 +745,7 @@ class Agent:
 
     async def _close_unfinished_tool_calls(
         self,
+        message: str | None = None,
     ) -> AsyncGenerator[
         ToolResultStartEvent | ToolResultTextDeltaEvent | ToolResultEndEvent,
         None,
@@ -762,7 +768,7 @@ class Agent:
             elif isinstance(block, ToolResultBlock):
                 awaiting_tool_calls.pop(block.id, None)
 
-        interruption_message = (
+        interruption_message = message or (
             "<system-reminder>The tool call has been interrupted by "
             "the user.</system-reminder>"
         )
@@ -895,6 +901,8 @@ class Agent:
             # Update the structured output tool for new requirements or
             #  from the previous reply
             await self.toolkit.remove_tool(_GenerateStructuredOutput.name)
+            if self._execution_guard:
+                self._execution_guard.resume()
             if self.state.reply_context.structured_schema:
                 await self.toolkit.add_tool(
                     _GenerateStructuredOutput(
@@ -923,6 +931,12 @@ class Agent:
                             # the continuation protocol doesn't apply
                             yield exit_msg
                             return
+
+                        if self._execution_guard and self._execution_guard.data["finalizing"]:
+                            async for cleanup_event in self._close_unfinished_tool_calls(
+                                "系统已停止本次继续执行；此工具调用未执行。",
+                            ):
+                                yield cleanup_event
 
                         for exit_event in exit_events:
                             yield exit_event
@@ -971,6 +985,8 @@ class Agent:
                                 continue
 
                             if isinstance(evt, ModelCallEndEvent):
+                                if self._execution_guard:
+                                    self._execution_guard.data["output_tokens"] += evt.output_tokens
                                 interrupted = (
                                     evt.finished_reason
                                     == FinishedReason.INTERRUPTED
@@ -987,6 +1003,18 @@ class Agent:
                                 ),
                             )
                             return
+
+                        if (
+                            self._execution_guard and (
+                                final_msg is None or (
+                                    self.state.reply_context.structured_schema is not None
+                                    and self.state.reply_context.structured_output is None
+                                )
+                            )
+                            and not self._execution_guard.data["last_truncated"]
+                            and not self.state.get_unfinished_tool_calls(self.name)
+                        ):
+                            self._execution_guard.record_round([], [], {})
 
                     case Acting(tool_calls=tool_calls):
                         made_progress = True
@@ -1044,6 +1072,18 @@ class Agent:
                             if break_execution_for_hitl:
                                 break
 
+                        if self._execution_guard and not self.state.get_unfinished_tool_calls(self.name):
+                            current = self._get_last_msg()
+                            call_ids = {call.id for call in tool_calls}
+                            results = [
+                                item for item in (current.get_content_blocks("tool_result") if current else [])
+                                if item.id in call_ids
+                            ]
+                            self._execution_guard.record_round(
+                                tool_calls, results,
+                                self.state.tasks_context.model_dump(mode="json"),
+                            )
+
                 # A reasoning-acting round is complete only after every tool
                 # call it produced has a result. A call parked for user
                 # confirmation or external execution keeps the round open.
@@ -1063,6 +1103,8 @@ class Agent:
                 raise
 
         finally:
+            if self._execution_guard:
+                self._execution_guard.park()
             if end_event is not None:
                 interrupted_end = (
                     end_event.finished_reason
@@ -1508,10 +1550,32 @@ class Agent:
             completed_response.usage,
         )
 
+        guard = self._execution_guard
+        if guard:
+            guard.data["last_truncated"] = bool(completed_response.metadata.get("output_truncated"))
+            if guard.data["last_truncated"]:
+                guard.data["continuations"] += 1
+                has_tools = any(isinstance(block, ToolCallBlock) for block in completed_response.content)
+                guard.data["truncated_tools"] = has_tools
+                if has_tools:
+                    # A truncated JSON call must not execute, even if a repair
+                    # parser could turn its partial arguments into valid JSON.
+                    async for evt in self._close_unfinished_tool_calls(
+                        "输出被截断，工具参数未完整生成；此次调用未执行。",
+                    ):
+                        yield evt
+                else:
+                    guard.data.setdefault("partial_output", []).extend(
+                        block.model_dump(mode="json") for block in completed_response.content
+                        if isinstance(block, TextBlock)
+                    )
+                return
+            guard.data["continuations"] = 0
+
         # A thinking-only response is an intermediate reasoning step rather
         # than a user-visible final answer. Keep the ReAct loop running so the
         # model can produce text, data, or a tool call on the next iteration.
-        has_only_thinking_blocks = bool(completed_response.content) and all(
+        has_only_thinking_blocks = (bool(completed_response.content) or guard is not None) and all(
             isinstance(block, ThinkingBlock)
             for block in completed_response.content
         )
@@ -1544,7 +1608,10 @@ class Agent:
                 id=self.state.reply_id,
                 name=self.name,
                 # Text only response message
-                content=list(completed_response.content),
+                content=(
+                    [TextBlock.model_validate(block) for block in guard.data.pop("partial_output", [])]
+                    if guard else []
+                ) + list(completed_response.content),
                 usage=final_usage,
                 # The INTERRUPTED case is excluded by the branch condition
                 finished_reason=ReplyFinishedReason.COMPLETED,
@@ -3126,8 +3193,31 @@ class Agent:
         self,
         final_msg: Msg | None = None,
     ) -> Reasoning | Acting | Exit:
-        """Decide the next action from the current state. Read-only: all
-        side effects are performed by the caller ``_reply_impl``."""
+        """Decide the next action from the current state.
+        Runtime-supervision counters are updated here; tool execution stays
+        in ``_reply_impl``."""
+
+        guard = self._execution_guard
+        if guard and guard.data["finalizing"]:
+            # One final, tool-free summary is allowed. A provider ignoring
+            # tool_choice must never execute another side effect afterwards.
+            from ..types import ErrorInfo
+
+            reason = guard.data["reason"]
+            message = final_msg or AssistantMsg(
+                id=self.state.reply_id, name=self.name,
+                content=f"{reason}当前任务尚未全部完成，可基于已有进度继续处理。",
+            )
+            message.finished_reason = ReplyFinishedReason.ERROR
+            return Exit(
+                exit_msg=message,
+                exit_events=[ReplyEndEvent(
+                    session_id=self.state.session_id,
+                    reply_id=self.state.reply_id,
+                    finished_reason=ReplyFinishedReason.ERROR,
+                    error=ErrorInfo(message=reason),
+                )],
+            )
 
         # ===========================================================
         # Step 1: Check executable and awaiting tool calls
@@ -3180,6 +3270,32 @@ class Agent:
         required = self.state.reply_context.structured_schema is not None
         satisfied = self.state.reply_context.structured_output is not None
 
+        if guard and not satisfied and (final_msg is None or required):
+            reason = guard.stop_reason()
+            if reason:
+                guard.data["finalizing"] = True
+                return Reasoning(
+                    hint=HintBlock(hint=(
+                        f"<system-reminder>{reason}停止调用工具。"
+                        "向用户说明已完成的部分、尚未完成的部分及具体阻碍。"
+                        "不得宣称任务全部完成，不得编造执行结果。</system-reminder>"
+                    )),
+                    tool_choice=ToolChoice(mode="none"),
+                )
+            warning = guard.warning()
+            if warning:
+                return Reasoning(hint=HintBlock(hint=f"<system-reminder>{warning}</system-reminder>"))
+            if guard.data["last_truncated"]:
+                return Reasoning(
+                    hint=HintBlock(hint=(
+                        "<system-reminder>上次输出被模型长度上限截断。"
+                        "正文请从末尾接续，避免重复已输出内容；"
+                        "未完整生成的工具调用未执行，请重新生成完整参数。"
+                        "已经成功的操作不要重新执行。</system-reminder>"
+                    )),
+                    tool_choice=None if guard.data["truncated_tools"] else ToolChoice(mode="none"),
+                )
+
         if required and satisfied:
             # Next return the structured output and finish the reply
             return Exit(
@@ -3212,6 +3328,8 @@ class Agent:
 
             # Allow extra grace iterations for structured generation
             if (
+                guard is None
+                and
                 self.state.cur_iter
                 >= self.react_config.max_iters
                 + self.react_config.structured_output_grace_iters
@@ -3244,7 +3362,7 @@ class Agent:
                     ),
                 )
 
-            if self.state.cur_iter >= self.react_config.max_iters:
+            if guard is None and self.state.cur_iter >= self.react_config.max_iters:
                 # Must call the structured output tool and return the
                 # structured output
                 tool_choice = ToolChoice(
@@ -3284,7 +3402,7 @@ class Agent:
             # ``cur_iter == max_iters + 1`` means the text came from the
             # one forced finalization call after the normal budget ended.
             exceeded_max_iters = (
-                self.state.cur_iter > self.react_config.max_iters
+                guard is None and self.state.cur_iter > self.react_config.max_iters
             )
             finished_reason = (
                 ReplyFinishedReason.EXCEED_MAX_ITERS
@@ -3324,7 +3442,7 @@ class Agent:
 
         # Spend one additional, tool-free call turning partial progress into
         # a useful final answer instead of returning only a generic error.
-        if self.state.cur_iter == self.react_config.max_iters:
+        if guard is None and self.state.cur_iter == self.react_config.max_iters:
             return Reasoning(
                 hint=HintBlock(
                     hint=(
@@ -3342,7 +3460,7 @@ class Agent:
 
         # Equality returned above, so this is the bounded fallback after the
         # forced finalization call also failed to produce text.
-        if self.state.cur_iter >= self.react_config.max_iters:
+        if guard is None and self.state.cur_iter >= self.react_config.max_iters:
             logger.warning(
                 "Agent %s exceeds the max iteration numbers %d. "
                 "Stop the react loop.",

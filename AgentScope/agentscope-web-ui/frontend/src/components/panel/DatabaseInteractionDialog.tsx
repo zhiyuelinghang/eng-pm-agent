@@ -1,4 +1,3 @@
-import { ToolPresentationInfo } from './ToolPresentationInfo';
 import {
 	CircleAlert,
 	Link2,
@@ -10,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
+import { ToolPresentationInfo } from './ToolPresentationInfo';
 import type {
 	DatabaseInteraction,
 	DatabaseConversationType,
@@ -454,7 +454,7 @@ export function DatabaseInteractionDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="flex h-[min(800px,calc(100dvh-2rem))] flex-col sm:max-w-5xl">
+			<DialogContent className="flex h-[min(820px,calc(100dvh-2rem))] !w-[min(1240px,calc(100vw-3rem))] !max-w-[1240px] flex-col">
 				<DialogHeader>
 					<DialogTitle>
 						{mode === 'create'
@@ -472,7 +472,7 @@ export function DatabaseInteractionDialog({
 					</Alert>
 				) : null}
 
-				<div className="grid min-h-0 flex-1 overflow-hidden rounded-lg border md:grid-cols-[12rem_minmax(0,1fr)]">
+				<div className="grid min-h-0 flex-1 overflow-hidden rounded-lg border md:grid-cols-[minmax(260px,26%)_minmax(0,1fr)]">
 					<nav className="border-b bg-muted/20 p-2 md:border-r md:border-b-0">
 						<a href="#database-interaction-basic" className="block rounded-md px-3 py-2 text-sm font-medium hover:bg-muted">{t('panel.database.editor.basic')}</a>
 						<a href="#database-interaction-source" className="mt-1 block rounded-md px-3 py-2 text-sm font-medium hover:bg-muted">{t('panel.database.editor.source')}</a>

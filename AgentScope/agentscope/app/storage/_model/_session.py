@@ -200,6 +200,9 @@ class SessionConfig(BaseModel):
     platform_context: PlatformSessionContext | None = None
     """Platform identity/grouping metadata; never a copy of chat content."""
 
+    memory_run_id: str | None = None
+    """Server-owned business request identity, retained across delegated replies."""
+
 
 class SessionRecord(_RecordBase):
     """The session record."""

@@ -9,7 +9,7 @@ def automatic_validation(kind, detail):
     cited = [e for e in evidence if e.get('id') in ids]
     if not ids or ids != {e.get('id') for e in cited}:
         raise MemoryError('invented_evidence', '学习成果没有完整可追溯的引用证据。')
-    if not any(e.get('kind') in {'user', 'tool', 'task', 'memory', 'feedback'} and
+    if not any(e.get('kind') in {'user', 'tool', 'task', 'memory', 'feedback', 'business_event'} and
                e.get('outcome') not in {'assistant_claim', 'error', 'failure'} and str(e.get('text', '')).strip() for e in cited):
         raise MemoryError('insufficient_evidence', '缺少用户、实际结果或有效来源支持，不能仅凭助手自评或失败记录启用。')
     if not str(detail.get('conditions', '')).strip() or not str(detail.get('limitations', '')).strip():

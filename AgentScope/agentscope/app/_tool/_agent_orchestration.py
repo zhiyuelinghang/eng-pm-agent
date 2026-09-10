@@ -111,6 +111,14 @@ class _OrchestrationBase(_TeamToolBase):
         self._caller_owner_id = caller_owner_id or user_id
 
     async def _authorised_candidates(self) -> list["AgentRecord"]:
+        from .._agent_collaboration import can_delegate
+        from .._service._platform_settings import get_global_main_agent_id, get_platform_duties
+
+        caller = await self._storage.get_agent(self._caller_owner_id, self._agent_id)
+        main_id = await get_global_main_agent_id(
+            self._storage, self._caller_owner_id,
+        )
+        duties = await get_platform_duties(self._storage, self._caller_owner_id)
         views = await self._access.list_resource(
             self._caller_owner_id,
             ResourceKind.AGENT,
@@ -118,11 +126,8 @@ class _OrchestrationBase(_TeamToolBase):
         return [
             view
             for view in views
-            if view.id != self._agent_id
-            and view.data.platform_config.enabled
-            and view.data.platform_config.allow_global_main_call
-            and view.data.invite_config.invitable
-            and (view.data.invite_config.invite_description or "").strip()
+            if caller is not None and caller.id == main_id
+            and can_delegate(caller, view, main_id, duties)
         ]
 
     async def _resolve_target(
@@ -224,10 +229,9 @@ class AgentSearch(_OrchestrationBase):
                 "agent_id": record.id,
                 "name": record.data.name,
                 "category": record.data.platform_config.category,
-                "agent_level": record.data.platform_config.agent_level,
                 "capability": (
-                    record.data.platform_config.description
-                    or record.data.invite_config.invite_description
+                    record.data.invite_config.invite_description
+                    or record.data.platform_config.description
                     or ""
                 ).strip()[:1200],
             }
@@ -259,7 +263,7 @@ class AgentInvoke(_OrchestrationBase):
     name: str = "agent_invoke"
     description: str = (
         "调用 agent_search 选出的一个既有智能体。执行前重新检查启用状态、"
-        "可邀请状态和 Dobby 调用许可；自动建立受控协同运行，不创建新智能体。"
+        "固定职责和 Dobby 调用许可；自动建立受控协同运行，不创建新智能体。"
     )
     input_schema: dict = _AgentInvokeParams.model_json_schema()
 
@@ -269,7 +273,7 @@ class AgentInvoke(_OrchestrationBase):
         target = await self._resolve_target(agent_id.strip())
         if target is None:
             return _error(
-                "agent_invoke：目标不在当前 Dobby 授权范围内，或已被停用/取消邀请。",
+                "agent_invoke：目标不在当前 Dobby 授权范围内，或已被停用。",
             )
         session = await self._storage.get_session(
             self._user_id,

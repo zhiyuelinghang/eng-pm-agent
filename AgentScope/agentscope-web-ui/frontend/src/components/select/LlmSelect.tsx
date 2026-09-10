@@ -38,6 +38,8 @@ interface Props {
 	clearLabel?: string;
 	/** Disable model changes while still showing the effective model. */
 	disabled?: boolean;
+	/** Share one model catalogue when several selectors appear in one form. */
+	catalogue?: ReturnType<typeof useAvailableModels>;
 }
 
 export function LlmSelect({
@@ -49,10 +51,14 @@ export function LlmSelect({
 	allowClear = false,
 	clearLabel,
 	disabled = false,
+	catalogue,
 }: Props) {
-	const { groups, loading, refetch } = useAvailableModels();
+	const ownCatalogue = useAvailableModels(!catalogue);
+	const { groups, loading, refetch } = catalogue ?? ownCatalogue;
 	const { t } = useTranslation();
-	const hasOptions = Object.keys(groups).length > 0;
+	const hasOptions = Object.values(groups).some((items) =>
+		items.some(({ models }) => models.length > 0),
+	);
 
 	useEffect(() => {
 		if (refetchTrigger !== undefined && refetchTrigger > 0) refetch();

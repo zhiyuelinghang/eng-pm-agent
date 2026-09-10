@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "task-engine"
-version = "0.1.0"
+version = "0.1.1"
 description = "通用任务引擎：任务流编排、多级流转与定时触发，以 MCP 形式交付"
 readme = "README.md"
 requires-python = ">=3.13"

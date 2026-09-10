@@ -142,18 +142,18 @@
 			"description": "Answers project-document questions using assigned project tools as needed.",
 			"selector": "Knowledge-chat agent",
 			"placeholder": "Select a dedicated agent",
-			"requirement": "Requires a fixed model and project-document queries enabled in the agent configuration. Each platform responsibility requires a different agent.",
+			"requirement": "Requires a fixed model. Knowledge access belongs to this fixed duty and needs no separate permission switch.",
 			"roleBadge": "Platform responsibility",
 			"saved": "Knowledge Assistant settings saved",
 			"unconfiguredTitle": "Knowledge Assistant is not assigned",
 			"unconfigured": "Select an agent and save to use it for project knowledge chats.",
 			"noCandidates": "Create and enable an agent with a fixed chat model first.",
 			"invalidCurrentTitle": "Knowledge Assistant is unavailable",
-			"invalidCurrent": "Check that the agent is enabled, has a fixed model, and allows project-document queries.",
+			"invalidCurrent": "Check the fixed model and external knowledge connection.",
 			"effect": "New chats use this assignment. Previous conversations remain readable after switching. Project tools and memory permissions follow the selected agent configuration.",
 			"save": "Save Knowledge Assistant",
 			"clear": "Unassigned",
-			"missingCapability": "Enable project-document queries in the selected agent configuration before saving."
+			"missingCapability": "Knowledge access is provided by the fixed Knowledge Assistant duty."
 		}
 	},
 	"memory-settings": {
@@ -382,6 +382,7 @@
 		"pauseAudio": "Pause audio",
 		"running": "Running...",
 		"hintSource": {
+			"System": "System context",
 			"tool_output": "Tool Output",
 			"team_message": "Team Message",
 			"schedule": "Schedule"
@@ -443,14 +444,15 @@
 			}
 		},
 		"model-policy": {
+			"managedDescription": "Manage provider parameters in Models & Connections. Execution is managed automatically by the system.",
 			"legend": "Model Configuration",
-			"description": "Pin a dedicated model and parameters to this agent, or let it follow the current conversation.",
+			"description": "Choose a fixed model for this agent, or follow the current conversation.",
 			"mode": {
 				"label": "Model policy",
 				"inherit": "Follow conversation",
 				"fixed": "Fixed model",
 				"inherit_sessionDescription": "Use the model selected for the current conversation.",
-				"fixedDescription": "Always use the model and parameters below; the chat screen cannot override them."
+				"fixedDescription": "Always use the selected model; it cannot be changed in chat."
 			},
 			"credential": "Model credential",
 			"credentialPlaceholder": "Select a credential",
@@ -469,40 +471,31 @@
 		},
 		"platform-config": {
 			"legend": "Platform Integration",
-			"description": "Controls this agent's role, publication state, permissions, and default knowledge bases in the engineering platform.",
+			"description": "Set the agent’s audience, execution and publication settings.",
 			"role": {
-				"label": "Platform role",
+				"label": "Audience",
 				"options": {
 					"global_main": "Platform main agent (managed globally)",
-					"business": "Business agent",
-					"system_internal": "Internal system agent"
+					"business": "Public",
+					"system_internal": "Internal"
 				},
 				"descriptions": {
 					"global_main": "Handles ordinary platform chat and can dynamically collaborate with non-main agents explicitly opened to the platform main agent.",
-					"business": "Appears automatically on the Business Tools page when published and can be called by authorised agents.",
-					"system_internal": "Used only by internal system flows and never shown in the business-tool catalogue."
+					"business": "Available to platform users after execution and publication are enabled; appears in the business directory and mention candidates.",
+					"system_internal": "For internal workflows and authorized collaboration only. Hidden from the user directory and mentions."
 				}
-			},
-			"agentLevel": {
-				"label": "Agent level",
-				"management": "Management agent",
-				"worker": "Worker agent",
-				"managementDescription": "May coordinate authorised agents and use cross-session shared memory.",
-				"workerDescription": "Executes bounded tasks without long-term-memory tools."
 			},
 			"globalMainNotice": "This agent is selected as the main agent in Platform Settings. Switch it there; its role and enabled state cannot be changed here.",
 			"enabled": "Allow platform execution",
 			"published": "Publish to platform",
 			"allowGlobalMainCall": "Allow calls from platform main agent",
 			"allowGlobalMainCallDescription": "Only enabled agents with this option enter the platform main agent's collaboration pool. Ordinary agents still use their own allowlists.",
-			"projectKnowledge": "Enable project knowledge queries",
-			"projectKnowledgeDescription": "Allows this agent to consult authorized project documents. Assign the Knowledge Assistant in Platform Settings; project tools and memory permissions remain configured on this agent.",
 			"catalogDescription": "Platform description",
 			"descriptionPlaceholder": "Explain what this agent offers to business users.",
 			"category": "Business category",
 			"sortOrder": "Display order",
-			"permissionMode": "Platform session permission mode",
-			"permissionModeDescription": "Applies only to new sessions created by the engineering platform. Auto is recommended so the built-in reviewer can decide first.",
+			"permissionMode": "Execution permission mode",
+			"permissionModeDescription": "Debug runs use this saved setting on every run and cannot override it. New engineering-platform sessions also use this setting. Auto uses the built-in permission reviewer.",
 			"permissionOptions": {
 				"auto": "Auto review",
 				"default": "Default (ask)",
@@ -519,7 +512,9 @@
 				"static": "Static retrieval",
 				"topK": "Top K"
 			},
-			"visibilityNotice": "The Business Tools catalogue only shows enabled, published business agents. Select the platform main in Platform Settings; internal agents stay hidden."
+			"visibilityNotice": "Audience controls user visibility. Permission for orchestrator calls and other invitations is configured separately under Collaboration.",
+			"enabledDescription": "Controls execution in the engineering platform. Turning this off prevents user access and delegation while preserving its configuration.",
+			"publishedDescription": "Applies to public agents. With execution enabled, publication exposes this agent in the business directory, homepage assistant menu and group mentions. Internal agents cannot be published. A configured model is required to run."
 		},
 		"context-config": {
 			"legend": "Context Config",
@@ -541,13 +536,28 @@
 			}
 		},
 		"react-config": {
-			"legend": "ReAct Config",
-			"description": "Controls the reasoning and action loop behaviour.",
+			"legend": "Reasoning & tool execution",
+			"description": "The agent calls tools and uses their results to continue working until it can answer. This loop is called ReAct; these settings control its iterations and interruption handling.",
 			"max-iters": {
-				"label": "Max iterations"
+				"label": "Maximum execution iterations",
+				"description": "The reasoning and tool execution budget for one reply. The agent can finish early; when the budget is reached, it attempts to summarize the results so far."
+			},
+			"structured-output-grace-iters": {
+				"label": "Extra iterations for structured output",
+				"description": "Extra iterations allowed after the execution limit when output must follow a specified format. Plain-text replies do not use this allowance."
 			},
 			"stop-on-reject": {
-				"label": "Stop on reject"
+				"label": "Stop when a tool call is rejected",
+				"description": "This setting is not yet connected to the current execution flow. Changing it has no runtime effect."
+			},
+			"interruption-message": {
+				"label": "Reply after interruption",
+				"description": "The quick reply used when a task is interrupted.",
+				"placeholder": "Enter the reply to use when a task is interrupted"
+			},
+			"interruption-raise-cancelled-error": {
+				"label": "Propagate cancellation to the caller",
+				"description": "Re-raise the cancellation exception after interruption handling, so programmatic callers can handle cancellation."
 			}
 		},
 		"invite-config": {
@@ -612,10 +622,6 @@
 		"selectType": "Provider",
 		"selectTypePlaceholder": "Select a provider"
 	},
-	"dialog-credential-edit": {
-		"title": "Edit Credential",
-		"description": "Update the saved credential for this provider."
-	},
 	"dialog-knowledge-base-create": {
 		"title": "Create knowledge base",
 		"description": "Create a new knowledge base using an embedding model.",
@@ -669,6 +675,21 @@
 		"description": "This will permanently delete the knowledge base \"{{name}}\" and all of its indexed documents. This action cannot be undone."
 	},
 	"credential": {
+		"inlineEdit": {
+			"loadFailed": "Credential fields could not be loaded. Please retry.",
+			"retry": "Retry",
+			"unsavedTitle": "Unsaved changes",
+			"unsavedDescription": "Leaving will discard your unsaved changes.",
+			"waitForOperation": "The configuration is being processed. Please wait.",
+			"keepEditing": "Keep editing",
+			"discardAndLeave": "Discard and leave",
+			"saved": "Credential saved",
+			"saveFailed": "Save failed. Your changes are kept; please try again.",
+			"discard": "Undo changes",
+			"keepValue": "Leave unchanged to keep the current value",
+			"showSecret": "Show {{field}}",
+			"hideSecret": "Hide {{field}}"
+		},
 		"noProviders": "No providers available",
 		"noConfigs": "No configurations",
 		"selectHint": "No credential selected",
@@ -694,7 +715,6 @@
 		"manualAdd": "Add manually",
 		"manualModelTitle": "Add model manually",
 		"manualModelDescription": "Choose how the model is used, then enter its exact provider model ID. Adding the same ID again updates its type.",
-		"manualModelCustomParametersDescription": "If this model does not declare reasoning support, enter the provider-specific JSON parameters here while adding it. Leave blank to send no custom parameters; they remain editable after creation.",
 		"editModelTitle": "Edit model",
 		"editModelDescription": "Change the model ID, display name, or model type. The model ID is the exact value sent to the provider.",
 		"modelType": "Model type",
@@ -731,54 +751,50 @@
 			"failed": "Could not detect this embedding model. Check its model ID, API URL, and credential."
 		},
 		"modelDefaults": {
-			"action": "Configure model defaults",
-			"title": "Model defaults",
-			"description": "Configure default inference parameters for {{model}}, including thinking mode and reasoning effort.",
-			"inheritanceTitle": "Inherited by every use case",
-			"inheritanceDescription": "Business agents, team members, schedules, and built-in agents read these defaults. Session-specific or dedicated settings can override them.",
+			"action": "Model settings",
+			"title": "Model settings",
+			"description": "{{model}} · Default settings for model calls.",
 			"configured": "{{count}} configured",
-			"reset": "Restore provider defaults",
-			"save": "Save defaults",
+			"reset": "Clear these settings",
+			"save": "Save settings",
 			"saved": "Model defaults saved.",
-			"customTitle": "Custom request parameters (JSON)",
-			"customDescription": "Use this for provider fields the model has not declared. Values are merged into the actual request body and custom values win on conflicts; AgentScope-owned model, message, and tool fields cannot be replaced.",
-			"customRequired": "Thinking fields undeclared",
-			"customPlaceholder": "{\n  \"enable_thinking\": true\n}",
-			"customExamplesLabel": "Choose the form required by this provider, for example:",
-			"customExamples": "OpenAI compatible: {\"enable_thinking\":true}\nResponses: {\"reasoning\":{\"effort\":\"low\"}}\nAnthropic: {\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":5000}}",
 			"customInvalid": "Invalid JSON. Check brackets, quotes, commas, and values.",
-			"customObjectRequired": "Custom request parameters must be a JSON object."
+			"customObjectRequired": "Custom request parameters must be a JSON object.",
+			"commonTab": "Reasoning settings",
+			"invalidParameter": "Enter a valid value for {{field}}, or use the default setting.",
+			"extensionsTab": "API extensions",
+			"defaultValue": "Not specified",
+			"unspecifiedEffort": "Do not specify reasoning effort",
+			"requestThinking": "Request reasoning",
+			"requestNoThinking": "Request reasoning off",
+			"noThinkingRequest": "Do not request extra reasoning",
+			"useReasoningEffort": "Use a specified reasoning effort",
+			"reasoningEffortHint": "Select an effort when using a specified reasoning effort. Without one, no extra reasoning parameters are sent.",
+			"interfaceHint": "Reasoning support and available effort levels depend on the selected model.",
+			"noCommonSettings": "This model needs no extra settings and is ready to use.",
+			"customActive": "Provider extensions are configured and take precedence over matching settings.",
+			"extensionTitle": "Provider extensions",
+			"extensionHint": "Enter a JSON object only when the provider requires extra parameters. Matching fields here take precedence. Usually leave this empty."
 		},
 		"permissionReviewer": {
-			"systemGroup": "Built-in agents",
-			"shortTitle": "Permission reviewer",
-			"builtIn": "Built in",
-			"title": "System permission reviewer",
-			"subtitle": "Independently reviews tool calls for sessions using Auto permission mode.",
-			"systemBadge": "System built-in · no business chat",
-			"securityTitle": "The permission engine remains the non-bypassable boundary",
-			"securityDescription": "The reviewer only sees operations whose original result is Ask. Explicit denials, dangerous paths, and destructive operations cannot be auto-approved. Model failures or uncertainty always fall back to a human.",
-			"bindingTitle": "Independent model binding",
-			"bindingDescription": "The reviewer does not follow the active chat model, so it can use a stronger model and dedicated quota.",
-			"credential": "Primary credential",
-			"model": "Primary reviewer model",
+			"loadFailed": "Unable to load review settings",
+			"retryLoad": "Reload",
+			"title": "Permission review settings",
+			"credential": "Credential",
+			"model": "Review model",
 			"selectCredential": "Select a credential",
 			"selectModel": "Select a chat model",
-			"fallbackCredential": "Fallback credential (optional)",
-			"fallbackModel": "Fallback model (optional)",
-			"noFallback": "No fallback model",
-			"confidence": "Minimum auto-decision confidence",
-			"maxRisk": "Maximum risk for auto decisions",
+			"confidence": "Minimum confidence",
+			"maxRisk": "Maximum automatic risk",
 			"timeout": "Review timeout",
 			"seconds": "sec",
-			"test": "Test reviewer",
+			"test": "Test model",
 			"testing": "Testing…",
 			"save": "Save configuration",
 			"saved": "Permission reviewer configuration saved.",
 			"testPassed": "Reviewer test passed · {{latency}} ms",
 			"testFailed": "Reviewer test failed",
 			"auditTitle": "Recent review decisions",
-			"auditDescription": "Only automatic review decisions are recorded. Sensitive fields are redacted before sending or persistence.",
 			"noAudits": "No automatic review decisions yet.",
 			"auditTotal": "{{count}} records",
 			"auditPage": "Page {{current}} / {{total}}",
@@ -1113,6 +1129,9 @@
 		"pickModelFirst": "Pick a model first"
 	},
 	"permission-mode": {
+		"followsAgent": "Permissions follow the saved agent configuration and cannot be changed in debug sessions.",
+		"followsSession": "Uses this task’s permission configuration.",
+		"configured": "Configured",
 		"placeholder": "Select permission mode",
 		"trigger-tooltip": "Permission Mode",
 		"label": "Permission Mode",
@@ -1188,6 +1207,7 @@
 		"wednesday": "Wed"
 	},
 	"model-parameters": {
+		"settingsLabel": "Conversation settings",
 		"title": "Model Parameters",
 		"description": "Adjust inference parameters for the selected model.",
 		"empty": "No configurable parameters.",
@@ -1200,20 +1220,26 @@
 		"ttsParametersDescription": "Adjust parameters for the selected TTS model.",
 		"noTts": "No TTS",
 		"fields": {
-			"max_tokens": "Max output tokens",
-			"thinking_enable": "Enable thinking",
+			"max_tokens": "Output limit (tokens)",
+			"thinking_enable": "Reasoning mode",
 			"reasoning_effort": "Reasoning effort",
-			"thinking_budget": "Thinking budget",
-			"temperature": "Temperature",
-			"top_p": "Top P",
-			"top_k": "Top K",
-			"parallel_tool_calls": "Parallel tool calls",
+			"thinking_budget": "Reasoning budget (tokens)",
+			"temperature": "Response randomness",
+			"top_p": "Cumulative sampling range",
+			"top_k": "Sampling candidates",
+			"parallel_tool_calls": "Parallel tool requests",
 			"voice": "Voice"
 		},
 		"fieldDescriptions": {
-			"thinking_enable": "Controls whether this model emits extended thinking or reasoning.",
-			"reasoning_effort": "Controls how much computation the model spends on reasoning; available levels depend on the provider and model.",
-			"thinking_budget": "Maximum number of tokens the model may spend on thinking."
+			"thinking_enable": "",
+			"reasoning_effort": "",
+			"thinking_budget": "",
+			"max_tokens": "Managed using catalog limits and remaining context. Usually leave this unset.",
+			"temperature": "Lower values generally produce more consistent output.",
+			"top_p": "",
+			"top_k": "",
+			"parallel_tool_calls": "",
+			"voice": ""
 		},
 		"values": {
 			"none": "None",
@@ -1346,7 +1372,7 @@
 			"instructions": "Instructions",
 			"noInstructions": "No instructions provided.",
 			"emptyTitle": "No platform skills",
-			"emptyDescription": "Create skill Markdown online, then assign it to an agent.",
+			"emptyDescription": "Create a skill online, then assign it to an agent.",
 			"assignLabel": "Assign {{name}} to the current agent",
 			"selectedSummary": "{{count}} skills selected",
 			"saveChanges": "Save assignments",
@@ -1367,7 +1393,7 @@
 			"description": "View the fixed file reading, search, editing, and other system capabilities available to every agent.",
 			"globalNotice": "System tools are globally available and cannot be changed per agent",
 			"searchPlaceholder": "Search tools",
-			"platform": "Business tools",
+			"platform": "Business agents",
 			"workspace": "Workspace tools",
 			"back": "Back to tools",
 			"catalogTitle": "System tools",

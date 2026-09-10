@@ -9,6 +9,7 @@ import re
 
 from .group_learning_repository import GroupOutput
 from .memory_repository import MemoryError
+from .learning_settings_guard import LearningPaused
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ def model_input(snapshot, existing, limit):
 
 async def process_group_job(repository, job, *, runtime, settings):
     try:
-        policy = await runtime.authorize_group(job)
+        await runtime.authorize_group(job)
         # Refresh the same revision interval on every retry; stale message text never survives retries.
         snapshot = await runtime.gateway.group_learning_source(job['channel_id'], job['from_revision'], job['to_revision'] - job['from_revision'])
         if snapshot['to_revision'] != job['to_revision']:
@@ -99,11 +100,14 @@ async def process_group_job(repository, job, *, runtime, settings):
             output = GroupOutput.model_validate_json(raw)
         else:
             output = GroupOutput(reason='本批仅含问候、助手自述或来源变更，无须调用模型。')
-        policy = await runtime.authorize_group(job)
+        await runtime.authorize_group(job)
         await runtime.gateway.group_learning_validate(snapshot)
-        return await asyncio.to_thread(repository.complete, job, output, write_scopes=policy.memory_write_scopes)
+        return await asyncio.to_thread(repository.complete, job, output)
     except asyncio.CancelledError:
         raise
+    except LearningPaused as exc:
+        await asyncio.to_thread(repository.defer, job, exc.code)
+        return {'status':'pending', 'code':exc.code}
     except Exception as exc:
         code = getattr(exc, 'code', None) or ('source_changed' if getattr(exc, 'status_code', None) == 409 else type(exc).__name__)
         await asyncio.to_thread(repository.fail, job, code)
@@ -112,12 +116,11 @@ async def process_group_job(repository, job, *, runtime, settings):
 
 
 async def scan_groups(repository, runtime, settings, *, tenant_id, config_owner):
-    agent_id = await runtime.group_agent_id(config_owner)
     try:
-        await runtime.authorize_group({'tenant_id':tenant_id,'agent_id':agent_id,'config_owner':config_owner})
+        await runtime.authorize_group({'tenant_id':tenant_id,'config_owner':config_owner})
         capture = True
     except MemoryError as exc:
-        if exc.status != 403:
+        if not isinstance(exc, LearningPaused) and exc.status != 403:
             raise
         capture = False
     after = 0
@@ -145,7 +148,7 @@ async def scan_groups(repository, runtime, settings, *, tenant_id, config_owner)
             await asyncio.to_thread(repository.invalidate, tenant_id, channel['channel_id'],
                 changed_ids=snapshot['changed_message_ids'], policy=snapshot['has_policy_change'])
             if due(snapshot, settings):
-                await asyncio.to_thread(repository.enqueue, tenant_id, snapshot, agent_id=agent_id,
+                await asyncio.to_thread(repository.enqueue, tenant_id, snapshot,
                     config_owner=config_owner, daily_limit=settings.group_learning_daily_limit)
         if len(channels) < 100:
             break
@@ -153,15 +156,17 @@ async def scan_groups(repository, runtime, settings, *, tenant_id, config_owner)
 
 
 async def run_group_learning_worker(repository, *, runtime, settings_loader, tenant_id, config_owner):
+    from agentscope.app.memory._settings import runtime_memory_settings
     next_scan = 0.0
     loop = asyncio.get_running_loop()
     while True:
         try:
-            settings = await settings_loader()
-            if settings.learning_enabled and settings.group_learning_enabled:
-                if loop.time() >= next_scan:
-                    await scan_groups(repository, runtime, settings, tenant_id=tenant_id, config_owner=config_owner)
-                    next_scan = loop.time() + settings.group_learning_scan_seconds
+            settings = runtime_memory_settings(await settings_loader())
+            # Source withdrawal remains effective while new learning is paused.
+            if loop.time() >= next_scan:
+                await scan_groups(repository, runtime, settings, tenant_id=tenant_id, config_owner=config_owner)
+                next_scan = loop.time() + settings.group_learning_scan_seconds
+            if settings.learning_enabled and settings.group_learning_enabled and settings.learning_model_config is not None:
                 job = await asyncio.to_thread(repository.claim, tenant_id)
                 if job:
                     await process_group_job(repository, job, runtime=runtime, settings=settings)

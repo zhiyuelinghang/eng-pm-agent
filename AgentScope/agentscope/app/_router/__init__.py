@@ -14,6 +14,7 @@ from ._mcp_registry import mcp_registry_router
 from ._skill_registry import skill_registry_router
 from ._memory_management import memory_management_router
 from ._platform_audit import platform_audit_router
+from ._platform_completion import platform_completion_router
 from ._tts_model import tts_model_router
 from ._workspace import workspace_router
 
@@ -25,6 +26,7 @@ __all__ = [
     "skill_registry_router",
     "memory_management_router",
     "platform_audit_router",
+    "platform_completion_router",
     "tts_model_router",
     "chat_router",
     "credential_router",

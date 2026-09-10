@@ -15,7 +15,6 @@ from ..deps import (
     get_current_principal,
     get_current_user_id,
     get_message_bus,
-    get_permission_review_service,
     get_resource_access_service,
     get_session_service,
     get_storage,
@@ -23,6 +22,10 @@ from ..deps import (
 )
 from .._manager import ChatRunRegistry
 from .._auth import AgentScopePrincipal
+from .._agent_permissions import (
+    configured_permission_mode,
+    uses_agent_permission_config,
+)
 from .._platform_permissions import apply_platform_tool_allow_rules
 from .._session_access import (
     require_runtime_session_access,
@@ -44,7 +47,6 @@ from ._schema import (
 from ..message_bus import MessageBus, MessageBusKeys
 from .._service import (
     AgentView,
-    PermissionReviewService,
     ResourceAccessService,
     ChatService,
     CollaborationProgressProjector,
@@ -53,6 +55,7 @@ from .._service import (
     SessionProjection,
     SubagentHitlProjector,
 )
+from .._service._model import resolve_chat_model_binding
 from ..storage import (
     ChatModelConfig,
     SessionKnowledgeConfig,
@@ -157,8 +160,10 @@ async def _ensure_credential_exists(
     user_id: str,
     config: ChatModelConfig | TTSModelConfig | None,
 ) -> None:
-    """Validate that the credential referenced by ``config`` is visible to
-    the given user (own or shared). No-op when ``config`` is ``None``.
+    """Validate visible credentials and current chat-model catalogue bindings.
+
+    TTS keeps its separate credential visibility contract. No-op when
+    ``config`` is ``None``.
 
     Args:
         access (`ResourceAccessService`): Injected access service.
@@ -171,6 +176,9 @@ async def _ensure_credential_exists(
             visible to the user.
     """
     if config is None:
+        return
+    if isinstance(config, ChatModelConfig):
+        await resolve_chat_model_binding(user_id, config, access)
         return
     # ``get_resource`` raises 404 when the credential is neither owned
     # nor shared to the viewer — exactly the semantics we want.
@@ -300,9 +308,6 @@ async def create_session(
     storage: StorageBase = Depends(get_storage),
     workspace_manager: WorkspaceManagerBase = Depends(get_workspace_manager),
     access: ResourceAccessService = Depends(get_resource_access_service),
-    permission_review_service: PermissionReviewService = Depends(
-        get_permission_review_service,
-    ),
 ) -> CreateSessionResponse:
     """Create (or resume) a session for a given agent and workspace.
 
@@ -343,6 +348,10 @@ async def create_session(
     # create a model-less session (or override the model selected by the
     # agent administrator).
     agent = await access.resolve_agent(user_id, body.agent_id)
+    from .._service._platform_settings import ensure_fixed_agent_entry, get_platform_duties
+    ensure_fixed_agent_entry(
+        await get_platform_duties(storage, user_id), body.agent_id, body.platform_context,
+    )
     chat_model_config = body.chat_model_config
     if agent.data.model_policy.mode == "fixed":
         chat_model_config = agent.data.model_policy.chat_model_config
@@ -372,19 +381,17 @@ async def create_session(
         )
     )
 
+    permission_mode = (
+        configured_permission_mode(agent.data, body.permission_mode)
+        if principal.kind != "service"
+        else body.permission_mode
+    )
     session_state = None
-    if body.permission_mode is not None or body.platform_context is not None:
+    if permission_mode is not None or body.platform_context is not None:
         permission_context = AgentState().permission_context
-        if body.permission_mode is not None:
-            if body.permission_mode == PermissionMode.AUTO:
-                reviewer_config = await permission_review_service.get_config(user_id)
-                if not reviewer_config.data.enabled:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="Auto permission mode requires an enabled built-in permission reviewer.",
-                    )
+        if permission_mode is not None:
             permission_context = permission_context.model_copy(
-                update={"mode": body.permission_mode},
+                update={"mode": permission_mode},
             )
         session_state = AgentState(
             permission_context=apply_platform_tool_allow_rules(
@@ -414,7 +421,7 @@ async def create_session(
     )
     return CreateSessionResponse(
         session_id=session_record.id,
-        configuration_applied=body.permission_mode is not None,
+        configuration_applied=permission_mode is not None,
     )
 
 
@@ -535,9 +542,6 @@ async def update_session(
     principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
     access: ResourceAccessService = Depends(get_resource_access_service),
-    permission_review_service: PermissionReviewService = Depends(
-        get_permission_review_service,
-    ),
 ) -> SessionRecord:
     """Update the model configuration of an existing session.
 
@@ -574,6 +578,11 @@ async def update_session(
         )
 
     agent = await access.resolve_agent(user_id, agent_id)
+    from .._service._platform_settings import ensure_fixed_agent_entry, get_platform_duties
+    ensure_fixed_agent_entry(
+        await get_platform_duties(storage, user_id), agent_id,
+        body.platform_context if "platform_context" in body.model_fields_set else existing.config.platform_context,
+    )
     chat_model_config = body.chat_model_config
     if agent.data.model_policy.mode == "fixed":
         chat_model_config = agent.data.model_policy.chat_model_config
@@ -593,21 +602,14 @@ async def update_session(
 
     updated_state = existing.state
     permission_context = existing.state.permission_context
-    if body.permission_mode is not None:
-        if body.permission_mode == PermissionMode.AUTO:
-            reviewer_config = await permission_review_service.get_config(
-                user_id,
-            )
-            if not reviewer_config.data.enabled:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        "Auto permission mode requires an enabled built-in "
-                        "permission reviewer."
-                    ),
-                )
+    permission_mode = (
+        configured_permission_mode(agent.data, body.permission_mode)
+        if uses_agent_permission_config(existing)
+        else body.permission_mode
+    )
+    if permission_mode is not None:
         permission_context = permission_context.model_copy(
-            update={"mode": body.permission_mode},
+            update={"mode": permission_mode},
         )
 
     if "platform_context" in body.model_fields_set:
@@ -617,7 +619,7 @@ async def update_session(
         )
 
     if (
-        body.permission_mode is not None
+        permission_mode is not None
         or "platform_context" in body.model_fields_set
     ):
         updated_state = existing.state.model_copy(

@@ -1,8 +1,8 @@
-import { ToolPresentationInfo } from './ToolPresentationInfo';
 import { Search, SearchX, Wrench } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
-import type { AgentView, WorkspaceTool } from '@/api';
+import { ToolPresentationInfo } from './ToolPresentationInfo';
+import type { WorkspaceTool } from '@/api';
 import { PanelCatalogRow } from '@/components/panel/PanelCatalogRow';
 import { PanelEmpty } from '@/components/panel/PanelEmpty';
 import { Button } from '@/components/ui/button';
@@ -18,7 +18,6 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/in
 import { useTranslation } from '@/i18n/useI18n';
 
 interface ToolPanelProps {
-	agent: AgentView | null;
 	tools: WorkspaceTool[];
 	loading?: boolean;
 }
@@ -68,7 +67,7 @@ function readToolParameters(inputSchema: Record<string, unknown>): ToolParameter
 	});
 }
 
-export function ToolPanel({ agent, tools, loading = false }: ToolPanelProps) {
+export function ToolPanel({ tools, loading = false }: ToolPanelProps) {
 	const { t, i18n } = useTranslation();
 	const [search, setSearch] = useState('');
 	const [selectedName, setSelectedName] = useState<string | null>(null);
@@ -108,24 +107,6 @@ export function ToolPanel({ agent, tools, loading = false }: ToolPanelProps) {
 	const selectedPresentation = selectedTool ? getPresentation(selectedTool) : null;
 	const selectedParameters = selectedTool ? readToolParameters(selectedTool.input_schema) : [];
 
-	if (loading && !agent) {
-		return (
-			<div className="flex flex-1 items-center justify-center">
-				<p className="text-sm text-muted-foreground">{t('panel.loading')}</p>
-			</div>
-		);
-	}
-
-	if (!agent) {
-		return (
-			<PanelEmpty
-				icon={Wrench}
-				title={t('panel.tool.noAgentTitle')}
-				description={t('panel.tool.noAgentDescription')}
-			/>
-		);
-	}
-
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
 			<Dialog
@@ -135,7 +116,7 @@ export function ToolPanel({ agent, tools, loading = false }: ToolPanelProps) {
 				}}
 			>
 				{selectedTool && selectedPresentation ? (
-					<DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-2xl">
+					<DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col !w-[min(1040px,calc(100vw-3rem))] !max-w-[1040px]">
 						<DialogHeader>
 							<DialogTitle>{selectedPresentation.name}</DialogTitle>
 							<DialogDescription>
@@ -144,16 +125,19 @@ export function ToolPanel({ agent, tools, loading = false }: ToolPanelProps) {
 						</DialogHeader>
 
 						<div className="min-h-0 flex-1 space-y-5 overflow-y-auto py-1">
-<ToolPresentationInfo value={selectedTool.presentation} />
+							<ToolPresentationInfo value={selectedTool.presentation} />
 							<section className="space-y-2">
 								<h3 className="text-sm font-medium">{t('panel.tool.details')}</h3>
 								<p className="whitespace-pre-wrap text-sm leading-6 text-muted-foreground">
-									{selectedPresentation.description || t('panel.tool.noDescription')}
+									{selectedPresentation.description ||
+										t('panel.tool.noDescription')}
 								</p>
 							</section>
 
 							<section className="space-y-2">
-								<h3 className="text-sm font-medium">{t('panel.tool.parameters')}</h3>
+								<h3 className="text-sm font-medium">
+									{t('panel.tool.parameters')}
+								</h3>
 								{selectedParameters.length ? (
 									<div className="divide-y rounded-md border">
 										{selectedParameters.map((parameter) => {

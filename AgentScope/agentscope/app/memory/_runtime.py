@@ -34,71 +34,27 @@ def _settings_dict(settings: Any | None) -> dict[str, Any]:
 
 
 def apply_global_memory_settings(settings: Any | None) -> dict[str, Any]:
-    """Overlay persisted platform policy onto the copied upstream modules.
-
-    These values are platform-global by design. The model context size is
-    deliberately excluded and remains a per-agent runtime value.
-    """
-
+    """Apply only the code-owned conversation compression policy."""
     values = _settings_dict(settings)
-    if not values:
-        return values
-
-    from utils import config as memory_config
-
+    from utils import config as memory_config, compression
     mapping = {
-        "recall_top_k": "MEMORY_TOP_K",
-        "recall_threshold": "MEMORY_THRESHOLD",
-        "recall_reinforce_threshold": "MEMORY_REINFORCE_THRESHOLD",
-        "fusion_weight_mem0": "FUSION_WEIGHT_MEM0",
-        "fusion_weight_kb": "FUSION_WEIGHT_KB",
-        "fusion_weight_timeline": "FUSION_WEIGHT_TIMELINE",
-        "fusion_weight_experience": "FUSION_WEIGHT_EXPERIENCE",
-        "fusion_weight_graphrag": "FUSION_WEIGHT_GRAPHRAG",
-        "fusion_mmr_lambda": "FUSION_MMR_LAMBDA",
-        "rrf_k": "RRF_K",
-        "mem0_infer_enabled": "MEM0_INFER_ENABLED",
-        "mem0_infer_async": "MEM0_INFER_ASYNC",
         "compression_trigger_ratio": "CONTEXT_TRIGGER_RATIO",
         "compression_keep_messages": "COMPRESSION_KEEP_MESSAGES",
         "compression_mode": "COMPRESSION_MODE",
         "emergency_compression_ratio": "EMERGENCY_COMPRESSION_THRESHOLD",
-        "compression_background": "COMPRESSION_BACKGROUND",
         "compression_max_consecutive": "COMPRESSION_MAX_CONSECUTIVE",
         "compression_quality_threshold": "COMPRESSION_QUALITY_THRESHOLD",
         "compression_min_rounds_between": "COMPRESSION_MIN_ROUNDS_BETWEEN",
-        "token_budget_system_prompt": "TOKEN_BUDGET_SYSTEM_PROMPT",
-        "token_budget_skill_injection": "TOKEN_BUDGET_SKILL_INJECTION",
-        "token_budget_summary": "TOKEN_BUDGET_SUMMARY",
-        "token_budget_ltm_kb_timeline": "TOKEN_BUDGET_LTM_KB_TIMELINE",
-        "token_budget_runtime": "TOKEN_BUDGET_RUNTIME",
-        "token_budget_recent_history": "TOKEN_BUDGET_RECENT_HISTORY",
-        "token_budget_output_reserve": "TOKEN_BUDGET_OUTPUT_RESERVE",
-        "dreamer_enabled": "DREAMER_ENABLED",
-        "experience_event_driven_enabled": "EXPERIENCE_EVENT_DRIVEN_ENABLED",
     }
     for source, target in mapping.items():
         if source in values:
             setattr(memory_config, target, values[source])
-
-    from utils import compression, historian
-
-    compression.COMPRESS_SYSTEM = values.get(
-        "compression_system_prompt",
-        compression.COMPRESS_SYSTEM,
-    )
-    compression.COMPRESS_USER = values.get(
-        "compression_user_prompt",
-        compression.COMPRESS_USER,
-    )
-    compression.COMPRESS_USER_INCREMENTAL = values.get(
-        "compression_incremental_prompt",
-        compression.COMPRESS_USER_INCREMENTAL,
-    )
-    historian.HISTORIAN_SYSTEM = values.get(
-        "historian_system_prompt",
-        historian.HISTORIAN_SYSTEM,
-    )
+    memory_config.COMPRESSION_BACKGROUND = False
+    from ._prompts import (DEFAULT_COMPRESSION_SYSTEM_PROMPT,
+        DEFAULT_COMPRESSION_USER_PROMPT, DEFAULT_COMPRESSION_INCREMENTAL_PROMPT)
+    compression.COMPRESS_SYSTEM = DEFAULT_COMPRESSION_SYSTEM_PROMPT
+    compression.COMPRESS_USER = DEFAULT_COMPRESSION_USER_PROMPT
+    compression.COMPRESS_USER_INCREMENTAL = DEFAULT_COMPRESSION_INCREMENTAL_PROMPT
     return values
 
 

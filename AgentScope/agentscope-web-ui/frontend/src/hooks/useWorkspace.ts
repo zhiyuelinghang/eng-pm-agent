@@ -14,6 +14,7 @@ export function useWorkspace(agentId: string | null, sessionId: string | null) {
 			return;
 		}
 		setToolsLoading(true);
+		setError(null);
 		try {
 			setTools(await workspaceApi.tool.list(agentId, sessionId));
 		} catch (e) {

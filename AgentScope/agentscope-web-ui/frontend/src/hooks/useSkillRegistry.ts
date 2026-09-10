@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { skillRegistryApi } from '@/api';
 import type { ManagedSkillInput, ManagedSkillPackage, ManagedSkillVersion } from '@/api';
@@ -6,21 +6,30 @@ import type { ManagedSkillInput, ManagedSkillPackage, ManagedSkillVersion } from
 export function useSkillRegistry(agentId: string | null) {
 	const [packages, setPackages] = useState<ManagedSkillPackage[]>([]);
 	const [loading, setLoading] = useState(false);
+	const [loadedAgentId, setLoadedAgentId] = useState<string | null>(null);
+	const request = useRef(0);
 	const [error, setError] = useState<Error | null>(null);
 
 	const refetch = useCallback(async () => {
+		const ticket = ++request.current;
 		if (!agentId) {
 			setPackages([]);
+			setLoadedAgentId(null);
+			setLoading(false);
 			return;
 		}
 		setLoading(true);
 		setError(null);
 		try {
-			setPackages(await skillRegistryApi.list(agentId));
+			const next = await skillRegistryApi.list(agentId);
+			if (ticket === request.current) setPackages(next);
 		} catch (reason) {
-			setError(reason as Error);
+			if (ticket === request.current) setError(reason as Error);
 		} finally {
-			setLoading(false);
+			if (ticket === request.current) {
+				setLoadedAgentId(agentId);
+				setLoading(false);
+			}
 		}
 	}, [agentId]);
 
@@ -53,8 +62,7 @@ export function useSkillRegistry(agentId: string | null) {
 	);
 
 	const listVersions = useCallback(
-		(packageId: string): Promise<ManagedSkillVersion[]> =>
-			skillRegistryApi.versions(packageId),
+		(packageId: string): Promise<ManagedSkillVersion[]> => skillRegistryApi.versions(packageId),
 		[],
 	);
 
@@ -66,7 +74,7 @@ export function useSkillRegistry(agentId: string | null) {
 
 	return {
 		packages,
-		loading,
+		loading: loading || (agentId !== null && loadedAgentId !== agentId),
 		error,
 		refetch,
 		createPackage,

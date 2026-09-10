@@ -2,7 +2,7 @@
 """Persistence models for the built-in permission reviewer."""
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ._base import _RecordBase
 
@@ -10,33 +10,26 @@ from ._base import _RecordBase
 class PermissionReviewerConfigData(BaseModel):
     """Per-user model binding and policy for the system reviewer."""
 
-    enabled: bool = False
-    credential_id: str | None = None
-    model: str | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    credential_id: str | None = Field(default=None, min_length=1)
+    model: str | None = Field(default=None, min_length=1)
     parameters: dict[str, Any] = Field(default_factory=dict)
-    fallback_credential_id: str | None = None
-    fallback_model: str | None = None
-    fallback_parameters: dict[str, Any] = Field(default_factory=dict)
     confidence_threshold: float = Field(default=0.85, ge=0.5, le=1)
     max_auto_risk: Literal["low", "medium"] = "low"
     timeout_seconds: int = Field(default=30, ge=5, le=120)
 
+    @field_validator("credential_id", "model")
+    @classmethod
+    def _nonblank_binding(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("审核凭证和模型不能为空白。")
+        return value
+
     @model_validator(mode="after")
     def _validate_bindings(self) -> "PermissionReviewerConfigData":
-        if self.enabled and (not self.credential_id or not self.model):
-            raise ValueError(
-                "An enabled permission reviewer requires a credential "
-                "and model.",
-            )
-        fallback_values = (
-            self.fallback_credential_id,
-            self.fallback_model,
-        )
-        if any(fallback_values) and not all(fallback_values):
-            raise ValueError(
-                "Fallback credential and fallback model must be configured "
-                "together.",
-            )
+        if bool(self.credential_id) != bool(self.model):
+            raise ValueError("审核凭证和模型必须一起配置。")
         return self
 
 

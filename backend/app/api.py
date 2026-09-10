@@ -399,6 +399,8 @@ def apply_project_initialization_draft(
         raise HTTPException(status_code=404, detail="初始化草稿不存在")
     try:
         result = apply_initialization_draft(db, draft, payload)
+        from .business_learning_sources import record_initialization_applied
+        record_initialization_applied(db, draft, user.id, result)
         audit(
             db,
             user,
@@ -1783,8 +1785,8 @@ async def generate_task_flow(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """仅通过 AI 生成可由现有前端直接编辑的任务流。"""
-    project = project_or_404(db, project_id)
+    """通过固定任务助手生成可由现有前端直接编辑的任务流。"""
+    project = project_for_user_or_403(db, project_id, user)
     engine = get_engine()
 
     generator = get_generator()
@@ -1873,6 +1875,7 @@ async def generate_task_flow(
     generation_task = asyncio.create_task(
         generator.generate_async(
             payload.requirement,
+            generation_id=payload.generation_id,
             now=engine.now(),
             assignees=assignees,
             context={
@@ -2035,18 +2038,26 @@ async def generate_task_flow(
                 if first_manual_assignee
                 else None
             ),
-            "confirmer_user_id": None,
-            "wbs_item_id": None,
+            "confirmer_user_id": _to_int(flow.confirmer.ref) if flow.confirmer else None,
+            "wbs_item_id": _to_int(flow.site.ref) if flow.site else None,
             "risk_source_id": None,
-            "run_mode": "recurring" if trigger.is_recurring else "once",
+            "run_mode": str(trigger.run_mode),
             "trigger_date": first_at.strftime("%Y-%m-%d"),
             "trigger_time": first_at.strftime("%H:%M"),
             "trigger_rule": trigger.describe(),
             "trigger_interval_value": trigger.interval_value,
             "trigger_interval_unit": str(trigger.interval_unit),
+            "trigger_calendar_mode": str(trigger.calendar_mode) if trigger.calendar_mode else "weekdays",
+            "trigger_weekdays": list(trigger.calendar_weekdays),
+            "trigger_day_of_month": trigger.calendar_day,
+            "trigger_end_mode": "until" if trigger.until else "count" if trigger.max_fires else "never",
+            "trigger_until_date": trigger.until.strftime("%Y-%m-%d") if trigger.until else None,
+            "trigger_max_fires": trigger.max_fires,
             "cc": "，".join(watcher.display_name for watcher in flow.watchers),
             "steps": generated_steps,
             "generated_by": "ai",
+            "generation_origin_token": flow.scope.get('generation_origin_token'),
+            "generation_id": payload.generation_id,
             "generation_note": flow.origin_note,
         },
         "任务流已生成",
@@ -2085,8 +2096,11 @@ def create_task(
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """立即布置任务，或登记由 tick 自动布置的单次/周期计划。"""
-    project_or_404(db, project_id)
-    engine = get_engine()
+    project_for_user_or_403(db, project_id, user)
+    from .task_engine_gateway import transaction_engine
+    from .business_learning_sources import record_task_event, record_task_plan
+    from .business_learning_policy import task_generation_policy
+    engine = transaction_engine(db, get_engine())
     try:
         flow = build_flow(
             db,
@@ -2094,6 +2108,24 @@ def create_task(
             payload,
             actor_user_id=user.id,
         )
+        if db.info.get('task_learning_source_channel_ids'):
+            flow.scope['learning_source_channel_ids'] = list(db.info['task_learning_source_channel_ids'])
+        generation_id = db.info.get('task_learning_generation_id')
+        flow.scope['learning_policy'] = task_generation_policy(db,
+            token=None if generation_id else payload.generation_origin_token, generation_id=generation_id,
+            user_id=user.id,project_id=project_id)
+        if db.info.get('task_learning_origin_policy') is not None:
+            from .business_learning_policy import merge_learning_policies
+            flow.scope['learning_policy'] = merge_learning_policies(flow.scope['learning_policy'],db.info['task_learning_origin_policy'])
+        if payload.generation_id and not generation_id:
+            if payload.generation_origin_token:
+                from .business_learning_policy import resolve_generation_origin
+                origin = resolve_generation_origin(db,payload.generation_origin_token,user_id=user.id,project_id=project_id)
+                if origin.generation_id != payload.generation_id:
+                    raise HTTPException(403,'任务生成标识与已签名来源不一致')
+            else:
+                # A generated draft whose binding was lost must never become an unrestricted manual source.
+                flow.scope['learning_policy'] = {'allow_learning':False,'source_run_refs':[]}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -2101,6 +2133,7 @@ def create_task(
         try:
             flow.require_dispatchable()
             plan = engine.schedule(flow)
+            record_task_plan(db, plan, user.id)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -2160,6 +2193,7 @@ def create_task(
         "task",
         0,
     )
+    record_task_event(db, task, user.id, 'task_published')
     db.commit()
     return ok(to_api_task(task), "任务已创建")
 
@@ -2254,7 +2288,13 @@ def transition_task(
     user: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """只把验收、退回和取消交给引擎；其余状态由节点流转推导。"""
-    engine = get_engine()
+    from .task_engine_gateway import transaction_engine
+    from .business_learning_sources import record_task_event
+    engine = transaction_engine(db, get_engine())
+    existing = engine.get_task(task_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    project_for_user_or_403(db, int(existing.scope.get('project_id') or 0), user)
     target = DOBBY_TO_ENGINE_STATE.get(payload.status, payload.status)
 
     try:
@@ -2292,6 +2332,9 @@ def transition_task(
         "running": "task_rejected",
     }[target]
     enqueue_task_notification(db, task, event_type)
+    record_task_event(db, task, user.id, {
+        'done': 'task_accepted', 'cancelled': 'task_cancelled', 'running': 'task_rejected',
+    }[target])
     audit(
         db,
         user,

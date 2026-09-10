@@ -1,9 +1,4 @@
 import type { AgentModelPolicy, AgentModelPolicyMode, ChatModelConfig } from '@/api';
-import {
-	CUSTOM_REQUEST_BODY_KEY,
-	customRequestBodyText,
-	parseCustomRequestBody,
-} from '@/lib/model-parameters';
 
 export interface AgentModelPolicyFormValues extends Record<string, unknown> {
 	mode?: AgentModelPolicyMode;
@@ -33,9 +28,6 @@ export function agentModelPolicyToForm(
 	return {
 		mode: resolved.mode,
 		chat_model_config: resolved.chat_model_config,
-		custom_request_text: resolved.chat_model_config
-			? customRequestBodyText(resolved.chat_model_config.parameters)
-			: '',
 	};
 }
 
@@ -50,27 +42,21 @@ export function agentModelPolicyFromForm(values: AgentModelPolicyFormValues): Ag
 		return { mode, chat_model_config: null };
 	}
 
-	let customRequestBody: Record<string, unknown>;
-	try {
-		customRequestBody = parseCustomRequestBody(values.custom_request_text ?? '');
-	} catch (error) {
-		const code =
-			error instanceof Error && error.message === 'object_required'
-				? 'object_required'
-				: 'invalid_json';
-		throw new AgentModelPolicyFormError(code);
-	}
-
-	const parameters = { ...config.parameters };
-	delete parameters[CUSTOM_REQUEST_BODY_KEY];
-	if (Object.keys(customRequestBody).length > 0) {
-		parameters[CUSTOM_REQUEST_BODY_KEY] = customRequestBody;
-	}
 	return {
 		mode,
 		chat_model_config: {
 			...config,
-			parameters,
+			parameters: {},
 		},
 	};
+}
+
+/** Editing another section must not rewrite a saved model's legacy parameters. */
+export function agentModelPolicyUpdateFromForm(
+	values: AgentModelPolicyFormValues,
+	original?: AgentModelPolicy | null,
+): AgentModelPolicy | undefined {
+	if (JSON.stringify(values) === JSON.stringify(agentModelPolicyToForm(original)))
+		return undefined;
+	return agentModelPolicyFromForm(values);
 }

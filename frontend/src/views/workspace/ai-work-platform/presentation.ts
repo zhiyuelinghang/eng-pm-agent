@@ -65,6 +65,12 @@ export type GeneratedTaskFlow = {
   trigger_interval_value: number
   trigger_interval_unit: TriggerIntervalUnit
   cc: string
+  trigger_calendar_mode?: 'daily' | 'weekdays' | 'weekly' | 'monthly'
+  trigger_weekdays?: number[]
+  trigger_day_of_month?: number | null
+  trigger_end_mode?: 'never' | 'until' | 'count'
+  trigger_until_date?: string | null
+  trigger_max_fires?: number | null
   steps: Array<{
     name: string
     node_type?: TaskNodeType
@@ -82,6 +88,8 @@ export type GeneratedTaskFlow = {
     }
   }>
   generated_by: 'ai'
+  generation_origin_token: string | null
+  generation_id: string
   generation_note: string
 }
 

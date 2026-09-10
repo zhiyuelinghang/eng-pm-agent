@@ -9,7 +9,7 @@ def create_group_agent_session(db, client, *, user, project, channel, thread, ag
     conversation = AgentConversation(
         project_id=project.id, user_id=user.id, agent_id=thread.agent_id,
         agent_name=thread.agent_name, conversation_type="group_chat",
-        title=channel.title, status="creating",
+        title=channel.title, status="creating", source_channel_id=channel.id,
     )
     db.add(conversation)
     db.flush()

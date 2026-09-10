@@ -8,12 +8,16 @@ from unittest.mock import AsyncMock, patch
 from agentscope.agent import ContextConfig, ReActConfig
 from agentscope.app._service._toolkit import get_toolkit
 from agentscope.app._tool import AgentInvite, AgentInvoke, AgentRetryOrSwitch
+from agentscope.app.storage import PlatformSettingsRecord, PlatformSettingsData
 from agentscope.app.storage import (
     AgentCallConfig,
     AgentData,
     AgentRecord,
     InviteConfig,
     PlatformAgentConfig,
+    PlatformSessionContext,
+    SessionConfig,
+    SessionRecord,
 )
 from agentscope.message import TextBlock
 from agentscope.tool import ToolChunk
@@ -23,6 +27,16 @@ USER_ID = "allowlist-test"
 CALLER_ID = "caller"
 TARGET_A_ID = "target-a"
 TARGET_B_ID = "target-b"
+
+
+def _session(agent_id: str, session_id: str = 'session', *, kind: str | None = None) -> SessionRecord:
+    context = None if kind is None else PlatformSessionContext(
+        user_id='business-user', username='member', display_name='成员',
+        project_id='project', project_name='测试项目', conversation_id='conversation',
+        conversation_title='测试会话', conversation_type=kind, agent_name=agent_id,
+    )
+    return SessionRecord(id=session_id, user_id=USER_ID, agent_id=agent_id,
+        config=SessionConfig(workspace_id=f'workspace-{agent_id}', platform_context=context))
 
 
 def _agent(
@@ -51,7 +65,7 @@ def _agent(
 
 
 class AgentCallConfigTest(IsolatedAsyncioTestCase):
-    """Validate configuration compatibility and runtime enforcement."""
+    """Validate explicit collaboration configuration and enforcement."""
 
     def test_old_agent_data_defaults_to_deny(self) -> None:
         old_data = AgentData.model_validate(
@@ -77,10 +91,6 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
         self.assertFalse(config.allows("target-b"))
 
     async def test_toolkit_filters_the_invite_pool(self) -> None:
-        all_targets = await self._invite_targets(AgentCallConfig(scope="all"))
-        self.assertEqual(len(all_targets or []), 2)
-        self.assertFalse(any(target.startswith("Caller@") for target in all_targets or []))
-
         selected_targets = await self._invite_targets(
             AgentCallConfig(
                 scope="selected",
@@ -104,7 +114,7 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
             "Caller",
             call_config=AgentCallConfig(scope="none"),
         )
-        storage = SimpleNamespace(
+        storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=None))),
             get_session=AsyncMock(
                 return_value=SimpleNamespace(team_id="team"),
             ),
@@ -132,7 +142,7 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
 
     async def test_invite_rejects_oversized_prompt_before_team_lookup(self) -> None:
         target = _agent(TARGET_A_ID, "Target A", invitable=True)
-        storage = SimpleNamespace(
+        storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=None))),
             get_session=AsyncMock(),
             get_team=AsyncMock(),
             get_agent=AsyncMock(),
@@ -155,7 +165,10 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
         self.assertEqual(storage.get_session.await_count, 0)
 
     async def test_recovery_rejects_unauthorised_switch_before_cleanup(self) -> None:
-        storage = SimpleNamespace(get_session=AsyncMock())
+        storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=CALLER_ID))),
+            get_session=AsyncMock(),
+            get_agent=AsyncMock(return_value=_agent(CALLER_ID, "Dobby", platform_config=PlatformAgentConfig(role="global_main"))),
+        )
         tool = AgentRetryOrSwitch(
             storage=storage,
             message_bus=object(),
@@ -188,10 +201,11 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
                 allow_global_main_call=True,
             ),
         )
-        storage = SimpleNamespace(
+        storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=CALLER_ID))),
             get_session=AsyncMock(
                 return_value=SimpleNamespace(team_id="failed-team"),
             ),
+            get_agent=AsyncMock(return_value=_agent(CALLER_ID, "Dobby", platform_config=PlatformAgentConfig(role="global_main"))),
             get_team=AsyncMock(
                 return_value=SimpleNamespace(
                     id="failed-team",
@@ -247,7 +261,7 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
             },
         )
 
-    async def test_global_main_only_sees_explicitly_enabled_targets(
+    async def test_global_main_search_requires_target_permission_for_every_role(
         self,
     ) -> None:
         caller = _agent(
@@ -277,7 +291,7 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
             _agent(
                 "internal",
                 "Internal",
-                invitable=True,
+                invitable=False,
                 platform_config=PlatformAgentConfig(
                     role="system_internal",
                     published=False,
@@ -316,6 +330,15 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
             {item["name"] for item in payload["candidates"]},
             {"Published", "Unpublished"},
         )
+        # The catalogue is dynamic: opting in an enabled internal agent adds
+        # it without assigning a whitelist on main, and revocation removes it.
+        internal = next(agent for agent in visible_agents if agent.id == "internal")
+        internal.data.platform_config.allow_global_main_call = True
+        result = await search(query="capability", limit=5)
+        self.assertIn("Internal", {item["name"] for item in json.loads(result.content[0].text)["candidates"]})
+        internal.data.platform_config.allow_global_main_call = False
+        result = await search(query="capability", limit=5)
+        self.assertNotIn("Internal", {item["name"] for item in json.loads(result.content[0].text)["candidates"]})
 
     async def test_dynamic_search_ranks_chinese_professional_capability(self) -> None:
         caller = _agent(
@@ -357,7 +380,7 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
         payload = json.loads(result.content[0].text)
         self.assertEqual(payload["candidates"][0]["agent_id"], TARGET_A_ID)
 
-    async def test_global_main_rechecks_target_permission(self) -> None:
+    async def test_global_main_rechecks_target_enablement(self) -> None:
         caller = _agent(
             CALLER_ID,
             "Caller",
@@ -377,14 +400,14 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
                     update={
                         "platform_config": (
                             target.data.platform_config.model_copy(
-                                update={"allow_global_main_call": False},
+                                update={"enabled": False},
                             )
                         ),
                     },
                 ),
             },
         )
-        storage = SimpleNamespace(
+        storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=CALLER_ID))),
             get_session=AsyncMock(
                 return_value=SimpleNamespace(team_id="team"),
             ),
@@ -467,11 +490,7 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
             middlewares=[],
             user_id=USER_ID,
             agent_record=caller,
-            session_record=SimpleNamespace(
-                id="session",
-                team_id=None,
-                config=SimpleNamespace(chat_model_config=None),
-            ),
+            session_record=_session(caller.id),
             resource_access_service=SimpleNamespace(
                 list_resource=AsyncMock(return_value=[caller, target]),
             ),
@@ -514,16 +533,7 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
             middlewares=[],
             user_id=USER_ID,
             agent_record=caller,
-            session_record=SimpleNamespace(
-                id="home-session",
-                team_id=None,
-                config=SimpleNamespace(
-                    chat_model_config=None,
-                    platform_context=SimpleNamespace(
-                        conversation_type="general",
-                    ),
-                ),
-            ),
+            session_record=_session(caller.id, 'home-session', kind='general'),
             resource_access_service=SimpleNamespace(
                 list_resource=AsyncMock(return_value=[caller]),
             ),
@@ -586,13 +596,10 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
             list_mcps=AsyncMock(return_value=[]),
         )
         toolkit = await get_toolkit(
-            storage=SimpleNamespace(
+            storage=SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=caller.id if caller.data.platform_config.role == 'global_main' else None))),
+                get_agent=AsyncMock(return_value=caller),
                 get_team=AsyncMock(return_value=None),
-                get_session=AsyncMock(
-                    return_value=SimpleNamespace(
-                        config=SimpleNamespace(platform_context=None),
-                    ),
-                ),
+                get_session=AsyncMock(return_value=_session(caller.id)),
             ),
             workspace=workspace,
             workspace_manager=object(),
@@ -604,11 +611,7 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
             middlewares=[],
             user_id=USER_ID,
             agent_record=caller,
-            session_record=SimpleNamespace(
-                id="session",
-                team_id=None,
-                config=SimpleNamespace(chat_model_config=None),
-            ),
+            session_record=_session(caller.id),
             resource_access_service=SimpleNamespace(
                 list_resource=AsyncMock(return_value=visible_agents),
             ),

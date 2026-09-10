@@ -15,8 +15,8 @@ from backend.app.chat_agent_sessions import create_group_agent_session
 from backend.app.agent_api_support import _platform_session_context
 from backend.app.db import Base
 from backend.app.models import (
-    AgentConversation, ChatAgentThread, ChatChannel, ChatMessage, EngineeringDocumentNode,
-    EngineeringDocumentPermission, EngineeringDocumentSyncState, OperationLog,
+    AgentConversation, ChatAgentThread, ChatChannel, ChatChannelMember, ChatMessage, EngineeringDocumentNode,
+    EngineeringDocumentPermission, EngineeringDocumentSyncState, EngineeringKnowledgeConversation, OperationLog,
     Project, ProjectMember, ProjectSettings, User,
 )
 
@@ -55,10 +55,16 @@ def test_memory_scope_tracks_group_privacy_and_membership(scoped_project):
         title="记忆权限验证",agentscope_session_id="memory-scope",conversation_type="business")
     db.add(conversation)
     db.commit()
-    assert get_agent_memory_scope("memory-scope",db)["data"] == {
+    result = get_agent_memory_scope("memory-scope",db)["data"]
+    assert {key: result[key] for key in ('user_id','project_id','private','project_read','project_write',
+            'group_source_channels','group_shared_channels')} == {
         "user_id":str(user.id),"project_id":str(project.id),"private":True,"project_read":True,"project_write":False,
         "group_source_channels":[],"group_shared_channels":[]}
     conversation.conversation_type = "group_chat"
+    channel = ChatChannel(project_id=project.id, title='权限群', channel_type='project', auto_sync_members=True)
+    db.add(channel)
+    db.flush()
+    conversation.source_channel_id = channel.id
     db.commit()
     assert get_agent_memory_scope("memory-scope",db)["data"]["private"] is False
     membership = db.scalar(select(ProjectMember).where(ProjectMember.project_id==project.id,ProjectMember.user_id==user.id))
@@ -89,13 +95,39 @@ def test_full_group_memory_write_accepts_member_but_subgroup_cannot_publish(scop
     db.flush()
     db.add(ChatAgentThread(channel_id=channel.id, agent_id='main', agent_name='主智能体', agentscope_session_id='group-write'))
     db.add(AgentConversation(project_id=project.id, user_id=users[0].id, agent_id='main', agent_name='主智能体',
-        title='群聊', agentscope_session_id='group-write', conversation_type='group_chat'))
+        title='群聊', agentscope_session_id='group-write', conversation_type='group_chat', source_channel_id=channel.id))
     db.commit()
     assert users[0].role == 'user'
     assert get_agent_memory_scope('group-write',db)['data']['project_write'] is True
     channel.auto_sync_members = False
+    db.add(ChatChannelMember(channel_id=channel.id, user_id=users[0].id))
     db.commit()
     assert get_agent_memory_scope('group-write',db)['data']['project_write'] is False
+
+
+def test_group_memory_cannot_read_initiators_other_private_group(scoped_project):
+    db, project, users = scoped_project
+    public = ChatChannel(project_id=project.id, title='公开群', channel_type='project', auto_sync_members=True)
+    secret = ChatChannel(project_id=project.id, title='私有群', channel_type='topic', auto_sync_members=False)
+    db.add_all([public, secret])
+    db.flush()
+    db.add(ChatChannelMember(channel_id=secret.id, user_id=users[0].id))
+    db.add(AgentConversation(project_id=project.id, user_id=users[0].id, agent_id='main', agent_name='总控',
+        title='群聊', agentscope_session_id='group-safe', conversation_type='group_chat', source_channel_id=public.id))
+    db.commit()
+    scope = get_agent_memory_scope('group-safe', db)['data']
+    assert str(secret.id) not in scope['group_source_channels']
+    assert scope['audience_user_ids'] == [str(user.id) for user in users]
+    assert scope['source_channel_id'] == str(public.id)
+
+
+def test_unbound_group_session_cannot_fall_back_to_user_visibility(scoped_project):
+    db, project, users = scoped_project
+    db.add(AgentConversation(project_id=project.id, user_id=users[0].id, agent_id='main', agent_name='总控',
+        title='群聊', agentscope_session_id='group-unbound', conversation_type='group_chat'))
+    db.commit()
+    with pytest.raises(HTTPException, match='来源绑定'):
+        get_agent_memory_scope('group-unbound', db)
 
 
 def test_each_group_request_has_its_own_account_bound_session(scoped_project):
@@ -144,6 +176,32 @@ def test_knowledge_scope_is_rechecked_after_document_and_membership_revocation(s
     with pytest.raises(HTTPException) as error:
         get_agent_knowledge_scope("scope-session", "knowledge-agent", db)
     assert error.value.status_code == 403
+
+
+def test_group_knowledge_uses_every_current_recipient_permission(scoped_project):
+    db,project,users=scoped_project
+    channel=ChatChannel(project_id=project.id,title='全体群',channel_type='project',auto_sync_members=True)
+    db.add(channel)
+    db.flush()
+    db.add(AgentConversation(project_id=project.id,user_id=users[0].id,agent_id='main',agent_name='总控',
+        title='群内查询',agentscope_session_id='group-knowledge',conversation_type='group_chat',source_channel_id=channel.id))
+    db.commit()
+    assert get_agent_knowledge_scope('group-knowledge','knowledge-agent',db)['data']['weknora_knowledge_ids']==[]
+    document=db.scalar(select(EngineeringDocumentNode).where(EngineeringDocumentNode.external_id=='doc-0'))
+    db.add(EngineeringDocumentPermission(project_id=project.id,node_id=document.id,subject_type='user',subject_id=users[1].id,can_read=True))
+    db.commit()
+    assert get_agent_knowledge_scope('group-knowledge','knowledge-agent',db)['data']['weknora_knowledge_ids']==['doc-0']
+
+
+def test_memory_entry_kind_comes_from_actual_knowledge_page_binding(scoped_project):
+    db,project,users=scoped_project
+    conversation=AgentConversation(project_id=project.id,user_id=users[0].id,agent_id='knowledge',agent_name='知识库助手',
+        title='问答',agentscope_session_id='knowledge-entry',conversation_type='business')
+    db.add(conversation)
+    db.flush()
+    db.add(EngineeringKnowledgeConversation(project_id=project.id,user_id=users[0].id,title='资料问答',agent_conversation_id=conversation.id))
+    db.commit()
+    assert get_agent_memory_scope('knowledge-entry',db)['data']['entry_kind']=='knowledge'
 
 
 def test_greeting_context_does_not_query_the_document_catalogue(scoped_project):

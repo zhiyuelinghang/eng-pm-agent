@@ -19,6 +19,7 @@ from ._model import (
     PermissionReviewAuditRecord,
     PermissionReviewerConfigData,
     PermissionReviewerConfigRecord,
+    MemorySettingsData,
     PlatformSettingsData,
     PlatformSettingsRecord,
     ScheduleRecord,
@@ -310,34 +311,47 @@ class RedisStorage(StorageBase):
             else None
         )
 
-    async def upsert_platform_settings(
+    async def _write_platform_settings(
         self,
         user_id: str,
-        data: PlatformSettingsData,
+        *,
+        data: PlatformSettingsData | None = None,
+        memory_settings: MemorySettingsData | None = None,
+        expected_revision: int | None = None,
     ) -> PlatformSettingsRecord:
-        """Create or replace the platform-wide settings."""
-        from hashlib import sha256
+        from ._memory_settings import merge_platform_settings
 
-        existing = await self.get_platform_settings(user_id)
-        record = PlatformSettingsRecord(
-            id=sha256(
-                f"platform-settings:{user_id}".encode("utf-8"),
-            ).hexdigest(),
-            user_id=user_id,
-            data=data,
-        )
-        if existing is not None:
-            record.created_at = existing.created_at
-        record.updated_at = datetime.now()
-        key = self._key(
-            self.key_config.platform_settings,
-            user_id=user_id,
-        )
-        await self._set_with_ttl(
-            key,
-            json.dumps(_dump_with_secrets(record)),
-        )
-        return record
+        key = self._key(self.key_config.platform_settings, user_id=user_id)
+        async with self._client.pipeline(transaction=True) as pipe:
+            while True:
+                try:
+                    await pipe.watch(key)
+                    raw = await pipe.get(key)
+                    existing = PlatformSettingsRecord.model_validate_json(raw) if raw else None
+                    record = merge_platform_settings(user_id, existing, now=datetime.now(),
+                        data=data, memory_settings=memory_settings, expected_revision=expected_revision)
+                    pipe.multi()
+                    pipe.set(key, json.dumps(_dump_with_secrets(record)))
+                    if self.key_ttl is not None:
+                        pipe.expire(key, self.key_ttl)
+                    await pipe.execute()
+                    return record
+                except _watch_error():
+                    # Re-read under WATCH; the memory revision is checked again
+                    # and stale general snapshots keep the latest memory value.
+                    continue
+
+    async def upsert_platform_settings(
+        self, user_id: str, data: PlatformSettingsData,
+    ) -> PlatformSettingsRecord:
+        """Save general settings while preserving the current memory revision."""
+        return await self._write_platform_settings(user_id, data=data)
+
+    async def update_memory_settings(
+        self, user_id: str, settings: MemorySettingsData, expected_revision: int,
+    ) -> PlatformSettingsRecord:
+        return await self._write_platform_settings(user_id,
+            memory_settings=settings, expected_revision=expected_revision)
 
     async def append_permission_review_audit(
         self,

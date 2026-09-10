@@ -107,7 +107,6 @@ def _public_agent_catalog_item(item: dict[str, Any] | None) -> dict[str, Any] | 
             "description",
             "category",
             "role",
-            "agent_level",
             "enabled",
             "published",
             "invitable",
@@ -186,7 +185,7 @@ def _catalog_agent_for_conversation(
         if selected is None:
             raise HTTPException(
                 status_code=409,
-                detail="该业务智能体已停用或取消发布，请刷新业务工具页面",
+                detail="该业务智能体已停用或取消发布，请刷新业务智能体页面",
             )
     if not selected.get("model_ready"):
         raise HTTPException(
@@ -501,14 +500,23 @@ def _initialization_files_for_message(
 def _initialization_attachment_manifest_context(
     db: Session,
     files: list[ProjectInitializationFile],
+    *, native_image_ids: set[int] | None = None,
 ) -> str:
     """Inject only bounded parsed-data references into the leader context."""
     if not files:
         return ""
+    native_image_ids = native_image_ids or set()
+    # Successful OCR remains useful alongside the image. A failed/pending OCR
+    # job must not block an image already validated for native model input.
+    parsed_files = [file for file in files if file.id not in native_image_ids
+        or initialization_attachment_summary(db, file).get('status') == 'ready']
     try:
-        manifest = initialization_attachment_manifest(db, files)
+        manifest = initialization_attachment_manifest(db, parsed_files)
     except InitializationAttachmentParseError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if native_image_ids:
+        manifest['native_images'] = [{'file_id':file.id, 'file_name':file.file_name}
+            for file in files if file.id in native_image_ids]
     return (
         "\n<parsed-attachment-manifest>\n"
         + json.dumps(manifest, ensure_ascii=False)
@@ -550,14 +558,14 @@ def _build_agent_project_context(
     del db  # Kept in the signature for the existing platform call sites.
     if knowledge_query_enabled is True:
         knowledge_context = (
-            "\n工程资料：用户本轮已明确点名 @资料助手。必须调用 "
+            "\n工程资料：用户本轮已明确点名 @知识库助手。必须调用 "
             "weknora_query_project_knowledge，并仅依据该工具返回的授权资料"
             "组织回答；不得补写未检索到的资料内容，也不得使用旧的本地附件表"
             "推断工程资料。"
         )
     elif knowledge_query_enabled is False:
         knowledge_context = (
-            "\n工程资料：用户本轮没有点名 @资料助手，不得调用资料查询工具，"
+            "\n工程资料：用户本轮没有点名 @知识库助手，不得调用资料查询工具，"
             "也不得声称已查询项目知识库。"
         )
     else:
@@ -770,6 +778,7 @@ def _project_agentscope_user_message(
         "role": "user",
         "content": display_content,
         "extra_data": {
+            "image_attachments": metadata.get('platform_image_attachments', []) if isinstance(metadata, dict) else [],
             "initialization_files": (
                 _initialization_files_from_agentscope_message(message)
             ),

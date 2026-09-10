@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import json
 import re
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Mapping
 
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 from ..domain.models import (
     Activity,
@@ -100,6 +101,7 @@ class PostgresStore:
         *,
         schema: str = "task_engine",
         dispose_on_close: bool = False,
+        connection: Connection | None = None,
     ) -> None:
         if engine.dialect.name != "postgresql":
             raise ValueError("PostgresStore 只能使用 PostgreSQL Engine")
@@ -108,6 +110,18 @@ class PostgresStore:
         self.engine = engine
         self.schema = schema
         self.dispose_on_close = dispose_on_close
+        self.connection = connection
+
+    @contextmanager
+    def _connect(self, *, write: bool = False):
+        """Use the host transaction when supplied; never commit it from the store."""
+        if self.connection is not None:
+            if not self.connection.in_transaction():
+                raise RuntimeError('宿主任务操作需要已开启的业务事务')
+            yield self.connection
+        else:
+            with (self.engine.begin() if write else self.engine.connect()) as connection:
+                yield connection
 
     def _table(self, name: str) -> str:
         if not _IDENTIFIER_PATTERN.fullmatch(name):
@@ -144,7 +158,7 @@ class PostgresStore:
         site_ref, site_name, site_code = _site_to_row(flow.site)
         confirmer_ref, confirmer_name = _assignee_to_row(flow.confirmer)
         flows = self._table("flows")
-        with self.engine.begin() as connection:
+        with self._connect(write=True) as connection:
             connection.execute(
                 text(
                     f"""
@@ -211,7 +225,7 @@ class PostgresStore:
             )
 
     def get_flow(self, flow_id: str) -> TaskFlow | None:
-        with self.engine.connect() as connection:
+        with self._connect() as connection:
             row = connection.execute(
                 text(f"SELECT * FROM {self._table('flows')} WHERE id = :id"),
                 {"id": flow_id},
@@ -228,7 +242,7 @@ class PostgresStore:
         params: dict[str, Any] = {"limit": limit}
         if category:
             params["category"] = category
-        with self.engine.connect() as connection:
+        with self._connect() as connection:
             rows = connection.execute(
                 text(
                     f"SELECT * FROM {self._table('flows')} {where} "
@@ -300,7 +314,7 @@ class PostgresStore:
     def save_schedule(self, schedule: Schedule, now: datetime) -> None:
         self.save_flow(schedule.flow, now)
         schedules = self._table("schedules")
-        with self.engine.begin() as connection:
+        with self._connect(write=True) as connection:
             connection.execute(
                 text(
                     f"""
@@ -334,7 +348,7 @@ class PostgresStore:
             )
 
     def get_schedule(self, schedule_id: str) -> Schedule | None:
-        with self.engine.connect() as connection:
+        with self._connect() as connection:
             row = connection.execute(
                 text(f"SELECT * FROM {self._table('schedules')} WHERE id = :id"),
                 {"id": schedule_id},
@@ -346,7 +360,7 @@ class PostgresStore:
 
     def list_schedules(self, *, active_only: bool = False) -> list[Schedule]:
         where = "WHERE active IS TRUE AND paused IS FALSE" if active_only else ""
-        with self.engine.connect() as connection:
+        with self._connect() as connection:
             rows = connection.execute(
                 text(
                     f"SELECT * FROM {self._table('schedules')} {where} "
@@ -361,7 +375,7 @@ class PostgresStore:
         return result
 
     def due_schedules(self, now: datetime) -> list[Schedule]:
-        with self.engine.connect() as connection:
+        with self._connect() as connection:
             rows = connection.execute(
                 text(
                     f"""
@@ -399,7 +413,7 @@ class PostgresStore:
         )
 
     def delete_schedule(self, schedule_id: str) -> bool:
-        with self.engine.begin() as connection:
+        with self._connect(write=True) as connection:
             result = connection.execute(
                 text(f"DELETE FROM {self._table('schedules')} WHERE id = :id"),
                 {"id": schedule_id},
@@ -409,7 +423,7 @@ class PostgresStore:
     # ---- 触发幂等 ----
 
     def claim_fire(self, schedule_id: str, fire_at: datetime, now: datetime) -> bool:
-        with self.engine.begin() as connection:
+        with self._connect(write=True) as connection:
             result = connection.execute(
                 text(
                     f"""
@@ -435,7 +449,7 @@ class PostgresStore:
         task_id: str = "",
         error: str = "",
     ) -> None:
-        with self.engine.begin() as connection:
+        with self._connect(write=True) as connection:
             connection.execute(
                 text(
                     f"""
@@ -453,7 +467,7 @@ class PostgresStore:
             )
 
     def release_fire(self, schedule_id: str, fire_at: datetime) -> None:
-        with self.engine.begin() as connection:
+        with self._connect(write=True) as connection:
             connection.execute(
                 text(
                     f"DELETE FROM {self._table('fire_log')} "
@@ -470,7 +484,7 @@ class PostgresStore:
         activities = self._table("activities")
         site_ref, site_name, site_code = _site_to_row(task.site)
         confirmer_ref, confirmer_name = _assignee_to_row(task.confirmer)
-        with self.engine.begin() as connection:
+        with self._connect(write=True) as connection:
             connection.execute(
                 text(
                     f"""
@@ -604,7 +618,7 @@ class PostgresStore:
                 )
 
     def get_task(self, task_id: str) -> TaskInstance | None:
-        with self.engine.connect() as connection:
+        with self._connect() as connection:
             row = connection.execute(
                 text(f"SELECT * FROM {self._table('tasks')} WHERE id = :id"),
                 {"id": task_id},
@@ -723,7 +737,7 @@ class PostgresStore:
             )
             params["assignee"] = assignee
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        with self.engine.connect() as connection:
+        with self._connect() as connection:
             rows = connection.execute(
                 text(
                     f"SELECT t.id FROM {self._table('tasks')} t {where} "
@@ -742,7 +756,7 @@ class PostgresStore:
         if open_only:
             clauses.append("state NOT IN ('done', 'cancelled')")
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-        with self.engine.connect() as connection:
+        with self._connect() as connection:
             value = connection.scalar(
                 text(f"SELECT COUNT(*) FROM {self._table('tasks')} {where}"),
                 params,
@@ -750,7 +764,7 @@ class PostgresStore:
         return int(value or 0)
 
     def overdue_candidates(self, now: datetime) -> list[TaskInstance]:
-        with self.engine.connect() as connection:
+        with self._connect() as connection:
             rows = connection.execute(
                 text(
                     f"""
@@ -764,7 +778,7 @@ class PostgresStore:
         return [task for row in rows if (task := self.get_task(row["id"]))]
 
     def delete_task(self, task_id: str) -> bool:
-        with self.engine.begin() as connection:
+        with self._connect(write=True) as connection:
             result = connection.execute(
                 text(f"DELETE FROM {self._table('tasks')} WHERE id = :id"),
                 {"id": task_id},

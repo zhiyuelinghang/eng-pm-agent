@@ -343,6 +343,8 @@ class DashScopeChatModel(ChatModelBase):
                     continue
 
                 choice = chunk.choices[0]
+                if getattr(choice, "finish_reason", None) == "length":
+                    delta_res.metadata["output_truncated"] = True
                 delta = choice.delta
 
                 # Thinking
@@ -408,7 +410,7 @@ class DashScopeChatModel(ChatModelBase):
                             media_type="audio/wav",
                         )
 
-                if delta_res.content or usage:
+                if delta_res.content or usage or delta_res.metadata:
                     delta_res.usage = usage
                     yield delta_res
 
@@ -470,6 +472,8 @@ class DashScopeChatModel(ChatModelBase):
             "is_last": True,
             "usage": usage,
         }
+        if response.choices and getattr(response.choices[0], "finish_reason", None) == "length":
+            resp_kwargs["metadata"] = {"output_truncated": True}
         response_id = getattr(response, "id", None)
         if response_id:
             resp_kwargs["id"] = response_id

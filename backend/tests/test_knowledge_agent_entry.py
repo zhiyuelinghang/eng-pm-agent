@@ -38,7 +38,7 @@ def test_connect_reuses_platform_session_without_contacting_knowledge_service(db
         again = connect_knowledge_agent(project.id, entry.id, KnowledgeAgentConnectInput(agent_id='ignored'), db, user)['data']
     assert result['id'] == again['id'] == entry.agent_conversation_id
     assert result['conversation_type'] == 'business'
-    assert result['agent_name'] == '资料助手'
+    assert result['agent_name'] == '知识库助手'
     assert client.create_session.call_count == 1
     assert client.create_session.call_args.kwargs['platform_context']['weknora_query_enabled'] is False
     conversation = db.get(AgentConversation, result['id'])
@@ -110,7 +110,7 @@ def test_knowledge_entry_does_not_fall_back_to_published_business_agents(db):
         with pytest.raises(HTTPException) as error:
             connect_knowledge_agent(project.id, entry.id, KnowledgeAgentConnectInput(), db, user)
     assert error.value.status_code == 409
-    assert '平台设置' in error.value.detail
+    assert '平台主智能体' in error.value.detail
     client.create_session.assert_not_called()
     assert entry.agent_conversation_id is None
 

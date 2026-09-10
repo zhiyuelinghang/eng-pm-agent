@@ -966,6 +966,9 @@ def test_home_agent_task_draft_uses_private_conversation_context(
     with (
         patch("backend.app.chat_api._agentscope_client", return_value=fake_client),
         patch("backend.app.chat_api._start_private_task_draft_generation") as start,
+        patch("backend.app.business_learning_policy._memory_runs",return_value=[{
+            'tenant_id':'projectcopilot','run_id':'home-optout-run','root_session_id':'home-session-1',
+            'root_agent_id':'dobby-main','state':'completed','no_memory':False,'no_learning':True}]),
     ):
         created = asyncio.run(
             chat_api.create_home_agent_task_draft(
@@ -988,6 +991,8 @@ def test_home_agent_task_draft_uses_private_conversation_context(
         {
             "source": "home_agent_reference",
             "conversation_id": conversation.id,
+            "learning_policy": {'allow_learning':False,'source_run_refs':[{'tenant_id':'projectcopilot',
+                'run_id':'home-optout-run','root_session_id':'home-session-1','root_agent_id':'dobby-main'}]},
         },
     ]
     assert db.scalar(select(func.count(ChatMessage.id))) == 0

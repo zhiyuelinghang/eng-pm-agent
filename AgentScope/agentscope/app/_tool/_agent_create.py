@@ -406,6 +406,19 @@ optional):
                 self._user_id,
                 leader_session.agent_id,
             )
+            if leader_agent_record is None:
+                return ToolChunk(
+                    content=[TextBlock(text="AgentCreate: 团队主智能体已不存在，无法继承模型配置。")],
+                    state=ToolResultState.ERROR,
+                )
+            from .._service._model import (
+                managed_chat_model_config,
+                resolve_effective_chat_model_config,
+            )
+
+            inherited_chat_model = resolve_effective_chat_model_config(
+                leader_agent_record.data, leader_session.config,
+            )
             existing_names: set[str] = set()
             if leader_agent_record is not None:
                 existing_names.add(leader_agent_record.data.name)
@@ -511,11 +524,9 @@ optional):
                 config=SessionConfig(
                     workspace_id=leader_session.config.workspace_id,
                     name=f"team:{team.id}/{name}",
-                    chat_model_config=(
-                        leader_session.config.chat_model_config
-                    ),
-                    fallback_chat_model_config=(
-                        leader_session.config.fallback_chat_model_config
+                    chat_model_config=inherited_chat_model,
+                    fallback_chat_model_config=managed_chat_model_config(
+                        leader_session.config.fallback_chat_model_config,
                     ),
                     platform_context=worker_platform_context,
                 ),

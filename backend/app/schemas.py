@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class LoginRequest(BaseModel):
@@ -260,6 +260,8 @@ class WbsRiskLinkInput(BaseModel):
 
 class TaskInput(BaseModel):
     title: str
+    generation_origin_token: str | None = Field(default=None, max_length=2048)
+    generation_id: str | None = Field(default=None, max_length=64)
     task_type: str
     action_type: Literal["responsibility_task", "project_chat_message"] = (
         "responsibility_task"
@@ -436,9 +438,18 @@ class AgentConversationInput(BaseModel):
     title: str | None = Field(default=None, max_length=300)
 
 
+class AgentConversationImageInput(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+    name: str = Field(min_length=1, max_length=300)
+    media_type: Literal['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+    data: str = Field(min_length=1, max_length=40 * 1024 * 1024)
+
+
 class AgentConversationMessageInput(BaseModel):
     content: str = Field(min_length=1, max_length=20000)
     initialization_file_ids: list[int] = Field(default_factory=list)
+    image_attachments: list[AgentConversationImageInput] = Field(default_factory=list, max_length=8)
 
 
 class AgentConversationConfirmInput(BaseModel):

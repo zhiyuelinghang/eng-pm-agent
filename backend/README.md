@@ -8,7 +8,7 @@
 
 如需切换到 Conda 环境，必须明确修改 `start-frontend.bat` 并同步更新项目根目录 `README.md`；便携运行时缺失时不要静默回退到其他 Python 环境。
 
-项目根目录已提供 `.env.example`；首次运行前复制为 `.env` 并填入 `JWT_SECRET`。如需接入真实模型服务，同时填写 `AI_API_KEY`、`AI_BASE_URL` 与 `AI_MODEL`。
+项目根目录已提供 `.env.example`；首次运行前复制为 `.env` 并填入 `JWT_SECRET`。模型凭证与参数统一在 AgentScope 管理端配置，并为平台总控选择固定模型；工程平台通过 `AGENTSCOPE_SERVICE_TOKEN` 使用该配置。
 
 ```powershell
 .\python-3.13.14\python.exe -m pip install -r backend/requirements.txt

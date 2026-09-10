@@ -101,93 +101,12 @@ def _default_workspace_tool_catalog() -> list[AgentToolDescriptor]:
     ]
 
 
-async def _resolve_workspace(
-    user_id: str,
-    agent_id: str,
-    session_id: str,
-    storage: StorageBase,
-    workspace_manager: WorkspaceManagerBase,
-    principal: AgentScopePrincipal,
-) -> WorkspaceBase:
-    """Resolve the workspace for the given session, raising 404 if not
-    found."""
-    session_record = await storage.get_session(user_id, agent_id, session_id)
-    if session_record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id!r} not found.",
-        )
-    require_runtime_session_access(principal, session_record)
-    return await workspace_manager.get_workspace(
-        user_id,
-        agent_id,
-        session_id,
-        session_record.config.workspace_id,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Direct tool endpoints
-# ---------------------------------------------------------------------------
-
-
-@workspace_router.get("/tool")
-async def list_workspace_tools(
-    agent_id: str = Query(...),
-    session_id: str | None = Query(default=None),
-    user_id: str = Depends(get_current_user_id),
-    principal: AgentScopePrincipal = Depends(get_current_principal),
-    storage: StorageBase = Depends(get_storage),
-    workspace_manager: WorkspaceManagerBase = Depends(get_workspace_manager),
-    extra_factory: AgentToolFactory | None = Depends(get_extra_agent_tools),
-    catalog_factory: AgentToolCatalogFactory | None = Depends(
-        get_extra_agent_tool_catalog,
-    ),
-    mcp_registry_manager: MCPRegistryManager | None = Depends(
-        get_optional_mcp_registry_manager,
-    ),
+async def _fixed_tool_catalog(
+    workspace_tools: list,
+    platform_tools: list,
+    mcp_registry_manager: MCPRegistryManager | None,
 ) -> list[WorkspaceToolInfo]:
-    """Return the fixed direct-tool catalogue shared by every agent.
-
-    Assignable MCP tools and skills are excluded because the WebUI exposes
-    them in neighboring tabs. Packages designated as fixed system tools are
-    included here instead: every agent receives them and management clients
-    can inspect but never assign or disable them. Both application and
-    workspace catalogues are available before a management-chat session; a
-    session is required only to bind tools to a live execution backend.
-    """
-    agent_record = await storage.get_agent(user_id, agent_id)
-    if agent_record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Agent {agent_id!r} not found.",
-        )
-
-    workspace_tools = _default_workspace_tool_catalog()
-    if session_id is not None:
-        workspace = await _resolve_workspace(
-            user_id,
-            agent_id,
-            session_id,
-            storage,
-            workspace_manager,
-            principal,
-        )
-        workspace_tools = await workspace.list_tools()
-
-    if catalog_factory is not None:
-        platform_tools = await catalog_factory(user_id, agent_id)
-    elif extra_factory is not None and session_id is not None:
-        factory_items = await extra_factory(user_id, agent_id, session_id)
-        platform_tools = []
-        for item in factory_items:
-            if isinstance(item, ToolGroup):
-                platform_tools.extend(await item.list_tools())
-            else:
-                platform_tools.append(item)
-    else:
-        platform_tools = []
-
+    """Shared metadata projection; never creates sessions or executes tools."""
     system_tools: list[AgentToolDescriptor] = []
     system_presentations: dict[str, dict[str, str]] = {}
     if mcp_registry_manager is not None:
@@ -246,6 +165,111 @@ async def list_workspace_tools(
                 ),
             )
     return results
+
+
+@workspace_router.get("/system-tools")
+async def list_system_tools(
+    principal: AgentScopePrincipal = Depends(get_current_principal),
+    mcp_registry_manager: MCPRegistryManager | None = Depends(
+        get_optional_mcp_registry_manager,
+    ),
+) -> list[WorkspaceToolInfo]:
+    """Global read-only catalogue, independent of any agent or chat session."""
+    if principal.kind == "service":
+        raise HTTPException(status_code=403, detail="平台服务凭证不能访问管理端系统工具目录。")
+    return await _fixed_tool_catalog(
+        _default_workspace_tool_catalog(), [], mcp_registry_manager,
+    )
+
+
+async def _resolve_workspace(
+    user_id: str,
+    agent_id: str,
+    session_id: str,
+    storage: StorageBase,
+    workspace_manager: WorkspaceManagerBase,
+    principal: AgentScopePrincipal,
+) -> WorkspaceBase:
+    """Resolve the workspace for the given session, raising 404 if not
+    found."""
+    session_record = await storage.get_session(user_id, agent_id, session_id)
+    if session_record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id!r} not found.",
+        )
+    require_runtime_session_access(principal, session_record)
+    return await workspace_manager.get_workspace(
+        user_id,
+        agent_id,
+        session_id,
+        session_record.config.workspace_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Direct tool endpoints
+# ---------------------------------------------------------------------------
+
+
+@workspace_router.get("/tool")
+async def list_workspace_tools(
+    agent_id: str = Query(...),
+    session_id: str | None = Query(default=None),
+    user_id: str = Depends(get_current_user_id),
+    principal: AgentScopePrincipal = Depends(get_current_principal),
+    storage: StorageBase = Depends(get_storage),
+    workspace_manager: WorkspaceManagerBase = Depends(get_workspace_manager),
+    extra_factory: AgentToolFactory | None = Depends(get_extra_agent_tools),
+    catalog_factory: AgentToolCatalogFactory | None = Depends(
+        get_extra_agent_tool_catalog,
+    ),
+    mcp_registry_manager: MCPRegistryManager | None = Depends(
+        get_optional_mcp_registry_manager,
+    ),
+) -> list[WorkspaceToolInfo]:
+    """Return the direct-tool catalogue for an agent or its workspace.
+
+    Assignable MCP tools and skills are excluded because the WebUI exposes
+    them in neighboring tabs. Packages designated as fixed system tools are
+    included here instead: they need no per-agent assignment and management clients
+    can inspect but never assign or disable them. Both application and
+    workspace catalogues are available before a management-chat session; a
+    session is required only to bind tools to a live execution backend.
+    """
+    agent_record = await storage.get_agent(user_id, agent_id)
+    if agent_record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Agent {agent_id!r} not found.",
+        )
+
+    workspace_tools = _default_workspace_tool_catalog()
+    if session_id is not None:
+        workspace = await _resolve_workspace(
+            user_id,
+            agent_id,
+            session_id,
+            storage,
+            workspace_manager,
+            principal,
+        )
+        workspace_tools = await workspace.list_tools()
+
+    if catalog_factory is not None:
+        platform_tools = await catalog_factory(user_id, agent_id)
+    elif extra_factory is not None and session_id is not None:
+        factory_items = await extra_factory(user_id, agent_id, session_id)
+        platform_tools = []
+        for item in factory_items:
+            if isinstance(item, ToolGroup):
+                platform_tools.extend(await item.list_tools())
+            else:
+                platform_tools.append(item)
+    else:
+        platform_tools = []
+
+    return await _fixed_tool_catalog(workspace_tools, platform_tools, mcp_registry_manager)
 
 
 # ---------------------------------------------------------------------------

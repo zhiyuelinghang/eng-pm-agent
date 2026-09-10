@@ -1,26 +1,19 @@
-import { useRef, useState, type UIEvent } from 'react';
+import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type {
-	AgentCallConfig,
 	PlatformAgentConfig,
 	AgentSchemaV2Response,
-	AgentView,
 	JSONSchema,
 	JSONSchemaProperty,
 } from '@/api';
-import { AgentCallConfigFields } from '@/components/form/AgentCallConfigFields';
+import { AgentIncomingCollaborationFields } from '@/components/form/AgentIncomingCollaborationFields';
 import { AgentModelPolicyFields } from '@/components/form/AgentModelPolicyFields';
 import { AgentPlatformConfigFields } from '@/components/form/AgentPlatformConfigFields';
 import { SchemaForm, type SchemaFormValue } from '@/components/form/SchemaForm';
-import {
-	FieldDescription,
-	FieldGroup,
-	FieldLegend,
-	FieldSeparator,
-	FieldSet,
-} from '@/components/ui/field';
+import { Textarea } from '@/components/ui/textarea';
 import { agentModelPolicyToForm, type AgentModelPolicyFormValues } from '@/lib/agent-model-policy';
+import type { Duty } from '@/lib/agent-workbench';
 
 export type AgentSection =
 	| 'identity'
@@ -38,8 +31,8 @@ export type AgentFormValues = {
 interface Props {
 	schema: AgentSchemaV2Response;
 	values: AgentFormValues;
-	agents: AgentView[];
-	currentAgentId?: string;
+	initialSection?: EditorSection;
+	primaryDuty?: Duty;
 	onChange: (section: AgentSection, key: string, value: unknown) => void;
 }
 
@@ -58,8 +51,6 @@ const NESTED_SECTIONS: Array<{ key: Exclude<AgentSection, 'identity'>; i18n: str
 	{ key: 'invite_config', i18n: 'invite-config' },
 	{ key: 'call_config', i18n: 'call-config' },
 ];
-
-const IDENTITY_I18N = 'identity';
 
 const toKebab = (s: string) => s.replace(/_/g, '-');
 
@@ -113,158 +104,163 @@ function sliceSchema(root: JSONSchema): Record<AgentSection, JSONSchema> {
 	};
 }
 
-export function AgentFormFields({ schema, values, agents, currentAgentId, onChange }: Props) {
-	const { t } = useTranslation();
+export type EditorSection = 'identity' | 'model' | 'platform' | 'collaboration';
+export function AgentFormFields({
+	schema,
+	values,
+	initialSection = 'identity',
+	primaryDuty,
+	onChange,
+}: Props) {
+	const { t, i18n } = useTranslation();
+	const zh = i18n.language.startsWith('zh');
 	const sections = sliceSchema(schema.schema);
-	const scrollContainerRef = useRef<HTMLDivElement | null>(null);
-	const sectionRefs = useRef<Partial<Record<AgentSection, HTMLDivElement | null>>>({});
-	const [activeSection, setActiveSection] = useState<AgentSection>('identity');
-
-	const rows: Array<{ key: AgentSection; i18n: string; sectionSchema: JSONSchema }> = [
-		{ key: 'identity', i18n: IDENTITY_I18N, sectionSchema: sections.identity },
-		...NESTED_SECTIONS.map((s) => ({
-			key: s.key as AgentSection,
-			i18n: s.i18n,
-			sectionSchema: sections[s.key],
-		})),
+	const [active, setActive] = useState<EditorSection>(initialSection);
+	const id = useId();
+	const rows: [EditorSection, string, string][] = [
+		[
+			'identity',
+			zh ? '基本信息' : 'Identity',
+			zh ? '设置名称与工作指令。' : 'Name and working instructions.',
+		],
+		[
+			'model',
+			zh ? '模型配置' : 'Model',
+			zh ? '选择此智能体使用的模型。' : 'Choose the model used by this agent.',
+		],
+		[
+			'platform',
+			primaryDuty
+				? zh
+					? '高级设置'
+					: 'Advanced settings'
+				: zh
+					? '平台接入'
+					: 'Platform access',
+			primaryDuty
+				? zh
+					? '设置运行时的操作确认方式。'
+					: 'Set how actions are confirmed during execution.'
+				: zh
+					? '设置平台可见范围与调用权限。'
+					: 'Visibility and platform access.',
+		],
+		[
+			'collaboration',
+			zh ? '协作设置' : 'Collaboration',
+			zh
+				? '说明此智能体如何承接协作任务。'
+				: 'Describe how this agent handles delegated work.',
+		],
 	];
-
-	const scrollToSection = (sectionKey: AgentSection) => {
-		const container = scrollContainerRef.current;
-		const target = sectionRefs.current[sectionKey];
-		if (!container || !target) return;
-
-		setActiveSection(sectionKey);
-		container.scrollTo({
-			top: Math.max(target.offsetTop - 24, 0),
-			behavior: 'smooth',
-		});
-	};
-
-	const handleScroll = (event: UIEvent<HTMLDivElement>) => {
-		const container = event.currentTarget;
-		if (container.scrollTop + container.clientHeight >= container.scrollHeight - 8) {
-			setActiveSection(rows[rows.length - 1].key);
-			return;
-		}
-
-		const position = container.scrollTop + 48;
-		let current = rows[0].key;
-		for (const row of rows) {
-			const element = sectionRefs.current[row.key];
-			if (!element || element.offsetTop > position) break;
-			current = row.key;
-		}
-		setActiveSection(current);
-	};
-
+	const renderSchema = (section: AgentSection) => (
+		<SchemaForm
+			schema={sections[section]}
+			values={values[section] as Record<string, SchemaFormValue>}
+			onChange={(k, v) => onChange(section, k, v)}
+			idPrefix={`${id}-${section}`}
+			labelFor={(k, prop) =>
+				t(`agent-form.${toKebab(section)}.${toKebab(k)}.label`, {
+					defaultValue: prop.title ?? k.replace(/_/g, ' '),
+				})
+			}
+			placeholderFor={(k, prop) =>
+				t(`agent-form.${toKebab(section)}.${toKebab(k)}.placeholder`, {
+					defaultValue: prop.description ?? '',
+				}) || undefined
+			}
+			descriptionFor={(k) =>
+				t(`agent-form.${toKebab(section)}.${toKebab(k)}.description`, {
+					defaultValue: '',
+				}) || undefined
+			}
+		/>
+	);
+	const row = rows.find(([key]) => key === active)!;
 	return (
-		<div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[11.5rem_minmax(0,1fr)]">
+		<div className="grid h-full min-h-0 grid-cols-1 md:grid-cols-[12rem_minmax(0,1fr)]">
 			<nav
-				aria-label="Agent configuration sections"
-				className="flex shrink-0 gap-1 overflow-x-auto border-b bg-muted/20 p-3 md:flex-col md:overflow-x-visible md:border-r md:border-b-0 md:px-3 md:py-5"
+				aria-label={zh ? '智能体配置' : 'Agent settings'}
+				className="flex gap-1 overflow-x-auto border-b bg-muted/20 p-3 md:flex-col md:border-r md:border-b-0 md:py-5"
 			>
-				{rows.map(({ key: sectionKey, i18n: sectionI18n, sectionSchema }) => {
-					const label = t(`agent-form.${sectionI18n}.legend`, {
-						defaultValue: sectionSchema.title ?? sectionKey,
-					});
-					const isActive = activeSection === sectionKey;
-
-					return (
-						<button
-							key={sectionKey}
-							type="button"
-							aria-current={isActive ? 'step' : undefined}
-							aria-controls={`agent-section-${sectionKey}`}
-							onClick={() => scrollToSection(sectionKey)}
-							className={`group flex min-w-max items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors md:min-w-0 ${
-								isActive
-									? 'bg-background text-[#c95622] shadow-sm ring-1 ring-border/70'
-									: 'text-muted-foreground hover:bg-background/80 hover:text-foreground'
-							}`}
-						>
-							<span
-								aria-hidden="true"
-								className={`size-2 shrink-0 rounded-full ${
-									isActive ? 'bg-[#c95622]' : 'bg-border group-hover:bg-muted-foreground/50'
-								}`}
-							/>
-							<span className="truncate">{label}</span>
-						</button>
-					);
-				})}
+				{rows.map(([key, label]) => (
+					<button
+						key={key}
+						type="button"
+						aria-current={key === active ? 'page' : undefined}
+						aria-controls={`${id}-content`}
+						onClick={() => setActive(key)}
+						className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition-colors ${active === key ? 'bg-[#c95622]/8 text-[#c95622]' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+					>
+						<span
+							aria-hidden="true"
+							className={`size-1.5 rounded-full ${key === active ? 'bg-[#c95622]' : 'bg-border'}`}
+						/>
+						{label}
+					</button>
+				))}
 			</nav>
-
-			<div
-				ref={scrollContainerRef}
-				onScroll={handleScroll}
-				className="no-scrollbar relative min-h-0 overflow-y-auto scroll-smooth px-5 py-5 sm:px-7 sm:py-6"
-			>
-				<FieldGroup className="mx-auto max-w-2xl gap-0">
-					{rows.map(({ key: sectionKey, i18n: sectionI18n, sectionSchema }, idx) => {
-						const legend = t(`agent-form.${sectionI18n}.legend`, {
-							defaultValue: sectionSchema.title ?? sectionKey,
-						});
-						const description = t(`agent-form.${sectionI18n}.description`, {
-							defaultValue: '',
-						});
-						return (
-							<div
-								key={sectionKey}
-								id={`agent-section-${sectionKey}`}
-								ref={(element) => {
-									sectionRefs.current[sectionKey] = element;
-								}}
-								className="scroll-mt-6 py-1"
-							>
-								{idx > 0 && <FieldSeparator className="my-6" />}
-								<FieldSet>
-									<FieldLegend className="text-lg">{legend}</FieldLegend>
-									{description && <FieldDescription>{description}</FieldDescription>}
-									{sectionKey === 'model_policy' ? (
-										<AgentModelPolicyFields
-											values={values.model_policy as AgentModelPolicyFormValues}
-											onChange={(k, v) =>
-												onChange('model_policy', String(k), v)
-											}
-										/>
-									) : sectionKey === 'platform_config' ? (
-										<AgentPlatformConfigFields
-											values={values.platform_config as Partial<PlatformAgentConfig>}
-											onChange={(k, v) =>
-												onChange('platform_config', String(k), v)
-											}
-										/>
-									) : sectionKey === 'call_config' ? (
-										<AgentCallConfigFields
-											values={values.call_config as Partial<AgentCallConfig>}
-											agents={agents}
-											currentAgentId={currentAgentId}
-											onChange={(k, v) => onChange('call_config', k, v)}
-										/>
-									) : (
-										<SchemaForm
-											schema={sectionSchema}
-											values={values[sectionKey] as Record<string, SchemaFormValue>}
-											onChange={(k, v) => onChange(sectionKey, k, v)}
-											idPrefix={`agent-form-${sectionI18n}`}
-											labelFor={(k, prop) =>
-												t(`agent-form.${sectionI18n}.${toKebab(k)}.label`, {
-													defaultValue: prop.title ?? k.replace(/_/g, ' '),
-												})
-											}
-											placeholderFor={(k, prop) =>
-												t(`agent-form.${sectionI18n}.${toKebab(k)}.placeholder`, {
-													defaultValue: prop.description ?? '',
-												}) || undefined
-											}
-										/>
-									)}
-								</FieldSet>
-							</div>
-						);
-					})}
-				</FieldGroup>
+			<div id={`${id}-content`} className="min-h-0 overflow-y-auto px-6 py-6 sm:px-8">
+				<div className="mx-auto max-w-2xl space-y-6">
+					<div>
+						<h3 className="text-lg font-semibold">{row[1]}</h3>
+						<p className="mt-1 text-sm text-muted-foreground">{row[2]}</p>
+					</div>
+					<div hidden={active !== 'identity'} className="space-y-6">
+						<div className="[&_textarea]:min-h-48">{renderSchema('identity')}</div>
+						<div className="space-y-2">
+							<label htmlFor={`${id}-description`} className="text-sm font-medium">
+								{zh ? '职责说明' : 'Description'}
+							</label>
+							<Textarea
+								id={`${id}-description`}
+								rows={3}
+								value={String(values.platform_config.description ?? '')}
+								onChange={(e) =>
+									onChange(
+										'platform_config',
+										'description',
+										e.target.value || null,
+									)
+								}
+							/>
+						</div>
+					</div>
+					<div hidden={active !== 'model'} className="space-y-6">
+						<AgentModelPolicyFields
+							values={values.model_policy as AgentModelPolicyFormValues}
+							onChange={(k, v) => onChange('model_policy', String(k), v)}
+						/>
+					</div>
+					<div hidden={active !== 'platform'} className="space-y-6">
+						<AgentPlatformConfigFields
+							fixedDuty={!!primaryDuty}
+							mainDuty={primaryDuty?.key === 'main'}
+							values={values.platform_config as Partial<PlatformAgentConfig>}
+							onChange={(k, v) => onChange('platform_config', String(k), v)}
+						/>
+					</div>
+					<div hidden={active !== 'collaboration'}>
+						<AgentIncomingCollaborationFields
+							primaryDuty={primaryDuty?.key}
+							mainDuty={primaryDuty?.key === 'main'}
+							invitable={values.invite_config.invitable === true}
+							onInvitableChange={(allowed) =>
+								onChange('invite_config', 'invitable', allowed)
+							}
+							allowGlobalMainCall={
+								values.platform_config.allow_global_main_call === true
+							}
+							onAllowGlobalMainCallChange={(allowed) =>
+								onChange('platform_config', 'allow_global_main_call', allowed)
+							}
+							description={String(values.invite_config.invite_description ?? '')}
+							onChange={(value) =>
+								onChange('invite_config', 'invite_description', value)
+							}
+						/>
+					</div>
+				</div>
 			</div>
 		</div>
 	);
@@ -286,16 +282,9 @@ export function defaultAgentFormValues(schema: AgentSchemaV2Response): AgentForm
 		model_policy: agentModelPolicyToForm(),
 		platform_config: {
 			role: 'business',
-			agent_level: 'worker',
-			memory_read_scopes: ['user', 'user_project', 'project'],
-			memory_write_scopes: ['user', 'user_project', 'project'],
-			learning_capture: true,
-			learning_process: true,
-			learning_use: true,
 			enabled: true,
 			published: true,
 			allow_global_main_call: false,
-			project_knowledge_enabled: false,
 			description: null,
 			category: '通用',
 			sort_order: 100,

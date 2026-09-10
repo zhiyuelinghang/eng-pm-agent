@@ -19,8 +19,7 @@ from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app.mcp_registry import MCPRegistryManager
 from agentscope.app.skill_registry import SkillRegistryManager
 from agentscope.app.memory import (
-    agent_can_use_shared_memory,
-    configure_platform_memory_model,
+    get_compression_model,
     get_memory_runtime,
 )
 from agentscope.app.database_interactions import (
@@ -248,13 +247,14 @@ async def _memory_platform_context(user_id: str, session: Any) -> Any:
     return platform_context
 
 
-async def _memory_settings(user_id: str) -> MemorySettingsData:
-    """Load the persisted platform policy, including defaults for old rows."""
+async def _memory_settings(user_id: str):
+    """Combine saved decisions with versioned internal execution rules."""
+    from agentscope.app.memory._settings import runtime_memory_settings
 
     record = await storage.get_platform_settings(user_id)
     if record is None:
-        return MemorySettingsData()
-    return record.data.memory_settings
+        return runtime_memory_settings(MemorySettingsData())
+    return runtime_memory_settings(record.data.memory_settings)
 
 
 async def _create_memory_middlewares(
@@ -262,23 +262,10 @@ async def _create_memory_middlewares(
     agent_id: str,
     session_id: str,
 ):
-    """Bind shared memory only to management-level agents.
-
-    Worker agents receive bounded task context from their caller and must not
-    independently read or write long-term memory.
-    """
-
-    agent_record = await storage.get_agent(user_id, agent_id)
-    if not agent_can_use_shared_memory(agent_record):
-        return []
+    """Every invocation keeps compression; memory tools use actual scopes."""
     session = await storage.get_session(user_id, agent_id, session_id)
     platform_context = await _memory_platform_context(user_id, session)
-    platform_settings = await storage.get_platform_settings(user_id)
-    settings = (
-        platform_settings.data.memory_settings
-        if platform_settings is not None
-        else MemorySettingsData()
-    )
+    settings = await _memory_settings(user_id)
     runtime = get_memory_runtime()
     scope = runtime.scope(
         project_id=(
@@ -296,28 +283,10 @@ async def _create_memory_middlewares(
         ),
     )
     from agentscope.app.memory._direct import ThreeDrawerMemoryMiddleware
-    from utils.memory_repository import MemoryAccess, MemoryError
-
-    async def resolve_memory_access():
-        # Refresh agent settings as well as project membership on each operation.
-        current_agent = await storage.get_agent(user_id, agent_id)
-        if not agent_can_use_shared_memory(current_agent) or not current_agent.data.platform_config.enabled:
-            raise MemoryError("agent_memory_disabled", "该智能体已停用长期记忆。", status=403)
-        policy = current_agent.data.platform_config
-        if platform_context is not None:
-            root_id = platform_context.root_session_id or session_id
-            live = await database_interaction_manager.resolve_memory_scope(root_id)
-            if str(live["user_id"]) != str(platform_context.user_id) or str(live["project_id"]) != str(platform_context.project_id):
-                raise MemoryError("identity_mismatch", "会话身份与平台权限不一致。", status=403)
-            return MemoryAccess(runtime.tenant_id, str(live["user_id"]), str(live["project_id"]),
-                actor_id=f"business_user:{live['user_id']}", private=bool(live["private"]),
-                project_read=bool(live["project_read"]), project_write=bool(live["project_write"]),
-                group_source_channels=tuple(live.get('group_source_channels', [])), group_shared_channels=tuple(live.get('group_shared_channels', [])),
-                read_scopes=tuple(policy.memory_read_scopes), write_scopes=tuple(policy.memory_write_scopes),
-                learning_capture=policy.learning_capture,learning_process=policy.learning_process,learning_use=policy.learning_use)
-        return MemoryAccess(runtime.tenant_id, str(user_id), identity_type="management_user",
-            read_scopes=tuple(policy.memory_read_scopes), write_scopes=tuple(policy.memory_write_scopes),
-            learning_capture=policy.learning_capture,learning_process=policy.learning_process,learning_use=policy.learning_use)
+    from agentscope.app.memory._run_controller import RunMemoryController
+    from utils.memory_service import get_memory_repository
+    controller=RunMemoryController(storage=storage,gateway=database_interaction_manager,
+        repository=get_memory_repository(),tenant_id=runtime.tenant_id,owner=user_id,agent_id=agent_id,session_id=session_id)
 
     return [
         ThreeDrawerMemoryMiddleware(
@@ -325,8 +294,9 @@ async def _create_memory_middlewares(
             scope,
             settings,
             include_knowledge_base=False,
-            access_resolver=resolve_memory_access,
-            compression_setup=lambda: configure_platform_memory_model(user_id,settings,memory_resource_access),
+            access_resolver=controller.access,
+            controller=controller,
+            compression_setup=lambda: get_compression_model(user_id,settings,memory_resource_access),
             config_owner=user_id,
             learning_session_id=(platform_context.root_session_id or session_id) if platform_context else session_id,
         ),
@@ -420,20 +390,19 @@ async def _create_platform_agent_tools(
         if platform_context is not None
         else ""
     )
-    from agentscope.app._service._platform_settings import get_global_main_agent_id
-
-    main_agent_id = await get_global_main_agent_id(storage, user_id, legacy_record=agent_record)
+    from agentscope.app._service._platform_settings import can_query_project_knowledge
 
     async def _resolve_knowledge_scope():
+        if not await can_query_project_knowledge(storage, user_id, agent_id):
+            raise RuntimeError("只有平台知识库助手能直接查询项目知识库。")
         return await database_interaction_manager.resolve_knowledge_scope(
             session_id=platform_session_id, actor_agent_id=agent_id,
         )
 
     if (
         agent_record is not None
-        and agent_record.id != main_agent_id
-        and agent_record.data.platform_config.project_knowledge_enabled
         and platform_context is not None
+        and await can_query_project_knowledge(storage, user_id, agent_id)
     ):
         settings = await storage.get_platform_settings(user_id)
         connection = (
@@ -519,36 +488,56 @@ async def _lifespan_with_memory_maintenance(application: Any):
     async with _agentscope_lifespan(application):
         from utils.memory_service import run_memory_index_worker
         maintenance_task = asyncio.create_task(
-            run_memory_index_worker(lambda: _memory_settings(os.getenv("AGENTSCOPE_GLOBAL_CONFIG_ID", "default").strip() or "default")),
+            run_memory_index_worker(),
             name="dobby-memory-index",
         )
         from utils.learning_repository import LearningRepository
         from utils.learning_service import run_learning_worker
         from utils.memory_service import get_memory_repository
         from agentscope.app.memory._learning import PlatformLearningRuntime
+        from agentscope.app.memory._run_context import validate_learning_event
+        from agentscope.app.memory._run_service import MemoryRunService, run_memory_run_worker
         global_id=os.getenv('AGENTSCOPE_GLOBAL_CONFIG_ID','default').strip() or 'default'
         learning_runtime=PlatformLearningRuntime(storage=storage,gateway=database_interaction_manager,resources=memory_resource_access,
-            settings_loader=lambda:_memory_settings(global_id),tenant_id=get_memory_runtime().tenant_id)
+            settings_loader=lambda:_memory_settings(global_id),tenant_id=get_memory_runtime().tenant_id,
+            memory_repository=get_memory_repository(),
+            interaction_validator=lambda event,existing=False: validate_learning_event(storage,database_interaction_manager,
+                get_memory_runtime().tenant_id,event,existing=existing))
         learning_task=asyncio.create_task(run_learning_worker(LearningRepository(get_memory_repository()),tenant_id=get_memory_runtime().tenant_id,
-            settings_loader=lambda:_memory_settings(global_id),authorize=learning_runtime.authorize,call_model=learning_runtime.call_model),
+            settings_loader=lambda:_memory_settings(global_id),authorize=learning_runtime.authorize,
+            authorize_existing=learning_runtime.authorize_existing,filter_existing=learning_runtime.filter_existing,
+            call_model=learning_runtime.call_model),
             name='dobby-learning')
         from utils.group_learning_repository import GroupLearningRepository
         from utils.group_learning_service import run_group_learning_worker
         group_learning_task = asyncio.create_task(run_group_learning_worker(GroupLearningRepository(get_memory_repository()),
             runtime=learning_runtime, settings_loader=lambda:_memory_settings(global_id),
             tenant_id=get_memory_runtime().tenant_id, config_owner=global_id), name='dobby-group-learning')
+        from utils.business_learning_service import run_business_learning_worker
+        business_learning_task=asyncio.create_task(run_business_learning_worker(LearningRepository(get_memory_repository()),
+            runtime=learning_runtime,settings_loader=lambda:_memory_settings(global_id),tenant_id=get_memory_runtime().tenant_id,
+            config_owner=global_id),name='dobby-business-learning')
+        memory_run_task=asyncio.create_task(run_memory_run_worker(MemoryRunService(storage=storage,
+            gateway=database_interaction_manager,repository=get_memory_repository(),tenant_id=get_memory_runtime().tenant_id),
+            lambda:_memory_settings(global_id)),name='dobby-memory-runs')
         try:
             yield
         finally:
             maintenance_task.cancel()
             learning_task.cancel()
             group_learning_task.cancel()
+            business_learning_task.cancel()
+            memory_run_task.cancel()
             with suppress(asyncio.CancelledError):
                 await maintenance_task
             with suppress(asyncio.CancelledError):
                 await learning_task
             with suppress(asyncio.CancelledError):
                 await group_learning_task
+            with suppress(asyncio.CancelledError):
+                await business_learning_task
+            with suppress(asyncio.CancelledError):
+                await memory_run_task
 
 
 app.router.lifespan_context = _lifespan_with_memory_maintenance

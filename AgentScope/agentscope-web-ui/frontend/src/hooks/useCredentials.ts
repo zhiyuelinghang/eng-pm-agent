@@ -39,10 +39,13 @@ export function useCredentials() {
 		[refetch],
 	);
 
-	/** Replaces a credential's payload and refreshes the list. */
+	/** Updates supplied credential fields and refreshes the list. */
 	const update = useCallback(
 		async (credentialId: string, body: UpdateCredentialRequest) => {
 			const res = await credentialApi.update(credentialId, body);
+			setCredentials((current) =>
+				current.map((item) => (item.id === credentialId ? res : item)),
+			);
 			await refetch();
 			return res;
 		},

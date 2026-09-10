@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { agentApi } from '@/api';
 import type { AgentSchemaV2Response } from '@/api';
@@ -14,10 +14,15 @@ let inflight: Promise<AgentSchemaV2Response> | null = null;
 async function loadSchema(): Promise<AgentSchemaV2Response> {
 	if (cached) return cached;
 	if (!inflight) {
-		inflight = agentApi.getSchema().then((res) => {
-			cached = res;
-			return res;
-		});
+		inflight = agentApi
+			.getSchema()
+			.then((res) => {
+				cached = res;
+				return res;
+			})
+			.finally(() => {
+				inflight = null;
+			});
 	}
 	return inflight;
 }
@@ -26,13 +31,21 @@ async function loadSchema(): Promise<AgentSchemaV2Response> {
 export function useAgentSchema() {
 	const [schema, setSchema] = useState<AgentSchemaV2Response | null>(cached);
 	const [error, setError] = useState<Error | null>(null);
+	const [attempt, setAttempt] = useState(0);
+	const retry = useCallback(() => {
+		setError(null);
+		setAttempt((n) => n + 1);
+	}, []);
 
 	useEffect(() => {
-		if (cached) return;
+		if (cached) {
+			setSchema(cached);
+			return;
+		}
 		loadSchema()
 			.then(setSchema)
 			.catch((e: Error) => setError(e));
-	}, []);
+	}, [attempt]);
 
-	return { schema, loading: schema === null && error === null, error };
+	return { schema, loading: schema === null && error === null, error, retry };
 }

@@ -1,9 +1,7 @@
-import { AlertTriangle, Braces } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { useMemo } from 'react';
 
-import type { AgentModelPolicyMode, ChatModelConfig, JSONSchema, ModelCard } from '@/api';
-import { SchemaForm, type SchemaFormValue } from '@/components/form/SchemaForm';
-import { Badge } from '@/components/ui/badge';
+import type { AgentModelPolicyMode, ChatModelConfig, ModelCard } from '@/api';
 import { Label } from '@/components/ui/label';
 import {
 	Select,
@@ -12,11 +10,9 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from '@/components/ui/select';
-import { Textarea } from '@/components/ui/textarea';
 import { useAvailableModels } from '@/hooks/useAvailableModels';
 import { useTranslation } from '@/i18n/useI18n';
 import type { AgentModelPolicyFormValues } from '@/lib/agent-model-policy';
-import { CUSTOM_REQUEST_BODY_KEY, parseCustomRequestBody } from '@/lib/model-parameters';
 
 interface Props {
 	values: AgentModelPolicyFormValues;
@@ -28,7 +24,6 @@ export function AgentModelPolicyFields({ values, onChange }: Props) {
 	const { groups, loading } = useAvailableModels();
 	const mode = values.mode ?? 'inherit_session';
 	const config = values.chat_model_config ?? null;
-	const customRequestText = values.custom_request_text ?? '';
 
 	const credentialOptions = useMemo(
 		() =>
@@ -50,29 +45,6 @@ export function AgentModelPolicyFields({ values, onChange }: Props) {
 	const selectedModel: ModelCard | undefined = selectedCredential?.models.find(
 		(model) => model.name === config?.model,
 	);
-	const parameterSchema = (selectedModel?.parameter_schema ?? {
-		type: 'object',
-		properties: {},
-	}) as unknown as JSONSchema;
-	const parameterEntries = Object.keys(parameterSchema.properties ?? {});
-	const parameterValues = Object.fromEntries(
-		Object.entries(config?.parameters ?? {})
-			.filter(([key]) => key !== CUSTOM_REQUEST_BODY_KEY)
-			.map(([key, value]) => [key, value as SchemaFormValue]),
-	);
-
-	let customRequestError: string | null = null;
-	if (customRequestText.trim()) {
-		try {
-			parseCustomRequestBody(customRequestText);
-		} catch (error) {
-			customRequestError =
-				error instanceof Error && error.message === 'object_required'
-					? t('credential.modelDefaults.customObjectRequired')
-					: t('credential.modelDefaults.customInvalid');
-		}
-	}
-
 	const updateConfig = (next: ChatModelConfig | null) => {
 		onChange('chat_model_config', next);
 	};
@@ -104,15 +76,6 @@ export function AgentModelPolicyFields({ values, onChange }: Props) {
 			parameters: {},
 		});
 		onChange('custom_request_text', '');
-	};
-
-	const updateParameter = (key: string, value: SchemaFormValue) => {
-		if (!config) return;
-		const parameters = { ...config.parameters, [key]: value };
-		if (value === undefined || value === null || value === '') {
-			delete parameters[key];
-		}
-		updateConfig({ ...config, parameters });
 	};
 
 	return (
@@ -168,8 +131,7 @@ export function AgentModelPolicyFields({ values, onChange }: Props) {
 										{String(
 											option.credential.data.name ??
 												option.credential.id.slice(0, 8),
-										)}{' '}
-										· {option.type.replace(/_credential$/, '')}
+										)}
 									</SelectItem>
 								))}
 							</SelectContent>
@@ -211,80 +173,11 @@ export function AgentModelPolicyFields({ values, onChange }: Props) {
 							{t('agent-form.model-policy.unavailableDescription')}
 						</div>
 					)}
-
-					{selectedModel && (
-						<div className="grid gap-3 rounded-lg border p-4">
-							<div className="flex items-center justify-between gap-2">
-								<div className="text-sm font-medium">
-									{t('agent-form.model-policy.parameters')}
-								</div>
-								{parameterEntries.length > 0 && (
-									<Badge variant="secondary">{parameterEntries.length}</Badge>
-								)}
-							</div>
-							<p className="text-xs text-muted-foreground">
-								{t('agent-form.model-policy.parametersDescription')}
-							</p>
-							{parameterEntries.length > 0 ? (
-								<SchemaForm
-									schema={parameterSchema}
-									values={parameterValues}
-									onChange={updateParameter}
-									idPrefix="agent-model-parameter"
-									labelFor={(key, property) =>
-										t(`model-parameters.fields.${key}`, {
-											defaultValue: property.title ?? key,
-										})
-									}
-									descriptionFor={(key, property) =>
-										t(`model-parameters.fieldDescriptions.${key}`, {
-											defaultValue: property.description,
-										})
-									}
-									optionFor={(_key, value) =>
-										t(`model-parameters.values.${String(value)}`, {
-											defaultValue: String(value),
-										})
-									}
-								/>
-							) : (
-								<p className="text-xs text-muted-foreground">
-									{t('model-parameters.empty')}
-								</p>
-							)}
-
-							<div className="grid gap-2 border-t pt-3">
-								<Label
-									htmlFor="agent-model-custom-request"
-									className="flex items-center gap-2"
-								>
-									<Braces className="size-4" />
-									{t('credential.modelDefaults.customTitle')}
-								</Label>
-								<p className="text-xs text-muted-foreground">
-									{t('agent-form.model-policy.customDescription')}
-								</p>
-								<Textarea
-									id="agent-model-custom-request"
-									value={customRequestText}
-									onChange={(event) =>
-										onChange('custom_request_text', event.target.value)
-									}
-									placeholder={t('credential.modelDefaults.customPlaceholder')}
-									className="min-h-28 resize-y font-mono text-xs"
-									aria-invalid={Boolean(customRequestError)}
-								/>
-								{customRequestError && (
-									<p className="text-xs text-destructive">{customRequestError}</p>
-								)}
-								<pre className="overflow-x-auto whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-xs leading-relaxed text-muted-foreground">
-									{t('credential.modelDefaults.customExamples')}
-								</pre>
-							</div>
-						</div>
-					)}
 				</>
 			)}
+			<p className="text-sm leading-relaxed text-muted-foreground">
+				{t('agent-form.model-policy.managedDescription')}
+			</p>
 		</div>
 	);
 }

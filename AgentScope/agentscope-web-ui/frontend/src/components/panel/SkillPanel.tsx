@@ -34,6 +34,7 @@ import { formatApiErrorForAlert } from '@/lib/api-error';
 
 interface SkillPanelProps {
 	agent: AgentView | null;
+	onDirtyChange?: (dirty: boolean) => void;
 	packages: ManagedSkillPackage[];
 	loading?: boolean;
 	loadError?: Error | null;
@@ -57,6 +58,7 @@ function sameIds(left: string[], right: string[]): boolean {
 
 /** Platform skill catalogue, package maintenance, and agent assignment. */
 export function SkillPanel({
+	onDirtyChange,
 	agent,
 	packages,
 	loading = false,
@@ -84,19 +86,12 @@ export function SkillPanel({
 		setErrorMsg('');
 	}, [agent]);
 
-	useEffect(() => {
-		if (loading) return;
-		const available = new Set(packages.map((item) => item.id));
-		setDraftIds((current) => current.filter((id) => available.has(id)));
-	}, [loading, packages]);
-
-	const persistedIds = useMemo(() => {
-		if (loading) return assignedIds(agent);
-		const available = new Set(packages.map((item) => item.id));
-		return assignedIds(agent).filter((id) => available.has(id));
-	}, [agent, loading, packages]);
+	const persistedIds = useMemo(() => assignedIds(agent), [agent]);
 	const selectedSet = useMemo(() => new Set(draftIds), [draftIds]);
 	const isDirty = !sameIds(draftIds, persistedIds);
+	useEffect(() => {
+		onDirtyChange?.(isDirty);
+	}, [isDirty, onDirtyChange]);
 	const query = search.trim().toLowerCase();
 	const filtered = query
 		? packages.filter((item) =>
@@ -202,7 +197,9 @@ export function SkillPanel({
 									checkbox={{
 										checked,
 										disabled: !agent?.editable || submitting,
-										ariaLabel: t('panel.skill.assignLabel', { name: item.name }),
+										ariaLabel: t('panel.skill.assignLabel', {
+											name: item.name,
+										}),
 										onChange: (value) => togglePackage(item.id, value),
 									}}
 									onOpen={() => setDetailTarget(item)}

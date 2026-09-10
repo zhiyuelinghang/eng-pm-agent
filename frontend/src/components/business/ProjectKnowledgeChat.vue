@@ -60,7 +60,7 @@
 
     <section class="knowledge-chat-pane">
       <header class="knowledge-chat-head">
-        <div class="knowledge-assistant-heading"><strong>项目资料助手</strong><small>资料依据与项目动态，在这里一起梳理</small></div>
+        <div class="knowledge-assistant-heading"><strong>项目知识库助手</strong><small>资料依据与项目动态，在这里一起梳理</small></div>
         <div class="knowledge-scope-picker">
           <button
             type="button"
@@ -164,7 +164,7 @@
             <span v-if="chatMessage.role === 'assistant'" class="knowledge-message-avatar"><n-icon :size="17"><Robot /></n-icon></span>
             <div class="knowledge-message-card">
               <AgentMessageContent v-if="chatMessage.role === 'assistant' && chatMessage.runtimeTrace"
-                :content="chatMessage.content" :runtime-trace="chatMessage.runtimeTrace" assistant-name="资料助手"
+                :content="chatMessage.content" :runtime-trace="chatMessage.runtimeTrace" assistant-name="知识库助手"
                 :confirmation-busy="answering" :markdown-renderer="text => renderMarkdown(text, displayedMessageReferences(chatMessage))" @confirm="confirmToolCall" />
               <div v-else-if="chatMessage.role === 'assistant'" class="knowledge-markdown" v-html="renderMarkdown(chatMessage.content, displayedMessageReferences(chatMessage))"></div>
               <p v-else>{{ chatMessage.content }}</p>
@@ -184,7 +184,7 @@
         <article v-if="answering" class="knowledge-chat-message is-assistant is-pending" :class="{ 'has-content': streamingMessage?.content }" role="status" aria-live="polite">
           <span class="knowledge-message-avatar"><n-icon :size="17"><Robot /></n-icon></span>
           <div class="knowledge-message-card">
-            <AgentMessageContent :runtime-trace="streamingTrace" streaming assistant-name="资料助手"
+            <AgentMessageContent :runtime-trace="streamingTrace" streaming assistant-name="知识库助手"
               :starting-label="stopping ? '正在停止并保留已生成内容…' : streamStatus" :confirmation-busy="answering"
               :markdown-renderer="text => renderMarkdown(text, streamingMessage ? displayedMessageReferences(streamingMessage) : [])" />
             <div class="knowledge-wait-detail"><span>{{ stopping ? '正在停止' : '处理中' }} · {{ elapsedSeconds }} 秒</span><span v-if="idleSeconds >= 20">暂未收到新的进度，可继续等待或停止本次回答。</span></div>
@@ -358,7 +358,7 @@ const recoveringRun = ref(false)
 let recoveryTimer: ReturnType<typeof setTimeout> | null = null
 const stopping = ref(false)
 const stopRequested = ref(false)
-const streamStatus = ref('正在连接资料助手…')
+const streamStatus = ref('正在连接知识库助手…')
 const streamingTrace = ref<AgentRuntimeTrace | null>(null)
 const knowledgeAgentReady = ref(false)
 const catalogLoading = ref(false)
@@ -1169,10 +1169,10 @@ async function loadKnowledgeAgents() {
     const response = await api.get<ApiEnvelope<{ knowledge_assistant: { enabled: boolean; model_ready: boolean; project_knowledge_enabled: boolean } | null }>>('/agents/catalog')
     const agent = response.data.data.knowledge_assistant
     knowledgeAgentReady.value = Boolean(agent?.enabled && agent.model_ready && agent.project_knowledge_enabled)
-    if (!agent?.enabled) catalogError.value = '资料助手尚未分配或已停用，请在智能体管理端「平台设置 → 资料助手」中配置。'
-    else if (!knowledgeAgentReady.value) catalogError.value = '资料助手配置不完整，请检查固定模型和「启用项目资料查询」。'
+    if (!agent?.enabled) catalogError.value = '知识库助手暂不可用，请在智能体管理端「平台主智能体 → 知识库助手」中检查配置。'
+    else if (!knowledgeAgentReady.value) catalogError.value = '知识库助手配置不完整，请检查固定模型和外部知识库连接。'
   } catch (error: any) {
-    catalogError.value = error.response?.data?.detail || '资料助手目录加载失败，请重试。'
+    catalogError.value = error.response?.data?.detail || '知识库助手目录加载失败，请重试。'
   } finally { catalogLoading.value = false }
 }
 void loadKnowledgeAgents()
@@ -1193,7 +1193,7 @@ function beginTurn() {
   followingBottom.value = true
   elapsedSeconds.value = idleSeconds.value = 0
   turnStartedAt = lastProgressAt = Date.now()
-  streamStatus.value = '正在连接资料助手…'
+  streamStatus.value = '正在连接知识库助手…'
   streamingTrace.value = createEmptyRuntimeTrace()
   streamingMessage.value = createChatMessage('assistant', '', [])
   streamingRawReferences.value = []
@@ -1227,7 +1227,7 @@ function agentHandlers(conversation: KnowledgeConversation, completed: { done: b
       if (epoch !== turnEpoch) return
       completed.accepted = true
       lastProgressAt = Date.now()
-      streamStatus.value = '资料助手已接收，正在理解问题…'
+      streamStatus.value = '知识库助手已接收，正在理解问题…'
       if (payload.user_message) {
         if (!conversation.messages.some(item => item.role === 'assistant' || item.id.startsWith('agent-'))) conversation.messages = []
         if (optimisticId) conversation.messages = conversation.messages.filter(item => item.id !== optimisticId)
@@ -1280,7 +1280,7 @@ async function sendQuestion() {
   const content = question.value.trim()
   if (props.disabled || loadingHistory.value || loadingMessages.value || !content || answering.value || recoveringRun.value || !store.currentProjectId) return
   if (!knowledgeAgentReady.value && !activeConversation.value?.agentConversationId) {
-    requestError.value = catalogError.value || '正在检查资料助手配置，请稍候。'
+    requestError.value = catalogError.value || '正在检查知识库助手配置，请稍候。'
     return
   }
   const projectId = store.currentProjectId
@@ -1329,13 +1329,13 @@ async function sendQuestion() {
       conversation.agentConversationId = linked.data.data.id
     }
     if (stopRequested.value) return
-    streamStatus.value = '正在连接资料助手…'
+    streamStatus.value = '正在连接知识库助手…'
     await streamAgentConversationMessage(conversation.agentConversationId!, content,
       agentHandlers(conversation, completed, optimisticId), activeStreamController!.signal)
     if (!completed.done) throw new Error('连接已中断，尚未确认处理结果。请先恢复记录，避免重复提交。')
   } catch (error: any) {
     if (epoch !== turnEpoch) return
-    const detail = error.response?.data?.detail || error.message || '资料助手暂时无法回答，请稍后重试。'
+    const detail = error.response?.data?.detail || error.message || '知识库助手暂时无法回答，请稍后重试。'
     if (!completed.accepted && !question.value) question.value = content
     if (conversation) keepPartial(conversation, detail)
     else requestError.value = detail

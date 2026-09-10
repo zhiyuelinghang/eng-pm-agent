@@ -219,6 +219,7 @@ class _StreamAccumulator:
         """The usage of the latest delta that reported one, if any."""
 
         self.finished_reason: FinishedReason = FinishedReason.COMPLETED
+        self.metadata: dict = {}
         """The finished reason to report in ``build``."""
 
     def append_chat_response(self, chat_response: ChatResponse) -> Self:
@@ -228,6 +229,7 @@ class _StreamAccumulator:
             chat_response (`ChatResponse`):
                 The streaming delta chunk to collect.
         """
+        self.metadata.update(chat_response.metadata)
         for block in chat_response.content:
             acc = self._blocks.get(block.id)
             if acc is not None and acc.type != block.type:
@@ -276,5 +278,6 @@ class _StreamAccumulator:
             is_last=True,
             usage=self.usage,
             finished_reason=self.finished_reason,
+            metadata=dict(self.metadata),
             **kwargs,
         )

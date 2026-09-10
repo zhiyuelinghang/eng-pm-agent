@@ -259,14 +259,16 @@ class ModelPermissionReviewer(PermissionReviewerBase):
     def __init__(
         self,
         *,
-        models: list[tuple[str, ChatModelBase]],
+        model_name: str,
+        model: ChatModelBase,
         config: PermissionReviewerConfigData,
         storage: StorageBase | None = None,
         user_id: str = "",
         agent_id: str = "",
         session_id: str = "",
     ) -> None:
-        self._models = models
+        self._model_name = model_name
+        self._model = model
         self._config = config
         self._storage = storage
         self._user_id = user_id
@@ -393,44 +395,23 @@ class ModelPermissionReviewer(PermissionReviewerBase):
             await self._audit(request, result)
             return result
 
-        failures: list[str] = []
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + self._config.timeout_seconds
-        for index, (model_name, model) in enumerate(self._models):
-            try:
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    raise TimeoutError("permission review timed out")
-                async with asyncio.timeout(remaining):
-                    result = await self._call_model(
-                        model_name,
-                        model,
-                        request,
-                    )
-                if index > 0:
-                    result.source = "fallback_model"
-                result = self._apply_policy(result)
-                await self._audit(request, result)
-                return result
-            except Exception as exc:  # pylint: disable=broad-except
-                logger.exception(
-                    "Permission review model %s failed.",
-                    model_name,
-                )
-                failures.append(f"{model_name}: {type(exc).__name__}")
-
-        result = PermissionReviewResult(
-            action=PermissionReviewAction.HUMAN_REQUIRED,
-            risk=PermissionReviewRisk.HIGH,
-            confidence=0,
-            reason=(
-                "权限审核模型不可用，已安全回退人工确认。"
-                + ("；" + "；".join(failures) if failures else "")
-            )[:2000],
-            source="model_error",
-        )
+        try:
+            async with asyncio.timeout(self._config.timeout_seconds):
+                result = await self._call_model(self._model_name, self._model, request)
+            result = self._apply_policy(result)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.exception("Permission review model %s failed.", self._model_name)
+            result = PermissionReviewResult(
+                action=PermissionReviewAction.HUMAN_REQUIRED,
+                risk=PermissionReviewRisk.HIGH,
+                confidence=0,
+                reason="权限审核模型不可用，已转人工确认：" + type(exc).__name__,
+                model=self._model_name,
+                source="model_error",
+            )
         await self._audit(request, result)
         return result
+
 
 
 class PermissionReviewService:
@@ -484,68 +465,23 @@ class PermissionReviewService:
         user_id: str,
         data: PermissionReviewerConfigData,
     ) -> PermissionReviewerConfigRecord:
-        # Disabling must remain possible even after a previously selected
-        # credential has been removed.  Bindings are validated again before
-        # the reviewer can be enabled or built.
-        if data.enabled and data.credential_id and data.model:
-            await self._validate_binding(
-                user_id,
-                data.credential_id,
-                data.model,
-            )
-        if (
-            data.enabled
-            and data.fallback_credential_id
-            and data.fallback_model
-        ):
-            await self._validate_binding(
-                user_id,
-                data.fallback_credential_id,
-                data.fallback_model,
-            )
-        return await self._storage.upsert_permission_reviewer_config(
-            user_id,
-            data,
-        )
+        if not data.credential_id or not data.model:
+            raise ValueError("请先选择审核凭证和模型。")
+        await self._validate_binding(user_id, data.credential_id, data.model)
+        return await self._storage.upsert_permission_reviewer_config(user_id, data)
 
-    async def _resolve_models(
+    async def _resolve_model(
         self,
         user_id: str,
         config: PermissionReviewerConfigData,
-    ) -> list[tuple[str, ChatModelBase]]:
-        bindings = [
-            (
-                config.credential_id,
-                config.model,
-                config.parameters,
-            ),
-            (
-                config.fallback_credential_id,
-                config.fallback_model,
-                config.fallback_parameters,
-            ),
-        ]
-        models: list[tuple[str, ChatModelBase]] = []
-        for credential_id, model_name, parameters in bindings:
-            if not credential_id or not model_name:
-                continue
-            provider_type = await self._validate_binding(
-                user_id,
-                credential_id,
-                model_name,
-            )
-            model = await get_model(
-                user_id,
-                ChatModelConfig(
-                    type=provider_type,
-                    credential_id=credential_id,
-                    model=model_name,
-                    parameters=parameters,
-                ),
-                self._access,
-            )
-            models.append((model_name, model))
-        return models
+    ) -> ChatModelBase:
+        if not config.credential_id or not config.model:
+            raise ValueError("请先选择审核凭证和模型。")
+        provider_type = await self._validate_binding(user_id, config.credential_id, config.model)
+        return await get_model(user_id, ChatModelConfig(
+            type=provider_type, credential_id=config.credential_id,
+            model=config.model, parameters=config.parameters,
+        ), self._access)
 
     async def build_reviewer(
         self,
@@ -555,10 +491,10 @@ class PermissionReviewService:
         session_id: str,
     ) -> PermissionReviewerBase | None:
         record = await self.get_config(user_id)
-        if not record.data.enabled:
+        if not record.data.credential_id or not record.data.model:
             return None
         try:
-            models = await self._resolve_models(user_id, record.data)
+            model = await self._resolve_model(user_id, record.data)
         except Exception:  # pylint: disable=broad-except
             logger.exception(
                 "Unable to resolve configured permission reviewer for %s; "
@@ -566,10 +502,9 @@ class PermissionReviewService:
                 user_id,
             )
             return None
-        if not models:
-            return None
         return ModelPermissionReviewer(
-            models=models,
+            model_name=record.data.model,
+            model=model,
             config=record.data,
             storage=self._storage,
             user_id=user_id,
@@ -584,11 +519,10 @@ class PermissionReviewService:
     ) -> PermissionReviewerTestResult:
         started = perf_counter()
         try:
-            models = await self._resolve_models(user_id, data)
-            if not models:
-                raise ValueError("请先选择审核凭证和模型。")
+            model = await self._resolve_model(user_id, data)
             reviewer = ModelPermissionReviewer(
-                models=models,
+                model_name=data.model,
+                model=model,
                 config=data,
             )
             result = await reviewer.review(
@@ -608,6 +542,13 @@ class PermissionReviewService:
                     working_directories=["."],
                 ),
             )
+            if result.source == "model_error":
+                return PermissionReviewerTestResult(
+                    success=False,
+                    latency_ms=int((perf_counter() - started) * 1000),
+                    model=result.model,
+                    error=result.reason,
+                )
             return PermissionReviewerTestResult(
                 success=True,
                 latency_ms=int((perf_counter() - started) * 1000),

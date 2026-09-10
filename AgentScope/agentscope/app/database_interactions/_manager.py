@@ -92,6 +92,14 @@ class DatabaseInteractionManager:
     async def memory_identity_catalog(self) -> dict[str, Any]:
         return await self._request("GET", "/agent-tools/memory-catalog", timeout=5)
 
+    async def business_learning_sources(self, after_id: int = 0, limit: int = 50):
+        return await self._request('GET', '/agent-tools/business-learning/sources',
+                                   params={'after_id': after_id, 'limit': limit})
+
+    async def business_learning_validate(self, snapshot: dict):
+        return await self._request('POST', '/agent-tools/business-learning/validate',
+                                   payload={'snapshot': snapshot})
+
     async def group_learning_channels(self, after_channel: int = 0):
         return await self._request('GET', '/agent-tools/group-learning/channels', params={'after_channel': after_channel})
 

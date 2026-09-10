@@ -166,15 +166,32 @@ class AnthropicChatModel(ChatModelBase):
                 enabled.
         """
 
-        # Anthropic requires max_tokens; fall back to a safe default when
-        # the user hasn't configured one explicitly.
-        max_tokens = self.parameters.max_tokens or 8192
+        # This API requires an explicit output limit. Unknown catalogue
+        # capacity must not silently become an invented fixed limit.
+        request_body_overrides = self._get_request_body_overrides()
+        call_extra_body = generate_kwargs.get("extra_body") or {}
+        max_tokens = request_body_overrides.get(
+            "max_tokens",
+            call_extra_body.get(
+                "max_tokens",
+                generate_kwargs.get("max_tokens", self.parameters.max_tokens),
+            ),
+        )
+        if (
+            not isinstance(max_tokens, int)
+            or isinstance(max_tokens, bool)
+            or max_tokens <= 0
+        ):
+            raise ValueError(
+                "Anthropic 接口要求明确的输出上限。请在模型目录中补充经过确认的"
+                "输出上限，或在请求参数中指定正整数 max_tokens。",
+            )
 
         kwargs: dict[str, Any] = {
             "model": model_name,
-            "max_tokens": max_tokens,
             "stream": self.stream,
             **generate_kwargs,
+            "max_tokens": max_tokens,
         }
 
         # Anthropic extended thinking — only set when explicitly enabled.
@@ -189,7 +206,6 @@ class AnthropicChatModel(ChatModelBase):
                 "type": "enabled",
                 "budget_tokens": budget,
             }
-        request_body_overrides = self._get_request_body_overrides()
         if request_body_overrides:
             existing_extra_body = kwargs.get("extra_body")
             extra_body = (
@@ -334,6 +350,7 @@ class AnthropicChatModel(ChatModelBase):
             "content": content_blocks,
             "is_last": True,
             "usage": usage,
+            "metadata": {"output_truncated": getattr(response, "stop_reason", None) == "max_tokens"},
         }
         response_id = getattr(response, "id", None)
         if response_id:
@@ -467,10 +484,12 @@ class AnthropicChatModel(ChatModelBase):
                         )
 
                 elif event.type == "message_delta":
+                    if getattr(getattr(event, "delta", None), "stop_reason", None) == "max_tokens":
+                        delta_res.metadata["output_truncated"] = True
                     if event.usage and usage:
                         usage.output_tokens = event.usage.output_tokens
 
-                if delta_res.content:
+                if delta_res.content or delta_res.metadata:
                     delta_res.usage = usage
                     yield delta_res
 

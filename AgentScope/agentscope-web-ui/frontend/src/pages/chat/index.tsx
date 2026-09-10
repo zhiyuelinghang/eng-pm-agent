@@ -138,7 +138,7 @@ const ChatPageInner = () => {
 	// the URL in-place (replace so we don't pollute history).
 	useEffect(() => {
 		if (!urlAgentId && agents.length > 0) {
-			navigate(`/chat/${agents[0].id}`, { replace: true });
+			navigate('/business-tools', { replace: true });
 		}
 	}, [agents, urlAgentId, navigate]);
 

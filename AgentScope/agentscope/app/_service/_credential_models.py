@@ -269,7 +269,7 @@ def _model_parameter_schema(
     ):
         properties.pop("voice", None)
 
-    if "max_tokens" in properties:
+    if "max_tokens" in properties and definition.output_size is not None:
         properties["max_tokens"]["maximum"] = definition.output_size
 
     return {
@@ -294,6 +294,36 @@ def _definition_to_card(
         parameter_schema=_model_parameter_schema(credential, definition),
         parameters_overrides={},
     )
+
+
+def resolve_model_output_limit(
+    definition: ModelCard | None,
+    requested_limit: int | None,
+) -> int | None:
+    """Apply only an explicit request limit or known catalogue capacity."""
+    known_limit = definition.output_size if definition is not None else None
+    if requested_limit is None:
+        return known_limit
+    if known_limit is None:
+        return requested_limit
+    return min(requested_limit, known_limit)
+
+
+def require_enabled_chat_model(
+    credential: CredentialBase,
+    model_name: str,
+) -> CredentialModelEntry:
+    """Resolve an enabled catalogue entry without guessing another model."""
+    candidate = next(
+        (item for item in build_credential_model_catalog(credential)
+         if item.name == model_name),
+        None,
+    )
+    if candidate is None:
+        raise ValueError(f"模型 {model_name!r} 不在所选凭证的聊天模型目录中，请重新选择。")
+    if not candidate.enabled:
+        raise ValueError(f"模型 {model_name!r} 已停用，请重新选择已启用的聊天模型。")
+    return candidate
 
 
 def build_credential_model_catalog(
@@ -608,14 +638,16 @@ async def test_credential_model(
 
     The request asks for a one-word reply, disables retries, and has a hard
     timeout so clicking the UI button cannot silently trigger repeated calls
-    or leave the request hanging indefinitely. No explicit token parameter is
-    sent because older OpenAI-compatible services may reject the newer
-    ``max_completion_tokens`` field. Provider exception details are classified
-    and sanitised before returning to the browser.
+    or leave the request hanging indefinitely. Output limits follow the same
+    explicit settings and known catalogue metadata as normal model execution.
+    Unknown output capacity does not create an artificial token limit.
+    Provider exception details are classified and sanitised before returning
+    to the browser.
     """
     started_at = perf_counter()
 
     async def _invoke() -> None:
+        definition = require_enabled_chat_model(credential, model_name)
         model_cls = credential.get_chat_model_class()
         defaults = credential.model_catalog.model_default_parameters.get(
             model_name,
@@ -627,6 +659,11 @@ async def test_credential_model(
             {},
         )
         parameters = model_cls.Parameters(**parameter_values)
+        if hasattr(parameters, "max_tokens"):
+            parameters.max_tokens = resolve_model_output_limit(
+                definition,
+                parameters.max_tokens,
+            )
         client_kwargs: dict[str, int | float] = {}
         credential_type = getattr(credential, "type", None)
         if credential_type in _OPENAI_SDK_CREDENTIAL_TYPES:

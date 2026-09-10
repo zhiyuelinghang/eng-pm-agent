@@ -319,9 +319,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 					.catch(() => {
 						// Caller is responsible for error notification (e.g. toast).
 						// Just silently remove the entry here.
-						setFiles((prev) =>
-							prev.filter((f) => f.id !== placeholder.id),
-						);
+						setFiles((prev) => prev.filter((f) => f.id !== placeholder.id));
 					});
 			});
 		};
@@ -460,6 +458,7 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 										variant="ghost"
 										size="icon-lg"
 										onClick={() => fileInputRef.current?.click()}
+										aria-label={t('textInput.attach')}
 										disabled={attachDisabled}
 										className="shrink-0 rounded-full"
 									>
@@ -479,12 +478,16 @@ export const TextInput = forwardRef<TextInputRef, TextInputProps>(
 									<Button
 										type="button"
 										onClick={sendButton.onClick}
+										aria-label={sendButton.tooltip}
 										disabled={sendButton.disabled}
 										size="icon-lg"
 										className="shrink-0 rounded-full"
 									>
 										<sendButton.icon
-											className={cn('h-4 w-4', sendButton.spin && 'animate-spin')}
+											className={cn(
+												'h-4 w-4',
+												sendButton.spin && 'animate-spin',
+											)}
 										/>
 									</Button>
 								</TooltipTrigger>

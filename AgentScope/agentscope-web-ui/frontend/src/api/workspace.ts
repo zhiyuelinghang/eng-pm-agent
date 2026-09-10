@@ -10,6 +10,7 @@ import type {
 
 export const workspaceApi = {
 	tool: {
+		listSystem: () => client.get<WorkspaceTool[]>('/workspace/system-tools'),
 		list: (agentId: string, sessionId?: string | null) =>
 			client.get<WorkspaceTool[]>('/workspace/tool', {
 				agent_id: agentId,

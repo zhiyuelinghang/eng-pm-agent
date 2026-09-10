@@ -653,16 +653,16 @@
         <a href="#mcp-database"><span class="toc-num">08</span>MCP 与数据库</a>
         <a href="#initialization-mcp"><span class="toc-num">09</span>项目初始化与 MCP</a>
         <a href="#conversation"><span class="toc-num">10</span>会话与协同</a>
-        <a href="#knowledge"><span class="toc-num">11</span>知识库</a>
+        <a href="#knowledge"><span class="toc-num">11</span>外部知识库</a>
       </nav>
       <div class="toc-title">平台管理</div>
       <nav class="toc">
-        <a href="#platform-settings"><span class="toc-num">12</span>平台设置</a>
+        <a href="#platform-settings"><span class="toc-num">12</span>平台主智能体</a>
         <a href="#audit"><span class="toc-num">13</span>交互审计</a>
         <a href="#schedule"><span class="toc-num">14</span>日程</a>
         <a href="#troubleshooting"><span class="toc-num">15</span>问题排查</a>
       </nav>
-      <div class="sidebar-footer">文档版本：1.2<br>更新日期：2026-08-08</div>
+      <div class="sidebar-footer">文档版本：1.3<br>更新日期：2026-09-08</div>
     </aside>
 
     <main class="content">
@@ -691,9 +691,9 @@
           </div>
           <div class="quick-grid">
             <div class="quick-step"><span class="quick-no">1</span><strong>添加凭证</strong><span>配置模型 API，并拉取或手动添加模型。</span></div>
-            <div class="quick-step"><span class="quick-no">2</span><strong>创建智能体</strong><span>填写名称、系统提示词，选择固定模型。</span></div>
-            <div class="quick-step"><span class="quick-no">3</span><strong>分配能力</strong><span>勾选 MCP、数据库交互、知识库和协同范围。</span></div>
-            <div class="quick-step"><span class="quick-no">4</span><strong>创建会话</strong><span>点击 Create Session，发送一条真实任务。</span></div>
+            <div class="quick-step"><span class="quick-no">2</span><strong>创建业务智能体</strong><span>进入“业务智能体”，新增并填写名称、提示词和模型。</span></div>
+            <div class="quick-step"><span class="quick-no">3</span><strong>配置能力</strong><span>在页面上方切换能力 Tab，勾选列表项目并明确保存。</span></div>
+            <div class="quick-step"><span class="quick-no">4</span><strong>调试</strong><span>点击“调试”，新建调试会话并验证保存后的配置。</span></div>
             <div class="quick-step"><span class="quick-no">5</span><strong>确认发布</strong><span>需要业务端使用时，再启用并发布为业务智能体。</span></div>
           </div>
           <div class="callout">
@@ -708,24 +708,24 @@
         <section class="section" id="workspace">
           <div class="section-head">
             <p class="section-kicker">Workspace</p>
-            <h2>工作台的四个区域</h2>
-            <p class="section-desc">日常管理主要在对话工作台完成，操作结构为“左侧选择对象、中间测试会话、右侧配置能力”。</p>
+            <h2>选择对象，配置能力，再调试</h2>
+            <p class="section-desc">首页为“平台主智能体”，第二个独立菜单为“业务智能体”。主页面查看概况并用上方 Tab 配置能力；编辑、查看资源详情使用弹窗，调试使用可最大化的独立工作区。</p>
           </div>
           <div class="workspace-map" aria-label="工作台区域示意">
-            <div class="workspace-zone"><strong>① 全局导航</strong><span>对话、审计、平台设置、日程、凭证、知识库、语言与新手引导。</span></div>
-            <div class="workspace-zone"><strong>② 智能体与会话</strong><span>切换智能体、创建 Agent、创建/选择会话。</span></div>
-            <div class="workspace-zone"><strong>③ 对话区</strong><span>发送任务、上传附件、查看计划时间线、协同过程和结果。</span></div>
-            <div class="workspace-zone"><strong>④ 能力侧栏</strong><span>MCP、技能、数据库交互、工具、知识库、协同智能体。</span></div>
+            <div class="workspace-zone"><strong>① 全局导航</strong><span>平台主智能体、业务智能体、记忆管理，以及下方基础配置。</span></div>
+            <div class="workspace-zone"><strong>② 对象列表</strong><span>主智能体固定四个职责；业务智能体支持搜索和新增，包含内部和未发布对象。</span></div>
+            <div class="workspace-zone"><strong>③ 配置弹窗</strong><span>编辑身份、模型与运行和平台接入；MCP 等能力直接在页面 Tab 切换，查看详情才打开弹窗。</span></div>
+            <div class="workspace-zone"><strong>④ 调试工作区</strong><span>管理调试会话、发送消息或附件，查看思考、工作过程和结果。</span></div>
           </div>
           <figure class="figure">
-            <img src="assets/agent-management-center/01-chat-overview.png" alt="智能体管理中心对话工作台总览">
-            <figcaption>工作台总览：左侧选择智能体和会话，中间进行真实对话测试，右侧为当前智能体配置能力。侧栏可收起，为对话区释放空间。</figcaption>
+            <img src="assets/agent-management-center/20260908-primary.png" alt="新版平台主智能体真实管理页面">
+            <figcaption>2026-09-08 本地真实管理页：两个独立菜单，四个固定职责，在详情内直接编辑和调试。以下旧版截图保留用于说明资源功能；新入口以本节为准。</figcaption>
           </figure>
           <div class="callout info">
             <div class="callout-icon">?</div>
             <div>
               <div class="callout-title">功能入口查找</div>
-              <p>将鼠标悬停在右侧标签上可查看用途说明；左下角“指南/罗盘”按钮可以重新启动内置新手引导。</p>
+              <p>协同智能体、技能、MCP、数据库交互在页面上方 Tab 切换，默认打开协同智能体。记忆与学习由系统统一安排，无须逐个配置。列表按钮打开单层详情弹窗；项目初始化的核验版本在顶部“初始化核验”中管理。</p>
             </div>
           </div>
         </section>
@@ -774,7 +774,7 @@
           <div class="section-head">
             <p class="section-kicker">Step 1</p>
             <h2>配置模型凭证</h2>
-            <p class="section-desc">没有可用凭证和模型，智能体无法开始对话。入口位于左侧钥匙图标“凭证”。</p>
+            <p class="section-desc">没有可用凭证和模型，智能体无法开始对话。入口位于左侧“模型与连接”。</p>
           </div>
           <div class="steps">
             <div class="step">
@@ -791,13 +791,10 @@
             </div>
             <div class="step">
               <div class="step-index">4</div>
-              <div><h3>测试并保存</h3><p>保存前先测试模型。若启用 Auto 权限模式，再为系统权限审核员绑定独立审核模型。</p></div>
+              <div><h3>测试并保存</h3><p>保存前先测试模型。若启用 Auto 权限模式，请到左侧独立的“权限审核配置”页面，为系统权限审核员绑定审核模型。</p></div>
             </div>
           </div>
-          <figure class="figure">
-            <img src="assets/agent-management-center/04-credential.png" alt="凭证与系统权限审核员配置页面">
-            <figcaption>凭证页同时管理模型 API 和系统权限审核员。审核员模型与聊天模型独立，可设置备用模型、置信度、最高风险和超时。</figcaption>
-          </figure>
+          <p>“模型与连接”专门管理模型 API 和模型目录。“权限审核配置”位于左侧上方，在“业务智能体”之后、“记忆配置”之前，集中提供审核模型配置、模型测试和审核记录。审核服务不属于四个主智能体，也不参与业务协作。</p>
           <div class="callout danger">
             <div class="callout-icon">!</div>
             <div><div class="callout-title">API Key 安全要求</div><p>界面会脱敏显示密钥。完整密钥不得写入智能体提示词、截图、日志或会话消息，只能保存在凭证配置中。</p></div>
@@ -808,29 +805,27 @@
           <div class="section-head">
             <p class="section-kicker">Step 2</p>
             <h2>创建并配置智能体</h2>
-            <p class="section-desc">在对话页左侧点击“创建 Agent”。左侧目录用于快速切换配置分区；首次创建应先完成身份、模型和平台接入配置。</p>
+            <p class="section-desc">进入“业务智能体”点击“新增业务智能体”。编辑器包括基本信息、模型配置、平台接入和协作设置，主智能体按固定职责显示适用分区。所有智能体的记忆与学习由系统按职责、业务入口和来源权限安排，外部能力页和编辑窗口均没有单独的记忆配置。</p>
           </div>
           <figure class="figure">
             <img src="assets/agent-management-center/02-create-agent.png" alt="创建智能体弹窗">
-            <figcaption>创建弹窗：左侧是配置目录，右侧是当前分区。系统提示词支持多行输入；上下文、ReAct 等高级项可先保留默认值。</figcaption>
+            <figcaption>创建弹窗：左侧是配置目录，右侧是当前分区。系统提示词定义业务职责；上下文和执行过程由运行服务自动管理。</figcaption>
           </figure>
           <div class="table-wrap">
             <table>
               <thead><tr><th>配置分区</th><th>功能说明</th><th>首次配置建议</th></tr></thead>
               <tbody>
-                <tr><td><strong>Agent 身份</strong></td><td>名称用于列表展示；系统提示词定义职责和边界。</td><td>名称写业务用途；提示词写清“目标、输入、输出、禁止事项”。</td></tr>
-                <tr><td><strong>模型配置</strong></td><td>“跟随会话”允许每次选择模型；“固定模型”保证稳定。</td><td>业务和平台职责智能体优先固定已验证模型。</td></tr>
-                <tr><td><strong>平台接入配置</strong></td><td>决定是否运行、发布、被总控调用和在业务端的排序。</td><td>先启用但不发布；验证通过后再发布。需要业务端展示时填写清晰说明和分类。</td></tr>
-                <tr><td><strong>上下文配置</strong></td><td>控制长会话压缩、保留比例和工具结果截断。</td><td>保持默认。只有确认上下文过长或关键信息丢失时再调整。</td></tr>
-                <tr><td><strong>ReAct 配置</strong></td><td>控制一次任务最多循环多少轮，以及拒绝和中断行为。</td><td>保持默认。复杂任务失败且日志显示迭代耗尽时再增加。</td></tr>
-                <tr><td><strong>邀请配置</strong></td><td>开启后才可被其他智能体协同调用；说明会帮助调用方判断何时邀请。</td><td>专项智能体开启，并明确写“负责什么、需要什么输入、返回什么”。</td></tr>
-                <tr><td><strong>调用白名单</strong></td><td>限制当前智能体可以邀请哪些协同成员。</td><td>总控可按需设为全部；专业智能体建议选择“指定”。</td></tr>
+                <tr><td><strong>基本信息</strong></td><td>名称用于列表展示；系统提示词定义职责和边界。</td><td>名称写业务用途；提示词写清“目标、输入、输出、禁止事项”。</td></tr>
+                <tr><td><strong>模型与运行</strong></td><td>“跟随会话”允许每次选择模型；“固定模型”保证稳定。</td><td>业务和平台职责智能体优先固定已验证模型。</td></tr>
+                <tr><td><strong>平台接入</strong></td><td>决定是否运行、发布和在业务端的排序。</td><td>先启用但不发布；验证通过后再发布。需要业务端展示时填写清晰说明和分类。</td></tr>
+                <tr><td><strong>协作设置</strong></td><td>在编辑弹窗中分别设置“允许总控调用”“允许其他智能体邀请”，并填写协作说明。</td><td>前者控制总控自动名单；后者控制其他智能体的候选列表，实际调用还需加入调用方的明确名单。</td></tr>
+                <tr><td><strong>能力配置 → 协同智能体</strong></td><td>查看或配置向外调用的协作名单。</td><td>总控自动展示已启用且允许总控调用的智能体；其他调用方从已启用且允许其他邀请的候选中选择，未选择时独立工作。</td></tr>
               </tbody>
             </table>
           </div>
           <div class="callout warn">
             <div class="callout-icon">!</div>
-            <div><div class="callout-title">“启用”与“发布”的区别</div><p>启用表示智能体可以运行；发布表示智能体可以出现在业务端。智能体应在测试完成后再发布，避免向用户展示未完成配置。</p></div>
+            <div><div class="callout-title">“启用”与“发布”的区别</div><p>四个主智能体始终启用，不能停用、删除或清空职责。业务智能体的启用表示可以运行；发布表示可以出现在业务端。智能体应在测试完成后再发布，避免向用户展示未完成配置。</p></div>
           </div>
         </section>
 
@@ -838,7 +833,7 @@
           <div class="section-head">
             <p class="section-kicker">Step 3</p>
             <h2>给智能体分配能力</h2>
-            <p class="section-desc">右侧标签是当前智能体的能力视图。能力是否可编辑取决于类型：有的按智能体分配，有的是平台固定能力。</p>
+            <p class="section-desc">在智能体页面上方依次切换协同智能体、技能、MCP、数据库交互。系统工具位于左侧独立菜单。资源列表点击“查看详情”打开详情，能力分配需明确保存。全局「记忆配置」只管理后台开关、来源和模型；系统自动确定各智能体的记忆范围，并遵守用户本次的不记忆、不学习要求。</p>
           </div>
           <div class="ability-grid">
             <article class="ability-card">
@@ -867,15 +862,15 @@
             </article>
             <article class="ability-card">
               <span class="tag green">可分配</span>
-              <h3>知识库</h3>
-              <p>为智能体提供可检索资料。先在知识库页面创建并导入文档，再回到智能体选择。</p>
-              <ul><li>适合制度、规范、产品资料和长期知识</li><li>临时会话附件应使用附件解析工具，不作为知识库维护</li><li>答案仍需由智能体结合当前任务判断</li></ul>
+              <h3>外部项目资料</h3>
+              <p>知识库查询是知识库助手的固定职责，无需在其他智能体上勾选；连接与项目绑定在“外部知识库”菜单管理。</p>
+              <ul><li>原生 AgentScope 知识库的管理与分配入口已隐藏</li><li>知识库查询仅属于知识库助手的固定职责，无需勾选；其他智能体通过授权协作使用它</li><li>项目资料访问仍受当前用户、项目和资料范围限制</li></ul>
             </article>
             <article class="ability-card">
               <span class="tag green">可分配</span>
               <h3>协同智能体</h3>
-              <p>决定当前智能体可邀请的其他智能体范围：全部、指定或禁用。</p>
-              <ul><li>被邀请方必须允许被邀请</li><li>业务智能体建议使用“指定”</li><li>保存后对该智能体后续会话生效</li></ul>
+              <p>总控自动纳入已启用且开启“允许总控调用”的智能体；其他主智能体和业务智能体只可选择已启用且允许其他智能体邀请的协作对象。</p>
+              <ul><li>在“编辑智能体 → 协作设置”配置两个独立接收权限及协作说明</li><li>非总控调用还须加入调用方的明确名单，已有名单不能绕过被调用方关闭邀请的限制</li><li>派发任务时重新检查最新权限与启用状态，禁止循环调用</li></ul>
             </article>
           </div>
 
@@ -906,14 +901,11 @@
           <h3>系统工具：固定能力，只看不改</h3>
           <figure class="figure">
             <img src="assets/agent-management-center/11-built-in-tools.png" alt="系统内置工具列表">
-            <figcaption>系统工具是平台基础设施。它们全局可用，不提供分配复选框；点击条目即可查看用途和调用参数。</figcaption>
+            <figcaption>系统工具目录位于左侧“系统工具”，无需选择智能体或创建会话。支持搜索和查看详情，不提供分配开关；实际可用范围由智能体职责、运行环境和权限配置决定。下图为工具目录示意，入口以当前左侧菜单为准。</figcaption>
           </figure>
 
-          <h3>协同智能体：控制可以邀请谁</h3>
-          <figure class="figure">
-            <img src="assets/agent-management-center/10-collaboration.png" alt="协同智能体范围配置">
-            <figcaption>“全部”包含未来新增且开放邀请的智能体；“指定”最安全；“禁用”适合必须独立执行的智能体。</figcaption>
-          </figure>
+          <h3>协同智能体：控制可以调用谁</h3>
+          <p>只有已启用且开启“允许总控调用”的智能体，才会自动加入总控的协作范围。其他调用方的候选列表仅包含已启用且开启“允许其他智能体邀请”的对象，还需勾选保存后才可调用。两个接收权限分别生效，协作不会继承对方的工具、数据库或资料访问权限。</p>
         </section>
 
         <section class="section" id="database-tutorial">
@@ -960,7 +952,7 @@
               <div class="step-index">1</div>
               <div>
                 <h3>选择目标智能体</h3>
-                <p>左侧切换到准备使用数据库能力的智能体，再打开右侧“数据库交互”。只读智能体不会显示新增或编辑能力。</p>
+                <p>左侧切换到准备使用数据库能力的智能体，再在详情页打开“数据库交互”的配置弹窗。只读智能体不会显示新增或编辑能力。</p>
               </div>
             </div>
             <div class="step">
@@ -1286,7 +1278,7 @@ Content-Type: application/json
             <div class="callout-icon">i</div>
             <div>
               <div class="callout-title">初始化能力边界</div>
-              <p>附件解析由平台固定工具执行，流程组织由初始化编排技能负责，草稿读取与写入通过数据库交互完成，最终检查由核验 MCP 执行。核验 MCP 不属于智能体可分配能力，其当前使用版本在“平台设置”中统一选择。</p>
+              <p>附件解析由平台固定工具执行，流程组织由初始化编排技能负责，草稿读取与写入通过数据库交互完成，最终检查由核验 MCP 执行。核验 MCP 不属于智能体可分配能力，其当前使用版本在“项目初始化 → 初始化核验”中统一选择。</p>
             </div>
           </div>
 
@@ -1323,7 +1315,7 @@ Content-Type: application/json
                   <td><strong>最终核验</strong></td>
                   <td>必需的核验 MCP</td>
                   <td>读取平台组装好的规范化草稿 JSON，快速执行跨分区规则，返回 ready / invalid 和定位到数据行、字段的问题。</td>
-                  <td>“平台设置 → 项目初始化智能体 → 核验 MCP”，选择当前使用版本。</td>
+                  <td>“平台主智能体 → 项目初始化 → 初始化核验”，选择当前使用版本。</td>
                 </tr>
                 <tr>
                   <td><strong>核对与正式入库</strong></td>
@@ -1368,7 +1360,7 @@ Content-Type: application/json
             </div>
             <div class="step">
               <div class="step-index">6</div>
-              <div><h3>执行核验 MCP</h3><p>平台通过数据库交互读取并组装规范化草稿 JSON，然后启动“平台设置”中选定版本的核验 MCP。MCP 返回状态以及问题所在的数据记录 ID、字段、说明和处理建议；平台负责持久化结果。</p></div>
+              <div><h3>执行核验 MCP</h3><p>平台通过数据库交互读取并组装规范化草稿 JSON，然后启动“项目初始化 → 初始化核验”中选定版本的核验 MCP。MCP 返回状态以及问题所在的数据记录 ID、字段、说明和处理建议；平台负责持久化结果。</p></div>
             </div>
             <div class="step">
               <div class="step-index">7</div>
@@ -1394,7 +1386,7 @@ Content-Type: application/json
             <div class="callout-icon">!</div>
             <div>
               <div class="callout-title">数据库交互采用职责隔离</div>
-              <p>各智能体看到的可分配目录可以相同，但实际分配必须按职责区分。主智能体负责创建草稿和提交核验；专项智能体仅创建或更新自己的业务分区。知识库不属于固定初始化步骤，仅在任务需要长期资料时分配。</p>
+              <p>各智能体看到的可分配目录可以相同，但实际分配必须按职责区分。主智能体负责创建草稿和提交核验；专项智能体仅创建或更新自己的业务分区。外部资料查询不属于固定初始化步骤，仅在需要资料且已明确授权时使用。</p>
             </div>
           </div>
 
@@ -1403,7 +1395,7 @@ Content-Type: application/json
             <article class="card">
               <h3>主智能体配置</h3>
               <ol>
-                <li>进入“平台设置”，选择 <strong>Dobby 项目初始化助手</strong>。</li>
+                <li>进入“平台主智能体 → 项目初始化 → 初始化核验”，核对 <strong>Dobby 项目初始化助手</strong>。</li>
                 <li>回到该智能体的“技能”标签，确认编排技能已分配。</li>
                 <li>在“数据库交互”中只勾选初始化状态、草稿、分区、附件分块、创建草稿和提交核验相关交互。</li>
                 <li>在“协同智能体”中允许邀请五位专项智能体。</li>
@@ -1424,8 +1416,8 @@ Content-Type: application/json
 
           <h3>核验 MCP 版本管理</h3>
           <figure class="figure">
-            <img src="assets/agent-management-center/03-platform-settings.png" alt="平台设置中的项目初始化智能体与核验 MCP 版本管理">
-            <figcaption>进入“平台设置 → 项目初始化智能体”。核验 MCP 是平台必需能力，版本仅在该区域管理，不出现在普通智能体的 MCP 分配目录中。</figcaption>
+            <img src="assets/agent-management-center/20260908-initializer.png" alt="项目初始化的初始化核验中的项目初始化智能体与核验 MCP 版本管理">
+            <figcaption>进入“平台主智能体 → 项目初始化 → 初始化核验”。核验 MCP 是平台必需能力，版本仅在该区域管理，不出现在普通智能体的 MCP 分配目录中。</figcaption>
           </figure>
           <div class="steps">
             <div class="step"><div class="step-index">1</div><div><h3>上传新版本</h3><p>点击“上传新版本”，上传包含运行时和全部依赖的平台适配 ZIP 包。包名可以保持一致，但 <code>mcp.json</code> 中的版本号必须递增。</p></div></div>
@@ -1506,7 +1498,7 @@ MCP 输出：{
                 <li>解析预处理后，聊天时间线立即出现执行计划。</li>
                 <li>协同卡片只说明专家正在处理什么，不展示大段邀请文本。</li>
                 <li>专家通过数据库交互读取分块并提交各自分区。</li>
-                <li>最终核验调用显示平台设置中当前使用的 MCP 版本。</li>
+                <li>最终核验调用显示项目初始化的初始化核验中当前使用的 MCP 版本。</li>
                 <li>问题出现在准确的数据行和字段，可打开查看说明与建议。</li>
                 <li>用户确认前，正式项目表不会写入初始化数据。</li>
               </ul>
@@ -1567,26 +1559,23 @@ MCP 输出：{
         <section class="section" id="knowledge">
           <div class="section-head">
             <p class="section-kicker">Knowledge</p>
-            <h2>创建和使用知识库</h2>
-            <p class="section-desc">知识库适合长期复用的资料。入口位于左侧书本图标；创建完成后，再回到智能体右侧“知识库”标签分配。</p>
+            <h2>连接外部知识库并授权资料查询</h2>
+            <p class="section-desc">当前使用外部知识库集成。左侧“外部知识库”管理连接与项目绑定，智能体编辑器管理资料查询授权。</p>
           </div>
           <div class="steps">
-            <div class="step"><div class="step-index">1</div><div><h3>创建知识库</h3><p>使用能体现内容范围的名称，例如“公司质量制度”“项目技术规范”。</p></div></div>
-            <div class="step"><div class="step-index">2</div><div><h3>导入并等待索引</h3><p>上传资料后等待解析与索引完成。索引失败的文件不会被智能体可靠检索。</p></div></div>
-            <div class="step"><div class="step-index">3</div><div><h3>分配给智能体</h3><p>返回对话页，选择智能体，在“知识库”标签中勾选并保存。</p></div></div>
-            <div class="step"><div class="step-index">4</div><div><h3>用可核对问题测试</h3><p>询问资料中有明确答案的问题，并让智能体说明依据；避免只测试宽泛问答。</p></div></div>
+            <div class="step"><div class="step-index">1</div><div><h3>配置连接</h3><p>进入“外部知识库”，检查 WeKnora 连接及项目绑定。</p></div></div>
+            <div class="step"><div class="step-index">2</div><div><h3>确认资料可用</h3><p>检查项目目录同步、文件解析和索引状态。</p></div></div>
+            <div class="step"><div class="step-index">3</div><div><h3>授权指定智能体</h3><p>在“平台主智能体 → 知识库助手 → 编辑智能体 → 平台接入”配置项目知识库能力并保存。其他智能体也须单独授权。</p></div></div>
+            <div class="step"><div class="step-index">4</div><div><h3>在项目业务入口验证</h3><p>使用有权访问该项目的用户，从工程资料问答中询问有明确依据的问题。普通管理端调试不能替代项目身份与资料权限验证。</p></div></div>
           </div>
-          <figure class="figure">
-            <img src="assets/agent-management-center/05-knowledge.png" alt="知识库管理页面">
-            <figcaption>知识库页左侧是知识库列表，右侧查看和维护详情。空状态时点击“创建知识库”开始。</figcaption>
-          </figure>
+          <p>原生知识库历史配置没有被清除，但不再作为当前管理端的可见配置入口。资料权限与项目数据库查询权限是两项独立能力。</p>
         </section>
 
         <section class="section" id="platform-settings">
           <div class="section-head">
             <p class="section-kicker">Platform settings</p>
-            <h2>设置平台总控与项目初始化能力</h2>
-            <p class="section-desc">平台设置影响整个 Dobby，不是单个会话。入口位于左侧皇冠图标，仅管理员应修改。</p>
+            <h2>管理四个固定平台职责</h2>
+            <p class="section-desc">进入“平台主智能体”，选择职责后直接编辑和调试。不再提供选择或替换承担职责对象的入口；未配置的固定助手直接填写模型与工作指令。读取失败时先重试。</p>
           </div>
           <div class="table-wrap">
             <table>
@@ -1594,12 +1583,14 @@ MCP 输出：{
               <tbody>
                 <tr><td><strong>平台总控智能体</strong></td><td>统一承接普通对话、理解意图并组织协同。</td><td>已启用、可编辑、固定对话模型；不能与初始化智能体相同。</td><td>立即影响平台新请求；原总控恢复为业务智能体。</td></tr>
                 <tr><td><strong>项目初始化智能体</strong></td><td>工程配置页统一入口，处理计划、专项协同和草稿；附件解析由平台固定工具预先完成。</td><td>固定模型；分配初始化编排技能、职责内数据库交互和五位专项智能体，不分配旧编排 MCP。</td><td>影响新的项目初始化流程。</td></tr>
+                <tr><td><strong>任务助手</strong></td><td>承接群聊任务识别和分析。</td><td>专用智能体、固定对话模型，按现有职责规则配置任务能力。</td><td>配置后由平台任务助手入口使用。</td></tr>
+                <tr><td><strong>知识库助手</strong></td><td>承接项目资料问答。</td><td>已发布、固定模型、项目知识库能力；项目工具按需另行授权。</td><td>影响新的资料问答请求。</td></tr>
                 <tr><td><strong>核验 MCP</strong></td><td>草稿入正式项目数据前执行最终结构与业务核验。</td><td>必须选择一个可用版本。</td><td>保存后新核验使用所选版本。</td></tr>
               </tbody>
             </table>
           </div>
           <figure class="figure">
-            <img src="assets/agent-management-center/03-platform-settings.png" alt="平台设置中的项目初始化智能体与核验 MCP 版本管理">
+            <img src="assets/agent-management-center/20260908-initializer.png" alt="新版项目初始化初始化核验与核验 MCP 版本管理">
             <figcaption>项目初始化配置：选择初始化智能体，并在“核验 MCP”中上传新版本、选择使用版本、下载或删除指定版本。</figcaption>
           </figure>
           <div class="callout warn">
@@ -1630,7 +1621,7 @@ MCP 输出：{
           <div class="section-head">
             <p class="section-kicker">Schedule</p>
             <h2>查看和管理日程</h2>
-            <p class="section-desc">日程页提供日历与列表两种视图，适合查看智能体产生或关联的计划安排。</p>
+            <p class="section-desc">管理中心已移除“日程”导航入口。以下保留旧页面的功能说明；本次调整不删除已有日程数据，也不影响后台定时任务。</p>
           </div>
           <figure class="figure">
             <img src="assets/agent-management-center/07-schedule.png" alt="日程日历页面">
@@ -1687,11 +1678,11 @@ MCP 输出：{
             </details>
             <details open>
               <summary>知识库已经创建，但回答没有引用资料</summary>
-              <ul><li>确认文件解析和索引已完成。</li><li>确认知识库已分配给当前智能体并保存。</li><li>用资料中有明确答案的问题重新测试。</li></ul>
+              <ul><li>确认文件解析和索引已完成。</li><li>确认项目已绑定外部知识库，知识库助手的固定模型与外部知识库连接已配置。</li><li>用资料中有明确答案的问题重新测试。</li></ul>
             </details>
             <details open>
               <summary>核验规则更新后仍像旧版本</summary>
-              <ul><li>上传新包后，在平台设置中选择新版本。</li><li>点击“保存初始化配置”。</li><li>重新发起核验；已经完成的历史核验不会自动重跑。</li></ul>
+              <ul><li>上传新包后，在项目初始化的初始化核验中选择新版本。</li><li>点击“保存初始化配置”。</li><li>重新发起核验；已经完成的历史核验不会自动重跑。</li></ul>
             </details>
             <details open>
               <summary>项目初始化的执行计划出现得很晚</summary>
@@ -1703,7 +1694,7 @@ MCP 输出：{
             </details>
             <details open>
               <summary>项目初始化没有触发核验 MCP</summary>
-              <ul><li>确认平台设置中已选择可用的核验 MCP 版本并保存。</li><li>确认五个实际需要的草稿分区均已提交完成。</li><li>确认主智能体拥有“提交初始化草稿核验”数据库交互，并且最终只提交草稿 ID。</li><li>检查 AgentScope 和工程管理平台服务是否都在运行。</li></ul>
+              <ul><li>确认项目初始化的初始化核验中已选择可用的核验 MCP 版本并保存。</li><li>确认五个实际需要的草稿分区均已提交完成。</li><li>确认主智能体拥有“提交初始化草稿核验”数据库交互，并且最终只提交草稿 ID。</li><li>检查 AgentScope 和工程管理平台服务是否都在运行。</li></ul>
             </details>
             <details open>
               <summary>保存按钮是灰色</summary>

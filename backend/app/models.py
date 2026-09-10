@@ -1292,6 +1292,34 @@ class AgentConversation(TimestampMixin, Base):
     )
     status: Mapped[str] = mapped_column(String(32), default="active")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_channel_id: Mapped[int | None] = mapped_column(
+        ForeignKey("chat_channels.id", ondelete="SET NULL"), nullable=True,
+    )
+    generation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True)
+
+
+class BusinessLearningSource(Base):
+    """Committed business evidence; written in the business operation transaction."""
+
+    __tablename__ = "business_learning_sources"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_key: Mapped[str] = mapped_column(String(300), unique=True)
+    source_type: Mapped[str] = mapped_column(String(40))
+    source_id: Mapped[str] = mapped_column(String(128))
+    source_version: Mapped[str] = mapped_column(String(128))
+    stage: Mapped[str] = mapped_column(String(40))
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    actor_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    audience_user_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    project_shared: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_channel_ids: Mapped[list[int]] = mapped_column(JSON, default=list)
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    evidence_hash: Mapped[str] = mapped_column(String(64))
+    source_fingerprint: Mapped[str] = mapped_column(String(64))
+    allow_learning: Mapped[bool] = mapped_column(Boolean, default=False)
+    source_run_refs: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class ProjectInitializationDraft(TimestampMixin, Base):

@@ -32,7 +32,6 @@ from task_engine.domain.models import (
     Trigger,
 )
 from task_engine.engine import TaskEngine
-from task_engine.generator.llm import FlowGenerator, LLMConfig
 from task_engine.store.postgres import PostgresStore
 
 from .chat_membership_policy import chat_auto_sync
@@ -86,16 +85,19 @@ def get_engine() -> TaskEngine:
 
 
 @lru_cache
-def get_generator() -> FlowGenerator:
-    """复用 Dobby 已有的模型配置。"""
-    settings = get_settings()
-    return FlowGenerator(
-        LLMConfig(
-            api_key=settings.ai_api_key,
-            base_url=settings.ai_base_url,
-            model=settings.ai_model,
-        ),
-    )
+def get_generator():
+    """Resolve task generation through the management-centre Task Assistant."""
+    from .task_assistant_generation import TaskAssistantGenerator
+    return TaskAssistantGenerator()
+
+
+def transaction_engine(db: Session, engine: TaskEngine) -> TaskEngine:
+    """Join task storage to the host business transaction without mutating a singleton."""
+    if not isinstance(engine.store, PostgresStore):
+        return engine
+    return TaskEngine(timezone=engine.timezone, store=PostgresStore(
+        engine.store.engine, schema=engine.store.schema, connection=db.connection(),
+    ))
 
 
 def engine_tz() -> ZoneInfo:
@@ -443,7 +445,7 @@ def dispatch_platform_task(
             "risk_source_id": risk_source_id,
         },
     )
-    task = get_engine().dispatch(
+    task = transaction_engine(db, get_engine()).dispatch(
         flow,
         actor=str(actor),
         trigger_note=trigger_reason,
@@ -452,6 +454,9 @@ def dispatch_platform_task(
     from .wecom_notification_gateway import enqueue_task_notification
 
     enqueue_task_notification(db, task, "task_created")
+    if str(actor).isdigit():
+        from .business_learning_sources import record_task_event
+        record_task_event(db, task, int(actor), 'task_published')
     return task
 
 

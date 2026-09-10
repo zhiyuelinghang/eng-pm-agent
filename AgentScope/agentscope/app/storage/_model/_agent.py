@@ -2,7 +2,7 @@
 """The agent storage class."""
 from typing import Literal, Self
 
-from pydantic import Field, BaseModel, field_validator, model_validator
+from pydantic import ConfigDict, Field, BaseModel, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
 from ...._utils._common import _generate_id
@@ -16,24 +16,14 @@ from ....agent import ContextConfig, ReActConfig
 
 
 class InviteConfig(BaseModel):
-    """User-editable invite settings for :class:`AgentData`.
-
-    Kept in its own sub-model so the frontend's schema-driven form —
-    which renders any nested-object property as its own fieldset —
-    picks it up as a dedicated section without a per-field allowlist.
-    Also keeps the cross-field ``invitable ⇒ non-empty description``
-    invariant local to this model.
-    """
+    """Consent to invitations from non-main agents and collaboration metadata."""
 
     invitable: bool = Field(
         default=False,
         description=(
-            "Whether this agent may be borrowed into another agent's team "
-            "via the ``AgentInvite`` tool. Independent from "
-            ":attr:`invite_description` so the user can preserve an "
-            "authored blurb while temporarily disabling the toggle. "
-            "``invitable=True`` requires a non-empty "
-            ":attr:`invite_description` (enforced by validator)."
+            "Whether other non-main agents can select and invite this agent. "
+            "The caller must also include it in its explicit collaboration "
+            "list. Independent from allow_global_main_call."
         ),
         title="Invitable",
     )
@@ -43,44 +33,26 @@ class InviteConfig(BaseModel):
         description=(
             "Free-text blurb shown to a leader LLM in the ``AgentInvite`` "
             "tool description — used by the leader to decide whether to "
-            "borrow this agent. Persisted across toggle off/on so the "
-            "user's authored draft is not lost when :attr:`invitable` "
-            "is temporarily disabled."
+            "borrow this agent. Falls back to the platform description or "
+            "agent name when empty."
         ),
         title="Invite Description",
         json_schema_extra={"format": "textarea"},
     )
 
-    @model_validator(mode="after")
-    def _check_invitable_has_description(self) -> Self:
-        """Reject ``invitable=True`` without a non-empty description.
-
-        The blurb is what the leader LLM sees when it inspects the
-        ``AgentInvite`` tool; without it, the LLM cannot make a sensible
-        choice. Rejecting at the model boundary (rather than in the
-        service layer) means PATCH / POST return HTTP 422 automatically.
-        """
-        if self.invitable and not (self.invite_description or "").strip():
-            raise ValueError(
-                "invite_description must be non-empty when invitable=True",
-            )
-        return self
-
-
 class AgentCallConfig(BaseModel):
     """Controls which existing agents this agent may invite.
 
-    ``scope='all'`` deliberately represents a dynamic set: every agent that
-    is visible to the caller and currently marked invitable is eligible,
-    including agents created after this configuration was saved.
+    Platform main access is derived from the authoritative main-agent pointer.
+    Other agents can only use an explicitly selected list.
     """
 
-    scope: Literal["all", "selected", "none"] = Field(
+    scope: Literal["selected", "none"] = Field(
         default="none",
         description=(
-            "Agent-call scope. ``all`` allows every visible invitable agent, "
-            "``selected`` allows only ``allowed_agent_ids``, and ``none`` "
-            "disables AgentInvite for this agent."
+            "Agent-call scope. ``selected`` allows only ``allowed_agent_ids``; "
+            "``none`` disables outgoing delegation. Main-agent access is "
+            "fixed by platform settings."
         ),
         title="Call Scope",
     )
@@ -107,8 +79,6 @@ class AgentCallConfig(BaseModel):
 
     def allows(self, agent_id: str) -> bool:
         """Return whether ``agent_id`` is inside this configured scope."""
-        if self.scope == "all":
-            return True
         if self.scope == "selected":
             return agent_id in self.allowed_agent_ids
         return False
@@ -244,41 +214,18 @@ class PlatformAgentConfig(BaseModel):
     need to leak into the platform's business-agent catalogue.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     role: Literal["global_main", "business", "system_internal"] = Field(
         default="business",
         description=(
             "Platform role. ``business`` is published in the business-tool "
             "catalogue and ``system_internal`` stays hidden. "
-            "``global_main`` is a compatibility value derived from the "
+            "``global_main`` is reserved for the "
             "platform-wide main-agent setting and must not be assigned "
             "directly."
         ),
         title="Platform Role",
-    )
-
-    agent_level: Literal["management", "worker"] = Field(
-        default="worker",
-        description=(
-            "Orchestration level independent from the platform role. "
-            "Management agents may use shared long-term memory and lead "
-            "authorised collaboration; worker agents execute bounded tasks "
-            "without long-term-memory tools."
-        ),
-        title="Agent Level",
-    )
-
-    memory_read_scopes: list[Literal["user", "user_project", "project"]] = Field(
-        default_factory=lambda: ["user", "user_project", "project"],
-        title="记忆读取抽屉",
-        description="管理级智能体可读取的抽屉；仍受当前用户、项目权限和群聊隐私边界限制。执行级智能体不直接读取长期记忆。",
-    )
-    learning_capture: bool = Field(default=True,title="记录学习素材")
-    learning_process: bool = Field(default=True,title="后台提炼学习成果")
-    learning_use: bool = Field(default=True,title="使用已验证的学习成果")
-    memory_write_scopes: list[Literal["user", "user_project", "project"]] = Field(
-        default_factory=lambda: ["user", "user_project", "project"],
-        title="记忆写入抽屉",
-        description="管理级智能体可建议保存的抽屉；项目级共享写入还必须通过平台当前权限校验。",
     )
 
     enabled: bool = Field(
@@ -299,21 +246,11 @@ class PlatformAgentConfig(BaseModel):
     allow_global_main_call: bool = Field(
         default=False,
         description=(
-            "Whether the platform-wide main agent may invite this agent "
-            "directly. This target-side permission is independent from "
-            "ordinary agents' selected call allowlists."
+            "Whether the enabled agent is included in the platform main "
+            "agent's dynamic collaboration catalogue. Other callers still "
+            "use their own explicit collaboration lists."
         ),
         title="Allow Platform Main Agent Call",
-    )
-
-    project_knowledge_enabled: bool = Field(
-        default=False,
-        description=(
-            "Whether engineering-platform sessions for this agent receive "
-            "the project-scoped WeKnora query tool. The current user's "
-            "project and document allowlists are still enforced each turn."
-        ),
-        title="Project Knowledge Query",
     )
 
     initialization_role: SkipJsonSchema[
@@ -364,8 +301,9 @@ class PlatformAgentConfig(BaseModel):
     permission_mode: PermissionMode = Field(
         default=PermissionMode.AUTO,
         description=(
-            "Permission mode applied to sessions created by the engineering "
-            "platform."
+            "Permission mode used by management debug runs and supplied to "
+            "sessions created by the engineering platform. Debug sessions "
+            "read this setting at each run and cannot override it."
         ),
         title="Platform Permission Mode",
     )

@@ -1,5 +1,10 @@
 import { BookUser, FolderKanban, UserRound, RefreshCw, Sparkles, Activity, Search } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+
+import { GroupLearningActivity } from './GroupLearningActivity';
+import { memoryKinds, LearningActivity } from './LearningCenter';
+import { MemoryDetail, memoryTitle, memoryState } from './MemoryDetail';
+import { MemoryDiagnostics } from './MemoryDiagnostics';
 import { memoryManagementApi } from '@/api/memory-management';
 import type { ManagedMemoryItem, MemoryManagementResponse, MemoryScopeType, MemoryIndexJob } from '@/api/types';
 import { Button } from '@/components/ui/button';
@@ -7,9 +12,6 @@ import { Input } from '@/components/ui/input';
 import { useTranslation } from '@/i18n/useI18n';
 import { formatApiErrorForAlert } from '@/lib/api-error';
 import { cn } from '@/lib/utils';
-import { memoryKinds, LearningActivity } from './LearningCenter';
-import { GroupLearningActivity } from './GroupLearningActivity';
-import { MemoryDetail, memoryTitle, memoryState } from './MemoryDetail';
 
 const SELECT = 'h-9 rounded-md border bg-background px-3 text-sm';
 const PAGE_SIZE = 30;
@@ -37,7 +39,7 @@ export function MemoryManagementPage() {
 	const [search, setSearch] = useState('');
 	const [offset, setOffset] = useState(0);
 	const [data, setData] = useState<MemoryManagementResponse | null>(null);
-	const [jobs, setJobs] = useState<MemoryIndexJob[]>([]);
+	const [jobs, setJobs] = useState<MemoryIndexJob[] | null>(null);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState('');
 	const sequence = useRef(0);
@@ -58,7 +60,6 @@ export function MemoryManagementPage() {
 	}, [section, scope, user, project, query, status, offset, memoryType]);
 	useEffect(() => { void load(); return () => { sequence.current++; }; }, [load]);
 	useEffect(() => { setDetailId(null); }, [section, scope, user, project, query, status, memoryType, offset]);
-	const time = (value: string | null) => value ? new Date(value).toLocaleString(zh ? 'zh-CN' : 'en') : '—';
 	const currentItem = data?.memories.find((item) => item.id === detailId) ?? null;
 	const ownerName = (item: ManagedMemoryItem) => item.identity_type === 'management_user' ? '管理端测试身份' : item.scope_type === 'project' ? '项目共享' : data?.users.find((u) => u.user_id === item.platform_user_id)?.display_name || '未命名用户';
 	const projectName = (item: ManagedMemoryItem) => data?.projects.find((p) => p.project_id === item.project_id)?.project_name || (item.project_id ? '未命名项目' : '');
@@ -107,12 +108,14 @@ export function MemoryManagementPage() {
 				</section>
 				<div className={cn('min-h-0 min-w-0', !currentItem && 'hidden lg:block')}>{currentItem ? <MemoryDetail key={`${currentItem.id}:${currentItem.version}`} item={currentItem} owner={ownerName(currentItem)} project={projectName(currentItem)} onClose={() => setDetailId(null)} onBusy={setDetailBusy} onChanged={async () => { await load(); setLearningRevision((n) => n + 1); }} /> : <div className="flex h-full flex-col items-center justify-center px-8 text-center"><BookUser className="mb-4 size-9 text-muted-foreground/40" /><h2 className="font-medium">选择一条记忆查看详情</h2><p className="mt-2 max-w-xs text-sm leading-6 text-muted-foreground">在这里查看完整内容、来源和历史，删除不需要的记忆。</p></div>}</div>
 			</div>
-		</div> : section === 'learning' ? <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6"><div className="mx-auto max-w-5xl"><div className="mb-5 flex gap-2" aria-label="学习记录类型"><Button variant={learningTab === 'group' ? 'default' : 'outline'} aria-pressed={learningTab === 'group'} onClick={() => setLearningTab('group')}>群聊持续学习</Button><Button variant={learningTab === 'conversation' ? 'default' : 'outline'} aria-pressed={learningTab === 'conversation'} onClick={() => setLearningTab('conversation')}>全部学习任务</Button></div>{learningTab === 'group' ? <GroupLearningActivity revision={learningRevision} onMemory={navigateMemory} users={data?.users} projects={data?.projects} /> : <LearningActivity revision={learningRevision} users={data?.users} projects={data?.projects} onCandidates={(event) => navigateMemory(event.scope_type, event.platform_user_id, event.project_id, 'active')} />}</div></div>
-		: <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6"><div className="mx-auto max-w-5xl space-y-5">
-			{error && <p role="alert" className="text-destructive">{error}</p>}{loading && <p role="status" className="text-muted-foreground">正在读取运行状态…</p>}
-			<section className="rounded-xl border bg-background p-5"><h2 className="font-semibold">后台索引任务 <span className="ml-2 font-normal text-muted-foreground">{jobs.length} 项</span></h2><p className="mt-2 text-sm leading-6 text-muted-foreground">正文独立保存。索引建立后可参与搜索；暂时失败会自动延后重试，任务在服务重启后继续。</p>{!loading && !error && !jobs.length && <p className="mt-5 rounded-lg bg-muted/40 p-4 text-sm">暂无待处理或失败的索引任务。</p>}
-				{jobs.map((job) => <div key={job.memory_id} className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t pt-4"><div><p className="text-sm">{({ pending: '等待索引', running: '正在建立索引', failed: '索引失败' })[job.state]} · 已尝试 {job.attempts} 次</p>{job.error_code && <p className="mt-1 text-xs text-amber-700">{job.error_code}</p>}<details className="mt-2 text-xs text-muted-foreground"><summary className="cursor-pointer">任务信息</summary><p className="mt-2 break-all">{job.memory_id} · 版本 {job.version} · {time(job.updated_at)}</p></details></div></div>)}
-			</section>
-		</div></div>}
+		</div> : section === 'learning' ? <div className="flex min-h-0 flex-1 flex-col">
+			<div className="shrink-0 border-b bg-background px-4 py-4 sm:px-6">
+				<div className="inline-flex max-w-full gap-1 overflow-x-auto rounded-lg bg-muted p-1" aria-label="学习记录类型">
+					{([{ id: 'group', title: '群聊持续学习' }, { id: 'conversation', title: '全部学习任务' }] as const).map(({ id, title }) => <button key={id} type="button" aria-pressed={learningTab === id} onClick={() => setLearningTab(id)} className={cn('shrink-0 rounded-md px-3 py-2 text-sm focus-visible:outline-2', learningTab === id ? 'bg-background font-medium shadow-sm' : 'text-muted-foreground hover:text-foreground')}>{title}</button>)}
+				</div>
+			</div>
+			{learningTab === 'group' ? <GroupLearningActivity revision={learningRevision} onMemory={navigateMemory} users={data?.users} projects={data?.projects} /> : <LearningActivity revision={learningRevision} users={data?.users} projects={data?.projects} onCandidates={(event) => navigateMemory(event.scope_type, event.platform_user_id, event.project_id, 'active')} />}
+		</div>
+		: <MemoryDiagnostics jobs={jobs} loading={loading} error={error} locale={zh ? 'zh-CN' : 'en'} onRefresh={() => void load()} />}
 	</div>;
 }

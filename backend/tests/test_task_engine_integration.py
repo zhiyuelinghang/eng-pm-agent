@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from backend.app import api
 from backend.app.db import Base
 from backend.app.models import (
+    BusinessLearningSource,
     ChatChannel,
     ChatChannelMember,
     ChatMessage,
@@ -237,6 +238,11 @@ def test_validation_c_only_confirmer_can_accept(
         confirmer,
     )["data"]
     assert accepted["status"] == "completed"
+    learning = list(platform_db.scalars(select(BusinessLearningSource).order_by(BusinessLearningSource.id)))
+    assert [row.stage for row in learning] == ['task_published', 'task_accepted']
+    assert learning[0].evidence[0]['outcome'] == 'confirmed'
+    assert learning[1].evidence[0]['outcome'] == 'accepted'
+    assert learning[1].actor_user_id == confirmer.id
 
 
 def test_recurring_tick_is_idempotent_and_creates_two_tasks(tmp_path) -> None:
@@ -296,6 +302,10 @@ def test_timed_once_registers_schedule_before_creating_task(
     )["data"]
 
     assert registered["schedule_id"].startswith("sched_")
+    source = platform_db.scalar(select(BusinessLearningSource))
+    assert source.stage == 'task_plan_confirmed'
+    assert source.evidence[0]['outcome'] == 'confirmed'
+    assert '尚不能证明任何任务已执行' in source.evidence[0]['text']
     assert reference_engine.list_tasks() == []
     plan = reference_engine.get_schedule(registered["schedule_id"])
     assert plan is not None
@@ -400,6 +410,7 @@ def test_dobby_project_chat_requirement_still_uses_ai_generator(
         real_name="系统管理员",
         identity_card_no="ADMIN_FLOW_TEST",
     )
+
     platform_db.add(admin)
     platform_db.commit()
     fixed_now = datetime(2026, 8, 25, 16, 47, tzinfo=ZoneInfo("Asia/Shanghai"))
@@ -1094,3 +1105,35 @@ def test_private_message_automation_respects_channel_membership(
         )
     assert recipient_error.value.status_code == 422
     assert recipient_error.value.detail == "消息接收人必须是目标群聊的当前成员"
+
+
+def test_generated_task_without_binding_cannot_be_learned_as_manual(tmp_path,monkeypatch,platform_db,responsibility_context):
+    project,responsible,confirmer,site=responsibility_context
+    reference_engine=TaskEngine(tmp_path/'unknown-origin.db')
+    monkeypatch.setattr(api,'get_engine',lambda:reference_engine)
+    payload=_task_payload(responsible,confirmer,site).model_copy(update={'generation_id':'missing-generation'})
+    result=api.create_task(project.id,payload,platform_db,responsible)
+    source=platform_db.scalar(select(BusinessLearningSource))
+    assert source.allow_learning is False
+    assert reference_engine.get_task(result['data']['id']).scope['learning_policy']['allow_learning'] is False
+
+
+def test_signed_generation_policy_survives_real_create_route(tmp_path,monkeypatch,platform_db,responsibility_context):
+    from backend.app.models import AgentConversation
+    from backend.app import business_learning_policy as policy
+    project,responsible,confirmer,site=responsibility_context
+    conversation=AgentConversation(project_id=project.id,user_id=responsible.id,agent_id='task-assistant',agent_name='任务助手',
+        conversation_type='task_editor',generation_id='generated-draft',agentscope_session_id='actual-session',status='completed',title='实际生成')
+    platform_db.add(conversation)
+    platform_db.commit()
+    monkeypatch.setattr(policy,'_memory_runs',lambda **_:[{'tenant_id':'projectcopilot','run_id':'actual-run',
+        'root_session_id':'actual-session','root_agent_id':'task-assistant','state':'completed','no_memory':False,'no_learning':True}])
+    token=policy.generation_origin_token(conversation)
+    reference_engine=TaskEngine(tmp_path/'bound-origin.db')
+    monkeypatch.setattr(api,'get_engine',lambda:reference_engine)
+    payload=_task_payload(responsible,confirmer,site).model_copy(update={'generation_id':'generated-draft','generation_origin_token':token})
+    result=api.create_task(project.id,payload,platform_db,responsible)
+    source=platform_db.scalar(select(BusinessLearningSource))
+    assert source.allow_learning is False
+    assert source.source_run_refs[0]['run_id']=='actual-run'
+    assert reference_engine.get_task(result['data']['id']).scope['learning_policy']['source_run_refs']==source.source_run_refs

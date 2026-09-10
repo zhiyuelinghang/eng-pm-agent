@@ -228,8 +228,14 @@ class OpenAIChatModel(ChatModelBase):
             "stream": self.stream,
         }
 
-        if self.parameters.max_tokens is not None:
-            kwargs["max_completion_tokens"] = self.parameters.max_tokens
+        if self.parameters.max_tokens is not None and not (
+            {"max_tokens", "max_completion_tokens"} & self._get_request_body_overrides().keys()
+        ):
+            token_parameter = (
+                "max_tokens" if isinstance(self.credential, CustomOpenAICredential)
+                else "max_completion_tokens"
+            )
+            kwargs[token_parameter] = self.parameters.max_tokens
 
         if self.parameters.temperature is not None:
             kwargs["temperature"] = self.parameters.temperature
@@ -276,7 +282,24 @@ class OpenAIChatModel(ChatModelBase):
             kwargs["stream_options"] = {"include_usage": True}
 
         start_datetime = datetime.now()
-        response = await self.client.chat.completions.create(**kwargs)
+        from openai import BadRequestError
+
+        try:
+            response = await self.client.chat.completions.create(**kwargs)
+        except BadRequestError as exc:
+            body = exc.body if isinstance(exc.body, dict) else {}
+            detail = body.get("error", body)
+            # Some compatible gateways expose OpenAI reasoning models, which
+            # require the newer field. Retry only a confirmed parameter-shape
+            # rejection; never retry arbitrary 400s or completed generations.
+            if (
+                "max_tokens" not in kwargs or not isinstance(detail, dict)
+                or detail.get("param") != "max_tokens"
+                or detail.get("code") != "unsupported_parameter"
+            ):
+                raise
+            kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
+            response = await self.client.chat.completions.create(**kwargs)
 
         audio_cfg = kwargs.get("audio")
         audio_fmt = (
@@ -365,12 +388,14 @@ class OpenAIChatModel(ChatModelBase):
                     )
 
                 if not chunk.choices:
-                    if delta_res.content or usage:
+                    if delta_res.content or usage or delta_res.metadata:
                         delta_res.usage = usage
                         yield delta_res
                     continue
 
                 choice = chunk.choices[0]
+                if getattr(choice, "finish_reason", None) == "length":
+                    delta_res.metadata["output_truncated"] = True
                 delta = choice.delta
 
                 # Thinking
@@ -452,7 +477,7 @@ class OpenAIChatModel(ChatModelBase):
                         input=delta_args or "",
                     )
 
-                if delta_res.content or usage:
+                if delta_res.content or usage or delta_res.metadata:
                     delta_res.usage = usage
                     yield delta_res
 
@@ -547,6 +572,8 @@ class OpenAIChatModel(ChatModelBase):
             "is_last": True,
             "usage": usage,
         }
+        if response.choices and getattr(response.choices[0], "finish_reason", None) == "length":
+            resp_kwargs["metadata"] = {"output_truncated": True}
         response_id = getattr(response, "id", None)
         if response_id:
             resp_kwargs["id"] = response_id

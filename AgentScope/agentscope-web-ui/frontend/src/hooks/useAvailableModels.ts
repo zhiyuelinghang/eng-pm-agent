@@ -13,17 +13,19 @@ export interface CredentialWithModels {
  * Provider type is read from `credential.data.type`.
  * Credentials without a `type` field or whose model fetch fails are silently skipped.
  */
-export function useAvailableModels() {
+export function useAvailableModels(enabled = true) {
 	const [groups, setGroups] = useState<Record<string, CredentialWithModels[]>>({});
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState<Error | null>(null);
 
 	const refetch = useCallback(async () => {
+		if (!enabled) return;
 		setLoading(true);
 		setError(null);
 		try {
 			const { credentials } = await credentialApi.list();
 			const result: Record<string, CredentialWithModels[]> = {};
+			const failures: Error[] = [];
 
 			await Promise.all(
 				credentials.map(async (credential) => {
@@ -36,19 +38,21 @@ export function useAvailableModels() {
 							credential,
 							models: models.filter((model) => model.enabled),
 						});
-					} catch {
+					} catch (error) {
+						failures.push(error instanceof Error ? error : new Error(String(error)));
 						result[type].push({ credential, models: [] });
 					}
 				}),
 			);
 
 			setGroups(result);
+			if (failures.length) setError(failures[0]);
 		} catch (e) {
 			setError(e as Error);
 		} finally {
 			setLoading(false);
 		}
-	}, []);
+	}, [enabled]);
 
 	useEffect(() => {
 		refetch();

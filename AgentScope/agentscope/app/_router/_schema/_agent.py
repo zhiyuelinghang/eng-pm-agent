@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 import warnings
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ....agent import ContextConfig, ReActConfig
 from ...storage import (
@@ -14,6 +14,7 @@ from ...storage import (
     AgentModelPolicy,
     InviteConfig,
     MemorySettingsData,
+    ChatModelConfig,
     PlatformAgentConfig,
     PlatformMCPVersionBinding,
     SessionKnowledgeConfig,
@@ -104,8 +105,9 @@ class UpdateAgentRequest(BaseModel):
     platform_config: PlatformAgentConfig | None = Field(
         default=None,
         description=(
-            "Engineering-platform role and publication settings. Omit to "
-            "retain the existing configuration."
+            "Engineering-platform capability and publication settings. "
+            "Only explicitly supplied fields are changed; omitted fields "
+            "retain their current values."
         ),
     )
     invite_config: InviteConfig | None = Field(
@@ -154,7 +156,6 @@ class PlatformAgentCatalogItem(BaseModel):
     description: str
     category: str
     role: str
-    agent_level: str
     enabled: bool
     published: bool
     invitable: bool
@@ -232,17 +233,24 @@ class MemorySettingsResponse(BaseModel):
     infrastructure: MemoryInfrastructureResponse
 
 
+class UpdateMemorySettingsData(MemorySettingsData):
+    """A replacement request must explicitly include every public setting."""
+
+    learning_enabled: bool = Field(...)
+    learning_model_config: ChatModelConfig | None = Field(...)
+    learning_interactions_enabled: bool = Field(...)
+    learning_business_events_enabled: bool = Field(...)
+    group_learning_enabled: bool = Field(...)
+    compression_model_config: ChatModelConfig | None = Field(...)
+
+
 class UpdateMemorySettingsRequest(BaseModel):
-    """Replace the full memory policy with optimistic concurrency."""
+    """Replace the six settings using a mandatory revision check."""
 
-    settings: MemorySettingsData
-    expected_revision: int | None = Field(default=None, ge=1)
+    model_config = ConfigDict(extra="forbid")
 
-
-class ResetMemorySettingsRequest(BaseModel):
-    """Restore the reference-branch defaults."""
-
-    expected_revision: int | None = Field(default=None, ge=1)
+    settings: UpdateMemorySettingsData
+    expected_revision: int = Field(ge=1)
 
 
 class WeKnoraConnectionResponse(BaseModel):

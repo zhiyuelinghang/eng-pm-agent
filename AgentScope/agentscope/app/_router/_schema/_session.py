@@ -91,7 +91,11 @@ class CreateSessionRequest(BaseModel):
 
     agent_id: str = Field(description="Agent this session belongs to.")
     permission_mode: PermissionMode | None = Field(
-        default=None, description="Initial permission mode, validated before saving.",
+        default=None,
+        description=(
+            "Platform session permission mode. Management debug sessions inherit "
+            "the saved agent mode; a conflicting override is rejected."
+        ),
     )
     workspace_id: str | None = Field(
         default=None,
@@ -183,7 +187,10 @@ class UpdateSessionRequest(BaseModel):
     )
     permission_mode: PermissionMode | None = Field(
         default=None,
-        description="New permission mode for the session.",
+        description=(
+            "New platform/task permission mode. Management debug sessions cannot "
+            "override the saved agent mode."
+        ),
     )
     platform_context: PlatformSessionContext | None = Field(
         default=None,

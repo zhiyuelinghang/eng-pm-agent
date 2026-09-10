@@ -6,6 +6,7 @@ tools, management APIs and background jobs share the same data invariants.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import nullcontext
 import hashlib
 import json
 import logging
@@ -68,11 +69,12 @@ class MemoryAccess:
     management: bool = False
     read_scopes: tuple[str, ...] = ("user", "user_project", "project")
     write_scopes: tuple[str, ...] = ("user", "user_project", "project")
-    learning_capture: bool = True
-    learning_process: bool = True
+    learning_enabled: bool = True
     learning_use: bool = True
     group_source_channels: tuple[str, ...] = ()
     group_shared_channels: tuple[str, ...] = ()
+    audience_user_ids: tuple[str, ...] = ()
+    business_source_ids: tuple[str, ...] = ()
 
     @property
     def actor(self) -> str:
@@ -80,7 +82,7 @@ class MemoryAccess:
 
     def target(self, scope: str, *, write: bool = False) -> tuple[str, str]:
         if scope not in (self.write_scopes if write else self.read_scopes):
-            raise MemoryError("scope_disabled", "该智能体未启用此记忆抽屉。", status=403)
+            raise MemoryError("scope_disabled", "当前业务场景、来源权限或本次请求不允许访问此记忆范围。", status=403)
         if scope == "user" and self.private and self.user_id:
             return self.user_id, ""
         if scope == "user_project" and self.private and self.user_id and self.project_id and self.project_read:
@@ -140,6 +142,14 @@ class MemoryRepository:
             allowed = access.group_shared_channels if row['scope_type'] == 'project' else access.group_source_channels
             if str(source.get('channel_id')) not in allowed:
                 raise MemoryError('not_found', '当前无权访问该群聊来源记忆。', status=404)
+        if source.get('kind') in {'group_learning', 'business_learning'}:
+            audience = {access.user_id} if access.private else set(access.audience_user_ids)
+            if not audience or not audience.issubset(set(source.get('audience') or [])):
+                raise MemoryError('not_found', '当前受众无权访问该来源记忆。', status=404)
+        if source.get('kind') == 'business_learning':
+            source_ids = source.get('source_ids') or [source.get('source_id')]
+            if not source_ids or any(str(sid) not in access.business_source_ids for sid in source_ids):
+                raise MemoryError('not_found', '当前无权访问该业务来源记忆。', status=404)
 
     @staticmethod
     def _version(conn, row: dict, actor: str, action: str) -> None:
@@ -155,7 +165,7 @@ class MemoryRepository:
             attempts=0, available_at=now(), lease_until=NULL, lease_id=NULL, error_code=NULL, updated_at=now()""",
             (row["id"], row["version"]))
 
-    def write(self, access: MemoryAccess, items: list[MemoryWrite], *, request_id: str, source: dict) -> list[dict]:
+    def write(self, access: MemoryAccess, items: list[MemoryWrite], *, request_id: str, source: dict, connection=None) -> list[dict]:
         if not items or len(items) > 20 or not request_id or len(request_id) > 255:
             raise MemoryError("invalid_request", "一次保存需要 1–20 条记忆和有效的请求标识。")
         # Validate the entire batch before persisting anything.
@@ -167,7 +177,7 @@ class MemoryRepository:
              "identity": access.identity_type, "source": source},
             sort_keys=True, ensure_ascii=False, default=str,
         ).encode()).hexdigest()
-        with self._connection() as conn:
+        with (nullcontext(connection) if connection is not None else self._connection()) as conn:
             conn.execute("SET LOCAL statement_timeout = '5s'")
             # Serializes retries and modifications in one tenant, identity and owner.
             # Project writes from different users also take a drawer-level lock below.
@@ -203,6 +213,8 @@ class MemoryRepository:
                     row = conn.execute("""SELECT * FROM memory_records WHERE tenant_id=%s AND identity_type=%s
                         AND scope_type=%s AND platform_user_id=%s AND project_id=%s AND fact_key=%s AND status<>'deleted' FOR UPDATE""",
                         (access.tenant_id, access.identity_type, item.scope_type, user, project, item.fact_key)).fetchone()
+                    if row:
+                        self._check_record(access,row,write=True)
                 if row and all(row[k] == getattr(item, k) for k in ("content", "memory_type", "importance", "status")):
                     result.append({"status": "unchanged", "memory": _visible(row, access)})
                     continue
@@ -250,6 +262,13 @@ class MemoryRepository:
         where = "tenant_id=%s AND identity_type=%s AND (" + (" OR ".join(clauses) or "FALSE") + ")"
         where += " AND (source->>'kind' IS DISTINCT FROM 'group_learning' OR scope_type='user' OR (scope_type='project' AND source->>'channel_id'=ANY(%s)) OR (scope_type='user_project' AND source->>'channel_id'=ANY(%s)))"
         params.extend([list(access.group_shared_channels), list(access.group_source_channels)])
+        audience = [access.user_id] if access.private else list(access.audience_user_ids)
+        where += " AND (source->>'kind' NOT IN ('group_learning','business_learning') OR source->>'kind' IS NULL OR (%s AND coalesce(source->'audience','[]'::jsonb) @> %s::jsonb))"
+        params.extend([bool(audience), Jsonb(audience)])
+        # Derived experiences must retain authorization for every source, not merely the last event.
+        ids = "CASE WHEN jsonb_typeof(source->'source_ids')='array' AND jsonb_array_length(source->'source_ids')>0 THEN source->'source_ids' ELSE jsonb_build_array(source->>'source_id') END"
+        where += f" AND (source->>'kind' IS DISTINCT FROM 'business_learning' OR ARRAY(SELECT jsonb_array_elements_text({ids})) <@ %s::text[])"
+        params.append(list(access.business_source_ids))
         return where, params
 
     def get(self, access: MemoryAccess, memory_id: str) -> dict:
@@ -331,8 +350,8 @@ class MemoryRepository:
         with self._connection() as conn:
             return _json(conn.execute("SELECT * FROM memory_versions WHERE memory_id=%s ORDER BY version DESC", (UUID(memory_id),)).fetchall())
 
-    def forget(self, access: MemoryAccess, memory_id: str, expected_version: int) -> dict:
-        with self._connection() as conn:
+    def forget(self, access: MemoryAccess, memory_id: str, expected_version: int, *, connection=None) -> dict:
+        with (nullcontext(connection) if connection is not None else self._connection()) as conn:
             row = conn.execute("SELECT * FROM memory_records WHERE id=%s FOR UPDATE",(UUID(memory_id),)).fetchone()
             if not row:
                 raise MemoryError("not_found", "未找到该记忆。", status=404)
@@ -363,9 +382,9 @@ class MemoryRepository:
             new_user = row["platform_user_id"] if user_id is None else user_id
             new_project = row["project_id"] if project_id is None else project_id
             new_status = status or row["status"]
-            if row.get('source', {}).get('kind') == 'group_learning' and (
+            if row.get('source', {}).get('kind') in {'group_learning', 'business_learning'} and (
                 new_scope != row['scope_type'] or new_user != row['platform_user_id'] or new_project != row['project_id']):
-                raise MemoryError('group_scope_fixed', '群聊学习成果保留原始可见范围，不能调整抽屉或转交其他用户。')
+                raise MemoryError('source_scope_fixed', '来源学习成果保留原始可见范围，不能调整抽屉或转交其他用户。')
             learning = dict(row.get('learning') or {})
             if row['memory_type'] in {'reflection','experience','skill'}:
                 if status == 'active':

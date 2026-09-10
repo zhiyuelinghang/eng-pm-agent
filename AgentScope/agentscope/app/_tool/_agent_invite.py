@@ -150,13 +150,13 @@ class AgentInvite(_TeamToolBase):
     """Borrow one of the user's invitable agents into the current team.
 
     The tool is attached to a caller's toolkit only when the calling
-    user has at least one agent with ``invitable=True`` and a non-empty
-    ``invite_description`` — see the toolkit assembly logic in
+    user has at least one enabled agent in the caller's explicit list
+    (or enabled targets that allow main calls) — see the toolkit assembly logic in
     :func:`get_toolkit`. The invitable pool is captured as a **snapshot**
     at attachment time so the tool's ``input_schema`` can enumerate
     concrete targets; ``__call__`` re-fetches the target's record and
-    re-checks invitability before minting the session, so a race
-    between snapshot and call (e.g. the user just turned off the toggle)
+    re-checks the current caller policy before minting the session, so a race
+    between snapshot and call (e.g. the user just disabled the target)
     is caught cleanly.
     """
 
@@ -225,7 +225,7 @@ class AgentInvite(_TeamToolBase):
         ]
         target_lines = [
             f"- ``{_display_name(a.data.name, a.id)!r}`` — "
-            f"{a.data.invite_config.invite_description}"
+            f"{a.data.invite_config.invite_description or a.data.platform_config.description or a.data.name}"
             for a in invitable_pool
         ]
         self.description = (
@@ -251,9 +251,7 @@ class AgentInvite(_TeamToolBase):
           pool.
         - The caller's latest agent-call configuration still allows the
           matched agent.
-        - The matched agent is still ``invitable=True`` with a
-          non-empty ``invite_description`` (guards against a
-          toggle-off race between attachment and invocation).
+        - The matched agent is still enabled and allowed by the caller policy.
         - The team does not already have this agent as a member (one
           borrow per agent per team).
         - The invited agent has at least one existing session to
@@ -324,70 +322,52 @@ class AgentInvite(_TeamToolBase):
             )
             from .._service._platform_settings import (
                 get_global_main_agent_id,
+                get_platform_duties,
             )
 
             global_main_agent_id = await get_global_main_agent_id(
                 self._storage,
                 self._caller_owner_id,
-                legacy_record=caller,
             )
-            caller_is_global_main = (
-                caller is not None and global_main_agent_id == caller.id
-            )
-            global_main_target_allowed = (
-                caller_is_global_main
-                and invited.data.platform_config.enabled
-                and invited.data.platform_config.allow_global_main_call
-                and invited.id != global_main_agent_id
-            )
-            configured_target_allowed = (
-                caller is not None
-                and not caller_is_global_main
-                and caller.data.call_config.allows(invited.id)
-            )
-            if (
-                caller is None
-                or not caller.data.platform_config.enabled
-                or invited.id == caller.id
-                or not (
-                    global_main_target_allowed
-                    or configured_target_allowed
-                )
-            ):
+            from .._agent_collaboration import can_delegate
+            duties = await get_platform_duties(self._storage, self._caller_owner_id)
+
+            if not can_delegate(caller, invited, global_main_agent_id, duties):
                 return _error(
                     f"AgentInvite: agent {invited.data.name!r} is no longer "
                     "allowed by the caller's agent-call configuration.",
                 )
 
-            # Re-fetch fresh — the snapshot could be stale if the user
-            # just toggled the invite off.
+            # Re-fetch so disabling a target takes effect before execution.
             fresh = await self._storage.get_agent(
                 invited.user_id,
                 invited.id,
             )
-            if (
-                fresh is None
-                or not fresh.data.platform_config.enabled
-                or not fresh.data.invite_config.invitable
-                or not (
-                    fresh.data.invite_config.invite_description or ""
-                ).strip()
-                or (
-                    caller_is_global_main
-                    and (
-                        fresh.id == global_main_agent_id
-                        or not fresh.data.platform_config.enabled
-                        or not (
-                            fresh.data.platform_config.allow_global_main_call
-                        )
-                    )
-                )
-            ):
+            if not can_delegate(caller, fresh, global_main_agent_id, duties):
                 return _error(
                     f"AgentInvite: agent {invited.data.name!r} is no "
                     f"longer invitable.",
                 )
             invited = fresh
+
+            from .._service._model import (
+                managed_chat_model_config,
+                resolve_effective_chat_model_config,
+            )
+
+            # A fixed caller can differ from its saved session selection.
+            # Resolve both policies before borrowing, including reassignment.
+            inherited_config = session.config.model_copy(update={
+                "chat_model_config": resolve_effective_chat_model_config(
+                    caller.data, session.config,
+                ),
+            })
+            borrowed_chat_model = resolve_effective_chat_model_config(
+                invited.data, inherited_config,
+            )
+            borrowed_fallback_model = managed_chat_model_config(
+                session.config.fallback_chat_model_config,
+            )
 
             for ancestor_id in ancestor_session_ids(team, self._session_id):
                 ancestor = await self._storage.get_session(self._user_id, "", ancestor_id)
@@ -408,6 +388,8 @@ class AgentInvite(_TeamToolBase):
                     return _error("AgentInvite: 目标已由其他阶段调用，请由该阶段继续分配。")
                 return await self._reassign_existing(
                     invited, existing, team, session, prompt,
+                    chat_model_config=borrowed_chat_model,
+                    fallback_chat_model_config=borrowed_fallback_model,
                 )
 
             # Leader session — needed for chat-model / workspace fallback
@@ -463,16 +445,6 @@ class AgentInvite(_TeamToolBase):
                         session_id=_generate_id(),
                     )
                 )
-            invited_policy = invited.data.model_policy
-            borrowed_chat_model = (
-                invited_policy.chat_model_config
-                if invited_policy.mode == "fixed"
-                else leader_session.config.chat_model_config
-            )
-            borrowed_fallback_model = (
-                leader_session.config.fallback_chat_model_config
-            )
-
             worker_platform_context = leader_session.config.platform_context
             if worker_platform_context is not None:
                 worker_platform_context = worker_platform_context.model_copy(
@@ -526,6 +498,7 @@ class AgentInvite(_TeamToolBase):
                     fallback_chat_model_config=borrowed_fallback_model,
                     knowledge_config=borrowed_knowledge_config,
                     platform_context=worker_platform_context,
+                    memory_run_id=leader_session.config.memory_run_id,
                 ),
                 state=worker_state,
                 source=leader_session.source,
@@ -610,7 +583,10 @@ class AgentInvite(_TeamToolBase):
                 state=ToolResultState.ERROR,
             )
 
-    async def _reassign_existing(self, invited, member, team, leader, prompt):
+    async def _reassign_existing(
+        self, invited, member, team, leader, prompt, *,
+        chat_model_config, fallback_chat_model_config,
+    ):
         """Reuse a settled worker for another stage, with fresh authorization."""
         if member.settled_revision < member.work_revision:
             return _error("AgentInvite: 目标智能体仍在执行上一阶段，请等待结果后再调用。")
@@ -632,7 +608,12 @@ class AgentInvite(_TeamToolBase):
         )
         await self._storage.upsert_session(
             user_id=self._user_id, agent_id=invited.id, session_id=borrowed.id,
-            config=borrowed.config.model_copy(update={"platform_context": context}),
+            config=borrowed.config.model_copy(update={
+                "chat_model_config": chat_model_config,
+                "fallback_chat_model_config": fallback_chat_model_config,
+                "platform_context": context,
+                "memory_run_id": leader.config.memory_run_id,
+            }),
             state=state, source=borrowed.source,
         )
         from ._team_say import TeamSay

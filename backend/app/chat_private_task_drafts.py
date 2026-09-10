@@ -27,7 +27,6 @@ chat_channel_for_user_or_403 = _legacy.chat_channel_for_user_or_403
 chat_message_view = _legacy.chat_message_view
 chat_task_draft_view = _legacy.chat_task_draft_view
 _configured_task_assistant = _legacy._configured_task_assistant
-_task_assistant_platform_context = _legacy._task_assistant_platform_context
 _chat_message_actor_name = _legacy._chat_message_actor_name
 _message_text = _legacy._message_text
 _tagged_content = _legacy._tagged_content
@@ -205,6 +204,12 @@ def _set_private_task_draft_state(
         draft.draft_payload = payload
     if publish_result is not None:
         draft.publish_result = publish_result
+    terminal = {'ready': 'completed', 'failed': 'failed', 'cancelled': 'cancelled'}.get(status_name)
+    runtime = _PRIVATE_TASK_AGENT_RUNS.get(draft.id)
+    if terminal and runtime:
+        run = db.scalar(select(AgentConversation).where(AgentConversation.agentscope_session_id == runtime[1]))
+        if run is not None:
+            run.status = terminal
     db.flush()
     _queue_private_task_draft_publish(db, draft)
 
@@ -237,6 +242,8 @@ def _finish_private_task_draft(
 
 
 async def _generate_private_task_draft(draft_id: int) -> None:
+    creation_pending = None
+    session_id = None
     try:
         with _legacy.SessionLocal() as db:
             draft = db.get(ChatTaskDraft, draft_id)
@@ -274,6 +281,11 @@ async def _generate_private_task_draft(draft_id: int) -> None:
                         agent_name=conversation.agent_name,
                         user_name=user.real_name,
                     )
+                    from .business_learning_policy import conversation_learning_policy, merge_learning_policies
+                    actual_policy = conversation_learning_policy(conversation)
+                    previous_policy = context_reference.get('learning_policy')
+                    context_reference = {**context_reference,'learning_policy':merge_learning_policies(previous_policy,actual_policy)
+                        if previous_policy is not None else actual_policy}
                     draft.context_json = [context_reference, *snapshot]
                     db.commit()
                     db.refresh(draft)
@@ -285,22 +297,14 @@ async def _generate_private_task_draft(draft_id: int) -> None:
             selected_agent = _configured_task_assistant()
             agent_id = str(selected_agent["id"])
             client = _legacy._agentscope_client()
-            platform_context = _task_assistant_platform_context(
-                user=user,
-                project=project,
-                conversation_id=f"private-task-draft-{draft.id}",
-                conversation_title=channel.title,
-                channel_id=channel.id,
-            )
-            session_id = await asyncio.to_thread(
-                client.create_session,
-                agent=selected_agent,
-                workspace_id=(
-                    f"platform-task-p{project.id}-u{user.id}-a{agent_id}"
-                ),
-                name=f"{project.name} · 任务草稿 {draft.id}",
-                platform_context=platform_context,
-            )
+            from .task_session_binding import create_bound_task_session
+            creation_pending = asyncio.create_task(asyncio.to_thread(
+                create_bound_task_session, client, agent=selected_agent,
+                user_id=user.id, project_id=project.id, generation_id=draft.generation_id,
+                source_channel_id=channel.id,
+                session_factory=_legacy.SessionLocal,
+            ))
+            session_id = await asyncio.shield(creation_pending)
             _PRIVATE_TASK_AGENT_RUNS[draft_id] = (agent_id, session_id)
             draft.context_json = [
                 *(draft.context_json or []),
@@ -349,6 +353,13 @@ async def _generate_private_task_draft(draft_id: int) -> None:
             payload=payload,
         )
     except asyncio.CancelledError:
+        if creation_pending is not None:
+            try:
+                session_id = await creation_pending
+                _PRIVATE_TASK_AGENT_RUNS[draft_id] = (agent_id, session_id)
+                await asyncio.to_thread(client.interrupt, agent_id=agent_id, session_id=session_id)
+            except Exception:
+                logger.exception('停止任务草稿会话失败：draft_id=%s', draft_id)
         _finish_private_task_draft(
             draft_id,
             status_name="cancelled",
@@ -515,10 +526,13 @@ async def create_home_agent_task_draft(
         )
 
     channel = ensure_project_chat_channel(db, project_id, user)
+    from .business_learning_policy import conversation_learning_policy
     context_snapshot = [
         {
             "source": "home_agent_reference",
             "conversation_id": conversation.id if conversation is not None else None,
+            "learning_policy": conversation_learning_policy(conversation) if conversation is not None else
+                {'allow_learning':True,'source_run_refs':[]},
         },
     ]
     draft = ChatTaskDraft(
@@ -622,7 +636,12 @@ def publish_private_chat_task_draft(
             # Imported lazily to avoid the api.py -> chat_api.py cycle.
             from .api import create_task
 
-            created = create_task(draft.project_id, payload, db, user)
+            from .business_learning_sources import task_learning_origin
+            reference = next((item for item in draft.context_json or [] if item.get('source')=='home_agent_reference'),None)
+            # This object was persisted by the authenticated homepage entry, not provided by the publish payload.
+            source_policy = (reference.get('learning_policy') or {'allow_learning':False,'source_run_refs':[]}) if reference else None
+            with task_learning_origin(db, draft.channel_id, draft.generation_id, source_policy):
+                created = create_task(draft.project_id, payload, db, user)
         except Exception:
             db.rollback()
             draft = db.get(ChatTaskDraft, draft_id)

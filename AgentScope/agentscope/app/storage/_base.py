@@ -15,6 +15,7 @@ from ._model import (
     PermissionReviewAuditRecord,
     PermissionReviewerConfigData,
     PermissionReviewerConfigRecord,
+    MemorySettingsData,
     PlatformSettingsData,
     PlatformSettingsRecord,
     ScheduleRecord,
@@ -100,6 +101,19 @@ class StorageBase(ABC):
         raise NotImplementedError(
             "This storage backend does not persist platform settings.",
         )
+
+    async def update_memory_settings(
+        self,
+        user_id: str,
+        settings: "MemorySettingsData",
+        expected_revision: int,
+    ) -> PlatformSettingsRecord:
+        """Atomically replace memory settings if the stored revision matches."""
+        raise NotImplementedError("This storage backend does not support memory settings CAS.")
+
+    def validate_memory_learning_storage(self, memory_database_url: str, settings_schema: str) -> None:
+        """Require a database shared with the atomic learning publication guard."""
+        raise ValueError("当前配置存储不支持原子学习提交，请使用与记忆库相同的 PostgreSQL 数据库。")
 
     async def list_permission_review_audits(
         self,

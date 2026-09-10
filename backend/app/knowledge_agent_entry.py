@@ -16,7 +16,7 @@ def connect_knowledge_agent_entry(project_id, conversation_id, payload, db, user
     if conversation.agent_conversation_id:
         linked = db.get(AgentConversation, conversation.agent_conversation_id)
         if linked is None or linked.user_id != user.id or linked.project_id != project_id:
-            raise HTTPException(status_code=409, detail='资料助手会话关联异常，请新建对话。')
+            raise HTTPException(status_code=409, detail='知识库助手会话关联异常，请新建对话。')
         return ok(serialize(linked))
     try:
         selected = require_knowledge_agent(client.get_catalog(force_refresh=True), payload.agent_id)
@@ -34,7 +34,7 @@ def connect_knowledge_agent_entry(project_id, conversation_id, payload, db, user
             platform_context=_platform_session_context(user, project, linked, db, knowledge_query_enabled=False),
         )
         linked.status = 'active'
-        audit(db, user, '接入资料助手', f'知识库对话接入「{linked.agent_name}」',
+        audit(db, user, '接入知识库助手', f'知识库对话接入「{linked.agent_name}」',
               project_id, 'engineering_knowledge_conversation', conversation.id)
         db.commit()
         db.refresh(linked)

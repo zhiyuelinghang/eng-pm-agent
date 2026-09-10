@@ -54,9 +54,10 @@ class ModelCard(BaseModel):
     )
     """The model context size."""
 
-    output_size: int = Field(
+    output_size: int | None = Field(
+        default=None,
         title="Max output tokens",
-        description="The maximum number of tokens.",
+        description="The known maximum output tokens, or null when unknown.",
         gt=0,
     )
     """The model max output tokens."""
@@ -114,7 +115,7 @@ class ModelCard(BaseModel):
             properties.pop("voice", None)
 
         # Auto-inject: set max_tokens maximum from output_size
-        if "max_tokens" in properties and "output_size" in config:
+        if "max_tokens" in properties and config.get("output_size") is not None:
             properties["max_tokens"]["maximum"] = config["output_size"]
 
         # Apply parameter_overrides with simple dict merge
@@ -154,7 +155,7 @@ class ModelCard(BaseModel):
             input_types=config.get("input_types", ["text/plain"]),
             output_types=config.get("output_types", ["text/plain"]),
             context_size=config["context_size"],
-            output_size=config["output_size"],
+            output_size=config.get("output_size"),
             parameter_schema=final_schema,
             parameters_overrides=config.get("parameter_overrides", {}),
         )

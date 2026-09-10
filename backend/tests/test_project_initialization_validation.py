@@ -1,7 +1,8 @@
 import importlib
 import sys
 from pathlib import Path
-from sqlalchemy import create_engine
+import pytest
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
@@ -11,6 +12,7 @@ from backend.app.initialization_draft_queries import (
 )
 from backend.app.models import (
     AgentConversation,
+    BusinessLearningSource,
     Project,
     ProjectInitializationDraft,
     ProjectInitializationDraftSection,
@@ -56,7 +58,8 @@ def validate_initialization_payload(
     return result["validation_issues"]
 
 
-def test_ready_draft_can_be_applied_with_current_structured_validation() -> None:
+@pytest.mark.parametrize('through_api', [False, True])
+def test_ready_draft_can_be_applied_with_current_structured_validation(through_api) -> None:
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -125,11 +128,16 @@ def test_ready_draft_can_be_applied_with_current_structured_validation() -> None
             ),
         )
 
-        result = apply_initialization_draft(
-            db,
-            draft,
-            ApplyInitializationDraftInput(allow_partial=True),
-        )
+        if through_api:
+            from backend.app.api import apply_project_initialization_draft
+            result = apply_project_initialization_draft(project.id, draft.id,
+                ApplyInitializationDraftInput(allow_partial=True), db, user)['data']['result']
+            source = db.scalar(select(BusinessLearningSource))
+            assert source.stage == 'initialization_applied'
+            assert source.source_version == str(draft.revision)
+            assert source.evidence[0]['outcome'] == 'confirmed'
+        else:
+            result = apply_initialization_draft(db, draft, ApplyInitializationDraftInput(allow_partial=True))
 
         assert result["status"] == "applied"
         assert draft.status == "applied"

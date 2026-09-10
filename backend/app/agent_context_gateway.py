@@ -232,6 +232,18 @@ def get_agent_knowledge_scope(
     )
     from .knowledge_agent_support import constrain_knowledge_scope
     envelope = constrain_knowledge_scope(db, context.conversation, envelope)
+    if context.conversation.conversation_type == 'group_chat':
+        # The response is posted to the group, so every recipient must be able
+        # to read each selected document. The initiator's rights alone are insufficient.
+        memory_scope = get_agent_memory_scope(agentscope_session_id, db)['data']
+        allowed = set(envelope.get('weknora_knowledge_ids') or [])
+        for recipient_id in memory_scope['audience_user_ids']:
+            recipient = db.get(User, int(recipient_id))
+            recipient_scope = _platform_session_context(recipient, context.project, context.conversation, db,
+                                                        knowledge_query_enabled=True)
+            allowed.intersection_update(recipient_scope.get('weknora_knowledge_ids') or [])
+        envelope['weknora_knowledge_ids'] = sorted(allowed)
+        envelope['weknora_access_mode'] = 'restricted'
     scope = {
         key: value for key, value in envelope.items()
         if key.startswith("weknora_")
@@ -256,13 +268,31 @@ def get_agent_memory_scope(
     """Revalidate membership for every memory operation, including group invocations."""
     context = resolve_tool_context(db, agentscope_session_id)
     private = context.conversation.conversation_type != "group_chat"
-    from .models import ChatAgentThread
-    from .group_learning_source import visible_channels
+    from .models import ChatChannel, EngineeringKnowledgeConversation
+    from .group_learning_source import channel_policy, visible_channels
     sources, shared = visible_channels(db, context.project.id, context.user.id)
     group_shared = False
+    audience = [str(context.user.id)]
     if not private:
-        thread = db.scalar(select(ChatAgentThread).where(ChatAgentThread.agentscope_session_id == agentscope_session_id))
-        group_shared = thread is not None and str(thread.channel_id) in shared
+        channel = db.get(ChatChannel, context.conversation.source_channel_id) if context.conversation.source_channel_id else None
+        if channel is None or channel.project_id != context.project.id or channel.archived_at is not None:
+            raise HTTPException(403, '群聊运行缺少有效的来源绑定')
+        group_shared, members = channel_policy(db, channel)
+        if context.user.id not in members:
+            raise HTTPException(403, '当前账号已无权访问此群聊')
+        audience = [str(uid) for uid in members]
+        # A group reply must not expose sources which only its initiating user can see.
+        common = set(sources)
+        for member in members:
+            visible, _ = visible_channels(db, context.project.id, member)
+            common.intersection_update(visible)
+        sources = sorted(common)
+        shared = sorted(set(shared) & common)
+    from .business_learning_sources import authorized_source_ids
+    knowledge_entry = db.scalar(select(EngineeringKnowledgeConversation.id).where(
+        EngineeringKnowledgeConversation.agent_conversation_id == context.conversation.id)) is not None
+    from .business_learning_policy import derived_input_constraints
+    inherited = derived_input_constraints(db,context.conversation)
     return ok({
         "user_id": str(context.user.id),
         "project_id": str(context.project.id),
@@ -273,7 +303,34 @@ def get_agent_memory_scope(
         "project_write": (context.is_admin and context.conversation.conversation_type in {"general", "business"}) or group_shared,
         "group_source_channels": sources,
         "group_shared_channels": shared,
+        "conversation_id": str(context.conversation.id),
+        "entry_agent_id": context.conversation.agent_id,
+        "root_session_id": context.conversation.agentscope_session_id,
+        "entry_kind": 'knowledge' if knowledge_entry else context.conversation.conversation_type,
+        **inherited,
+        "source_channel_id": str(context.conversation.source_channel_id or ''),
+        "audience_user_ids": audience,
+        "business_source_ids": authorized_source_ids(db, context.project.id, audience),
     })
+
+
+@router.get('/business-learning/sources', dependencies=[Depends(require_service_token)])
+def business_learning_sources(after_id: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+                              db: Session = Depends(get_db)):
+    from .business_learning_sources import list_sources
+    return ok(list_sources(db, after_id, limit))
+
+
+@router.get('/business-learning/sources/{source_id}', dependencies=[Depends(require_service_token)])
+def business_learning_source(source_id: int, db: Session = Depends(get_db)):
+    from .business_learning_sources import read_source
+    return ok(read_source(db, source_id))
+
+
+@router.post('/business-learning/validate', dependencies=[Depends(require_service_token)])
+def business_learning_validate(body: GroupLearningValidation, db: Session = Depends(get_db)):
+    from .business_learning_sources import validate_source
+    return ok(validate_source(db, body.snapshot))
 
 
 @router.get("/memory-catalog", dependencies=[Depends(require_service_token)])

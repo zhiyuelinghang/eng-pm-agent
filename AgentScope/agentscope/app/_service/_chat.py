@@ -30,6 +30,7 @@ from .._team_lifecycle import (
     settle_team_member,
     team_work_is_pending,
 )
+from .._agent_permissions import sync_agent_permission_mode
 from .._team_messaging import deliver_team_message
 from .._team_delegation import has_pending_delegations, report_recipient_session_id
 from ..message_bus import MessageBus, MessageBusKeys
@@ -53,7 +54,8 @@ from .._types import (
     SubAgentTemplate,
 )
 from ._access import ResourceAccessService
-from ._model import get_model, resolve_effective_chat_model_config
+from ._model import get_model, managed_chat_model_config, resolve_effective_chat_model_config
+from ..middleware._managed_model_middleware import ManagedModelMiddleware
 from ._tts_model import get_tts_model
 from ._toolkit import get_toolkit
 from ._session_projection import SessionProjection
@@ -63,12 +65,14 @@ from ._permission_review import (
     PermissionReviewService,
 )
 from ._attachment_pipeline import AttachmentPipeline
+from ._run_checkpoint import RunCheckpoint
 
 from ..._logging import logger
-from ...agent import Agent, ModelConfig
+from ...agent import Agent, ContextConfig, ExecutionPolicy, ModelConfig, ReActConfig
 from ...event import (
     AgentEvent,
     CustomEvent,
+    ModelCallStartEvent,
     ReplyStartEvent,
     ReplyEndEvent,
     ReplyFinishedReason,
@@ -566,6 +570,32 @@ class ChatService:
                     f"agent {agent_id!r}."
                 ),
             )
+        if not isinstance(input_msg, UserInterruptEvent):
+            from ._platform_settings import ensure_fixed_agent_entry, get_platform_duties
+            duties = await get_platform_duties(self._storage, user_id)
+            delegated = False
+            if duties is not None and agent_id in {
+                getattr(duties, "global_main_agent_id", None),
+                getattr(duties, "project_initializer_agent_id", None),
+            } and session_record.team_id:
+                team = await self._storage.get_team(user_id, session_record.team_id)
+                delegated = team is not None and team.session_id != session_id
+            ensure_fixed_agent_entry(
+                duties, agent_id, session_record.config.platform_context, delegated=delegated,
+            )
+        # Debug sessions (including existing/team sessions and resumed runs)
+        # always use the current saved agent mode, never a session override.
+        # A conversation can contain many independent requests. Only a real
+        # user input at its root starts a new memory run; team inbox reports
+        # and confirmation continuations retain the existing run identity.
+        from ..memory._run_context import bind_memory_run
+        session_record = await bind_memory_run(
+            self._storage, user_id, session_record, input_msg,
+        )
+        session_record.state = sync_agent_permission_mode(
+            agent_record.data,
+            session_record,
+        )
         workspace = await self._workspace_manager.get_workspace(
             user_id,
             agent_id,
@@ -595,6 +625,7 @@ class ChatService:
         # reasoning loop.
         # ----------------------------------------------------------------
         middlewares: list = [
+            ManagedModelMiddleware(),
             InboxMiddleware(self._message_bus),
             StateChangeMiddleware(
                 message_bus=self._message_bus,
@@ -719,7 +750,7 @@ class ChatService:
             )
         model = await get_model(user_id, model_cfg, self._access)
 
-        fallback_cfg = session_record.config.fallback_chat_model_config
+        fallback_cfg = managed_chat_model_config(session_record.config.fallback_chat_model_config)
         fallback_model = (
             await get_model(user_id, fallback_cfg, self._access)
             if fallback_cfg is not None
@@ -760,8 +791,11 @@ class ChatService:
             model=model,
             toolkit=toolkit,
             model_config=ModelConfig(fallback_model=fallback_model),
-            context_config=agent_record.data.context_config,
-            react_config=agent_record.data.react_config,
+            context_config=ContextConfig(),
+            react_config=ReActConfig(
+                interruption_message="已停止处理，已完成的内容会保留。",
+            ),
+            execution_policy=ExecutionPolicy(),
             state=agent_state,
             middlewares=middlewares,
             offloader=workspace,
@@ -833,6 +867,7 @@ class ChatService:
                     leader_session_id=session_id,
                 )
             await register_inbox_consumer(self._message_bus, session_id)
+            checkpoint = RunCheckpoint(self._storage, user_id, agent_id, session_id)
             try:
                 if input_msg is None or isinstance(input_msg, (Msg, list)):
                     # Case A: new reply (user message(s), or retrigger with
@@ -843,6 +878,7 @@ class ChatService:
                             await self._attachment_pipeline.prepare(
                                 input_msg,
                                 toolkit,
+                                supported_input_types=model.input_types,
                             )
                         )
                         input_msgs = (
@@ -872,6 +908,8 @@ class ChatService:
                         elif reply_msg is not None:
                             reply_msg.append_event(event)
                         try:
+                            if isinstance(event, ModelCallStartEvent):
+                                await checkpoint.save(agent, reply_msg)
                             await publish_session_event(
                                 self._message_bus,
                                 session_id,
@@ -919,6 +957,8 @@ class ChatService:
                         if reply_msg is not None:
                             reply_msg.append_event(event)
                         try:
+                            if isinstance(event, ModelCallStartEvent):
+                                await checkpoint.save(agent, reply_msg)
                             await publish_session_event(
                                 self._message_bus,
                                 session_id,

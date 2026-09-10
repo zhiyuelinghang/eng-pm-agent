@@ -40,6 +40,8 @@ def _service_request_allowed(request: Request) -> bool:
     path = request.url.path.rstrip("/") or "/"
     if request.method == "GET" and path == "/agent/platform/catalog":
         return True
+    if request.method == "POST" and path == "/platform/model-completion":
+        return True
     if (
         request.method == "POST"
         and path in {

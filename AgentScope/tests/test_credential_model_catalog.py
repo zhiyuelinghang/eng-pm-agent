@@ -70,11 +70,15 @@ from agentscope.types import ErrorType
 
 
 def _credential() -> CustomOpenAICredential:
-    return CustomOpenAICredential(
+    credential = CustomOpenAICredential(
         name="Compatible endpoint",
         api_key="secret",
         base_url="https://example.com/v1",
     )
+    credential.model_catalog.manual_models = [
+        CredentialModelDefinition(name="qwen/qwen3-max"),
+    ]
+    return credential
 
 
 class CredentialModelCatalogTest(TestCase):
@@ -258,11 +262,11 @@ class CredentialModelCatalogTest(TestCase):
 
         self.assertEqual(
             resolve_effective_chat_model_config(inherited, session),
-            session_model,
+            session_model.model_copy(update={"parameters": {}}),
         )
         self.assertEqual(
             resolve_effective_chat_model_config(fixed, session),
-            fixed_model,
+            fixed_model.model_copy(update={"parameters": {}}),
         )
 
 
@@ -776,8 +780,13 @@ class CredentialModelDiscoveryTest(IsolatedAsyncioTestCase):
             upsert_credential=AsyncMock(side_effect=_upsert),
             get_credential=AsyncMock(side_effect=_get),
         )
+        async def _view(_viewer, _kind, _credential_id):
+            current = await _get("owner", _credential_id)
+            return CredentialView.model_validate({**current.model_dump(), "editable": True})
+
         access = SimpleNamespace(
             resolve_for_edit=AsyncMock(return_value=("owner", record)),
+            get_resource=AsyncMock(side_effect=_view),
         )
 
         await update_credential(
@@ -1021,6 +1030,7 @@ class CustomRequestBodyAdapterTest(IsolatedAsyncioTestCase):
             model = AnthropicChatModel(
                 credential=AnthropicCredential(api_key="secret"),
                 model="future-claude-model",
+                parameters=AnthropicChatModel.Parameters(max_tokens=20_000),
                 stream=False,
             )
             model.set_request_body_overrides(

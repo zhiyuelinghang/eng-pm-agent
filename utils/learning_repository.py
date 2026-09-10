@@ -14,6 +14,7 @@ from psycopg.types.json import Jsonb
 from .memory_repository import MemoryAccess, MemoryError, MemoryRepository, _public, learning_fingerprint
 
 from .learning_validation import automatic_validation
+from .learning_settings_guard import learning_sources, lock_learning_settings
 
 LEARNED_TYPES = ('reflection','experience','skill')
 
@@ -21,7 +22,7 @@ LEARNED_TYPES = ('reflection','experience','skill')
 class Evidence(BaseModel):
     model_config = ConfigDict(extra='forbid')
     id: str = Field(min_length=1,max_length=255)
-    kind: Literal['user','tool','task','memory','feedback']
+    kind: Literal['user','tool','task','memory','feedback','business_event']
     text: str = Field(min_length=1,max_length=4000)
     outcome: str = Field(default='',max_length=120)
     tool_name: str = Field(default='',max_length=255)
@@ -55,30 +56,43 @@ class LearningRepository:
     def capture(self, access: MemoryAccess, *, scope_type: str, agent_id: str, session_id: str,
                 config_owner: str, event_key: str, event_type: str, evidence: list[dict],
                 fingerprint: str = '', delay_seconds: int = 30, enqueue: bool = True,
-                daily_limit: int = 30, pattern_threshold: int = 3) -> dict:
-        if not access.learning_capture:
-            raise MemoryError('learning_disabled','该智能体未启用学习记录。',status=403)
+                daily_limit: int = 30, pattern_threshold: int = 3,
+                source_type: str = 'interaction', provenance: dict | None = None) -> dict:
+        if not access.learning_enabled:
+            raise MemoryError('learning_disabled','当前业务场景或本次请求不允许交互学习。',status=403)
         user,project = access.target(scope_type,write=True)
         validated = [Evidence.model_validate(e).model_dump() for e in evidence[:20]]
-        if not validated or not event_key or len(event_key)>255 or not agent_id or not session_id:
+        if source_type not in {'interaction','group','business_event'}:
+            raise MemoryError('invalid_learning_source','学习来源类型无效。')
+        if not validated or not event_key or len(event_key)>255 or not session_id or (source_type == 'interaction' and not agent_id):
             raise MemoryError('invalid_learning_event','学习事件需要有效来源、智能体和会话。')
         fingerprint = fingerprint or _digest([event_type,[(e['kind'],e['text']) for e in validated]])
         with self.memories._connection() as conn:
-            conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",(f'learning-budget:{access.tenant_id}:{agent_id}',))
+            lock_learning_settings(conn, learning_sources({'config_owner':config_owner,
+                'source_type':source_type,'provenance':provenance or {}}))
+            conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",(f'learning-budget:{access.tenant_id}:{source_type}:{agent_id}',))
             old = conn.execute('SELECT id FROM learning_events WHERE tenant_id=%s AND identity_type=%s AND agent_id=%s AND session_id=%s AND event_key=%s',
                 (access.tenant_id,access.identity_type,agent_id,session_id,event_key)).fetchone()
             if old:
                 job = conn.execute('SELECT id,state FROM learning_jobs WHERE event_id=%s',(old['id'],)).fetchone()
+                if job is None and source_type == 'business_event' and enqueue and access.learning_enabled:
+                    count = conn.execute('''SELECT count(*) AS n FROM learning_jobs j JOIN learning_events e ON e.id=j.event_id
+                        WHERE e.tenant_id=%s AND e.agent_id=%s AND e.source_type=%s AND j.created_at>=date_trunc('day',now())''',
+                        (access.tenant_id, agent_id, source_type)).fetchone()['n']
+                    if count < daily_limit:
+                        job = conn.execute('''INSERT INTO learning_jobs(id,event_id,available_at)
+                            VALUES (%s,%s,now()+(%s * interval '1 second')) RETURNING id,state''',
+                            (uuid4(), old['id'], max(0, delay_seconds))).fetchone()
                 return {'event_id':str(old['id']),'job':_public(job) if job else None,'status':'unchanged'}
             row = conn.execute('''INSERT INTO learning_events
-                (id,tenant_id,identity_type,scope_type,platform_user_id,project_id,agent_id,session_id,config_owner,event_key,event_type,evidence,fingerprint,access_snapshot)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *''',
-                (uuid4(),access.tenant_id,access.identity_type,scope_type,user,project,agent_id,session_id,config_owner,event_key,event_type,Jsonb(validated),fingerprint,Jsonb(asdict(access)))).fetchone()
+                (id,tenant_id,identity_type,scope_type,platform_user_id,project_id,agent_id,session_id,config_owner,event_key,event_type,evidence,fingerprint,access_snapshot,source_type,provenance)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *''',
+                (uuid4(),access.tenant_id,access.identity_type,scope_type,user,project,agent_id,session_id,config_owner,event_key,event_type,Jsonb(validated),fingerprint,Jsonb(asdict(access)),source_type,Jsonb(provenance or {}))).fetchone()
             n = conn.execute('''SELECT count(*) AS n FROM learning_jobs j JOIN learning_events e ON e.id=j.event_id
-                WHERE e.tenant_id=%s AND e.agent_id=%s AND j.created_at>=date_trunc('day',now())''',(access.tenant_id,agent_id)).fetchone()['n']
+                WHERE e.tenant_id=%s AND e.agent_id=%s AND e.source_type=%s AND j.created_at>=date_trunc('day',now())''',(access.tenant_id,agent_id,source_type)).fetchone()['n']
             job = None
-            same=(access.tenant_id,access.identity_type,scope_type,user,project,agent_id,fingerprint)
-            matching="e.tenant_id=%s AND e.identity_type=%s AND e.scope_type=%s AND e.platform_user_id=%s AND e.project_id=%s AND e.agent_id=%s AND e.fingerprint=%s"
+            same=(access.tenant_id,access.identity_type,scope_type,user,project,agent_id,fingerprint,source_type)
+            matching="e.tenant_id=%s AND e.identity_type=%s AND e.scope_type=%s AND e.platform_user_id=%s AND e.project_id=%s AND e.agent_id=%s AND e.fingerprint=%s AND e.source_type=%s"
             repeats=conn.execute(f"SELECT count(*) AS n FROM learning_events e WHERE {matching} AND e.created_at>now()-interval '30 days'",same).fetchone()['n']
             cooling=conn.execute(f'''SELECT 1 FROM learning_events e JOIN learning_jobs j ON e.id=j.event_id WHERE {matching}
                 AND j.created_at>now()-(%s * interval '1 second') LIMIT 1''',(*same,max(delay_seconds,1))).fetchone()
@@ -86,40 +100,48 @@ class LearningRepository:
                 enqueue=False
             if event_type!='explicit' and cooling:
                 enqueue=False
-            if enqueue and access.learning_process and n < daily_limit:
+            if enqueue and access.learning_enabled and n < daily_limit:
                 job = conn.execute('''INSERT INTO learning_jobs(id,event_id,available_at) VALUES (%s,%s,now()+(%s * interval '1 second')) RETURNING id,state''',
                     (uuid4(),row['id'],max(0,delay_seconds))).fetchone()
             return {'event_id':str(row['id']),'job':_public(job) if job else None,
                     'status':'queued' if job else 'recorded','reason':None if job else '未自动排队：提炼开关、每日预算或触发条件未满足。'}
 
     def related_evidence(self, event: dict) -> list[dict]:
-        with self.memories._connection() as conn:
-            rows=conn.execute('''SELECT evidence FROM learning_events WHERE tenant_id=%s AND identity_type=%s AND scope_type=%s
-                AND platform_user_id=%s AND project_id=%s AND agent_id=%s AND (fingerprint=%s OR session_id=%s)
-                AND created_at<=%s AND created_at>now()-interval '30 days' ORDER BY created_at DESC LIMIT 5''',
-                tuple(event[k] for k in ('tenant_id','identity_type','scope_type','platform_user_id','project_id','agent_id','fingerprint','session_id','created_at'))).fetchall()
-        merged={e['id']:e for row in reversed(rows) for e in row['evidence']}
-        merged.update({e['id']:e for e in event['evidence']})
-        return list(merged.values())[-20:]
+        # The root run already collected its evidence and provenance. Pulling
+        # another event's text here would omit that event's current authorization.
+        return list({e['id']:e for e in event['evidence']}.values())[-20:]
 
-    def recent_failures(self, access: MemoryAccess, *, scope_type: str, agent_id: str,
-                        session_id: str, tool_names: list[str]) -> list[dict]:
-        user,project=access.target(scope_type,write=True)
-        if not access.learning_capture:
+    def recent_failure_events(self, access: MemoryAccess, *, scope_type: str, agent_id: str,
+                              session_id: str, tool_names: list[str]) -> list[dict]:
+        """Return original unresolved failure events, including their source references.
+
+        The caller must reauthorize each event before using any returned evidence.
+        A later successful recovery settles only its matching tools.
+        """
+        if not access.learning_enabled:
             return []
+        user,project=access.target(scope_type,write=True)
         with self.memories._connection() as conn:
-            rows=conn.execute('''SELECT evidence FROM learning_events WHERE tenant_id=%s AND identity_type=%s
+            rows=conn.execute('''SELECT * FROM learning_events WHERE tenant_id=%s AND identity_type=%s
                 AND scope_type=%s AND platform_user_id=%s AND project_id=%s AND agent_id=%s AND session_id=%s
+                AND source_type='interaction' AND coalesce(provenance->>'run_id','')<>''
+                AND jsonb_array_length(coalesce(provenance->'source_refs','[]'::jsonb))>0
                 AND event_type IN ('tool_failure','recovery') AND created_at>now()-interval '1 day'
-                ORDER BY created_at DESC LIMIT 10''',
+                ORDER BY created_at DESC,id DESC LIMIT 20''',
                 (access.tenant_id,access.identity_type,scope_type,user,project,agent_id,session_id)).fetchall()
-        # The most recent outcome per tool wins; a recovered failure is not learned again.
-        latest={}
+        remaining = set(tool_names)
+        selected = {}
         for row in rows:
-            for item in reversed(row['evidence']):
-                if item.get('kind')=='tool' and item.get('tool_name') in tool_names:
-                    latest.setdefault(item['tool_name'],item)
-        return [item for item in latest.values() if item.get('outcome')=='error'][:10]
+            for name in list(remaining):
+                evidence = [e for e in row['evidence'] if e['kind']=='tool' and e.get('tool_name')==name]
+                if row['event_type']=='recovery' and any(e.get('outcome')=='success' for e in evidence):
+                    remaining.remove(name)
+                elif any(e.get('outcome')=='error' for e in evidence):
+                    selected[str(row['id'])] = _public(row)
+                    remaining.remove(name)
+            if not remaining:
+                break
+        return list(selected.values())
 
     def validate_sources(self, event: dict) -> None:
         """Derived results may not outlive revoked or revised source versions."""
@@ -141,16 +163,16 @@ class LearningRepository:
             if not row or row['status']!='active' or row['learning'].get('validation_state')!='verified' or row['version']!=int(version[1:]) or any(row[k]!=event[k] for k in keys):
                 raise MemoryError('learning_source_changed','来源经验已修改、停用或调整归属，请重新选择当前版本复盘。',status=403)
 
-    def claim(self, tenant_id: str) -> dict | None:
+    def claim(self, tenant_id: str, *, enabled_sources=('interaction', 'business_event', 'group')) -> dict | None:
         with self.memories._connection() as conn:
             conn.execute('''UPDATE learning_jobs j SET state='failed',error_code='lease_expired',lease_id=NULL,lease_until=NULL,
                 finished_at=now(),updated_at=now() FROM learning_events e WHERE j.event_id=e.id AND e.tenant_id=%s
                 AND j.state='running' AND j.lease_until<now() AND j.attempts>=3''',(tenant_id,))
             row = conn.execute('''WITH next_job AS (SELECT j.id FROM learning_jobs j JOIN learning_events e ON e.id=j.event_id
-                WHERE e.tenant_id=%s AND ((j.state='pending' AND j.available_at<=now()) OR (j.state='failed' AND j.updated_at<now()-interval '1 day') OR (j.state='running' AND j.lease_until<now()))
+                WHERE e.tenant_id=%s AND e.source_type=ANY(%s) AND ((j.state='pending' AND j.available_at<=now()) OR (j.state='failed' AND j.updated_at<now()-interval '1 day') OR (j.state='running' AND j.lease_until<now()))
                 ORDER BY j.available_at FOR UPDATE OF j SKIP LOCKED LIMIT 1)
                 UPDATE learning_jobs j SET state='running',attempts=attempts+1,lease_id=%s,lease_until=now()+interval '5 minutes',
-                started_at=now(),updated_at=now() FROM next_job n WHERE j.id=n.id RETURNING j.*''',(tenant_id,uuid4())).fetchone()
+                started_at=now(),updated_at=now() FROM next_job n WHERE j.id=n.id RETURNING j.*''',(tenant_id,list(enabled_sources),uuid4())).fetchone()
             if row:
                 row['event'] = conn.execute('SELECT * FROM learning_events WHERE id=%s',(row['event_id'],)).fetchone()
             return row
@@ -171,25 +193,40 @@ class LearningRepository:
                 (state,code[:300],min(300,20*2**min(row['attempts'],5)),job['id']))
             return True
 
-    def complete(self, job: dict, access: MemoryAccess, output: LearningOutput) -> dict:
-        if not access.learning_process:
-            raise MemoryError('learning_disabled','提炼权限已停用。',status=403)
-        event = job['event']
-        user,project = access.target(event['scope_type'],write=True)
-        if (access.tenant_id,access.identity_type,user,project)!=(event['tenant_id'],event['identity_type'],event['platform_user_id'],event['project_id']):
-            raise MemoryError('learning_scope_changed','学习事件的当前权限或归属已经改变。',status=403)
-        evidence_ids = {e['id'] for e in event['evidence']}
-        for candidate in output.candidates:
-            if not candidate.content.strip() or not candidate.title.strip():
-                raise MemoryError('invalid_content','学习内容和标题不能为空。')
-            if not set(candidate.evidence_ids)<=evidence_ids:
-                raise MemoryError('invented_evidence','学习结果引用了不存在的证据。')
-            if not any(e['id'] in candidate.evidence_ids and e.get('outcome') != 'assistant_claim' for e in event['evidence']):
-                raise MemoryError('insufficient_evidence','助手自己说过的话不能单独证明学习成果。')
-            if candidate.memory_type=='skill' and (not candidate.steps or any(len(s)>2000 for s in candidate.steps)):
-                raise MemoryError('invalid_skill','技能需要有界的明确步骤。')
-        results = []
+    def defer(self, job: dict, code: str) -> bool:
         with self.memories._connection() as conn:
+            if not self._lease(conn, job):
+                return False
+            conn.execute('''UPDATE learning_jobs SET state='pending',attempts=greatest(0,attempts-1),
+                error_code=%s,lease_id=NULL,lease_until=NULL,available_at=now()+interval '5 seconds',
+                updated_at=now() WHERE id=%s''', (code[:300], job['id']))
+            return True
+
+    def complete(self, job: dict, access: MemoryAccess, output: LearningOutput) -> dict:
+        if not access.learning_enabled:
+            raise MemoryError('learning_disabled','提炼权限已停用。',status=403)
+        with self.memories._connection() as conn:
+            # Source identity and every original contributor come from the
+            # persisted job, not its mutable model-execution snapshot.
+            event = conn.execute('''SELECT e.* FROM learning_events e JOIN learning_jobs j ON j.event_id=e.id
+                WHERE j.id=%s FOR SHARE OF e''', (job['id'],)).fetchone()
+            if not event:
+                return {'status':'stale'}
+            lock_learning_settings(conn, learning_sources(event))
+            user,project = access.target(event['scope_type'],write=True)
+            if (access.tenant_id,access.identity_type,user,project)!=(event['tenant_id'],event['identity_type'],event['platform_user_id'],event['project_id']):
+                raise MemoryError('learning_scope_changed','学习事件的当前权限或归属已经改变。',status=403)
+            evidence_ids = {e['id'] for e in event['evidence']}
+            for candidate in output.candidates:
+                if not candidate.content.strip() or not candidate.title.strip():
+                    raise MemoryError('invalid_content','学习内容和标题不能为空。')
+                if not set(candidate.evidence_ids)<=evidence_ids:
+                    raise MemoryError('invented_evidence','学习结果引用了不存在的证据。')
+                if not any(e['id'] in candidate.evidence_ids and e.get('outcome') != 'assistant_claim' for e in event['evidence']):
+                    raise MemoryError('insufficient_evidence','助手自己说过的话不能单独证明学习成果。')
+                if candidate.memory_type=='skill' and (not candidate.steps or any(len(s)>2000 for s in candidate.steps)):
+                    raise MemoryError('invalid_skill','技能需要有界的明确步骤。')
+            results = []
             # One owner lock across all jobs makes candidate dedup deterministic.
             conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(_digest([event['tenant_id'],event['identity_type'],event['scope_type'],user,project]),))
             if not self._lease(conn,job):
@@ -213,14 +250,34 @@ class LearningRepository:
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'active',%s,%s,'learning',%s) RETURNING *''',
                     (uuid4(),event['tenant_id'],event['identity_type'],event['scope_type'],user,project,candidate.content.strip(),candidate.memory_type,
                      Jsonb({'kind':'learning','event_id':str(event['id']),'session_id':event['session_id'],'agent_id':event['agent_id']}),
-                     f"learning:{event['agent_id']}",Jsonb(detail))).fetchone()
-                if event['session_id'].startswith('group:'):
+                     f"learning:{event['agent_id']}" if event['source_type']=='interaction' else f"system:{event['source_type']}",Jsonb(detail))).fetchone()
+                business_sources = [source['provenance']['business_source'] for source in
+                    [event, *event['provenance'].get('derived_sources', [])] if source['source_type'] == 'business_event']
+                if business_sources:
+                    original = business_sources[0]
+                    source = {'kind':'business_learning','event_id':str(event['id']),
+                        'source_id':str(original['id']), 'source_ids':sorted({str(s['id']) for s in business_sources}),
+                        'source_key':original['source_key'],'source_version':original['source_version'],
+                        'project_shared':all(s['project_shared'] for s in business_sources),
+                        'audience':sorted(set.intersection(*(set(s['audience_user_ids']) for s in business_sources)))}
+                    row = conn.execute('UPDATE memory_records SET source=%s WHERE id=%s RETURNING *', (Jsonb(source), row['id'])).fetchone()
+                if event['source_type'] == 'group':
                     batch = conn.execute('SELECT channel_id FROM group_learning_batches WHERE id=%s AND tenant_id=%s',
-                        (UUID(event['session_id'][6:]), event['tenant_id'])).fetchone()
+                        (UUID(event['provenance']['batch_id']), event['tenant_id'])).fetchone()
                     if not batch:
                         raise MemoryError('source_missing', '群聊来源批次不存在。', status=403)
                     source = {'kind': 'group_learning', 'channel_id': str(batch['channel_id']),
-                        'batch_id': event['session_id'][6:], 'project_shared': event['scope_type']=='project', 'event_id': str(event['id'])}
+                         'batch_id': event['provenance']['batch_id'], 'project_shared': event['scope_type']=='project', 'event_id': str(event['id'])}
+                    source_audiences = []
+                    for evidence in event['evidence']:
+                        if evidence['kind'] == 'memory':
+                            original = conn.execute('SELECT source FROM memory_records WHERE id=%s',
+                                (UUID(evidence['id'].split(':')[1]),)).fetchone()
+                            if original:
+                                source_audiences.append(set(original['source'].get('audience', [])))
+                    if not source_audiences:
+                        raise MemoryError('source_missing', '群聊派生成果缺少原始受众证据。', status=403)
+                    source['audience'] = sorted(set.intersection(*source_audiences))
                     row = conn.execute('UPDATE memory_records SET source=%s WHERE id=%s RETURNING *', (Jsonb(source), row['id'])).fetchone()
                     for evidence in event['evidence']:
                         if evidence['kind']=='memory':
@@ -290,8 +347,8 @@ class LearningRepository:
 
     def feedback(self, access: MemoryAccess, memory_id: str, *, expected_version: int, outcome: str,
                  evidence: str, request_id: str) -> dict:
-        if not access.learning_capture:
-            raise MemoryError('learning_disabled','该智能体未启用学习反馈记录。',status=403)
+        if not access.learning_enabled:
+            raise MemoryError('learning_disabled','当前业务场景或本次请求不允许记录学习反馈。',status=403)
         if outcome not in {'success','failure','irrelevant'} or not evidence.strip() or len(evidence)>4000 or not request_id:
             raise MemoryError('invalid_feedback','反馈需要结果类型、证据和请求标识。')
         with self.memories._connection() as conn:
@@ -373,10 +430,22 @@ class LearningRepository:
         if any(any(row[k]!=first[k] for k in keys) or row['status']!='active' or row['learning'].get('validation_state')!='verified' or row['memory_type'] not in LEARNED_TYPES for row in records):
             raise MemoryError('scope_mismatch','只能合并同一抽屉、同一归属下已启用的学习成果。')
         with self.memories._connection() as conn:
-            event=conn.execute('SELECT * FROM learning_events WHERE id=%s AND tenant_id=%s',
-                (UUID(first['learning']['event_id']),access.tenant_id)).fetchone()
-        if not event:
+            source_events = [conn.execute('SELECT * FROM learning_events WHERE id=%s AND tenant_id=%s',
+                (UUID(record['learning']['event_id']),access.tenant_id)).fetchone() for record in records]
+        if any(event is None for event in source_events):
             raise MemoryError('source_missing','原始学习来源不存在。')
+        event = source_events[0]
+        derived_sources = {}
+        source_fields = ('tenant_id','identity_type','scope_type','platform_user_id','project_id','agent_id',
+            'session_id','config_owner','source_type','access_snapshot','provenance')
+        for source_event in source_events:
+            sources = source_event['provenance'].get('derived_sources') or [source_event]
+            for source_event in sources:
+                item = {key:source_event[key] for key in source_fields}
+                item['provenance'] = {k:v for k,v in item['provenance'].items() if k != 'derived_sources'}
+                derived_sources[_digest(item)] = item
+        if len(derived_sources) > 50:
+            raise MemoryError('source_limit', '合并的原始来源过多，请拆分处理。')
         source_access=MemoryAccess(**event['access_snapshot'])
         if source_access.target(first['scope_type'],write=True)!=(first['platform_user_id'],first['project_id']):
             raise MemoryError('learning_scope_changed','归属已改变，原始会话无法代表当前归属发起学习；请从当前归属会话重新复盘。',status=403)
@@ -386,7 +455,8 @@ class LearningRepository:
         evidence.append({'id':'review:'+str(uuid4()),'kind':'user','text':note.strip()[:4000],'outcome':'management_request'})
         return self.capture(source_access,scope_type=first['scope_type'],agent_id=event['agent_id'],
             session_id=event['session_id'],config_owner=event['config_owner'],event_key=event_key or str(uuid4()),event_type=action,
-            evidence=evidence,delay_seconds=0,daily_limit=daily_limit)
+            evidence=evidence,delay_seconds=0,daily_limit=daily_limit,
+            source_type=event['source_type'],provenance={**event['provenance'],'derived_sources':list(derived_sources.values())})
 
     def export_document(self,access: MemoryAccess,memory_id: str) -> dict:
         if not access.management:
@@ -461,12 +531,18 @@ class LearningRepository:
 
     def finish_automatic_check(self, snapshot: dict, access: MemoryAccess | None, *, error: str = '') -> bool:
         with self.memories._connection() as conn:
+            if not error and snapshot['status'] == 'candidate':
+                event=conn.execute('''SELECT e.* FROM learning_events e JOIN memory_records r
+                    ON r.learning->>'event_id'=e.id::text WHERE r.id=%s FOR SHARE OF e''', (snapshot['id'],)).fetchone()
+                if not event:
+                    raise MemoryError('source_missing','学习候选的原始来源不存在。',status=403)
+                lock_learning_settings(conn, learning_sources(event))
             row=conn.execute('SELECT * FROM memory_records WHERE id=%s FOR UPDATE',(snapshot['id'],)).fetchone()
             if not row or row['version']!=snapshot['version'] or row['status'] not in {'active','candidate'}:
                 return False
             detail=dict(row['learning'])
             if not error:
-                if access is None or not access.learning_process:
+                if access is None or (row['status'] == 'candidate' and not access.learning_enabled):
                     raise MemoryError('learning_disabled','后台学习权限已撤销。',status=403)
                 self.memories._check_record(access,row,write=True)
                 event=snapshot['event']

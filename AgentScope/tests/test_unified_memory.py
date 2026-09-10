@@ -5,10 +5,7 @@ from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agentscope.app.memory._model import (
-    build_memory_model_runtime_config,
-    configure_platform_memory_model,
-)
+from agentscope.app.memory._model import get_compression_model
 from agentscope.app.memory._middleware import DobbyMemoryMiddleware
 from agentscope.app.memory._policy import agent_can_use_shared_memory
 from agentscope.app.memory._runtime import MemoryRuntime, MemoryScope
@@ -26,20 +23,18 @@ from utils.memory_manager import MemoryManager
 
 
 class MemoryScopeTest(TestCase):
-    def test_only_management_agents_receive_shared_memory(self) -> None:
-        management = SimpleNamespace(
-            data=SimpleNamespace(
-                platform_config=SimpleNamespace(agent_level="management"),
-            ),
-        )
-        worker = SimpleNamespace(
-            data=SimpleNamespace(
-                platform_config=SimpleNamespace(agent_level="worker"),
-            ),
-        )
+    def test_enabled_agents_can_use_memory_regardless_of_platform_visibility(self) -> None:
+        def agent(**overrides):
+            return SimpleNamespace(data=SimpleNamespace(platform_config=SimpleNamespace(
+                **{"enabled": True, **overrides},
+            )))
 
-        self.assertTrue(agent_can_use_shared_memory(management))
-        self.assertFalse(agent_can_use_shared_memory(worker))
+        for role in ("business", "system_internal"):
+            with self.subTest(role=role):
+                self.assertTrue(agent_can_use_shared_memory(agent(role=role)))
+                self.assertFalse(agent_can_use_shared_memory(agent(
+                    enabled=False, role=role,
+                )))
         self.assertFalse(agent_can_use_shared_memory(None))
 
     def test_unrelated_turns_never_force_memory_retrieval(self) -> None:
@@ -94,31 +89,6 @@ class MemoryScopeTest(TestCase):
             other.memory_target("user_project").agent_id,
         )
 
-    def test_platform_model_is_translated_for_all_memory_clients(self) -> None:
-        config = ChatModelConfig(
-            type="custom_openai_credential",
-            credential_id="credential-memory",
-            model="memory-fast",
-            parameters={"temperature": 0.2},
-        )
-        runtime = build_memory_model_runtime_config(
-            config,
-            CustomOpenAICredential(
-                id="credential-memory",
-                api_key="secret",
-                base_url="https://models.example.com/v1",
-            ),
-            context_size=131_072,
-        )
-
-        self.assertEqual(runtime.mem0_llm["provider"], "openai")
-        self.assertEqual(
-            runtime.mem0_llm["config"]["openai_base_url"],
-            "https://models.example.com/v1",
-        )
-        self.assertEqual(runtime.graph_llm["model"], "memory-fast")
-        self.assertEqual(runtime.context_size, 131_072)
-
     def test_management_memory_is_user_private(self) -> None:
         runtime = MemoryRuntime(tenant_id="tenant-a")
         first = runtime.scope(
@@ -143,14 +113,14 @@ class MemoryModelConfigurationTest(IsolatedAsyncioTestCase):
             signature="environment",
         )
 
-    async def test_saved_selection_activates_all_runtime_model_paths(self) -> None:
+    async def test_saved_selection_resolves_only_the_compression_model(self) -> None:
         config = ChatModelConfig(
             type="custom_openai_credential",
             credential_id="credential-memory",
             model="memory-fast",
             parameters={"temperature": 0.2},
         )
-        settings = MemorySettingsData(memory_model_config=config)
+        settings = MemorySettingsData(compression_model_config=config)
         access = SimpleNamespace(
             resolve_credential=AsyncMock(
                 return_value=SimpleNamespace(
@@ -181,23 +151,20 @@ class MemoryModelConfigurationTest(IsolatedAsyncioTestCase):
                 AsyncMock(return_value=selected_model),
             ),
         ):
-            changed = await configure_platform_memory_model(
+            resolved = await get_compression_model(
                 "default",
                 settings,
                 access,
             )
-            resolved = await langgraph_utils._resolve_model("compress")
 
-        self.assertTrue(changed)
         self.assertIs(resolved, selected_model)
-        self.assertEqual(
-            langgraph_utils._build_mem0_config().llm.config["model"],
-            "memory-fast",
-        )
-        self.assertEqual(
-            langgraph_utils.get_runtime_graph_llm_config()["model"],
-            "memory-fast",
-        )
+
+    async def test_empty_selection_uses_current_conversation_without_environment_model(self):
+        access = SimpleNamespace(resolve_credential=AsyncMock())
+        self.assertIsNone(await get_compression_model('o', MemorySettingsData(), access))
+        access.resolve_credential.assert_not_awaited()
+        with self.assertRaises(RuntimeError):
+            await DobbyMemoryMiddleware._call_agent_model(SimpleNamespace(model=None), [])
 
 
 class MemoryScopeRouterTest(IsolatedAsyncioTestCase):
@@ -319,10 +286,20 @@ class MemoryManagerScopeTest(IsolatedAsyncioTestCase):
         manager._search_memory = AsyncMock(return_value=[])
         manager._search_knowledge = AsyncMock(return_value=[])
         manager._search_graph_rag = AsyncMock(return_value={})
+        manager._auto_hinter.get_hints = AsyncMock(return_value="")
 
-        with patch(
-            "utils.memory_manager.SkillRegistry.render_injection",
-            new=AsyncMock(return_value=""),
+        # Exercise optional hints without inheriting live clients from .env.
+        # Arguments are evaluated before get_hints, so its mock alone cannot
+        # prevent get_mem0 or the knowledge-base ID lookup from using a network.
+        with (
+            patch("utils.memory_manager._cfg.WEKNORA_ENABLED", True),
+            patch("utils.memory_manager.get_mem0", return_value=object()),
+            patch("utils.memory_manager._build_weknora_client", return_value=object()),
+            patch("utils.memory_manager._get_kb_id_by_name", return_value="test-kb"),
+            patch(
+                "utils.memory_manager.SkillRegistry.render_injection",
+                new=AsyncMock(return_value=""),
+            ),
         ):
             assembly = await manager.assemble_context(
                 self._empty_state(),
@@ -333,6 +310,7 @@ class MemoryManagerScopeTest(IsolatedAsyncioTestCase):
         manager._search_memory.assert_not_awaited()
         manager._search_knowledge.assert_not_awaited()
         manager._search_graph_rag.assert_not_awaited()
+        manager._auto_hinter.get_hints.assert_awaited_once()
 
     async def test_minimal_context_can_skip_legacy_knowledge_hints(self) -> None:
         manager = MemoryManager(project_id="project_7", role_id="agent-a")
@@ -905,23 +883,16 @@ class DobbyMemoryMiddlewareTest(IsolatedAsyncioTestCase):
         self.assertEqual(state["compression_trigger_ratio"], 0.8)
         self.assertIn("call_model", self.manager.compress_if_needed.await_args.kwargs)
 
-    async def test_compression_prefers_configured_memory_model(self) -> None:
+    async def test_compression_uses_invocation_model_without_global_binding(self) -> None:
         agent = self._agent()
         expected = AssistantMsg("assistant", "专用模型摘要")
         memory_call = AsyncMock(return_value=expected)
 
-        with (
-            patch(
-                "utils.langgraph_utils.has_runtime_memory_model",
-                return_value=True,
-            ),
-            patch("utils.langgraph_utils._call_model", memory_call),
-        ):
-            result = await self.middleware._call_agent_model(
-                agent,
-                [UserMsg("user", "需要压缩的内容")],
-            )
+        result = await self.middleware._call_agent_model(
+            agent,
+            [UserMsg("user", "需要压缩的内容")],
+            model_override=memory_call,
+        )
 
-        self.assertIs(result, expected)
+        self.assertEqual(result.get_text_content(), expected.get_text_content())
         memory_call.assert_awaited_once()
-        self.assertEqual(memory_call.await_args.kwargs["intent"], "compress")

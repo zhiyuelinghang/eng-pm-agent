@@ -4,6 +4,18 @@ from typing import Any
 from scripts import provision_initialization_agents
 
 
+def test_initialization_team_has_no_per_agent_memory_configuration():
+    module = provision_initialization_agents
+    initializer = module._platform_config(None, module.ORCHESTRATOR)
+    specialist = module._platform_config(None, module.SPECIALISTS[0])
+    old_fields = {'memory_policy', 'memory_read_scopes', 'memory_write_scopes', 'learning_enabled', 'learning_use'}
+    assert not old_fields & initializer.keys()
+    assert not old_fields & specialist.keys()
+    existing = {'category': '项目专家', 'description': '保留业务职责说明'}
+    refreshed = module._platform_config(existing, module.SPECIALISTS[0])
+    assert not old_fields & refreshed.keys()
+
+
 def _write_skill(root: Path, name: str) -> None:
     folder = root / name
     folder.mkdir(parents=True)
@@ -298,11 +310,8 @@ def test_collaboration_agent_sync_projects_management_centre_governance(
         "allowed_agent_ids": [],
     } for payload in payloads)
     by_name = {payload["name"]: payload for payload in payloads}
-    assert by_name["资料助手"]["platform_config"]["agent_level"] == "management"
-    assert by_name["资料助手"]["platform_config"][
-        "project_knowledge_enabled"
-    ] is True
-    assert by_name["风险研判助手"]["platform_config"]["agent_level"] == "worker"
+    assert all('memory_policy' not in payload['platform_config'] for payload in payloads)
+    assert "project_knowledge_enabled" not in by_name["知识库助手"]["platform_config"]
     assert by_name["任务助手"]["platform_config"]["role"] == "system_internal"
     assert by_name["任务助手"]["platform_config"]["published"] is False
     assert by_name["任务助手"]["mcp_config"] == {

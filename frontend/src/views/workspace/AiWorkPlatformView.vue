@@ -643,20 +643,20 @@
             <main class="task-flow-authoring">
               <div class="task-flow-assistant-bar">
                 <span class="task-flow-assistant-icon"><n-icon :size="20"><Robot /></n-icon></span>
-                <strong>Dobby 任务流助手</strong>
+                <strong>任务助手</strong>
                 <button type="button" class="task-flow-assistant-toggle" :aria-expanded="taskFlowAssistantOpen" aria-controls="task-flow-assistant-panel" @click="taskFlowAssistantOpen = !taskFlowAssistantOpen">{{ taskFlowAssistantOpen ? '收起助手' : '展开助手' }}<n-icon :size="17"><ChevronDown /></n-icon></button>
               </div>
 
               <section id="task-flow-assistant-panel" :class="['task-flow-assistant-panel', { collapsed: !taskFlowAssistantOpen }]">
                 <div class="task-flow-mode-switch" aria-label="任务流生成方式">
-                  <button type="button" :class="{ active: taskCreateMode === 'dobby' }" :disabled="taskFlowGenerating" @click="taskCreateMode = 'dobby'">Dobby 生成</button>
+                  <button type="button" :class="{ active: taskCreateMode === 'dobby' }" :disabled="taskFlowGenerating" @click="taskCreateMode = 'dobby'">助手生成</button>
                   <button type="button" :class="{ active: taskCreateMode === 'template' }" :disabled="taskFlowGenerating" @click="taskCreateMode = 'template'">模板生成</button>
                 </div>
                 <section v-if="taskCreateMode === 'dobby'" class="task-flow-generator dobby-generator">
-                  <div class="task-flow-section-title"><div><span>Dobby 任务流助手</span><strong>描述你想完成的工作</strong></div></div>
+                  <div class="task-flow-section-title"><div><span>任务助手</span><strong>描述你想完成的工作</strong></div></div>
                   <textarea v-model.trim="taskFlowRequirement" :disabled="taskFlowGenerating" placeholder="例如：每周一检查基坑监测数据；接近预警值时由监测员复核，项目负责人确认，最后归档监测报告。"></textarea>
                   <button v-if="taskFlowGenerating" type="button" class="task-flow-generate-button is-generating" :disabled="taskFlowGenerationStopping" @click="stopTaskFlowGeneration"><span v-if="taskFlowGenerationStopping" class="task-flow-button-spinner" aria-hidden="true"></span><n-icon v-else :size="17"><PlayerStop /></n-icon>{{ taskFlowGenerationStopping ? '正在停止…' : '停止生成' }}</button>
-                  <button v-else type="button" class="task-flow-generate-button" :disabled="taskFlowRequirement.length < 4" @click="generateTaskFlowWithDobby">让 Dobby 生成任务流</button>
+                  <button v-else type="button" class="task-flow-generate-button" :disabled="taskFlowRequirement.length < 4" @click="generateTaskFlowWithDobby">生成任务流</button>
                   <p v-if="taskFlowGenerationNote" class="task-flow-generation-note">{{ taskFlowGenerationNote }}</p>
                 </section>
                 <section v-else class="task-flow-generator template-generator">
@@ -668,7 +668,7 @@
               </section>
 
               <div class="task-flow-editor-head" :class="{ 'is-generating': taskFlowGenerating }">
-                <div><span>流程节点</span><strong>{{ taskFlowGenerating ? taskFlowGenerationStopping ? '正在停止本次生成' : 'Dobby 正在设计新任务流' : taskCreateForm.title || '未命名任务流' }}</strong><small>{{ taskFlowGenerating ? taskFlowGenerationStopping ? '正在停止生成' : '生成后将显示可编辑节点' : `${taskFlowSteps.length} 个节点，将按顺序依次流转` }}</small></div>
+                <div><span>流程节点</span><strong>{{ taskFlowGenerating ? taskFlowGenerationStopping ? '正在停止本次生成' : '任务助手正在生成任务流' : taskCreateForm.title || '未命名任务流' }}</strong><small>{{ taskFlowGenerating ? taskFlowGenerationStopping ? '正在停止生成' : '生成后将显示可编辑节点' : `${taskFlowSteps.length} 个节点，将按顺序依次流转` }}</small></div>
                 <div class="task-flow-editor-actions"><em>{{ taskFlowGenerating ? taskFlowGenerationStopping ? '正在停止' : '正在编排' : '展开节点后编辑详细配置' }}</em><button type="button" class="task-flow-add-button" :disabled="taskFlowGenerating" @click="addTaskFlowStep"><n-icon :size="16"><Plus /></n-icon>添加节点</button></div>
               </div>
 
@@ -677,7 +677,7 @@
                   <div v-if="taskFlowGenerating" class="task-flow-ai-loading" :class="{ 'is-stopping': taskFlowGenerationStopping }" role="status" aria-live="polite">
                     <div class="task-flow-ai-loading-head">
                       <span><n-icon :size="26"><Robot /></n-icon></span>
-                      <div><strong>{{ taskFlowGenerationStopping ? '正在停止生成' : 'Dobby 正在设计任务流' }}</strong><p>{{ taskFlowGenerationStopping ? '请稍候' : '正在结合你的描述和当前项目内容编排节点' }}</p></div>
+                      <div><strong>{{ taskFlowGenerationStopping ? '正在停止生成' : '任务助手正在生成任务流' }}</strong><p>{{ taskFlowGenerationStopping ? '请稍候' : '正在结合你的描述和当前项目内容编排节点' }}</p></div>
                     </div>
                     <div class="task-flow-ai-loading-track" aria-hidden="true">
                       <span><b>1</b><em>理解需求</em></span>
@@ -691,7 +691,7 @@
                     <div v-if="!taskFlowSteps.length" class="task-flow-node-empty">
                       <span><n-icon :size="26"><Robot /></n-icon></span>
                       <strong>还没有流程节点</strong>
-                      <p>让 Dobby 生成、选择标准模板，或手工添加第一个节点。</p>
+                      <p>让任务助手生成、选择标准模板，或手工添加第一个节点。</p>
                       <button type="button" @click="addTaskFlowStep"><n-icon :size="16"><Plus /></n-icon>添加第一个节点</button>
                     </div>
                     <article v-for="(step, index) in taskFlowSteps" :id="`task-flow-node-${index}`" :key="step.id" class="task-flow-node-card" :class="{ active: selectedTaskFlowStepIndex === index }" tabindex="-1" @click="selectedTaskFlowStepIndex = index">
@@ -1122,7 +1122,7 @@ const homeCapabilities = computed(() => [
   ...homeDirectAgents.value.map(agent => ({
     name: agent.name,
     description: agent.description || '调用管理中心已发布智能体',
-    icon: agent.name === '资料助手' ? Folder : Robot,
+    icon: agent.name === '知识库助手' ? Folder : Robot,
   })),
   {
     name: '任务助手',
@@ -1709,6 +1709,8 @@ const taskFlowGenerating = ref(false)
 const taskFlowSubmitting = ref(false)
 const taskFlowGenerationStopping = ref(false)
 const taskFlowGenerationNote = ref('')
+const taskFlowOriginToken = ref<string | null>(null)
+const taskFlowOriginGenerationId = ref<string | null>(null)
 const taskFlowGenerationId = ref('')
 const taskFlowGenerationProjectId = ref<string | null>(null)
 let taskFlowGenerationController: AbortController | null = null
@@ -2194,7 +2196,7 @@ const taskManagementTabs = computed(() => [
   { key: 'mine' as const, label: '我的任务', hint: '查看我的未完成任务与已完成记录', count: homeWorkItems.value.filter(item => item.workflowStatus === 'unfinished').length, icon: ListCheck },
   { key: 'history' as const, label: '执行记录', hint: '全部任务实例及其执行结果', count: taskLedgerTasks.value.length, icon: Notes },
   { key: 'schedules' as const, label: '计划列表', hint: '单次、间隔与日历触发规则', count: taskSchedules.value.length, icon: Clock },
-  { key: 'assign' as const, label: '布置任务', hint: '通过 Dobby、模板或手工创建流程', count: 'AI', icon: Plus },
+  { key: 'assign' as const, label: '布置任务', hint: '通过任务助手、模板或手工创建流程', count: 'AI', icon: Plus },
 ])
 const selectedTaskConclusion = computed(() => {
   const task = selectedTask.value
@@ -2570,6 +2572,7 @@ function memberNameById(memberId: string) {
 
 function normalizeGeneratedRunMode(mode: GeneratedTaskFlow['run_mode']): TaskRunMode {
   if (mode === 'scheduled' || mode === 'recurring') return 'recurring'
+  if (mode === 'calendar') return 'calendar'
   if (mode === 'once') return 'once'
   return 'immediate'
 }
@@ -2583,6 +2586,8 @@ function generateTemplateTaskFlow() {
 }
 
 function applyGeneratedTaskFlow(flow: GeneratedTaskFlow) {
+  taskFlowOriginToken.value = flow.generation_origin_token
+  taskFlowOriginGenerationId.value = flow.generation_id
   taskCreateForm.value.title = flow.title
   taskCreateForm.value.task_type = flow.task_type
   taskCreateForm.value.run_mode = normalizeGeneratedRunMode(flow.run_mode)
@@ -2590,6 +2595,12 @@ function applyGeneratedTaskFlow(flow: GeneratedTaskFlow) {
   taskCreateForm.value.trigger_time = flow.trigger_time
   taskCreateForm.value.trigger_interval_value = flow.trigger_interval_value
   taskCreateForm.value.trigger_interval_unit = flow.trigger_interval_unit
+  taskCreateForm.value.trigger_calendar_mode = flow.trigger_calendar_mode || 'weekdays'
+  taskCreateForm.value.trigger_weekdays = flow.trigger_weekdays || []
+  taskCreateForm.value.trigger_day_of_month = flow.trigger_day_of_month || 1
+  taskCreateForm.value.trigger_end_mode = flow.trigger_end_mode || 'never'
+  taskCreateForm.value.trigger_until_date = flow.trigger_until_date || ''
+  taskCreateForm.value.trigger_max_fires = flow.trigger_max_fires || 4
   taskCreateForm.value.cc = flow.cc
   taskCreateForm.value.wbs_item_id = flow.wbs_item_id ? String(flow.wbs_item_id) : ''
   taskCreateForm.value.confirmer_user_id = flow.confirmer_user_id ? String(flow.confirmer_user_id) : ''
@@ -2637,7 +2648,7 @@ async function generateTaskFlowWithDobby() {
     )
     if (store.currentProjectId === projectId) {
       applyGeneratedTaskFlow(response.data.data)
-      message.success('Dobby AI 已生成任务流')
+      message.success('任务助手已生成任务流')
     }
   } catch (error: any) {
     const stopped = taskFlowStopRequestedId === generationId
@@ -2748,6 +2759,8 @@ function resetTaskFlowCreator() {
   taskCreateMode.value = 'dobby'
   taskFlowAssistantOpen.value = true
   taskFlowRequirement.value = ''
+  taskFlowOriginToken.value = null
+  taskFlowOriginGenerationId.value = null
   taskFlowGenerationNote.value = ''
   taskTemplateType.value = '隐患整改'
   taskTemplateTopic.value = ''
@@ -2802,6 +2815,8 @@ async function createManualTask() {
   taskFlowSubmitting.value = true
   try {
     await store.createTask({
+      generation_origin_token: taskFlowOriginToken.value || undefined,
+      generation_id: taskFlowOriginGenerationId.value || undefined,
       title: form.title,
       task_type: form.task_type,
       risk_level: 'medium',

@@ -22,7 +22,7 @@ from task_engine.generator.llm import FlowGenerator, LLMConfig  # noqa: E402
 from task_engine.tools import ToolError, ToolRegistry  # noqa: E402
 
 SERVER_NAME = "task-engine"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.1.1"
 PROTOCOL_VERSION = "2024-11-05"
 
 # JSON-RPC 标准错误码

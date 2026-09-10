@@ -298,9 +298,7 @@ function renderConfirmCard(askingCall: ToolCallBlock, onUserConfirm?: OnUserConf
 			key={askingCall.id}
 			toolCall={askingCall}
 			onUserConfirm={(confirm, rules) =>
-				onUserConfirm
-					? onUserConfirm(askingCall, confirm, rules)
-					: Promise.resolve()
+				onUserConfirm ? onUserConfirm(askingCall, confirm, rules) : Promise.resolve()
 			}
 		/>
 	);
@@ -420,9 +418,7 @@ function renderBlock(
 							{visible.map((pair) => renderToolCall(pair, t))}
 						</CollapsibleContent>
 					</Collapsible>
-					{askingCall &&
-						onUserConfirm &&
-						renderConfirmCard(askingCall, onUserConfirm)}
+					{askingCall && onUserConfirm && renderConfirmCard(askingCall, onUserConfirm)}
 				</div>
 			);
 		}
@@ -535,7 +531,9 @@ function renderBlock(
 						sublabel?: string;
 					};
 					hintLabel = parsed.label
-						? t(`messageBubble.hintSource.${parsed.label}`)
+						? t(`messageBubble.hintSource.${parsed.label}`, {
+								defaultValue: parsed.label,
+							})
 						: block.source;
 					hintSublabel = parsed.sublabel ?? null;
 					if (parsed.label === 'team_message') HintIcon = Bot;

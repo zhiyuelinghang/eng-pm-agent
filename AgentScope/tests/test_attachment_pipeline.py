@@ -128,7 +128,7 @@ class AttachmentPipelineTest(IsolatedAsyncioTestCase):
             ],
         )
 
-        prepared = await AttachmentPipeline().prepare(message, _Toolkit(tool))
+        prepared = await AttachmentPipeline().prepare(message, _Toolkit(tool), supported_input_types=["text/plain"])
 
         self.assertEqual(len(message.get_content_blocks("data")), 1)
         self.assertEqual(len(prepared.get_content_blocks("data")), 0)
@@ -153,7 +153,7 @@ class AttachmentPipelineTest(IsolatedAsyncioTestCase):
             },
         )
 
-        prepared = await AttachmentPipeline().prepare(message, _Toolkit(tool))
+        prepared = await AttachmentPipeline().prepare(message, _Toolkit(tool), supported_input_types=["text/plain"])
 
         self.assertIs(prepared, message)
         self.assertEqual(tool.calls, [])
@@ -178,6 +178,7 @@ class AttachmentPipelineTest(IsolatedAsyncioTestCase):
         prepared = await AttachmentPipeline().prepare(
             message,
             _Toolkit(parser, importer),
+            supported_input_types=["text/plain"],
         )
 
         rendered = prepared.get_text_content() or ""
@@ -207,6 +208,7 @@ class AttachmentPipelineTest(IsolatedAsyncioTestCase):
         prepared = await AttachmentPipeline().prepare(
             message,
             _Toolkit(_ParserTool(), _ImportTool(fail=True)),
+            supported_input_types=["text/plain"],
         )
 
         self.assertIn("第1行", prepared.get_text_content() or "")
@@ -233,6 +235,7 @@ class AttachmentPipelineTest(IsolatedAsyncioTestCase):
         prepared = await AttachmentPipeline().prepare(
             message,
             _Toolkit(_ParserTool(fail=True)),
+            supported_input_types=["text/plain"],
         )
 
         self.assertEqual(len(prepared.get_content_blocks("data")), 0)
@@ -253,7 +256,7 @@ class AttachmentPipelineTest(IsolatedAsyncioTestCase):
             ],
         )
 
-        prepared = await AttachmentPipeline().prepare(message, _Toolkit(None))
+        prepared = await AttachmentPipeline().prepare(message, _Toolkit(None), supported_input_types=["text/plain"])
 
         self.assertEqual(len(prepared.get_content_blocks("data")), 0)
         self.assertIn("附件解析工具尚未就绪", prepared.get_text_content() or "")

@@ -1,4 +1,3 @@
-import { ToolPresentationInfo } from './ToolPresentationInfo';
 import {
 	CircleAlert,
 	Loader2,
@@ -13,6 +12,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
+import { ToolPresentationInfo } from './ToolPresentationInfo';
 import type { AgentMCPConfig, AgentView, ManagedMCPPackage, ManagedMCPTool } from '@/api';
 import { DeleteDialog } from '@/components/dialog/DeleteDialog';
 import { PanelCatalogRow } from '@/components/panel/PanelCatalogRow';
@@ -34,6 +34,7 @@ import { formatApiErrorForAlert } from '@/lib/api-error';
 
 interface McpPanelProps {
 	agent: AgentView | null;
+	onDirtyChange?: (dirty: boolean) => void;
 	packages: ManagedMCPPackage[];
 	loading?: boolean;
 	uploading?: boolean;
@@ -123,6 +124,7 @@ function mcpToolDisplayName(tool: ManagedMCPTool): string {
 
 /** Platform MCP catalogue, upload entry and agent-level assignment editor. */
 export function McpPanel({
+	onDirtyChange,
 	agent,
 	packages,
 	loading = false,
@@ -132,7 +134,7 @@ export function McpPanel({
 	onRemove,
 	onSave,
 }: McpPanelProps) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const fileInputRef = useRef<HTMLInputElement>(null);
 	const detailScrollRef = useRef<HTMLDivElement>(null);
 	const detailSectionRefs = useRef<Record<string, HTMLElement | null>>({});
@@ -150,25 +152,11 @@ export function McpPanel({
 	}, [agent]);
 
 	useEffect(() => {
-		if (loading) return;
-		const assignableIds = new Set(
-			packages.filter((item) => !isPlatformManaged(item)).map((item) => item.id),
-		);
-		setDraftIds((current) => current.filter((id) => assignableIds.has(id)));
-	}, [loading, packages]);
-
-	useEffect(() => {
 		setActiveDetailSection('overview');
 		detailScrollRef.current?.scrollTo({ top: 0 });
 	}, [selectedId]);
 
-	const persistedIds = useMemo(() => {
-		if (loading) return assignedIds(agent);
-		const assignableIds = new Set(
-			packages.filter((item) => !isPlatformManaged(item)).map((item) => item.id),
-		);
-		return assignedIds(agent).filter((id) => assignableIds.has(id));
-	}, [agent, loading, packages]);
+	const persistedIds = useMemo(() => assignedIds(agent), [agent]);
 	const persistedSet = useMemo(() => new Set(persistedIds), [persistedIds]);
 	const selectedSet = useMemo(() => new Set(draftIds), [draftIds]);
 	const assignablePackages = useMemo(
@@ -176,6 +164,13 @@ export function McpPanel({
 		[packages],
 	);
 	const isDirty = !sameIds(draftIds, persistedIds);
+	useEffect(() => {
+		onDirtyChange?.(isDirty);
+	}, [isDirty, onDirtyChange]);
+	const unavailableIds =
+		loading || loadError
+			? []
+			: draftIds.filter((id) => !packages.some((item) => item.id === id));
 	const selectedPackage = packages.find((item) => item.id === selectedId) ?? null;
 	const detailSections = selectedPackage
 		? [
@@ -276,7 +271,7 @@ export function McpPanel({
 				}}
 			>
 				{selectedPackage ? (
-					<DialogContent className="grid h-[min(820px,calc(100dvh-2rem))] max-h-[calc(100dvh-2rem)] !w-[min(900px,calc(100vw-2rem))] !max-w-[900px] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0">
+					<DialogContent className="grid h-[min(820px,calc(100dvh-2rem))] max-h-[calc(100dvh-2rem)] !w-[min(1240px,calc(100vw-3rem))] !max-w-[1240px] grid-rows-[auto_minmax(0,1fr)_auto] gap-0 overflow-hidden p-0">
 						<DialogHeader className="border-b px-6 py-5 pr-14">
 							<DialogTitle className="text-xl leading-tight">
 								{selectedPackage.display_name}
@@ -285,10 +280,10 @@ export function McpPanel({
 								{selectedPackage.name} · v{selectedPackage.version}
 							</DialogDescription>
 						</DialogHeader>
-						<div className="grid min-h-0 grid-cols-1 md:grid-cols-[12rem_minmax(0,1fr)]">
+						<div className="grid min-h-0 grid-cols-1 md:grid-cols-[minmax(260px,30%)_minmax(0,1fr)]">
 							<nav
 								aria-label={t('panel.mcp.directory')}
-								className="flex gap-1 overflow-x-auto border-b bg-muted/20 p-3 md:flex-col md:overflow-x-hidden md:border-r md:border-b-0 md:px-3 md:py-5"
+								className="flex gap-1 overflow-x-auto border-b bg-muted/20 p-3 md:flex-col md:overflow-x-hidden md:overflow-y-auto md:border-r md:border-b-0 md:px-3 md:py-5"
 							>
 								{detailSections.map((section, index) => {
 									const active = activeDetailSection === section.id;
@@ -298,7 +293,7 @@ export function McpPanel({
 											type="button"
 											aria-current={active ? 'location' : undefined}
 											onClick={() => scrollToDetailSection(section.id)}
-											className={`group flex min-w-max items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring md:min-w-0 ${
+											className={`group flex min-w-max items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm font-medium outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring md:min-w-0 md:items-start ${
 												active
 													? 'bg-background text-[#c95622] shadow-sm ring-1 ring-border/70'
 													: 'text-muted-foreground hover:bg-background/80 hover:text-foreground'
@@ -315,7 +310,9 @@ export function McpPanel({
 											>
 												{index === 0 ? 'i' : index}
 											</span>
-											<span className="truncate">{section.label}</span>
+											<span className="whitespace-normal break-words leading-5">
+												{section.label}
+											</span>
 										</button>
 									);
 								})}
@@ -382,8 +379,16 @@ export function McpPanel({
 															t('panel.mcp.noToolDescription')}
 													</p>
 
-													<div className="mt-3"><ToolPresentationInfo value={tool.presentation} /><p className="mt-2 text-xs text-muted-foreground">展示标题来自 MCP 包；更新包中的 title 后，新调用自动使用新标题，历史记录保持原样。</p></div>
-<div className="mt-5 space-y-2">
+													<div className="mt-3">
+														<ToolPresentationInfo
+															value={tool.presentation}
+														/>
+														<p className="mt-2 text-xs text-muted-foreground">
+															展示标题来自 MCP 包；更新包中的 title
+															后，新调用自动使用新标题，历史记录保持原样。
+														</p>
+													</div>
+													<div className="mt-5 space-y-2">
 														<h3 className="text-sm font-medium">
 															{t('panel.mcp.parameters')}
 														</h3>
@@ -437,34 +442,48 @@ export function McpPanel({
 								</article>
 							</div>
 						</div>
-					<DialogFooter className="m-0 rounded-none border-t bg-background px-6 py-4 sm:justify-between">
-						<Button
-							variant="ghost"
-							disabled={submitting}
-							onClick={() => {
-								setSelectedId(null);
-								setDeleteTarget(selectedPackage);
-							}}
-						>
-							<Trash2 />
-							{t('common.delete')}
-						</Button>
-						<Button variant="outline" onClick={() => setSelectedId(null)}>
-							{t('common.close')}
-						</Button>
-					</DialogFooter>
+						<DialogFooter className="m-0 rounded-none border-t bg-background px-6 py-4 sm:justify-between">
+							<Button
+								variant="ghost"
+								disabled={submitting}
+								onClick={() => {
+									setSelectedId(null);
+									setDeleteTarget(selectedPackage);
+								}}
+							>
+								<Trash2 />
+								{t('common.delete')}
+							</Button>
+							<Button variant="outline" onClick={() => setSelectedId(null)}>
+								{t('common.close')}
+							</Button>
+						</DialogFooter>
 					</DialogContent>
 				) : null}
 			</Dialog>
 
 			<div className="flex-none space-y-3 pb-3">
+				{unavailableIds.length > 0 && (
+					<Alert>
+						<CircleAlert />
+						<AlertDescription>
+							{i18n.language.startsWith('zh')
+								? `已保存的分配中，有 ${unavailableIds.length} 个 MCP 当前不在可用目录中。保留原配置，请核对服务是否仍可用。`
+								: `${unavailableIds.length} saved MCP assignments are absent from the available catalogue. The saved configuration is preserved.`}
+						</AlertDescription>
+					</Alert>
+				)}
+
 				<div className="flex items-center justify-between gap-3">
 					<div className="flex min-w-0 items-baseline gap-1.5">
-						<span className="truncate text-sm font-medium">{t('panel.mcp.catalogTitle')}</span>
+						<span className="truncate text-sm font-medium">
+							{t('panel.mcp.catalogTitle')}
+						</span>
 						<span className="shrink-0 text-xs tabular-nums text-muted-foreground">
 							{t('panel.mcp.selectedSummary', {
-								selected: assignablePackages.filter((item) => selectedSet.has(item.id))
-									.length,
+								selected: assignablePackages.filter((item) =>
+									selectedSet.has(item.id),
+								).length,
 								total: assignablePackages.length,
 							})}
 						</span>
@@ -517,7 +536,12 @@ export function McpPanel({
 										key={item.id}
 										title={item.display_name}
 										description={item.description}
-										metadata={<>{item.name} · {t('panel.mcp.tools', { count: item.tools.length })}</>}
+										metadata={
+											<>
+												{item.name} ·{' '}
+												{t('panel.mcp.tools', { count: item.tools.length })}
+											</>
+										}
 										badge={
 											<span className="flex items-center gap-1">
 												{platformManaged ? (
@@ -534,7 +558,8 @@ export function McpPanel({
 														checked,
 														disabled: !agent?.editable || submitting,
 														ariaLabel: item.display_name,
-														onChange: (value) => togglePackage(item.id, value),
+														onChange: (value) =>
+															togglePackage(item.id, value),
 													}
 										}
 										onOpen={() => setSelectedId(item.id)}

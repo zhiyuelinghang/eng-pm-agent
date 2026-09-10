@@ -111,6 +111,16 @@ def _model(model: str) -> ChatModelConfig:
     )
 
 
+def _model_credential(config: ChatModelConfig) -> SimpleNamespace:
+    return SimpleNamespace(data={
+        "type": config.type,
+        "id": config.credential_id,
+        "api_key": "fictional-session-binding-test-key",
+        "base_url": "https://example.invalid/v1",
+        "model_catalog": {"manual_models": [{"name": config.model}]},
+    })
+
+
 def _record(
     agent_id: str,
     name: str,
@@ -2384,7 +2394,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                     weknora_agent_id="robot-1",
                 ),
                 user_id=USER_ID,
-                storage=SimpleNamespace(),
+                storage=SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=None))), ),
             )
             chunks = [chunk async for chunk in response.body_iterator]
 
@@ -2468,7 +2478,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                     weknora_agent_id="robot-1",
                 ),
                 user_id=USER_ID,
-                storage=SimpleNamespace(),
+                storage=SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=None))), ),
             )
             chunks = [chunk async for chunk in response.body_iterator]
 
@@ -2540,7 +2550,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                     weknora_agent_id="robot-1",
                 ),
                 user_id=USER_ID,
-                storage=SimpleNamespace(),
+                storage=SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=None))), ),
             )
             chunks = [chunk async for chunk in response.body_iterator]
 
@@ -2635,7 +2645,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                     weknora_agent_id="robot-1",
                 ),
                 user_id=USER_ID,
-                storage=SimpleNamespace(),
+                storage=SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=None))), ),
             )
             chunks = [chunk async for chunk in response.body_iterator]
 
@@ -2844,7 +2854,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
     async def test_selecting_main_demotes_the_previous_main(self) -> None:
         old_main = _record("old", "Old", role="global_main")
         selected_main = _record("new", "New", role="global_main")
-        storage = SimpleNamespace(
+        storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=None))),
             list_agents=AsyncMock(return_value=[old_main, selected_main]),
             upsert_agent=AsyncMock(return_value="old"),
         )
@@ -2899,9 +2909,10 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         fixed = _record("fixed", "fixed-model", fixed_model=True)
         access = SimpleNamespace(
             resolve_agent=AsyncMock(return_value=fixed),
+            resolve_credential=AsyncMock(return_value=_model_credential(fixed.data.model_policy.chat_model_config)),
             get_resource=AsyncMock(return_value=object()),
         )
-        storage = SimpleNamespace(
+        storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=None))),
             upsert_session=AsyncMock(
                 return_value=SimpleNamespace(id="session-id"),
             ),
@@ -2928,9 +2939,8 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         self.assertEqual(response.session_id, "session-id")
         session_config = storage.upsert_session.await_args.kwargs["config"]
         self.assertEqual(session_config.chat_model_config.model, "fixed-model")
-        access.get_resource.assert_awaited_once_with(
+        access.resolve_credential.assert_awaited_once_with(
             USER_ID,
-            "credential",
             "credential-fixed-model",
         )
 
@@ -2940,9 +2950,10 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         fixed = _record("fixed", "fixed-model", fixed_model=True)
         access = SimpleNamespace(
             resolve_agent=AsyncMock(return_value=fixed),
+            resolve_credential=AsyncMock(return_value=_model_credential(fixed.data.model_policy.chat_model_config)),
             get_resource=AsyncMock(return_value=object()),
         )
-        storage = SimpleNamespace(
+        storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=None))),
             upsert_session=AsyncMock(
                 return_value=SimpleNamespace(id="session-id"),
             ),
@@ -2987,30 +2998,23 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         self.assertEqual(rule.behavior.value, "allow")
         self.assertEqual(rule.source, "platformSession")
 
-    async def test_create_session_auto_policy_requires_enabled_reviewer(self) -> None:
+    async def test_create_session_auto_policy_does_not_require_reviewer_configuration(self) -> None:
         fixed = _record("fixed", "fixed-model", fixed_model=True)
         access = SimpleNamespace(
             resolve_agent=AsyncMock(return_value=fixed),
+            resolve_credential=AsyncMock(return_value=_model_credential(fixed.data.model_policy.chat_model_config)),
             get_resource=AsyncMock(return_value=object()),
         )
-        storage = SimpleNamespace(upsert_session=AsyncMock(
+        storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=None))), upsert_session=AsyncMock(
             return_value=SimpleNamespace(id="session-id"),
-        ))
-        reviewer = SimpleNamespace(get_config=AsyncMock(
-            return_value=SimpleNamespace(data=SimpleNamespace(enabled=False)),
         ))
         arguments = dict(
             body=CreateSessionRequest(agent_id="fixed", permission_mode="auto"),
             user_id=USER_ID, storage=storage,
             workspace_manager=SimpleNamespace(assign_workspace_id=lambda **_: "workspace-id"),
-            access=access, permission_review_service=reviewer,
+            access=access,
             principal=AgentScopePrincipal(kind="management", subject=USER_ID),
         )
-        with self.assertRaises(HTTPException) as failure:
-            await create_session(**arguments)
-        self.assertEqual(failure.exception.status_code, 422)
-        storage.upsert_session.assert_not_awaited()
-        reviewer.get_config.return_value.data.enabled = True
         result = await create_session(**arguments)
         self.assertTrue(result.configuration_applied)
         self.assertEqual(storage.upsert_session.await_args.kwargs["state"].permission_context.mode.value, "auto")
@@ -3029,9 +3033,10 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         )
         access = SimpleNamespace(
             resolve_agent=AsyncMock(return_value=fixed),
+            resolve_credential=AsyncMock(return_value=_model_credential(fixed.data.model_policy.chat_model_config)),
             get_resource=AsyncMock(return_value=object()),
         )
-        storage = SimpleNamespace(
+        storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=None))),
             get_session=AsyncMock(return_value=session),
             upsert_session=AsyncMock(return_value=session),
         )
@@ -3043,7 +3048,6 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             user_id=USER_ID,
             storage=storage,
             access=access,
-            permission_review_service=SimpleNamespace(),
             principal=AgentScopePrincipal(
                 kind="management",
                 subject=USER_ID,
@@ -3070,7 +3074,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             agent_id="agent-1",
             config=SessionConfig(workspace_id="workspace"),
         )
-        storage = SimpleNamespace(
+        storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=None))),
             get_session=AsyncMock(return_value=session),
             get_message=AsyncMock(return_value=message),
             upsert_message=AsyncMock(),

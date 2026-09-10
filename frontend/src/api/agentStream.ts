@@ -1,5 +1,6 @@
 import { apiBaseUrl } from './client'
 import type { AgentRuntimeEvent, ApiAgentMessage } from '@/types/agentRuntime'
+import type { AgentImageAttachment } from '@/utils/agentImageAttachments'
 
 export type AgentStreamAccepted = {
   conversation_id: number
@@ -205,7 +206,7 @@ export async function streamAgentConversationMessage(
   content: string,
   handlers: AgentStreamHandlers,
   signal?: AbortSignal,
-  requestExtras: { initialization_file_ids?: number[] } = {},
+  requestExtras: { initialization_file_ids?: number[]; image_attachments?: AgentImageAttachment[] } = {},
 ): Promise<void> {
   return streamAgentConversationRequest(
     conversationId,

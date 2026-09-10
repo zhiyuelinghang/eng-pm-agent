@@ -38,7 +38,7 @@ export interface InviteConfig {
 	invite_description?: string | null;
 }
 
-export type AgentCallScope = 'all' | 'selected' | 'none';
+export type AgentCallScope = 'selected' | 'none';
 
 export interface AgentCallConfig {
 	scope: AgentCallScope;
@@ -176,16 +176,9 @@ export type PlatformAgentRole = 'global_main' | 'business' | 'system_internal';
 
 export interface PlatformAgentConfig {
 	role: PlatformAgentRole;
-	agent_level: 'management' | 'worker';
-	memory_read_scopes?: MemoryScopeType[];
-	memory_write_scopes?: MemoryScopeType[];
-	learning_capture?: boolean;
-	learning_process?: boolean;
-	learning_use?: boolean;
 	enabled: boolean;
 	published: boolean;
 	allow_global_main_call: boolean;
-	project_knowledge_enabled: boolean;
 	description: string | null;
 	category: string;
 	sort_order: number;
@@ -277,65 +270,12 @@ export interface UpdatePlatformSettingsRequest {
 }
 
 export interface MemorySettings {
-	memory_model_config: ChatModelConfig | null;
-	memory_profile_enabled: boolean;
-	memory_semantic_search_enabled: boolean;
-	memory_index_enabled: boolean;
 	learning_enabled: boolean;
-	group_learning_enabled: boolean;
-	group_learning_scan_seconds: number;
-	group_learning_message_threshold: number;
-	group_learning_idle_seconds: number;
-	group_learning_max_wait_seconds: number;
-	group_learning_batch_size: number;
-	group_learning_daily_limit: number;
-	learning_auto_consolidate: boolean;
 	learning_model_config: ChatModelConfig | null;
-	learning_capture_corrections: boolean;
-	learning_capture_failures: boolean;
-	learning_capture_verified_tasks: boolean;
-	learning_capture_patterns: boolean;
-	learning_daily_job_limit: number;
-	learning_cooldown_seconds: number;
-	learning_pattern_threshold: number;
-	learning_timeout_seconds: number;
-	learning_input_char_limit: number;
-	learning_review_days: number;
-	learning_skill_limit: number;
-	recall_top_k: number;
-	recall_threshold: number;
-	recall_reinforce_threshold: number;
-	fusion_weight_mem0: number;
-	fusion_weight_kb: number;
-	fusion_weight_timeline: number;
-	fusion_weight_experience: number;
-	fusion_weight_graphrag: number;
-	fusion_mmr_lambda: number;
-	rrf_k: number;
-	mem0_infer_enabled: boolean;
-	mem0_infer_async: boolean;
-	compression_trigger_ratio: number;
-	compression_keep_messages: number;
-	compression_mode: 'full' | 'incremental';
-	emergency_compression_ratio: number;
-	compression_background: boolean;
-	historian_trigger_ratio: number;
-	compression_max_consecutive: number;
-	compression_quality_threshold: number;
-	compression_min_rounds_between: number;
-	token_budget_system_prompt: number;
-	token_budget_skill_injection: number;
-	token_budget_summary: number;
-	token_budget_ltm_kb_timeline: number;
-	token_budget_runtime: number;
-	token_budget_recent_history: number;
-	token_budget_output_reserve: number;
-	dreamer_enabled: boolean;
-	experience_event_driven_enabled: boolean;
-	compression_system_prompt: string;
-	compression_user_prompt: string;
-	compression_incremental_prompt: string;
-	historian_system_prompt: string;
+	learning_interactions_enabled: boolean;
+	learning_business_events_enabled: boolean;
+	group_learning_enabled: boolean;
+	compression_model_config: ChatModelConfig | null;
 }
 
 export interface MemoryInfrastructure {
@@ -1027,7 +967,7 @@ export interface CredentialModelDefinition {
 	name: string;
 	label: string | null;
 	context_size: number;
-	output_size: number;
+	output_size: number | null;
 	input_types: string[];
 	output_types: string[];
 	dimensions: number | null;
@@ -1092,13 +1032,9 @@ export interface CredentialModelTestResponse {
 }
 
 export interface PermissionReviewerConfig {
-	enabled: boolean;
 	credential_id: string | null;
 	model: string | null;
 	parameters: Record<string, unknown>;
-	fallback_credential_id: string | null;
-	fallback_model: string | null;
-	fallback_parameters: Record<string, unknown>;
 	confidence_threshold: number;
 	max_auto_risk: 'low' | 'medium';
 	timeout_seconds: number;
@@ -1182,7 +1118,11 @@ export interface MCPClient {
 	mcp_config: StdioMCPConfig | HttpMCPConfig;
 }
 
-export interface ToolPresentation { label: string; source: string; category: string; }
+export interface ToolPresentation {
+	label: string;
+	source: string;
+	category: string;
+}
 
 export interface ToolInfo {
 	presentation?: ToolPresentation | null;
@@ -1369,7 +1309,7 @@ export interface ModelCard {
 	input_types: string[];
 	output_types: string[];
 	context_size: number;
-	output_size: number;
+	output_size: number | null;
 	parameter_schema: Record<string, unknown>;
 	parameters_overrides: Record<string, Record<string, unknown>>;
 	/** Credential-scoped defaults; absent on provider-only model endpoints. */

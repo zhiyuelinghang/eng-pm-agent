@@ -340,16 +340,18 @@ class TeamSay(_TeamToolBase):
             # Team membership does not grant authority to start arbitrary
             # peer work. Reports to the caller are exempt; every new task
             # rechecks the latest caller allowlist and target enablement.
-            from .._service._platform_settings import get_global_main_agent_id
+            from .._service._platform_settings import get_global_main_agent_id, get_platform_duties
+            from .._agent_collaboration import can_delegate
 
             global_main_id = (
                 await get_global_main_agent_id(
-                    self._storage, self._user_id, legacy_record=sender_agent,
+                    self._storage, self._user_id,
                 )
                 if any(self._session_id == team.session_id or sid != report_session.id
                        for sid, _ in recipients)
                 else None
             )
+            duties = await get_platform_duties(self._storage, self._user_id)
             for sid, aid in recipients:
                 if self._session_id != team.session_id and sid == report_session.id:
                     continue
@@ -357,15 +359,7 @@ class TeamSay(_TeamToolBase):
                     return ToolChunk(content=[TextBlock(text="TeamSay: 该成员由其他调用者负责，不能跨阶段重新分配任务。")],
                                      state=ToolResultState.ERROR)
                 recipient = await self._storage.get_agent(self._user_id, aid)
-                allowed = (
-                    sender_agent is not None and sender_agent.data.platform_config.enabled
-                    and recipient is not None and recipient.data.platform_config.enabled
-                    and (
-                        recipient.data.platform_config.allow_global_main_call
-                        if sender_agent.id == global_main_id
-                        else sender_agent.data.call_config.allows(aid)
-                    )
-                )
+                allowed = can_delegate(sender_agent, recipient, global_main_id, duties)
                 if not allowed:
                     return ToolChunk(content=[TextBlock(text="TeamSay: 目标不在当前调用白名单内或已停用。")],
                                      state=ToolResultState.ERROR)

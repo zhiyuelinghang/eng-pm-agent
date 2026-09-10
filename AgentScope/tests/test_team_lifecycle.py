@@ -373,6 +373,7 @@ class TeamLifecycleTest(IsolatedAsyncioTestCase):
         team.data.members.append(peer)
         storage = SimpleNamespace()
         storage.get_team = AsyncMock(return_value=team)
+        storage.get_platform_settings = AsyncMock(return_value=None)
 
         async def get_session(_user_id: str, _agent_id: str, sid: str):
             if sid == "worker-session":

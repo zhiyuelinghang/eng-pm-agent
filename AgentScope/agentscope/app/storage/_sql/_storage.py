@@ -30,6 +30,7 @@ from .._model import (
     PermissionReviewAuditRecord,
     PermissionReviewerConfigData,
     PermissionReviewerConfigRecord,
+    MemorySettingsData,
     PlatformSettingsData,
     PlatformSettingsRecord,
     ScheduleRecord,
@@ -512,27 +513,70 @@ class AsyncSQLAlchemyStorage(StorageBase):
             else None
         )
 
-    async def upsert_platform_settings(
+    async def _write_platform_settings(
         self,
         user_id: str,
-        data: PlatformSettingsData,
+        *,
+        data: PlatformSettingsData | None = None,
+        memory_settings: MemorySettingsData | None = None,
+        expected_revision: int | None = None,
     ) -> PlatformSettingsRecord:
-        """Create or atomically replace the platform-wide settings."""
-        from hashlib import sha256
+        from sqlalchemy import select, update
+        from .._memory_settings import merge_platform_settings
 
-        record_id = sha256(
-            f"platform-settings:{user_id}".encode("utf-8"),
-        ).hexdigest()
-        existing = await self.get_platform_settings(user_id)
-        record = PlatformSettingsRecord(
-            id=record_id,
-            user_id=user_id,
-            data=data,
-        )
-        if existing is not None:
-            record.created_at = existing.created_at
-        await self._write_row(PlatformSettingsRow, record)
+        initial = merge_platform_settings(user_id, None, now=_utcnow(),
+            data=data if data is not None else PlatformSettingsData())
+        row = _from_record(PlatformSettingsRow, initial)
+        values = {name: getattr(row, name) for name in
+            ("id", "created_at", "updated_at", "payload", "user_id")}
+        async with self._session() as sess:
+            # A no-op conflicting UPDATE takes the same database write lock as
+            # every settings save, including on SQLite. Read only after this
+            # statement; concurrent memory CAS and general saves serialize here.
+            await sess.execute(self._upsert_stmt(
+                PlatformSettingsRow, values, ["user_id"], ("user_id",)))
+            stored = (await sess.execute(select(PlatformSettingsRow).where(
+                PlatformSettingsRow.user_id == user_id))).scalar_one()
+            existing = _to_record(stored, PlatformSettingsRecord)
+            record = merge_platform_settings(user_id, existing, now=_utcnow(),
+                data=data, memory_settings=memory_settings, expected_revision=expected_revision)
+            updated = _from_record(PlatformSettingsRow, record)
+            await sess.execute(update(PlatformSettingsRow).where(
+                PlatformSettingsRow.user_id == user_id).values(
+                    payload=updated.payload, updated_at=record.updated_at))
+            await sess.commit()
         return record
+
+    async def upsert_platform_settings(
+        self, user_id: str, data: PlatformSettingsData,
+    ) -> PlatformSettingsRecord:
+        """Save general settings while preserving the current memory revision."""
+        return await self._write_platform_settings(user_id, data=data)
+
+    async def update_memory_settings(
+        self, user_id: str, settings: MemorySettingsData, expected_revision: int,
+    ) -> PlatformSettingsRecord:
+        return await self._write_platform_settings(user_id,
+            memory_settings=settings, expected_revision=expected_revision)
+
+    def validate_memory_learning_storage(self, memory_database_url: str, settings_schema: str) -> None:
+        from psycopg.conninfo import conninfo_to_dict
+
+        engine = self._engine
+        if engine is None or engine.dialect.name != "postgresql":
+            return super().validate_memory_learning_storage(memory_database_url, settings_schema)
+        memory = conninfo_to_dict(memory_database_url)
+        url = engine.url
+        # Compare configured endpoints conservatively. Aliases are not assumed
+        # to identify the same server; a false match would bypass row locking.
+        same_database = (
+            url.host == memory.get("host")
+            and int(url.port or 5432) == int(memory.get("port") or 5432)
+            and url.database == memory.get("dbname")
+            and self._schema == settings_schema
+        )
+        if not same_database:
+            raise ValueError("后台学习需要配置与记忆存储使用同一 PostgreSQL 数据库及配置表命名空间。")
 
     async def append_permission_review_audit(
         self,

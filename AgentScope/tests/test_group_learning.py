@@ -42,12 +42,12 @@ def output(**kwargs):
 def queued(groups, data=None):
     data = data or snapshot()
     groups.observe('t', dict(channel_id=10, project_id='p', title='工程讨论群', revision=data['to_revision']))
-    groups.enqueue('t', data, agent_id='main', config_owner='owner', daily_limit=100)
+    groups.enqueue('t', data, config_owner='owner', daily_limit=100)
     return groups.claim('t')
 
 
 def complete(groups, job, value=None):
-    return groups.complete(job, value or output(), write_scopes=['user','user_project','project'])
+    return groups.complete(job, value or output())
 
 
 def test_scheduling_idle_count_max_wait_and_no_value():
@@ -67,7 +67,7 @@ def test_empty_batch_advances_cursor_once(groups):
     job = queued(groups)
     complete(groups, job, GroupOutput(reason='证据不足，不强行生成。'))
     assert groups.claim('t') is None
-    assert groups.enqueue('t', snapshot(), agent_id='main', config_owner='owner', daily_limit=100) is None
+    assert groups.enqueue('t', snapshot(), config_owner='owner', daily_limit=100) is None
     data = groups.dashboard(access(management=True))
     assert data['channels'][0]['cursor'] == 1
     assert data['batches'][0]['state'] == 'skipped'
@@ -78,7 +78,7 @@ def test_full_group_routes_project_and_requires_live_source_visibility(groups):
     result = complete(groups, queued(groups))
     assert result['candidates'][0]['scope_type'] == 'project'
     assert groups.memories.search(access()) == []
-    live = replace(access(), group_shared_channels=('10',))
+    live = replace(access(user='1'), group_shared_channels=('10',))
     assert groups.memories.search(live)[0]['content'] == output().candidates[0].content
     with pytest.raises(MemoryError):
         groups.memories.get(access(), result['candidates'][0]['memory_id'])
@@ -154,14 +154,14 @@ def test_failure_retries_and_pause_preserve_cursor(groups):
 
 def test_budget_retains_unprocessed_interval(groups):
     complete(groups, queued(groups), GroupOutput(reason='无价值'))
-    assert groups.enqueue('t', snapshot(start=1,end=2), agent_id='main', config_owner='owner', daily_limit=1) is None
+    assert groups.enqueue('t', snapshot(start=1,end=2), config_owner='owner', daily_limit=1) is None
     assert groups.dashboard(access(management=True))['channels'][0]['cursor'] == 1
 
 
 def test_group_experience_automatically_activates_and_changed_source_suspends_it(groups):
     value = output(memory_type='experience', conditions='有会议附件清单时', limitations='不能替代质量验收')
     mid = complete(groups, queued(groups), value)['candidates'][0]['memory_id']
-    actor = replace(access(), group_shared_channels=('10',))
+    actor = replace(access(user='1'), group_shared_channels=('10',))
     assert groups.memories.search(actor)
     learn = LearningRepository(groups.memories)
     row = groups.memories.get(access(management=True),mid)
@@ -222,7 +222,7 @@ def test_source_invalidation_progress_is_independent_of_failed_summary(groups):
             conn.execute("UPDATE group_learning_batches SET state='failed' WHERE id=%s", (pending['id'],))
         policy = SimpleNamespace(memory_write_scopes=['project'])
         latest = snapshot(start=1,end=3)
-        runtime = SimpleNamespace(group_agent_id=AsyncMock(return_value='main'), authorize_group=AsyncMock(return_value=policy),
+        runtime = SimpleNamespace(authorize_group=AsyncMock(return_value=policy),
             gateway=SimpleNamespace(group_learning_channels=AsyncMock(return_value=[dict(channel_id=10,project_id='p',title='工程讨论群',revision=3)]),
                 group_learning_changes=AsyncMock(return_value=[dict(revision=3,message_id=1,kind='message')]),
                 group_learning_source=AsyncMock(return_value=latest)))

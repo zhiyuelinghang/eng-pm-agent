@@ -87,7 +87,7 @@ const menus = computed(() => [
   { path: '/ai', title: '智能协同', icon: MessageCircle, badge: unread.total, requiresProject: true },
   { path: '/tasks', title: '任务管理', icon: ListCheck, badge: unread.taskCounts?.tasks ?? myTasks.value.length, requiresProject: true },
   { path: '/docs', title: '工程资料', icon: Folder, badge: store.pendingDailyReports.length + store.pendingFills.length, requiresProject: true },
-  { path: '/tools', title: '业务工具', icon: Tools, badge: 0, requiresProject: true },
+  { path: '/tools', title: '业务智能体', icon: Tools, badge: 0, requiresProject: true },
   { path: '/profile', title: '个人设置', icon: UserCircle, badge: 0, requiresProject: false },
   ...(isManagementUser.value
     ? [{ path: '/settings', title: '工程配置', icon: Settings, badge: 0, requiresProject: false }]

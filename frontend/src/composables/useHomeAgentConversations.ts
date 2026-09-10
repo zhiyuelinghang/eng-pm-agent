@@ -8,6 +8,7 @@ import {
 } from '@/api/agentStream'
 import { useAppStore } from '@/stores/app'
 import { useAsyncConfirmDialog } from '@/composables/useAsyncConfirmDialog'
+import { encodeAgentImageAttachments } from '@/utils/agentImageAttachments'
 import {
   applyAgentRuntimeEvents,
   createEmptyRuntimeTrace,
@@ -470,6 +471,7 @@ export function useHomeAgentConversations() {
       await nextTick()
       scrollHomeQuick()
       controller.signal.throwIfAborted()
+      const imageAttachments = await encodeAgentImageAttachments(files, controller.signal)
       if (files.length) await uploadComposerFiles(files, controller.signal)
       controller.signal.throwIfAborted()
       quickPreparationLabel.value = '正在连接会话…'
@@ -504,6 +506,7 @@ export function useHomeAgentConversations() {
           },
         },
         controller.signal,
+        imageAttachments.length ? { image_attachments: imageAttachments } : {},
       )
       if (revision !== stateRevision) return false
       if (!completion.message) {

@@ -1,15 +1,6 @@
 import type { TaskContext } from '@agentscope-ai/agentscope/state';
-import {
-	BookOpen,
-	BookText,
-	ChevronLeft,
-	ChevronRight,
-	Database,
-	Users,
-	Wrench,
-} from 'lucide-react';
+import { UserRoundKey } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { usePanelRef } from 'react-resizable-panels';
 
 import type {
 	AgentCallConfig,
@@ -18,42 +9,21 @@ import type {
 	AgentView,
 	ChatModelConfig,
 	PermissionMode,
-	SessionKnowledgeConfig,
 	TTSModelConfig,
 } from '@/api';
-import { credentialApi, sessionApi } from '@/api';
-import MCPSvg from '@/assets/images/mcp.svg?react';
+import { sessionApi } from '@/api';
 import { ChatContent } from '@/components/chat/ChatContent.tsx';
 import { SubagentHitlCard } from '@/components/chat/SubagentHitlCard';
 import { CreateCredentialDialog } from '@/components/dialog/CreateCredentialDialog';
-import { AgentCollaborationPanel } from '@/components/panel/AgentCollaborationPanel';
-import { DatabaseInteractionPanel } from '@/components/panel/DatabaseInteractionPanel';
-import { KnowledgeBasePanel } from '@/components/panel/KnowledgeBasePanel';
-import { McpPanel } from '@/components/panel/McpPanel';
-import { PanelDock, type PanelDescriptor, type PanelKey } from '@/components/panel/PanelDock.tsx';
-import { SkillPanel } from '@/components/panel/SkillPanel';
-import { ToolPanel } from '@/components/panel/ToolPanel';
-import { KnowledgeBaseParametersPopover } from '@/components/popover/KnowledgeBaseParametersPopover';
 import { ModelParametersPopover } from '@/components/popover/ModelParametersPopover';
 import { LlmSelect } from '@/components/select/LlmSelect';
-import { PermissionModeSelect } from '@/components/select/PermissionModeSelect.tsx';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import {
-	ResizableHandle,
-	ResizablePanel,
-	ResizablePanelGroup,
-} from '@/components/ui/resizable.tsx';
 import { SidebarTrigger } from '@/components/ui/sidebar';
 import { useAvailableModels } from '@/hooks/useAvailableModels';
-import { useKnowledgeBaseMiddlewareSchema } from '@/hooks/useKnowledgeBaseMiddlewareSchema';
-import { useKnowledgeBases } from '@/hooks/useKnowledgeBases';
-import { useMcpRegistry } from '@/hooks/useMcpRegistry';
 import { useMessages } from '@/hooks/useMessages';
 import { useSessions } from '@/hooks/useSessions';
-import { useSkillRegistry } from '@/hooks/useSkillRegistry';
-import { useWorkspace } from '@/hooks/useWorkspace.ts';
 import { useTranslation } from '@/i18n/useI18n';
+import { availableChatModel, chatAttachmentBlock, resolveSessionChatModel } from '@/lib/chat-input';
 
 const ATTACHMENT_PARSER_INPUT_TYPES = [
 	'.txt',
@@ -92,11 +62,11 @@ interface ChatViewportProps {
 	/** Whether the visible-agent list is still loading. */
 	agentsLoading?: boolean;
 	/** Persist the current agent's global collaboration configuration. */
-	onUpdateAgentCallConfig: (agentId: string, config: AgentCallConfig) => Promise<void>;
+	onUpdateAgentCallConfig?: (agentId: string, config: AgentCallConfig) => Promise<void>;
 	/** Persist the current agent's global managed-MCP assignment. */
-	onUpdateAgentMCPConfig: (agentId: string, config: AgentMCPConfig) => Promise<void>;
+	onUpdateAgentMCPConfig?: (agentId: string, config: AgentMCPConfig) => Promise<void>;
 	/** Persist the current agent's global managed-skill assignment. */
-	onUpdateAgentSkillConfig: (agentId: string, config: AgentSkillConfig) => Promise<void>;
+	onUpdateAgentSkillConfig?: (agentId: string, config: AgentSkillConfig) => Promise<void>;
 	/**
 	 * Optional hook invoked when a team membership change arrives on
 	 * this viewport's SSE stream. The outer page owns the session list
@@ -126,19 +96,11 @@ interface ChatViewportProps {
  *   session is selected yet.
  * @returns The right-side main JSX of the chat page.
  */
-export function ChatViewport({
-	agentId,
-	sessionId,
-	agents,
-	agentsLoading = false,
-	onUpdateAgentCallConfig,
-	onUpdateAgentMCPConfig,
-	onUpdateAgentSkillConfig,
-	onTeamUpdated,
-}: ChatViewportProps) {
+export function ChatViewport({ agentId, sessionId, agents, onTeamUpdated }: ChatViewportProps) {
 	const { t } = useTranslation();
 	const { sessions, refetch: refetchSessions } = useSessions(agentId);
-	const { groups, loading: modelsLoading } = useAvailableModels();
+	const modelCatalogue = useAvailableModels();
+	const { groups, loading: modelsLoading, error: modelsError } = modelCatalogue;
 
 	// When the viewport agent differs from the outer page's selected
 	// agent (i.e. user drilled into a team member), `refetchSessions`
@@ -151,44 +113,14 @@ export function ChatViewport({
 	}, [refetchSessions, onTeamUpdated]);
 
 	const [selectedModel, setSelectedModel] = useState<ChatModelConfig | null>(null);
+	const [modelSaving, setModelSaving] = useState(false);
 	const [selectedFallbackModel, setSelectedFallbackModel] = useState<ChatModelConfig | null>(
 		null,
 	);
 	const [selectedTTSModel, setSelectedTTSModel] = useState<TTSModelConfig | null>(null);
-	const [selectedKnowledgeConfig, setSelectedKnowledgeConfig] =
-		useState<SessionKnowledgeConfig | null>(null);
-	const [selectedPermissionMode, setSelectedPermissionMode] = useState<PermissionMode>('default');
-	const [permissionReviewerEnabled, setPermissionReviewerEnabled] = useState<boolean | null>(
-		null,
-	);
 	const [credentialOpen, setCredentialOpen] = useState(false);
 	const [credentialRefetchTrigger, setCredentialRefetchTrigger] = useState(0);
 	const [tasksContext, setTasksContext] = useState<TaskContext | null>(null);
-	const [activePanel, setActivePanel] = useState<PanelKey>('mcp');
-	const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
-	const panelDockRef = usePanelRef();
-	const togglePanelDock = useCallback(() => {
-		if (panelDockRef.current?.isCollapsed()) {
-			panelDockRef.current.expand();
-			return;
-		}
-		panelDockRef.current?.collapse();
-	}, [panelDockRef]);
-
-	useEffect(() => {
-		let active = true;
-		void credentialApi
-			.permissionReviewer()
-			.then((response) => {
-				if (active) setPermissionReviewerEnabled(response.config.enabled);
-			})
-			.catch(() => {
-				if (active) setPermissionReviewerEnabled(null);
-			});
-		return () => {
-			active = false;
-		};
-	}, []);
 
 	const handleStateUpdated = useCallback((value: Record<string, unknown>) => {
 		if (value.tasks_context) {
@@ -201,27 +133,6 @@ export function ChatViewport({
 			onTeamUpdated: handleTeamUpdated,
 			onStateUpdated: handleStateUpdated,
 		});
-	const { tools, toolsLoading } = useWorkspace(agentId, sessionId);
-	const {
-		packages: mcpPackages,
-		loading: mcpsLoading,
-		uploading: mcpUploading,
-		error: mcpError,
-		uploadPackage,
-		removePackage,
-	} = useMcpRegistry(agentId);
-	const {
-		packages: skillPackages,
-		loading: skillsLoading,
-		error: skillError,
-		createPackage: createSkillPackage,
-		updatePackage: updateSkillPackage,
-		removePackage: removeSkillPackage,
-		listVersions: listSkillVersions,
-		downloadVersion: downloadSkillVersion,
-	} = useSkillRegistry(agentId);
-	const { knowledgeBases, loading: knowledgeBasesLoading } = useKnowledgeBases();
-	const { schema: kbMiddlewareSchema } = useKnowledgeBaseMiddlewareSchema();
 	const activeAgent = useMemo(
 		() => agents.find((agent) => agent.id === agentId) ?? null,
 		[agents, agentId],
@@ -232,175 +143,14 @@ export function ChatViewport({
 			: null;
 	const effectiveSelectedModel = agentFixedModel ?? selectedModel;
 
-	/**
-	 * Persist a knowledge-base attachment change. `null` detaches every
-	 * knowledge base from this session, removing the `RAGMiddleware`.
-	 *
-	 * Declared above `panels` (rather than alongside the other model
-	 * handlers below) because `panels` is built inside `useMemo` and
-	 * references this handler eagerly — a later `const` would still be
-	 * in the temporal dead zone when the memo factory runs on first
-	 * render.
-	 *
-	 * @param config - New attachment, or `null` to detach all.
-	 */
-	const handleKnowledgeConfigChange = useCallback(
-		async (config: SessionKnowledgeConfig | null) => {
-			if (!sessionId || !agentId) return;
-			setSelectedKnowledgeConfig(config);
-			await sessionApi.update(sessionId, agentId, { knowledge_config: config });
-			await refetchSessions();
-		},
-		[sessionId, agentId, refetchSessions],
-	);
-
-	// Build the panel descriptors with live data. Rebuilt on every
-	// data change so the dock always renders the latest state — the
-	// dock itself stays free of any data dependency.
-	const panels = useMemo<Record<PanelKey, PanelDescriptor>>(
-		() => ({
-			mcp: {
-				tabLabel: 'MCP',
-				icon: <MCPSvg className="size-4" />,
-				help: {
-					description: t('panel.mcp.description'),
-					note: t('panel.mcp.globalNotice'),
-				},
-				content: (
-					<McpPanel
-						agent={activeAgent}
-						packages={mcpPackages}
-						loading={mcpsLoading}
-						uploading={mcpUploading}
-						loadError={mcpError}
-						onUpload={uploadPackage}
-						onRemove={removePackage}
-						onSave={onUpdateAgentMCPConfig}
-					/>
-				),
-			},
-			skill: {
-				tabLabel: t('panel.skill.title'),
-				icon: <BookText className="size-4" />,
-				help: {
-					description: t('panel.skill.description'),
-				},
-				content: (
-					<SkillPanel
-						agent={activeAgent}
-						packages={skillPackages}
-						loading={skillsLoading}
-						loadError={skillError}
-						onCreate={createSkillPackage}
-						onUpdate={updateSkillPackage}
-						onRemove={removeSkillPackage}
-						onListVersions={listSkillVersions}
-						onDownloadVersion={downloadSkillVersion}
-						onSave={onUpdateAgentSkillConfig}
-					/>
-				),
-			},
-			tool: {
-				tabLabel: t('panel.tool.title'),
-				icon: <Wrench className="size-4" />,
-				help: {
-					description: t('panel.tool.description'),
-					note: t('panel.tool.globalNotice'),
-				},
-				content: (
-					<ToolPanel
-						agent={activeAgent}
-						tools={tools}
-						loading={toolsLoading}
-					/>
-				),
-			},
-			database: {
-				tabLabel: t('panel.database.title'),
-				icon: <Database className="size-4" />,
-				help: {
-					description: t('panel.database.description'),
-					note: t('panel.database.globalNotice'),
-				},
-				content: (
-					<DatabaseInteractionPanel agent={activeAgent} />
-				),
-			},
-			knowledge: {
-				tabLabel: t('panel.knowledge.title'),
-				icon: <BookOpen className="size-4" />,
-				help: {
-					description: t('panel.knowledge.description'),
-				},
-				content: (
-					<KnowledgeBasePanel
-						knowledgeBases={knowledgeBases}
-						loading={knowledgeBasesLoading}
-						value={selectedKnowledgeConfig}
-						onChange={handleKnowledgeConfigChange}
-						disabled={!sessionId}
-						actions={
-							<KnowledgeBaseParametersPopover
-								value={selectedKnowledgeConfig}
-								schema={kbMiddlewareSchema}
-								onChange={handleKnowledgeConfigChange}
-								disabled={!sessionId}
-							/>
-						}
-					/>
-				),
-			},
-			collaboration: {
-				tabLabel: t('panel.collaboration.title'),
-				icon: <Users className="size-4" />,
-				help: {
-					description: t('panel.collaboration.description'),
-					note: t('panel.collaboration.globalNotice'),
-				},
-				content: (
-					<AgentCollaborationPanel
-						agent={activeAgent}
-						agents={agents}
-						loading={agentsLoading}
-						onSave={onUpdateAgentCallConfig}
-					/>
-				),
-			},
-		}),
-		[
-			t,
-			mcpPackages,
-			mcpsLoading,
-			mcpUploading,
-			mcpError,
-			uploadPackage,
-			removePackage,
-			onUpdateAgentMCPConfig,
-			skillPackages,
-			skillsLoading,
-			skillError,
-			createSkillPackage,
-			updateSkillPackage,
-			removeSkillPackage,
-			listSkillVersions,
-			downloadSkillVersion,
-			onUpdateAgentSkillConfig,
-			tools,
-			toolsLoading,
-			knowledgeBases,
-			knowledgeBasesLoading,
-			selectedKnowledgeConfig,
-			kbMiddlewareSchema,
-			handleKnowledgeConfigChange,
-			sessionId,
-			activeAgent,
-			agents,
-			agentsLoading,
-			onUpdateAgentCallConfig,
-		],
-	);
-
 	const view = sessions.find((v) => v.session.id === sessionId) ?? null;
+	const usesAgentPermissions =
+		view?.session.source === 'user' && !view.session.config.platform_context;
+	const permissionMode = usesAgentPermissions
+		? activeAgent?.data.platform_config?.permission_mode
+		: ((view?.session.state?.permission_context as Record<string, unknown>)?.mode as
+				| PermissionMode
+				| undefined);
 
 	// ChatViewport keeps its own `useSessions(agentId)` instance (the
 	// outer page has a separate one). Its built-in fetch only fires on
@@ -425,46 +175,11 @@ export function ChatViewport({
 		setSelectedModel(null);
 		setSelectedFallbackModel(null);
 		setSelectedTTSModel(null);
-		setSelectedKnowledgeConfig(null);
 	}, [sessionId]);
 
 	const selectedModelCard = useMemo(() => {
-		if (!effectiveSelectedModel) return null;
-		const items = groups[effectiveSelectedModel.type];
-		if (!items) return null;
-		for (const { credential, models } of items) {
-			if (credential.id !== effectiveSelectedModel.credential_id) continue;
-			const card = models.find((m) => m.name === effectiveSelectedModel.model);
-			if (card) return card;
-		}
-		return null;
+		return availableChatModel(groups, effectiveSelectedModel);
 	}, [effectiveSelectedModel, groups]);
-
-	/**
-	 * Pick the first model the available-models endpoint surfaces, used
-	 * as a sensible default when the current session has no model
-	 * configured yet.
-	 *
-	 * @returns The first available `ChatModelConfig`, or `null` when
-	 *   no credentials / models are configured.
-	 */
-	const getFirstAvailableModel = useCallback((): ChatModelConfig | null => {
-		const firstType = Object.keys(groups)[0];
-		if (!firstType) return null;
-		const items = groups[firstType];
-		if (!items || items.length === 0) return null;
-		const firstItem = items[0];
-		const firstModel = (firstItem.models as { name?: string; id?: string }[])[0];
-		if (!firstModel) return null;
-		const modelName = firstModel.name ?? firstModel.id ?? null;
-		if (!modelName) return null;
-		return {
-			type: firstType,
-			credential_id: firstItem.credential.id,
-			model: modelName,
-			parameters: {},
-		};
-	}, [groups]);
 
 	// Sync tasksContext from the session snapshot. Real-time updates
 	// arrive via the CustomEvent(name="state_updated") → the
@@ -494,42 +209,51 @@ export function ChatViewport({
 	// we would racily auto-select + persist the first available
 	// model, clobbering whatever the user had configured.
 	useEffect(() => {
+		let current = true;
+		setModelSaving(false);
 		if (!view) return;
 		const sessionModel = view.session.config.chat_model_config;
 
-		if (sessionModel) {
-			setSelectedModel(sessionModel);
-		} else if (agentFixedModel) {
+		if (agentFixedModel) {
 			setSelectedModel(null);
+		} else if (modelsLoading || modelsError) {
+			setSelectedModel(sessionModel ?? null);
 		} else {
-			const firstModel = getFirstAvailableModel();
-			if (firstModel) {
-				setSelectedModel(firstModel);
+			const nextModel = resolveSessionChatModel(groups, sessionModel);
+			setSelectedModel(nextModel);
+			if (nextModel && nextModel !== sessionModel) {
 				if (sessionId && agentId) {
+					setModelSaving(true);
 					sessionApi
-						.update(sessionId, agentId, { chat_model_config: firstModel })
-						.then(() => refetchSessions())
-						.catch(() => {});
+						.update(sessionId, agentId, { chat_model_config: nextModel })
+						.then(() => {
+							if (current) return refetchSessions();
+						})
+						.catch(() => {
+							if (current) setSelectedModel(sessionModel ?? null);
+						})
+						.finally(() => {
+							if (current) setModelSaving(false);
+						});
 				}
-			} else {
-				setSelectedModel(null);
 			}
 		}
 
 		setSelectedFallbackModel(view.session.config.fallback_chat_model_config ?? null);
 		setSelectedTTSModel(view.session.config.tts_model_config ?? null);
-		setSelectedKnowledgeConfig(view.session.config.knowledge_config ?? null);
-	}, [view, sessionId, agentId, agentFixedModel, getFirstAvailableModel, refetchSessions]);
-
-	// Sync selectedPermissionMode when the session changes. Same
-	// loading-window guard as above — don't reset the displayed mode
-	// to "default" while the new session view is still on the wire.
-	useEffect(() => {
-		if (!view) return;
-		const mode = (view.session.state?.permission_context as Record<string, unknown>)
-			?.mode as PermissionMode;
-		setSelectedPermissionMode(mode ?? 'default');
-	}, [sessionId, view]);
+		return () => {
+			current = false;
+		};
+	}, [
+		view,
+		sessionId,
+		agentId,
+		agentFixedModel,
+		groups,
+		modelsLoading,
+		modelsError,
+		refetchSessions,
+	]);
 
 	/**
 	 * Persist a model change to the session and refetch so the local
@@ -539,23 +263,15 @@ export function ChatViewport({
 	 *   because the primary selector does not allow clearing.
 	 */
 	const handleLlmChange = async (config: ChatModelConfig | null) => {
-		if (agentFixedModel || !config || !sessionId || !agentId) return;
-		setSelectedModel(config);
-		await sessionApi.update(sessionId, agentId, { chat_model_config: config });
-		await refetchSessions();
-	};
-
-	/**
-	 * Persist a parameter change on the currently selected model.
-	 *
-	 * @param parameters - New parameter map (model-provider specific).
-	 */
-	const handleParametersChange = async (parameters: Record<string, unknown>) => {
-		if (!selectedModel || !sessionId || !agentId) return;
-		const updated = { ...selectedModel, parameters };
-		setSelectedModel(updated);
-		await sessionApi.update(sessionId, agentId, { chat_model_config: updated });
-		await refetchSessions();
+		if (agentFixedModel || !config || !sessionId || !agentId || modelSaving) return;
+		setModelSaving(true);
+		try {
+			await sessionApi.update(sessionId, agentId, { chat_model_config: config });
+			setSelectedModel(config);
+			await refetchSessions();
+		} finally {
+			setModelSaving(false);
+		}
 	};
 
 	/**
@@ -582,162 +298,106 @@ export function ChatViewport({
 		await refetchSessions();
 	};
 
-	/**
-	 * Persist a permission-mode change.
-	 *
-	 * @param mode - New permission mode (e.g. `default`, `explore`).
-	 */
-	const handlePermissionModeChange = useCallback(
-		async (mode: PermissionMode) => {
-			if (!sessionId || !agentId) return;
-			const previousMode = selectedPermissionMode;
-			setSelectedPermissionMode(mode);
-			try {
-				await sessionApi.update(sessionId, agentId, { permission_mode: mode });
-				await refetchSessions();
-			} catch (error) {
-				setSelectedPermissionMode(previousMode);
-				throw error;
-			}
-		},
-		[agentId, refetchSessions, selectedPermissionMode, sessionId],
-	);
-
-	useEffect(() => {
-		if (permissionReviewerEnabled !== false || selectedPermissionMode !== 'auto') return;
-		void handlePermissionModeChange('default').catch(() => undefined);
-	}, [handlePermissionModeChange, permissionReviewerEnabled, selectedPermissionMode]);
-
 	return (
 		<>
 			<main className="flex size-full">
-				<ResizablePanelGroup orientation="horizontal">
-					<ResizablePanel className="flex flex-1" minSize="24rem">
-						<div className="flex flex-col flex-1 min-h-0 min-w-0 overflow-x-hidden p-2">
-							<div className="flex flex-row gap-x-2 justify-between">
-								<div
-									id="tour-llm-select"
-									className="flex flex-row items-center gap-x-1"
-								>
-									<SidebarTrigger className="md:hidden" />
-									<LlmSelect
-										value={effectiveSelectedModel}
-										onChange={handleLlmChange}
-										onAddCredential={() => setCredentialOpen(true)}
-										refetchTrigger={credentialRefetchTrigger}
-										disabled={agentFixedModel !== null}
-									/>
-									{agentFixedModel && (
-										<Badge variant="secondary">
-											{t('chat.model.agentFixed')}
-										</Badge>
-									)}
-									{!modelsLoading &&
-										effectiveSelectedModel &&
-										!selectedModelCard && (
-											<Badge variant="destructive">
-												{t('chat.model.unavailable')}
-											</Badge>
-										)}
-									<ModelParametersPopover
-										selectedModel={effectiveSelectedModel}
-										modelCard={selectedModelCard}
-										onChange={handleParametersChange}
-										selectedFallbackModel={selectedFallbackModel}
-										onFallbackChange={handleFallbackChange}
-										selectedTTSModel={selectedTTSModel}
-										onTTSChange={handleTTSChange}
-									/>
-								</div>
-								<div id="tour-permission-mode" className="flex flex-row gap-x-1">
-									<PermissionModeSelect
-										value={selectedPermissionMode}
-										disabled={!sessionId}
-										autoEnabled={permissionReviewerEnabled === true}
-										onChange={handlePermissionModeChange}
-									/>
-								</div>
-							</div>
-							<div className="flex flex-1 justify-center min-h-0 overflow-hidden relative [--chat-content-w:48rem]">
-								<ChatContent
-									className={'max-w-[var(--chat-content-w)] w-full'}
-									msgs={msgs}
-									tasksContext={tasksContext}
-									phase={phase}
-									disabled={effectiveSelectedModel === null}
-									onSend={send}
-									onUserConfirm={onUserConfirm}
-									onInterrupt={interrupt}
-									footerSlot={
-										subagentHitl.length > 0 ? (
-											<div className="space-y-2 pb-2">
-												{subagentHitl.map((entry) => (
-													<SubagentHitlCard
-														key={`${entry.worker_session_id}:${entry.reply_id}`}
-														entry={entry}
-														onConfirm={(toolCall, confirm, rules) =>
-															onSubagentConfirm(
-																entry,
-																toolCall,
-																confirm,
-																rules,
-															)
-														}
-													/>
-												))}
-											</div>
-										) : null
-									}
-									allowedInputTypes={ATTACHMENT_PARSER_INPUT_TYPES}
-									fileProcessor={async (file) => {
-										const dataUrl = await new Promise<string>((resolve, reject) => {
-											const reader = new FileReader();
-											reader.onload = () => resolve(String(reader.result));
-											reader.onerror = () => reject(reader.error);
-											reader.readAsDataURL(file);
-										});
-										const base64 = dataUrl.split(',', 2)[1] ?? '';
-										return {
-											id: crypto.randomUUID(),
-											type: 'data' as const,
-											source: {
-												type: 'base64' as const,
-												media_type: file.type || 'application/octet-stream',
-												data: base64,
-											},
-											name: file.name,
-										};
-									}}
-								/>
-							</div>
+				<div className="flex flex-col flex-1 min-h-0 min-w-0 overflow-x-hidden p-2">
+					<div className="flex flex-row gap-x-2 justify-between">
+						<div id="tour-llm-select" className="flex flex-row items-center gap-x-1">
+							<SidebarTrigger className="md:hidden" />
+							<LlmSelect
+								value={effectiveSelectedModel}
+								onChange={handleLlmChange}
+								onAddCredential={() => setCredentialOpen(true)}
+								refetchTrigger={credentialRefetchTrigger}
+								catalogue={modelCatalogue}
+								disabled={agentFixedModel !== null || modelSaving}
+							/>
+							{agentFixedModel && (
+								<Badge variant="secondary">{t('chat.model.agentFixed')}</Badge>
+							)}
+							{!modelsLoading && effectiveSelectedModel && !selectedModelCard && (
+								<Badge variant="destructive">{t('chat.model.unavailable')}</Badge>
+							)}
+							<ModelParametersPopover
+								selectedModel={effectiveSelectedModel}
+								selectedFallbackModel={selectedFallbackModel}
+								onFallbackChange={handleFallbackChange}
+								selectedTTSModel={selectedTTSModel}
+								onTTSChange={handleTTSChange}
+							/>
 						</div>
-					</ResizablePanel>
-					<ResizableHandle className="bg-transparent">
-						<Button
-							type="button"
-							variant="outline"
-							size="icon-xs"
-							className="absolute top-24 right-0 z-20 size-7 bg-background shadow-sm"
-							onPointerDown={(event) => event.stopPropagation()}
-							onClick={togglePanelDock}
-							aria-label={t(
-								isPanelCollapsed ? 'panel.expandSidebar' : 'panel.collapseSidebar',
+						<div id="tour-permission-mode" className="flex items-center">
+							{permissionMode && (
+								<Badge
+									variant="outline"
+									className="gap-2 py-1 text-xs font-normal"
+									title={t(
+										usesAgentPermissions
+											? 'permission-mode.followsAgent'
+											: 'permission-mode.followsSession',
+									)}
+								>
+									<UserRoundKey className="size-4" />
+									{t(
+										`agent-form.platform-config.permissionOptions.${permissionMode}`,
+									)}
+									<span className="text-muted-foreground">
+										{t('permission-mode.configured')}
+									</span>
+								</Badge>
 							)}
-							title={t(
-								isPanelCollapsed ? 'panel.expandSidebar' : 'panel.collapseSidebar',
-							)}
-						>
-							{isPanelCollapsed ? <ChevronLeft /> : <ChevronRight />}
-						</Button>
-					</ResizableHandle>
-					<PanelDock
-						activeKey={activePanel}
-						onActiveChange={setActivePanel}
-						panels={panels}
-						panelRef={panelDockRef}
-						onCollapsedChange={setIsPanelCollapsed}
-					/>
-				</ResizablePanelGroup>
+						</div>
+					</div>
+					<div className="flex flex-1 justify-center min-h-0 overflow-hidden relative [--chat-content-w:48rem]">
+						<ChatContent
+							className={'max-w-[var(--chat-content-w)] w-full'}
+							msgs={msgs}
+							tasksContext={tasksContext}
+							phase={phase}
+							disabled={
+								!sessionId ||
+								!view ||
+								!selectedModelCard ||
+								modelsLoading ||
+								modelSaving
+							}
+							onSend={send}
+							onUserConfirm={onUserConfirm}
+							onInterrupt={interrupt}
+							footerSlot={
+								subagentHitl.length > 0 ? (
+									<div className="space-y-2 pb-2">
+										{subagentHitl.map((entry) => (
+											<SubagentHitlCard
+												key={`${entry.worker_session_id}:${entry.reply_id}`}
+												entry={entry}
+												onConfirm={(toolCall, confirm, rules) =>
+													onSubagentConfirm(
+														entry,
+														toolCall,
+														confirm,
+														rules,
+													)
+												}
+											/>
+										))}
+									</div>
+								) : null
+							}
+							allowedInputTypes={ATTACHMENT_PARSER_INPUT_TYPES}
+							fileProcessor={async (file) => {
+								const dataUrl = await new Promise<string>((resolve, reject) => {
+									const reader = new FileReader();
+									reader.onload = () => resolve(String(reader.result));
+									reader.onerror = () => reject(reader.error);
+									reader.readAsDataURL(file);
+								});
+								return chatAttachmentBlock(file, dataUrl, crypto.randomUUID());
+							}}
+						/>
+					</div>
+				</div>
 			</main>
 			<CreateCredentialDialog
 				open={credentialOpen}

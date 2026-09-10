@@ -311,21 +311,14 @@ class DobbyMemoryMiddleware(MiddlewareBase):
         agent: "Agent",
         messages: list[Msg],
         intent: str = "compress",
+        model_override: Any = None,
     ) -> Msg:
-        """Use the dedicated memory model, or preserve the legacy fallback."""
+        """Use this invocation's model or its current conversation model."""
 
         from agentscope.message import AssistantMsg
-        from utils.langgraph_utils import (
-            _call_model as fallback_call,
-            has_runtime_memory_model,
-        )
-
-        if has_runtime_memory_model():
-            return await fallback_call(messages, intent=intent)
-
-        model = getattr(agent, "model", None)
+        model = model_override if model_override is not None else getattr(agent, "model", None)
         if model is None:
-            return await fallback_call(messages, intent=intent)
+            raise RuntimeError('当前对话没有可用的摘要模型。')
 
         def first_text(content: Any) -> str:
             if isinstance(content, str):

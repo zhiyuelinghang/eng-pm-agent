@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """Model service: builds a ChatModelBase from stored credential + config."""
+from fastapi import HTTPException, status
+
 from ._access import ResourceAccessService
-from ._credential_models import build_credential_model_catalog
+from ._credential_models import (
+    require_enabled_chat_model,
+    resolve_model_output_limit,
+)
 from ..storage import AgentData, ChatModelConfig, SessionConfig
-from ...credential import CredentialFactory
-from ...model import CUSTOM_REQUEST_BODY_KEY, ChatModelBase
+from ...credential import CredentialBase, CredentialFactory
+from ...model import CUSTOM_REQUEST_BODY_KEY, ChatModelBase, ModelCard
 
 
 def _merge_request_bodies(
@@ -29,8 +34,42 @@ def resolve_effective_chat_model_config(
     """Resolve the primary model with agent policy taking precedence."""
     policy = agent.model_policy
     if policy.mode == "fixed":
-        return policy.chat_model_config
-    return session.chat_model_config
+        config = policy.chat_model_config
+    else:
+        config = session.chat_model_config
+    return managed_chat_model_config(config)
+
+
+def managed_chat_model_config(config: ChatModelConfig | None) -> ChatModelConfig | None:
+    """Model selection is per agent; provider parameters belong to the catalogue.
+
+    Do not rewrite stored agent/session records or silently copy one agent's
+    legacy overrides into the shared model settings.
+    """
+    return config.model_copy(update={"parameters": {}}) if config else None
+
+
+async def resolve_chat_model_binding(
+    user_id: str,
+    config: ChatModelConfig,
+    access: ResourceAccessService,
+) -> tuple[CredentialBase, ModelCard]:
+    """Use the same current catalogue rules for configuration and execution."""
+    record = await access.resolve_credential(user_id, config.credential_id)
+    credential = CredentialFactory.from_dict(record.data)
+    if config.type != credential.type:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="聊天模型类型与所选凭证不匹配，请重新选择模型。",
+        )
+    try:
+        definition = require_enabled_chat_model(credential, config.model)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
+    return credential, definition
 
 
 async def get_model(
@@ -63,14 +102,15 @@ async def get_model(
     Raises:
         `HTTPException`:
             404 when the credential is neither owned by ``user_id`` nor
-            shared to them.
+            shared to them; 422 when its type differs or the selected model
+            is absent from the current catalogue or disabled.
     """
-    credential_record = await access.resolve_credential(
+    credential, model_definition = await resolve_chat_model_binding(
         user_id,
-        config.credential_id,
+        config,
+        access,
     )
 
-    credential = CredentialFactory.from_dict(credential_record.data)
     model_cls = credential.get_chat_model_class()
     default_parameters = dict(
         credential.model_catalog.model_default_parameters.get(
@@ -100,24 +140,24 @@ async def get_model(
         if effective_parameters
         else None
     )
-    model_definition = next(
-        (
-            item
-            for item in build_credential_model_catalog(credential)
-            if item.name == config.model
-        ),
-        None,
-    )
-    runtime_kwargs = (
-        {"context_size": model_definition.context_size}
-        if model_definition is not None
-        else {}
-    )
     model = model_cls(
         credential=credential,
         model=config.model,
         parameters=parameters,
-        **runtime_kwargs,
+        context_size=model_definition.context_size,
     )
+    model.input_types = list(model_definition.input_types)
+    if hasattr(model, "formatter") and hasattr(model.formatter, "input_types"):
+        model.formatter.input_types = list(model_definition.input_types)
     model.set_request_body_overrides(request_body_overrides)
+    output_limit = resolve_model_output_limit(
+        model_definition,
+        getattr(model.parameters, "max_tokens", None),
+    )
+    if output_limit is not None:
+        model._managed_output_limit = output_limit
+        model._managed_thinking_budget = getattr(model.parameters, "thinking_budget", None)
+        # Supplies mandatory fields (e.g. Anthropic) even before middleware.
+        if hasattr(model.parameters, "max_tokens"):
+            model.parameters.max_tokens = output_limit
     return model

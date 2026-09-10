@@ -16,6 +16,7 @@ from .chat_agent_sessions import create_group_agent_session
 from .models import ChatAgentThread, ChatChannel, ChatMessage, ChatMessageMention, Project, User
 from .runtime_observability import RuntimeStageTracker
 from .schemas import TaskInput
+from .task_draft_adapter import normalize_task_flow
 
 
 router = _legacy.router
@@ -294,6 +295,7 @@ def _task_draft_payload(
     generated: dict[str, Any],
     source_text: str,
 ) -> dict[str, Any]:
+    generated = normalize_task_flow(generated)
     steps = [
         dict(step)
         for step in (generated.get("steps") or [])
@@ -337,7 +339,12 @@ def _task_draft_payload(
         "trigger_interval_unit": str(
             generated.get("trigger_interval_unit") or "week",
         ),
-        "trigger_end_mode": "never",
+        "trigger_end_mode": generated.get("trigger_end_mode") or "never",
+        "trigger_until_date": generated.get("trigger_until_date"),
+        "trigger_max_fires": generated.get("trigger_max_fires"),
+        "trigger_calendar_mode": generated.get("trigger_calendar_mode") or "weekdays",
+        "trigger_weekdays": list(generated.get("trigger_weekdays") or []),
+        "trigger_day_of_month": generated.get("trigger_day_of_month"),
         "cc": str(generated.get("cc") or ""),
         "target_channel_id": action.get("channel_id"),
         "mention_mode": str(action.get("mention_mode") or "none"),

@@ -52,7 +52,6 @@ from ._schema import (
     PlatformSettingsResponse,
     MemoryInfrastructureResponse,
     MemorySettingsResponse,
-    ResetMemorySettingsRequest,
     UpdateMemorySettingsRequest,
     ListWeKnoraKnowledgeBasesResponse,
     ListWeKnoraKnowledgeResponse,
@@ -94,6 +93,7 @@ from .._service import (
     build_credential_model_catalog,
     normalize_credential_model_parameters,
 )
+from .._service._model import resolve_chat_model_binding
 from ..storage import (
     AgentData,
     AgentModelPolicy,
@@ -345,19 +345,6 @@ def _memory_settings_response(
         updated_at=settings.updated_at,
         infrastructure=_memory_infrastructure_response(),
     )
-
-
-def _check_memory_settings_revision(
-    expected_revision: int | None,
-    current_revision: int,
-) -> None:
-    if expected_revision is not None and expected_revision != current_revision:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "记忆配置已被其他操作更新，请刷新页面后重新修改。"
-            ),
-        )
 
 
 def _validate_weknora_endpoint(base_url: str) -> str:
@@ -2118,13 +2105,7 @@ async def _synchronise_global_main_agent_roles(
     global_config_id: str,
     selected_agent_id: str | None,
 ) -> None:
-    """Mirror the authoritative pointer into legacy per-agent role fields.
-
-    The pointer in :class:`PlatformSettingsData` is authoritative. Keeping the
-    old role field synchronized preserves wire compatibility with older
-    clients while ensuring there is never more than one derived
-    ``global_main`` role.
-    """
+    """Apply an explicitly saved main duty and remove the former duty's privileges."""
     for record in await storage.list_agents(global_config_id):
         current_role = record.data.platform_config.role
         desired_role = (
@@ -2134,23 +2115,19 @@ async def _synchronise_global_main_agent_roles(
         )
         if record.id == selected_agent_id:
             desired_scope = "none"
-            desired_level = "management"
         elif current_role == "global_main":
             # A former main must not retain its platform-wide privilege.
             # Keep any explicit IDs so the admin can reuse the old whitelist.
             desired_scope = "selected"
-            desired_level = record.data.platform_config.agent_level
         else:
             desired_scope = record.data.call_config.scope
-            desired_level = record.data.platform_config.agent_level
         if (
             desired_role == current_role
-            and desired_level == record.data.platform_config.agent_level
             and desired_scope == record.data.call_config.scope
         ):
             continue
         platform_config = record.data.platform_config.model_copy(
-            update={"role": desired_role, "agent_level": desired_level},
+            update={"role": desired_role},
         )
         call_config = record.data.call_config.model_copy(
             update={"scope": desired_scope},
@@ -2173,8 +2150,6 @@ async def _synchronise_project_initializer_role(
     storage: StorageBase,
     global_config_id: str,
     selected_agent_id: str | None,
-    *,
-    agent_level: str = "management",
 ) -> None:
     """Keep the selected initializer hidden with an explicit allowlist."""
     if selected_agent_id is None:
@@ -2186,7 +2161,6 @@ async def _synchronise_project_initializer_role(
     call_config = record.data.call_config
     if (
         platform_config.role == "system_internal"
-        and platform_config.agent_level == agent_level
         and not platform_config.published
         and call_config.scope == "selected"
     ):
@@ -2198,7 +2172,6 @@ async def _synchronise_project_initializer_role(
                     "platform_config": platform_config.model_copy(
                         update={
                             "role": "system_internal",
-                            "agent_level": agent_level,
                             "published": False,
                         },
                     ),
@@ -2223,7 +2196,6 @@ async def _synchronise_task_assistant_role(
         storage,
         global_config_id,
         selected_agent_id,
-        agent_level="worker",
     )
 
 
@@ -2239,7 +2211,6 @@ async def _synchronise_knowledge_assistant_role(
     if record is not None:
         await _synchronise_project_initializer_role(
             storage, global_config_id, selected_agent_id,
-            agent_level=record.data.platform_config.agent_level,
         )
 
 
@@ -2247,74 +2218,16 @@ async def _load_platform_settings(
     storage: StorageBase,
     global_config_id: str,
 ) -> PlatformSettingsRecord:
-    """Load settings and migrate the former per-agent main role once."""
+    """Load explicit duties without inferring roles or rewriting agents on read."""
     existing = await storage.get_platform_settings(global_config_id)
     if existing is not None:
-        await _synchronise_global_main_agent_roles(
-            storage,
-            global_config_id,
-            existing.data.global_main_agent_id,
-        )
-        await _synchronise_project_initializer_role(
-            storage,
-            global_config_id,
-            existing.data.project_initializer_agent_id,
-        )
-        await _synchronise_task_assistant_role(
-            storage,
-            global_config_id,
-            existing.data.task_assistant_agent_id,
-        )
-        await _synchronise_knowledge_assistant_role(
-            storage, global_config_id, existing.data.knowledge_assistant_agent_id,
-        )
         return existing
-
-    records = await storage.list_agents(global_config_id)
-    legacy_candidates = sorted(
-        (
-            record
-            for record in records
-            if record.data.platform_config.role == "global_main"
-        ),
-        key=lambda record: (
-            not record.data.platform_config.enabled,
-            record.data.platform_config.sort_order,
-            record.data.name,
-            record.id,
-        ),
-    )
-    selected_id = legacy_candidates[0].id if legacy_candidates else None
-    data = PlatformSettingsData(global_main_agent_id=selected_id)
-    try:
-        settings = await storage.upsert_platform_settings(
-            global_config_id,
-            data,
-        )
-    except NotImplementedError:
-        settings = PlatformSettingsRecord(
-            user_id=global_config_id,
-            data=data,
-        )
-    await _synchronise_global_main_agent_roles(
-        storage,
-        global_config_id,
-        selected_id,
-    )
-    await _synchronise_project_initializer_role(
-        storage,
-        global_config_id,
-        data.project_initializer_agent_id,
-    )
-    await _synchronise_task_assistant_role(
-        storage,
-        global_config_id,
-        data.task_assistant_agent_id,
-    )
-    return settings
+    return await storage.upsert_platform_settings(global_config_id, PlatformSettingsData())
 
 
-def _catalog_item(agent: AgentView) -> PlatformAgentCatalogItem:
+def _catalog_item(
+    agent: AgentView, knowledge_assistant_id: str | None = None,
+) -> PlatformAgentCatalogItem:
     config = agent.data.platform_config
     description = (
         (config.description or "").strip()
@@ -2328,12 +2241,11 @@ def _catalog_item(agent: AgentView) -> PlatformAgentCatalogItem:
         description=description,
         category=config.category.strip() or "通用",
         role=config.role,
-        agent_level=config.agent_level,
         enabled=config.enabled,
         published=config.published,
         invitable=bool(agent.data.invite_config.invitable),
         allow_global_main_call=config.allow_global_main_call,
-        project_knowledge_enabled=config.project_knowledge_enabled,
+        project_knowledge_enabled=agent.id == knowledge_assistant_id,
         model_ready=(
             agent.data.model_policy.mode == "fixed"
             and agent.data.model_policy.chat_model_config is not None
@@ -2355,37 +2267,7 @@ async def _validate_model_policy(
         return policy
 
     config = policy.chat_model_config
-    record = await access.resolve_credential(
-        user_id,
-        config.credential_id,
-    )
-    credential = CredentialFactory.from_dict(record.data)
-    credential_type = getattr(credential, "type", None)
-    if config.type != credential_type:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                "Agent model provider type does not match the selected "
-                "credential."
-            ),
-        )
-
-    candidate = next(
-        (
-            model
-            for model in build_credential_model_catalog(credential)
-            if model.name == config.model
-        ),
-        None,
-    )
-    if candidate is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"Model {config.model!r} is not present in the selected "
-                "credential."
-            ),
-        )
+    credential, _candidate = await resolve_chat_model_binding(user_id, config, access)
 
     try:
         parameters = normalize_credential_model_parameters(
@@ -2572,7 +2454,7 @@ async def get_platform_agent_catalog(
     task_assistant_id = settings.data.task_assistant_agent_id
     knowledge_assistant_id = settings.data.knowledge_assistant_agent_id
     entries = await access.list_resource(user_id, ResourceKind.AGENT)
-    items = [_catalog_item(entry) for entry in entries]
+    items = [_catalog_item(entry, knowledge_assistant_id) for entry in entries]
     selected_item = next(
         (
             item
@@ -2621,7 +2503,7 @@ async def get_platform_agent_catalog(
     )
     if knowledge_assistant_item is not None:
         knowledge_assistant_item = knowledge_assistant_item.model_copy(
-            update={"name": "资料助手", "role": "system_internal", "published": False},
+            update={"name": "知识库助手", "role": "system_internal", "published": False},
         )
     business_agents = sorted(
         (
@@ -2744,21 +2626,7 @@ async def _validate_memory_model_config(
             detail=str(exc),
         ) from exc
 
-    normalized = config.model_copy(update={"parameters": parameters})
-    try:
-        from ..memory import build_memory_model_runtime_config
-
-        build_memory_model_runtime_config(
-            normalized,
-            credential,
-            context_size=candidate.context_size,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
-    return normalized
+    return config.model_copy(update={"parameters": parameters})
 
 
 @agent_router.get(
@@ -2789,58 +2657,31 @@ async def update_memory_settings(
 ) -> MemorySettingsResponse:
     """Atomically replace memory policy while preserving other settings."""
 
-    current = await _load_platform_settings(storage, user_id)
-    _check_memory_settings_revision(
-        body.expected_revision,
-        current.data.memory_settings_revision,
-    )
-    memory_model_config = await _validate_memory_model_config(
-        user_id,
-        body.settings.memory_model_config,
-        access,
-    )
-    normalized_settings = body.settings.model_copy(
-        update={"memory_model_config": memory_model_config,
-                "learning_model_config": await _validate_memory_model_config(user_id,body.settings.learning_model_config,access)},
-    )
-    updated_data = current.data.model_copy(
-        update={
-            "memory_settings": normalized_settings,
-            "memory_settings_revision": (
-                current.data.memory_settings_revision + 1
-            ),
-        },
-    )
-    updated = await storage.upsert_platform_settings(user_id, updated_data)
-    return _memory_settings_response(updated)
+    from ..storage._memory_settings import MemorySettingsConflict
 
+    normalized = MemorySettingsData.model_validate({
+        **body.settings.model_dump(),
+        "compression_model_config": await _validate_memory_model_config(
+            user_id, body.settings.compression_model_config, access),
+        "learning_model_config": await _validate_memory_model_config(
+            user_id, body.settings.learning_model_config, access),
+    })
+    if normalized.learning_enabled:
+        from utils.memory_service import get_memory_repository
+        import os
 
-@agent_router.post(
-    "/platform/memory-settings/reset",
-    response_model=MemorySettingsResponse,
-    summary="Restore reference-branch Dobby memory defaults",
-)
-async def reset_memory_settings(
-    body: ResetMemorySettingsRequest,
-    user_id: str = Depends(get_current_user_id),
-    storage: StorageBase = Depends(get_storage),
-) -> MemorySettingsResponse:
-    """Restore the integrated Dobby memory defaults."""
-
-    current = await _load_platform_settings(storage, user_id)
-    _check_memory_settings_revision(
-        body.expected_revision,
-        current.data.memory_settings_revision,
-    )
-    updated_data = current.data.model_copy(
-        update={
-            "memory_settings": MemorySettingsData(),
-            "memory_settings_revision": (
-                current.data.memory_settings_revision + 1
-            ),
-        },
-    )
-    updated = await storage.upsert_platform_settings(user_id, updated_data)
+        try:
+            storage.validate_memory_learning_storage(
+                get_memory_repository().pool.conninfo,
+                os.getenv("AGENTSCOPE_DATABASE_SCHEMA", "agentscope").strip(),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    try:
+        updated = await storage.update_memory_settings(
+            user_id, normalized, body.expected_revision)
+    except MemorySettingsConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return _memory_settings_response(updated)
 
 
@@ -4240,6 +4081,19 @@ async def update_platform_settings(
     )
     task_assistant_agent_id = current.data.task_assistant_agent_id
     knowledge_assistant_agent_id = current.data.knowledge_assistant_agent_id
+    for field in (
+        "project_initializer_agent_id", "task_assistant_agent_id",
+        "knowledge_assistant_agent_id",
+    ):
+        if (
+            field in body.model_fields_set
+            and getattr(current.data, field) is not None
+            and getattr(body, field) is None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="主智能体承担固定平台职责，不能移除。",
+            )
     validation_mcp = current.data.project_initializer_validation_mcp
     previous_validation_mcp = validation_mcp
 
@@ -4295,12 +4149,7 @@ async def update_platform_settings(
         task_assistant_agent_id = body.task_assistant_agent_id
     if "knowledge_assistant_agent_id" in body.model_fields_set:
         if body.knowledge_assistant_agent_id is not None:
-            selected = await validate_candidate(body.knowledge_assistant_agent_id, "knowledge assistant")
-            if not selected.data.platform_config.project_knowledge_enabled:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="请先在所选智能体的配置中开启「启用项目资料查询」。",
-                )
+            await validate_candidate(body.knowledge_assistant_agent_id, "knowledge assistant")
         knowledge_assistant_agent_id = body.knowledge_assistant_agent_id
     if "project_initializer_validation_mcp" in body.model_fields_set:
         requested_binding = body.project_initializer_validation_mcp
@@ -4351,7 +4200,7 @@ async def update_platform_settings(
     }:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="资料助手须使用独立智能体，不能与平台总控、项目初始化或任务助手共用。",
+            detail="知识库助手须使用独立智能体，不能与平台总控、项目初始化或任务助手共用。",
         )
     if project_initializer_agent_id is not None and validation_mcp is None:
         raise HTTPException(
@@ -4534,6 +4383,14 @@ async def update_agent(
     settings = await _load_platform_settings(storage, owner_id)
     selected_id = settings.data.global_main_agent_id
     is_selected_main = selected_id == agent_id
+    from .._service._platform_settings import fixed_agent_ids
+
+    is_fixed_agent = agent_id in fixed_agent_ids(settings.data)
+    if is_fixed_agent and body.platform_config is not None and not body.platform_config.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="主智能体承担固定平台职责，不能停用。",
+        )
     if (
         body.platform_config is not None
         and body.platform_config.role == "global_main"
@@ -4548,11 +4405,13 @@ async def update_agent(
         )
 
     updates = body.model_dump(exclude_none=True)
-    # ``model_copy(update=...)`` skips validators; re-run
-    # ``AgentData.model_validate`` on the merged shape so the
-    # ``invite_config`` sub-model's ``invitable ⇒ non-empty description``
-    # invariant enforced by ``@model_validator(mode="after")`` produces
-    # an HTTP 422 instead of a stored-but-invalid record.
+    if body.platform_config is not None:
+        # Preserve fields omitted by a partial platform configuration edit.
+        updates["platform_config"] = {
+            **existing.data.platform_config.model_dump(),
+            **body.platform_config.model_dump(exclude_unset=True),
+        }
+    # Revalidate merged settings because model_copy(update=...) skips validators.
     try:
         updated_data = AgentData.model_validate(
             {**existing.data.model_dump(), **updates},
@@ -4600,7 +4459,7 @@ async def update_agent(
                     )
                 ),
                 "call_config": updated_data.call_config.model_copy(
-                    update={"scope": "all"},
+                    update={"scope": "none"},
                 ),
             },
         )
@@ -4667,13 +4526,12 @@ async def delete_agent(
         agent_id,
     )
     settings = await _load_platform_settings(storage, owner_id)
-    if settings.data.global_main_agent_id == agent_id:
+    from .._service._platform_settings import fixed_agent_ids
+
+    if agent_id in fixed_agent_ids(settings.data):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                "Select another platform main agent before deleting the "
-                "current one."
-            ),
+            detail="主智能体承担固定平台职责，不能删除。",
         )
     deleted = await session_service.delete_agent(owner_id, agent_id)
     if not deleted:

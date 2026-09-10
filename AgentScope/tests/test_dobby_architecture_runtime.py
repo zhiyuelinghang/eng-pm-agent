@@ -14,6 +14,7 @@ from agentscope.app.database_interactions import DatabaseInteractionTool
 from agentscope.app.message_bus import InMemoryMessageBus
 from agentscope.app._platform_tool_policy import PlatformToolPolicy
 from agentscope.app._tool._team_say import TeamSay
+from agentscope.app.storage import PlatformSettingsRecord, PlatformSettingsData
 from agentscope.app.storage import (
     AgentCallConfig, AgentData, AgentRecord, InviteConfig, PlatformAgentConfig,
     SessionConfig, SessionRecord, TeamData, TeamMember, TeamRecord,
@@ -100,12 +101,21 @@ async def test_business_confirmation_survives_modes_and_saved_allow_rules(mode):
 
 
 @pytest.mark.asyncio
-async def test_invitation_rejects_a_worker_disabled_after_catalogue_load():
-    caller, original = agent_record("caller"), agent_record("worker")
-    storage = SimpleNamespace(
+@pytest.mark.parametrize(("main", "revoked_field"), [
+    (True, "enabled"), (True, "allow_global_main_call"),
+    (False, "enabled"), (False, "invitable"),
+])
+async def test_invitation_rechecks_target_permission_after_catalogue_load(main, revoked_field):
+    caller, original = agent_record("caller", main=main), agent_record("worker")
+    revoked = agent_record("worker")
+    if revoked_field == "invitable":
+        revoked.data.invite_config.invitable = False
+    else:
+        setattr(revoked.data.platform_config, revoked_field, False)
+    storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id='caller' if main else None))),
         get_session=AsyncMock(return_value=SimpleNamespace(team_id="team")),
         get_team=AsyncMock(return_value=SimpleNamespace(id="team", session_id="root")),
-        get_agent=AsyncMock(side_effect=[caller, agent_record("worker", enabled=False)]),
+        get_agent=AsyncMock(side_effect=[caller, revoked]),
         upsert_session=AsyncMock(),
     )
     invite = AgentInvite(storage, object(), object(), "owner", "root", "caller", [original])
@@ -116,8 +126,12 @@ async def test_invitation_rejects_a_worker_disabled_after_catalogue_load():
 
 
 @pytest.mark.asyncio
-async def test_completed_worker_can_receive_next_stage_without_recreating_team():
+@pytest.mark.parametrize("legacy_flags", [False, True])
+async def test_completed_worker_can_receive_next_stage_without_recreating_team(legacy_flags):
     caller, worker = agent_record("dobby", main=True), agent_record("worker")
+    worker.data.invite_config.invitable = legacy_flags
+    worker.data.invite_config.invite_description = "专项分析" if legacy_flags else None
+    worker.data.platform_config.allow_global_main_call = True
     root = SessionRecord(id="root", user_id="owner", agent_id="dobby", team_id="team",
                          config=SessionConfig(workspace_id="root-workspace"))
     borrowed = SessionRecord(id="borrowed", user_id="owner", agent_id="worker",
@@ -147,12 +161,21 @@ async def test_completed_worker_can_receive_next_stage_without_recreating_team()
     assert deliver.await_args.kwargs["recipient_session_id"] == "borrowed"
     assert result.metadata["collaboration_member"]["work_revision"] == 2
 
+    # Already being a team member must not bypass later permission revocation.
+    worker.data.platform_config.allow_global_main_call = False
+    say = TeamSay(storage, InMemoryMessageBus(), object(), "owner", "root", "dobby", role="leader")
+    with patch("agentscope.app._tool._team_say.deliver_team_message", new_callable=AsyncMock) as deliver:
+        denied = await say("再执行下一阶段", to="worker@worker")
+    assert denied.state == ToolResultState.ERROR
+    deliver.assert_not_awaited()
+    assert team.data.members[0].work_revision == 2
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("running", [False, True])
 async def test_user_stop_also_cancels_the_leaders_workers(running):
     service = object.__new__(ChatService)
-    service._storage = SimpleNamespace(
+    service._storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id='dobby'))),
         get_session=AsyncMock(return_value=SimpleNamespace(
             id="root", team_id="team", state=SimpleNamespace(reply_id="reply"))),
         get_team=AsyncMock(return_value=SimpleNamespace(id="team", session_id="root")),
@@ -175,7 +198,7 @@ async def test_dobby_capability_boundary_also_applies_outside_homepage():
                                 list_skills=AsyncMock(return_value=[]))
     registry = SimpleNamespace(get_session_clients=AsyncMock(return_value=[]))
     await get_toolkit(
-        storage=SimpleNamespace(), workspace=workspace, workspace_manager=object(),
+        storage=SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id='dobby'))), ), workspace=workspace, workspace_manager=object(),
         scheduler_manager=object(), background_task_manager=SimpleNamespace(list_tools=AsyncMock(return_value=[])),
         message_bus=object(), middlewares=[], user_id="owner", agent_record=caller,
         session_record=SessionRecord(id="root", user_id="owner", agent_id="dobby",
@@ -194,9 +217,21 @@ async def test_invited_management_agent_keeps_its_explicit_call_allowlist():
     caller, worker = agent_record("manager"), agent_record("worker")
     session = SessionRecord(id="manager-session", user_id="owner", agent_id="manager",
                             team_id="team", config=SessionConfig(workspace_id="workspace"))
+    root = SessionRecord(id='root', user_id='owner', agent_id='dobby', team_id='team',
+                         config=SessionConfig(workspace_id='root-workspace'))
+    team = TeamRecord(id='team', user_id='owner', session_id='root', data=TeamData(name='协作团队', members=[
+        TeamMember(owner_id='owner', agent_id='manager', session_id=session.id,
+                   role='invited', inviter_session_id='root'),
+    ]))
+    storage = SimpleNamespace(
+        get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id='owner',
+            data=PlatformSettingsData(global_main_agent_id='dobby'))),
+        get_team=AsyncMock(return_value=team),
+        get_session=AsyncMock(return_value=root),
+        get_agent=AsyncMock(return_value=agent_record('dobby', main=True)),
+    )
     toolkit = await get_toolkit(
-        storage=SimpleNamespace(get_team=AsyncMock(return_value=SimpleNamespace(session_id="root")),
-                                get_session=AsyncMock(return_value=None)),
+        storage=storage,
         workspace=SimpleNamespace(list_tools=AsyncMock(return_value=[]), list_mcps=AsyncMock(return_value=[]),
                                   list_skills=AsyncMock(return_value=[])),
         workspace_manager=object(), scheduler_manager=object(),
@@ -209,6 +244,20 @@ async def test_invited_management_agent_keeps_its_explicit_call_allowlist():
     assert invite is not None
     assert invite.input_schema["properties"]["target"]["enum"] == ["worker@worker"]
 
+    worker.data.invite_config.invitable = False
+    assert not caller.data.call_config.allowed_agent_ids == []
+    toolkit = await get_toolkit(
+        storage=storage,
+        workspace=SimpleNamespace(list_tools=AsyncMock(return_value=[]), list_mcps=AsyncMock(return_value=[]),
+                                  list_skills=AsyncMock(return_value=[])),
+        workspace_manager=object(), scheduler_manager=object(),
+        background_task_manager=SimpleNamespace(list_tools=AsyncMock(return_value=[])),
+        message_bus=object(), middlewares=[], user_id="owner", agent_record=caller,
+        session_record=session,
+        resource_access_service=SimpleNamespace(list_resource=AsyncMock(return_value=[caller, worker])),
+    )
+    assert await toolkit.get_tool("AgentInvite") is None
+
 
 @pytest.mark.asyncio
 async def test_nested_delegation_reports_to_caller_and_keeps_parent_pending():
@@ -217,6 +266,7 @@ async def test_nested_delegation_reports_to_caller_and_keeps_parent_pending():
     caller, manager, worker = agent_record("dobby", main=True), agent_record("manager"), agent_record("worker")
     workspace = SimpleNamespace(assign_workspace_id=lambda **kwargs: f"workspace-{kwargs['agent_id']}")
     async with storage:
+        await storage.upsert_platform_settings("owner", PlatformSettingsData(global_main_agent_id="dobby"))
         for record in [caller, manager, worker]:
             await storage.upsert_agent("owner", record)
         await storage.upsert_session("owner", "worker", SessionConfig(workspace_id="other-users-private-files"),
@@ -241,6 +291,15 @@ async def test_nested_delegation_reports_to_caller_and_keeps_parent_pending():
         team_id = result.metadata["collaboration_member"]["team_id"]
         team = await storage.get_team("owner", team_id)
         assert next(m for m in team.data.members if m.session_id == child_sid).inviter_session_id == manager_sid
+        # Revoking invitation consent blocks a new assignment through an
+        # existing team membership, even while the caller's saved ID remains.
+        worker.data.invite_config.invitable = False
+        await storage.upsert_agent("owner", worker)
+        manager_say = TeamSay(storage, bus, workspace, "owner", manager_sid, "manager", role="worker")
+        with patch("agentscope.app._tool._team_say.deliver_team_message", new_callable=AsyncMock) as deliver:
+            denied = await manager_say("继续执行", to="worker@worker")
+            assert denied.state == ToolResultState.ERROR
+            deliver.assert_not_awaited()
         service = object.__new__(ChatService)
         service._storage, service._message_bus = storage, bus
         reply = AssistantMsg(name="manager", content="等待专项结果", finished_reason=ReplyFinishedReason.COMPLETED)
@@ -275,7 +334,7 @@ async def test_lazy_task_engine_tools_cannot_publish_or_read_unscoped_tasks():
                      session=SimpleNamespace()) for name in names]
     toolkit = Toolkit(tool_groups=[ToolGroup(name="drafts", description="任务草稿",
         tool_loader=AsyncMock(return_value=tools))],
-        tool_policy=PlatformToolPolicy(global_main=False, management=False))
+        tool_policy=PlatformToolPolicy(global_main=False))
     assert await toolkit.get_tool("mcp__task-engine__generate_task_flow") is not None
     for name in names[1:]:
         assert await toolkit.get_tool(f"mcp__task-engine__{name}") is None
@@ -284,7 +343,7 @@ async def test_lazy_task_engine_tools_cannot_publish_or_read_unscoped_tasks():
         "read_only": False, "requires_confirmation": True, "policy": {"table_name": "tasks"},
     }, manager=AsyncMock(), session_id="root", actor_agent_id="agent", platform_agent_id="agent")
     for main in (True, False):
-        assert not PlatformToolPolicy(global_main=main, management=True)(custom_write)
+        assert not PlatformToolPolicy(global_main=main)(custom_write)
 
 
 @pytest.mark.asyncio
@@ -301,7 +360,7 @@ async def test_polling_projection_filters_resolved_worker_prompts():
         state=AgentState(context=[AssistantMsg(id="reply", name="worker", content=[call])]))
     root = SessionRecord(id="root", user_id="owner", agent_id="leader",
                          config=SessionConfig(workspace_id="root"))
-    storage = SimpleNamespace(
+    storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id='dobby'))),
         get_session=AsyncMock(side_effect=lambda user, agent, sid: root if sid == "root" else worker),
         list_messages=AsyncMock(return_value=([], False)))
     projection = SessionProjection(bus)

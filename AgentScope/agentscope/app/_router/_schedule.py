@@ -4,7 +4,6 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from ..access import ResourceKind
 from .._manager import SchedulerManager
 from ..deps import (
     get_current_user_id,
@@ -21,6 +20,7 @@ from ._schema import (
     UpdateScheduleRequest,
 )
 from .._service import ResourceAccessService, SessionService
+from .._service._model import resolve_chat_model_binding
 from ..storage import (
     StorageBase,
     ScheduleData,
@@ -98,11 +98,7 @@ async def create_schedule(
     # credential here surfaces the error at creation time rather than
     # silently at the first (possibly much later) scheduled run.
     await access.resolve_agent(user_id, body.agent_id)
-    await access.get_resource(
-        user_id,
-        ResourceKind.CREDENTIAL,
-        body.chat_model_config.credential_id,
-    )
+    await resolve_chat_model_binding(user_id, body.chat_model_config, access)
 
     record = ScheduleRecord(
         user_id=user_id,

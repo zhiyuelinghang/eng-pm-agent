@@ -142,6 +142,18 @@ class AgentScopeClient:
                 self._http_client.close()
                 self._http_client = None
 
+    def complete_platform_text(self, *, system_prompt: str, prompt: str) -> str:
+        """Use the main agent's saved model without creating an agent session."""
+        result = self._request(
+            "POST", "/platform/model-completion",
+            json={"system_prompt": system_prompt, "prompt": prompt},
+            wait_for_response=True,
+        )
+        content = result.get("content") if isinstance(result, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise AgentScopeGatewayError("平台共享模型未返回文本回复。", status_code=502)
+        return content.strip()
+
     @property
     def headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._service_token}"}
@@ -1061,6 +1073,16 @@ class AgentScopeClient:
             content_blocks=content_blocks,
         )
 
+        return self.wait_for_chat_reply(
+            agent_id=agent_id, session_id=session_id,
+            resolved_user_message_id=resolved_user_message_id, completion=completion,
+        )
+
+    def wait_for_chat_reply(
+        self, *, agent_id: str, session_id: str, resolved_user_message_id: str,
+        completion: AgentScopeRunCompletion | None = None,
+    ) -> AgentScopeReply:
+        """Wait for an already submitted turn without triggering it again."""
         if completion is not None:
             # Normally the already-open AgentScope event stream resolves this
             # immediately after durable persistence.  Probe slowly only as a

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from fnmatch import fnmatch
+from typing import Any, Sequence
 
 from ...message import Base64Source, DataBlock, Msg, TextBlock, ToolResultState
 from ...tool import Toolkit
@@ -37,11 +38,11 @@ class _AttachmentSource:
 
 
 class AttachmentPipeline:
-    """Parse every user attachment and replace raw model input with text.
+    """Keep supported images native and parse other user attachments.
 
     The original user message is kept for persistence and UI rendering.  A
-    deep copy is produced for the agent context, with binary blocks removed
-    and deterministic parser output appended as text.  Parse status is stored
+    deep copy is produced for the agent context, with supported base64 images
+    preserved and other attachments replaced by parser output. Status is stored
     in both messages' metadata so refreshes retain auditable pipeline state.
     """
 
@@ -62,29 +63,39 @@ class AttachmentPipeline:
         self,
         input_msg: Msg | list[Msg],
         toolkit: Toolkit,
+        *,
+        supported_input_types: Sequence[str],
     ) -> Msg | list[Msg]:
         """Prepare one message or message batch before model execution."""
         if isinstance(input_msg, Msg):
-            return await self._prepare_message(input_msg, toolkit)
+            return await self._prepare_message(input_msg, toolkit, supported_input_types)
         return [
-            await self._prepare_message(message, toolkit)
+            await self._prepare_message(message, toolkit, supported_input_types)
             for message in input_msg
         ]
 
-    async def _prepare_message(self, message: Msg, toolkit: Toolkit) -> Msg:
+    async def _prepare_message(
+        self, message: Msg, toolkit: Toolkit, supported_input_types: Sequence[str],
+    ) -> Msg:
         if message.role != "user":
             return message
 
-        sources = self._collect_sources(message)
-        if not sources:
+        native_images = [block for block in message.get_content_blocks("data")
+                         if self._is_native_image(block, supported_input_types)]
+        sources = self._collect_sources(message, supported_input_types)
+        if not sources and not native_images:
             return message
 
-        parser_tool = await toolkit.get_tool(_PARSER_TOOL_NAME)
-        data_modeling_import_tool = await toolkit.get_tool(
-            _DATA_MODELING_IMPORT_TOOL_NAME,
+        parser_tool = await toolkit.get_tool(_PARSER_TOOL_NAME) if sources else None
+        data_modeling_import_tool = (
+            await toolkit.get_tool(_DATA_MODELING_IMPORT_TOOL_NAME) if sources else None
         )
         parsed_sections: list[str] = []
-        statuses: list[dict[str, Any]] = []
+        statuses: list[dict[str, Any]] = [
+            {"name": block.name or "image", "status": "ready",
+             "parser": "native_image", "media_type": block.source.media_type}
+            for block in native_images
+        ]
         for source in sources:
             data_modeling = await self._stage_for_data_modeling(
                 data_modeling_import_tool,
@@ -146,16 +157,18 @@ class AttachmentPipeline:
             block
             for block in prepared.content
             if not isinstance(block, DataBlock)
+            or self._is_native_image(block, supported_input_types)
         ]
-        prepared.content.append(
-            TextBlock(
-                text=(
-                    "\n<parsed-attachments>\n"
-                    + "\n\n".join(parsed_sections)
-                    + "\n</parsed-attachments>"
+        if parsed_sections:
+            prepared.content.append(
+                TextBlock(
+                    text=(
+                        "\n<parsed-attachments>\n"
+                        + "\n\n".join(parsed_sections)
+                        + "\n</parsed-attachments>"
+                    ),
                 ),
-            ),
-        )
+            )
         prepared.metadata["attachment_preprocessing"] = pipeline_metadata
         return prepared
 
@@ -211,9 +224,21 @@ class AttachmentPipeline:
             }
 
     @staticmethod
-    def _collect_sources(message: Msg) -> list[_AttachmentSource]:
+    def _is_native_image(block: DataBlock, supported_input_types: Sequence[str]) -> bool:
+        return (
+            isinstance(block.source, Base64Source)
+            and block.source.media_type.startswith("image/")
+            and any(fnmatch(block.source.media_type, pattern) for pattern in supported_input_types)
+        )
+
+    @classmethod
+    def _collect_sources(
+        cls, message: Msg, supported_input_types: Sequence[str] = (),
+    ) -> list[_AttachmentSource]:
         sources: list[_AttachmentSource] = []
         for block in message.get_content_blocks("data"):
+            if cls._is_native_image(block, supported_input_types):
+                continue
             name = block.name or "attachment"
             if isinstance(block.source, Base64Source):
                 sources.append(

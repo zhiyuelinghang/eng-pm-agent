@@ -10,16 +10,18 @@ from uuid import uuid4
 
 import psycopg
 from psycopg import sql
+from psycopg.types.json import Jsonb
 from psycopg.conninfo import make_conninfo
 import pytest
 
 from utils.memory_repository import MemoryAccess, MemoryError, MemoryRepository, MemoryWrite
 from utils.memory_schema import MEMORY_DDL
 from utils.learning_schema import LEARNING_DDL
+from utils.memory_run_repository import MEMORY_RUN_DDL
 
 
 @pytest.fixture
-def repository():
+def repository(monkeypatch):
     url = os.environ.get("DOBBY_MEMORY_TEST_DATABASE_URL")
     if not url:
         pytest.skip("Set DOBBY_MEMORY_TEST_DATABASE_URL for isolated PostgreSQL integration tests")
@@ -29,6 +31,18 @@ def repository():
         conn.execute(sql.SQL("SET search_path TO {},public").format(sql.Identifier(schema)))
         conn.execute(MEMORY_DDL)
         conn.execute(LEARNING_DDL)
+        conn.execute(MEMORY_RUN_DDL)
+        # The publication guard must read the actual authoritative row in the
+        # same test database, never the developer's application settings.
+        conn.execute('CREATE TABLE platform_settings (user_id text PRIMARY KEY, payload json NOT NULL)')
+        settings = {'learning_enabled':True, 'learning_interactions_enabled':True,
+            'learning_business_events_enabled':True, 'group_learning_enabled':True,
+            'learning_model_config':{'type':'custom_openai_credential', 'credential_id':'test',
+                'model':'test', 'parameters':{}}, 'compression_model_config':None}
+        for owner in ('owner', 'o', 'default'):
+            conn.execute('INSERT INTO platform_settings(user_id,payload) VALUES(%s,%s)',
+                (owner, Jsonb({'data':{'memory_settings':settings, 'memory_settings_revision':0}})))
+    monkeypatch.setenv('AGENTSCOPE_DATABASE_SCHEMA', schema)
     repo = MemoryRepository(make_conninfo(url, options=f"-csearch_path={schema},public"))
     try:
         yield repo
@@ -220,11 +234,14 @@ def test_tool_saves_without_classifier_and_live_revocation_blocks_access(reposit
         if not allowed:
             raise MemoryError("revoked","项目权限已撤销。",status=403)
         return access()
+    from memory_run_test_support import MemoryRunHarness
+    harness = MemoryRunHarness(repository)
     runtime = MagicMock()
-    middleware = ThreeDrawerMemoryMiddleware(runtime,MemoryRuntime().scope(project_id="p",platform_user_id="a",agent_id="agent",session_id="s"),{},access_resolver=resolve,repository=repository)
+    middleware = ThreeDrawerMemoryMiddleware(runtime,MemoryRuntime().scope(project_id="p",platform_user_id="a",agent_id="agent",session_id="s"),{},access_resolver=resolve,repository=repository,controller=harness.controller())
     middleware.active_agent = SimpleNamespace(state=SimpleNamespace(context=[UserMsg("user","我叫雷淦文")]))
     async def run():
         nonlocal allowed
+        await harness.start("我叫雷淦文")
         add,search,*_others = await middleware.list_tools()
         result = json.loads((await add.call(items=[{"scope_type":"user","fact_key":"profile.name","content":"雷淦文"}])).content[0].text)
         assert result["status"] == "saved"

@@ -93,23 +93,21 @@ def test_section_17_collaboration_roles_and_confirmed_writes_are_declarative() -
     agents = {spec.key: spec for spec in COLLABORATION_AGENTS}
 
     knowledge = agents["knowledge_manager"]
-    assert knowledge.name == "资料助手"
-    assert knowledge.agent_level == "management"
+    assert knowledge.name == "知识库助手"
+    assert not hasattr(knowledge, 'memory_policy')
     assert knowledge.published is True
     assert knowledge.allow_global_main_call is True
-    assert knowledge.project_knowledge_enabled is True
 
     risk = agents["risk_advisor"]
     assert risk.name == "风险研判助手"
-    assert risk.agent_level == "worker"
+    assert not hasattr(risk, 'memory_policy')
     assert risk.allow_global_main_call is True
-    assert risk.project_knowledge_enabled is True
     assert "不得直接写入风险源" in risk.system_prompt
 
     task = agents["task_assistant"]
     assert task.name == "任务助手"
     assert task.role == "system_internal"
-    assert task.agent_level == "worker"
+    assert not hasattr(task, 'memory_policy')
     assert task.published is False
     assert task.mcp_ids == ("task-engine",)
     assert "绝不调用发布" in task.system_prompt
@@ -126,7 +124,7 @@ def test_section_17_collaboration_roles_and_confirmed_writes_are_declarative() -
     assert "先调用 agent_search，再用 agent_invoke" in _DOBBY_POLICY
     assert "普通问候直接回答，不激活项目数据库工具组" in _DOBBY_POLICY
     assert "dobby_get_project_basic_info_status，不启动子智能体" in _DOBBY_POLICY
-    assert "要求分析资料分类时先调用资料助手" in _DOBBY_POLICY
+    assert "要求分析资料分类时先调用知识库助手" in _DOBBY_POLICY
     assert "要求从施工资料识别风险时先调用风险研判助手" in _DOBBY_POLICY
     assert "专业智能体失败时先检查 agent_run_status" in _DOBBY_POLICY
 

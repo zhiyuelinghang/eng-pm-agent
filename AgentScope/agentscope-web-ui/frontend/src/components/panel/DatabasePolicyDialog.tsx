@@ -105,7 +105,7 @@ export function DatabasePolicyDialog({
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="flex h-[min(760px,calc(100dvh-2rem))] flex-col sm:max-w-5xl">
+			<DialogContent className="flex h-[min(820px,calc(100dvh-2rem))] !w-[min(1240px,calc(100vw-3rem))] !max-w-[1240px] flex-col">
 				<DialogHeader>
 					<div className="flex items-center gap-2">
 						<DialogTitle>{t('panel.database.policy.title')}</DialogTitle>
@@ -117,7 +117,7 @@ export function DatabasePolicyDialog({
 					<DialogDescription>{t('panel.database.policy.description')}</DialogDescription>
 				</DialogHeader>
 
-				<div className="grid min-h-0 flex-1 overflow-hidden rounded-lg border md:grid-cols-[14rem_minmax(0,1fr)]">
+				<div className="grid min-h-0 flex-1 overflow-hidden rounded-lg border md:grid-cols-[minmax(260px,30%)_minmax(0,1fr)]">
 					<aside className="flex min-h-0 flex-col border-b bg-muted/20 md:border-r md:border-b-0">
 						<div className="border-b px-3 py-2.5 text-sm font-medium">
 							{t('panel.database.policy.directory')}
@@ -131,8 +131,8 @@ export function DatabasePolicyDialog({
 									data-active={selectedId === policy.id || undefined}
 									className="mb-1 w-full rounded-md px-2.5 py-2 text-left transition-colors hover:bg-muted data-[active=true]:bg-accent data-[active=true]:text-accent-foreground"
 								>
-									<span className="block truncate text-sm font-medium">{policy.display_name}</span>
-									<code className="block truncate text-xs text-muted-foreground">{policy.table_name}</code>
+									<span className="block break-words text-sm font-medium">{policy.display_name}</span>
+									<code className="block break-all text-xs text-muted-foreground">{policy.table_name}</code>
 								</button>
 							)) : (
 								<div className="flex h-full min-h-40 flex-col items-center justify-center px-3 text-center">

@@ -48,33 +48,27 @@ export const agentApi = {
 	updatePlatformSettings: (body: UpdatePlatformSettingsRequest) =>
 		client.put<PlatformSettings>('/agent/platform/settings', body),
 
-	getMemorySettings: () =>
-		client.get<MemorySettingsResponse>('/agent/platform/memory-settings'),
+	getMemorySettings: (options?: { silent?: boolean }) =>
+		client.get<MemorySettingsResponse>('/agent/platform/memory-settings', undefined, options),
 
-	updateMemorySettings: (body: UpdateMemorySettingsRequest) =>
-		client.put<MemorySettingsResponse>('/agent/platform/memory-settings', body),
+	updateMemorySettings: (body: UpdateMemorySettingsRequest, options?: { silent?: boolean }) =>
+		client.put<MemorySettingsResponse>(
+			'/agent/platform/memory-settings',
+			body,
+			undefined,
+			options,
+		),
 
-	resetMemorySettings: (expectedRevision: number) =>
-		client.post<MemorySettingsResponse>('/agent/platform/memory-settings/reset', {
-			expected_revision: expectedRevision,
-		}),
-
-	getWeKnoraConnection: () =>
-		client.get<WeKnoraConnection>('/agent/platform/weknora-connection'),
+	getWeKnoraConnection: () => client.get<WeKnoraConnection>('/agent/platform/weknora-connection'),
 
 	revealWeKnoraApiKey: () =>
-		client.get<WeKnoraApiKeyResponse>(
-			'/agent/platform/weknora-connection/api-key',
-		),
+		client.get<WeKnoraApiKeyResponse>('/agent/platform/weknora-connection/api-key'),
 
 	updateWeKnoraConnection: (body: UpdateWeKnoraConnectionRequest) =>
 		client.put<WeKnoraConnection>('/agent/platform/weknora-connection', body),
 
 	testWeKnoraConnection: (body: UpdateWeKnoraConnectionRequest) =>
-		client.post<TestWeKnoraConnectionResponse>(
-			'/agent/platform/weknora-connection/test',
-			body,
-		),
+		client.post<TestWeKnoraConnectionResponse>('/agent/platform/weknora-connection/test', body),
 
 	listWeKnoraKnowledgeBases: (weknoraAgentId?: string) =>
 		client.get<WeKnoraKnowledgeBaseListResponse>(
@@ -94,16 +88,18 @@ export const agentApi = {
 	) =>
 		client.get<WeKnoraKnowledgeListResponse>(
 			`/agent/platform/weknora/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge`,
-			Object.fromEntries(Object.entries({
-				page: String(params.page ?? 1),
-				page_size: String(params.page_size ?? 50),
-				folder_path: params.folder_path,
-				folder_recursive:
-					params.folder_path !== undefined
-						? String(params.folder_recursive ?? false)
-						: undefined,
-				keyword: params.keyword?.trim() || undefined,
-			}).filter((entry): entry is [string, string] => entry[1] !== undefined)),
+			Object.fromEntries(
+				Object.entries({
+					page: String(params.page ?? 1),
+					page_size: String(params.page_size ?? 50),
+					folder_path: params.folder_path,
+					folder_recursive:
+						params.folder_path !== undefined
+							? String(params.folder_recursive ?? false)
+							: undefined,
+					keyword: params.keyword?.trim() || undefined,
+				}).filter((entry): entry is [string, string] => entry[1] !== undefined),
+			),
 		),
 
 	getWeKnoraFolderTree: (knowledgeBaseId: string) =>
@@ -111,10 +107,7 @@ export const agentApi = {
 			`/agent/platform/weknora/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge/folders`,
 		),
 
-	searchWeKnoraKnowledge: (
-		knowledgeBaseId: string,
-		body: SearchWeKnoraKnowledgeRequest,
-	) =>
+	searchWeKnoraKnowledge: (knowledgeBaseId: string, body: SearchWeKnoraKnowledgeRequest) =>
 		client.post<SearchWeKnoraKnowledgeResponse>(
 			`/agent/platform/weknora/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/search`,
 			body,
@@ -136,19 +129,14 @@ export const agentApi = {
 		);
 	},
 
-	createWeKnoraUrlKnowledge: (
-		knowledgeBaseId: string,
-		body: CreateWeKnoraUrlKnowledgeRequest,
-	) =>
+	createWeKnoraUrlKnowledge: (knowledgeBaseId: string, body: CreateWeKnoraUrlKnowledgeRequest) =>
 		client.post<WeKnoraKnowledgeMutationResponse>(
 			`/agent/platform/weknora/knowledge-bases/${encodeURIComponent(knowledgeBaseId)}/knowledge/url`,
 			body,
 		),
 
 	deleteWeKnoraKnowledge: (knowledgeId: string) =>
-		client.delete(
-			`/agent/platform/weknora/knowledge/${encodeURIComponent(knowledgeId)}`,
-		),
+		client.delete(`/agent/platform/weknora/knowledge/${encodeURIComponent(knowledgeId)}`),
 
 	downloadWeKnoraKnowledge: (knowledgeId: string) =>
 		client.stream(
@@ -161,38 +149,24 @@ export const agentApi = {
 		),
 
 	askWeKnoraAgent: (body: AskWeKnoraAgentRequest) =>
-		client.post<AskWeKnoraAgentResponse>(
-			'/agent/platform/weknora/agent-query',
-			body,
-		),
+		client.post<AskWeKnoraAgentResponse>('/agent/platform/weknora/agent-query', body),
 
 	listWeKnoraProjectBindings: () =>
-		client.get<WeKnoraProjectBindingListResponse>(
-			'/agent/platform/weknora/project-bindings',
-		),
+		client.get<WeKnoraProjectBindingListResponse>('/agent/platform/weknora/project-bindings'),
 
-	updateWeKnoraProjectBinding: (
-		projectId: number,
-		body: UpdateWeKnoraProjectBindingRequest,
-	) =>
+	updateWeKnoraProjectBinding: (projectId: number, body: UpdateWeKnoraProjectBindingRequest) =>
 		client.put<WeKnoraProjectBinding>(
 			`/agent/platform/weknora/project-bindings/${projectId}`,
 			body,
 		),
 
-	startWeKnoraProjectCatalogueSync: (
-		projectId: number,
-		body: WeKnoraCatalogueSelectionRequest,
-	) =>
+	startWeKnoraProjectCatalogueSync: (projectId: number, body: WeKnoraCatalogueSelectionRequest) =>
 		client.post<WeKnoraProjectBinding>(
 			`/agent/platform/weknora/project-bindings/${projectId}/catalogue-sync`,
 			body,
 		),
 
-	checkWeKnoraProjectCatalogueDiff: (
-		projectId: number,
-		body: WeKnoraCatalogueSelectionRequest,
-	) =>
+	checkWeKnoraProjectCatalogueDiff: (projectId: number, body: WeKnoraCatalogueSelectionRequest) =>
 		client.post<WeKnoraCatalogueDiffResponse>(
 			`/agent/platform/weknora/project-bindings/${projectId}/catalogue-diff`,
 			body,

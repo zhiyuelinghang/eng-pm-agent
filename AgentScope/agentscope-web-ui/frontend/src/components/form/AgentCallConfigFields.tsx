@@ -19,7 +19,7 @@ interface Props {
 	onChange: (key: keyof AgentCallConfig, value: AgentCallScope | string[]) => void;
 }
 
-const SCOPES: AgentCallScope[] = ['all', 'selected', 'none'];
+const SCOPES: AgentCallScope[] = ['selected', 'none'];
 
 export function AgentCallConfigFields({ values, agents, currentAgentId, onChange }: Props) {
 	const { t } = useTranslation();
