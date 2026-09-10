@@ -18,6 +18,7 @@ from .chat_management_api import router as chat_management_router
 from .collaboration_api import router as collaboration_router
 from .database_interaction_router import router as database_interaction_router
 from .engineering_documents_api import router as engineering_documents_router
+from .initialization_changes_api import router as initialization_changes_router
 from .database_interactions import bootstrap_declarative_catalog
 from .config import get_settings
 from .db import SessionLocal
@@ -474,6 +475,7 @@ app.include_router(chat_management_router)
 app.include_router(collaboration_router)
 app.include_router(database_interaction_router)
 app.include_router(engineering_documents_router)
+app.include_router(initialization_changes_router)
 app.include_router(task_context_router)
 
 

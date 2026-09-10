@@ -794,6 +794,8 @@ class SessionService:
             else:
                 # Worker session — drop only its entries from the
                 # leader's store.
+                from ._collaboration_archive import archive_before_worker_delete
+                await archive_before_worker_delete(self._storage, self._bus, user_id, team, session_id)
                 await SubagentHitlProjector.drop_worker(
                     self._projection,
                     team.session_id,

@@ -136,7 +136,7 @@ def test_complete_model_response_keeps_titles_for_permission_and_resume_context(
         response = ChatResponse(content=[ToolCallBlock(id="c", name="new_tool", input="{}")], is_last=True)
         agent = SimpleNamespace(toolkit=toolkit, state=SimpleNamespace(reply_id="reply"), model=SimpleNamespace(model="test"),
                                 _prepare_model_input=AsyncMock(return_value={}), _call_model=AsyncMock(return_value=response),
-                                _save_to_context=Mock())
+                                _save_to_context=Mock(), _execution_guard=None)
         agent._convert_chat_response_to_event = MethodType(Agent._convert_chat_response_to_event, agent)
         events = [event async for event in Agent._reasoning_impl(agent)]
         assert events

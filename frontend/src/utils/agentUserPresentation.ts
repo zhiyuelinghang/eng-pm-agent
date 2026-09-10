@@ -17,7 +17,8 @@ export function userWorkState(state: string, active: boolean, interrupted = fals
 export function userMessagePresentation(trace?: AgentRuntimeTrace | null, streaming = false) {
   const active = isRuntimeActive(trace) || streaming
   const items = agentConversationItems(trace)
-  const answers = items.filter(item => item.kind === 'block' && ['text', 'data'].includes(item.block.type))
+  const answers = items.filter(item => item.kind === 'collaboration_feedback'
+    || item.kind === 'block' && ['text', 'data'].includes(item.block.type))
   const confirmations: Array<{ key: string; replyId: string; call: AgentToolCallBlock }> = []
   const addConfirmation = (replyId: string, call: AgentToolCallBlock) => {
     const key = `${replyId}:${call.id}`

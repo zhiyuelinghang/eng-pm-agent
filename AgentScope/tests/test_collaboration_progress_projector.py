@@ -178,3 +178,16 @@ class CollaborationProgressProjectorTest(IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(self.projection.entries, {})
+
+    async def test_queued_next_assignment_does_not_relabel_current_reply_or_its_dates(self):
+        await self.project(ReplyStartEvent(session_id="worker-session", reply_id="reply-1", name="专家"))
+        first = self.projection.entries[("leader-session", CollaborationProgressProjector.KIND, "worker-session")]
+        member = self.storage.team.data.members[0]
+        member.work_revision = 4
+        member.active_revision = 0
+        member.settled_revision = 3
+        member.work_status = "queued"
+        payload = await self.project(ToolCallStartEvent(reply_id="reply-1", tool_call_id="late-tool", tool_call_name="report"))
+        self.assertEqual(payload["work_revision"], 3)
+        self.assertEqual(payload["assigned_at"], first["assigned_at"])
+        self.assertEqual(payload["started_at"], first["started_at"])

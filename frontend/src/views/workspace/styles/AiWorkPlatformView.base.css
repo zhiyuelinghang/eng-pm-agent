@@ -1451,6 +1451,7 @@
 
 .messages {
   overflow: auto;
+  scrollbar-gutter: stable;
   padding: 10px 18px 18px;
   display: flex;
   flex-direction: column;
@@ -1516,6 +1517,12 @@
 
 .message-row.assistant .message-bubble {
   border-top-left-radius: 4px;
+}
+
+.message-row.assistant {
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: 28px minmax(0, 1fr);
 }
 
 .message-row.is-awaiting-first-event {

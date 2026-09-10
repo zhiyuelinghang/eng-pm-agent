@@ -242,6 +242,28 @@ def execute_interaction(
         )
     if (
         interaction.runtime_policy or {}
+    ).get("handler") == "project_initialization_state":
+        from .initialization_state_reader import read_initialization_state
+
+        data = read_initialization_state(
+            db, context, interaction, policy, payload.arguments,
+        )
+        db.add(OperationLog(
+            project_id=context.project.id,
+            operator_id=context.user.id,
+            action="agent_database_read",
+            detail=(
+                f"智能体 {payload.actor_agent_id} 在平台会话 "
+                f"{context.conversation.id} 读取当前项目正式初始化数据"
+                f"（{payload.arguments.get('section', 'overview')}）"
+            ),
+            target_type="projects",
+            target_id=context.project.id,
+        ))
+        db.commit()
+        return ok(data, "已读取当前项目正式数据")
+    if (
+        interaction.runtime_policy or {}
     ).get("handler") == "project_basic_info_status":
         if payload.arguments:
             raise HTTPException(

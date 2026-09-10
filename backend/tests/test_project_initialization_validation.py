@@ -128,16 +128,27 @@ def test_ready_draft_can_be_applied_with_current_structured_validation(through_a
             ),
         )
 
+        from backend.app.initialization_change_contracts import PreviewInitializationChangesInput
+        from backend.app.initialization_change_service import create_change_preview
+
+        class Validator:
+            def validate_project_initialization(self, payload):
+                return {"package_id": "project-initialization-validator", "package_version": "2.0.0",
+                        "duration_ms": 10, "result": initialization_validator.validate_project_initialization(payload)}
+
+        preview = create_change_preview(db, draft, user, PreviewInitializationChangesInput(), client=Validator())
+        request = ApplyInitializationDraftInput(preview_id=preview["preview_id"], allow_partial=True)
+
         if through_api:
             from backend.app.api import apply_project_initialization_draft
             result = apply_project_initialization_draft(project.id, draft.id,
-                ApplyInitializationDraftInput(allow_partial=True), db, user)['data']['result']
+                request, db, user)['data']['result']
             source = db.scalar(select(BusinessLearningSource))
             assert source.stage == 'initialization_applied'
             assert source.source_version == str(draft.revision)
             assert source.evidence[0]['outcome'] == 'confirmed'
         else:
-            result = apply_initialization_draft(db, draft, ApplyInitializationDraftInput(allow_partial=True))
+            result = apply_initialization_draft(db, draft, request)
 
         assert result["status"] == "applied"
         assert draft.status == "applied"

@@ -247,113 +247,9 @@ def get_project_initialization_state(
     return ok(build_initialization_state(db, project))
 
 
-def _initialization_draft_review(
-    db: Session,
-    draft: ProjectInitializationDraft,
-) -> dict[str, Any]:
-    data = serialize(draft)
-    payload_model = compose_initialization_draft_payload(db, draft)
-    payload = payload_model.model_dump(mode="json")
-    workflow = initialization_draft_workflow_summary(db, draft)
-    current_issues = [] if draft.status == "building" else [
-        serialize_initialization_validation_issue(issue)
-        for issue in latest_initialization_validation_issues(db, draft.id)
-    ]
-    data["payload"] = payload
-    data["workflow"] = workflow
-    data["validation_issues"] = current_issues
-    latest_validation = latest_initialization_validation_run(db, draft.id)
-    data["validation"] = validation_run_view(latest_validation)
-    if draft.status == "building":
-        data["status"] = (
-            "reviewing"
-            if latest_validation is not None
-            and latest_validation.status == "running"
-            else "collecting"
-        )
-    elif draft.status not in {"applied", "rejected"}:
-        data["status"] = (
-            "invalid"
-            if any(issue["level"] == "error" for issue in current_issues)
-            else "ready"
-        )
-    personnel = (
-        payload.get("personnel", [])
-        if isinstance(payload.get("personnel", []), list)
-        else []
-    )
-    identity_cards = [
-        str(item.get("identity_card_no"))
-        for item in personnel
-        if isinstance(item, dict) and item.get("identity_card_no")
-    ]
-    existing_users = {
-        user.identity_card_no: user
-        for user in (
-            db.scalars(
-                select(User).where(User.identity_card_no.in_(identity_cards)),
-            ).all()
-            if identity_cards
-            else []
-        )
-    }
-    unavailable_usernames = set(db.scalars(select(User.username)).all())
-    required_credentials: list[dict[str, str]] = []
-    seen_new_cards: set[str] = set()
-    for item in personnel:
-        if not isinstance(item, dict) or not item.get("identity_card_no"):
-            continue
-        identity_card_no = str(item["identity_card_no"])
-        if identity_card_no in existing_users or identity_card_no in seen_new_cards:
-            continue
-        suggested_username = suggest_unique_username(
-            str(item.get("real_name") or ""),
-            identity_card_no,
-            unavailable_usernames,
-        )
-        unavailable_usernames.add(suggested_username)
-        seen_new_cards.add(identity_card_no)
-        required_credentials.append(
-            {
-                "identity_card_no": identity_card_no,
-                "real_name": str(item.get("real_name") or ""),
-                "position_name": str(item.get("position_name") or ""),
-                "suggested_username": suggested_username,
-            },
-        )
-    data["required_personnel_credentials"] = required_credentials
-    data["existing_personnel_accounts"] = [
-        {
-            "identity_card_no": identity_card_no,
-            "user_id": user.id,
-            "username": user.username,
-            "real_name": user.real_name,
-        }
-        for identity_card_no, user in existing_users.items()
-    ]
-    data["summary"] = {
-        "project_fields": sum(
-            value not in (None, "")
-            for key, value in (
-                payload.get("project", {}).items()
-                if isinstance(payload.get("project"), dict)
-                else []
-            )
-            if key != "record_id"
-        ),
-        "personnel": len(set(identity_cards)),
-        "position_assignments": len(personnel),
-        "wbs": len(payload.get("wbs", []))
-        if isinstance(payload.get("wbs"), list)
-        else 0,
-        "risks": len(payload.get("risks", []))
-        if isinstance(payload.get("risks"), list)
-        else 0,
-        "quality_requirements": len(payload.get("quality_requirements", []))
-        if isinstance(payload.get("quality_requirements"), list)
-        else 0,
-    }
-    return data
+def _initialization_draft_review(db: Session, draft: ProjectInitializationDraft) -> dict[str, Any]:
+    from .initialization_draft_view import build_initialization_draft_review
+    return build_initialization_draft_review(db, draft)
 
 
 @router.get("/projects/{project_id}/initialization-drafts/latest")
@@ -361,12 +257,14 @@ def get_latest_project_initialization_draft(
     project_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    conversation_id: int | None = None,
 ) -> dict[str, Any]:
     project_for_user_or_403(db, project_id, user)
+    query = select(ProjectInitializationDraft).where(ProjectInitializationDraft.project_id == project_id)
+    if conversation_id is not None:
+        query = query.where(ProjectInitializationDraft.conversation_id == conversation_id)
     draft = db.scalar(
-        select(ProjectInitializationDraft)
-        .where(ProjectInitializationDraft.project_id == project_id)
-        .order_by(ProjectInitializationDraft.updated_at.desc()),
+        query.order_by(ProjectInitializationDraft.updated_at.desc(), ProjectInitializationDraft.id.desc()),
     )
     return ok(_initialization_draft_review(db, draft) if draft else None)
 
@@ -398,9 +296,17 @@ def apply_project_initialization_draft(
     if draft is None or draft.project_id != project_id:
         raise HTTPException(status_code=404, detail="初始化草稿不存在")
     try:
-        result = apply_initialization_draft(db, draft, payload)
-        from .business_learning_sources import record_initialization_applied
-        record_initialization_applied(db, draft, user.id, result)
+        from .initialization_change_contracts import ApplyInitializationChangesInput
+        from .initialization_change_service import apply_change_preview
+        if not payload.preview_id:
+            raise InitializationApplyError("请先打开新版差异确认窗口，核对并选择本次要保存的内容。")
+        result = apply_change_preview(db, draft, user, ApplyInitializationChangesInput(
+            preview_id=payload.preview_id, allow_warnings=payload.allow_partial,
+            personnel_credentials=payload.personnel_credentials,
+        ))
+        if result["status"] == "applied":
+            from .business_learning_sources import record_initialization_applied
+            record_initialization_applied(db, draft, user.id, result)
         audit(
             db,
             user,

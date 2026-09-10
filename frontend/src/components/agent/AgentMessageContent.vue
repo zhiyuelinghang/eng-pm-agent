@@ -4,6 +4,8 @@
       <span class="working-mark"><n-icon :size="16"><Loader class="spin" /></n-icon></span>
       <span>{{ !canConfirm && presentation.confirmations.length ? '等待请求发起人确认后继续' : workingLabel }}</span>
     </div>
+    <AgentTaskPlan :runtime-trace="runtimeTrace" />
+    <AgentTeamOverview :runtime-trace="runtimeTrace" />
     <template v-for="item in presentation.items" :key="item.key">
       <template v-if="item.kind === 'block'">
         <details v-if="item.block.type === 'thinking'" class="agent-thinking" :open="isThinkingBlockActive(runtimeTrace, item.message, item.block)">
@@ -18,16 +20,15 @@
           <a v-else :href="dataUrl(item.block)!" target="_blank" rel="noopener noreferrer">{{ item.block.name || '查看结果文件' }}</a>
         </figure>
       </template>
-      <template v-else-if="item.kind === 'collaboration'">
-        <AgentWorkRecord :label="item.step.call?.presentation ? userWorkLabel(item.step.call.presentation) : '协同处理任务'" :state="userWorkState(item.step.status, isTraceActive, isInterrupted)" />
-        <AgentWorkRecord v-for="(activity, index) in item.step.activities" :key="`${item.key}:${index}`"
-          :label="userWorkLabel(activity.presentation)" :state="userWorkState(activity.state, isTraceActive, isInterrupted)" />
-        <template v-for="entry in item.step.pending" :key="`${entry.worker_session_id}:${entry.reply_id}`">
-          <AgentWorkRecord v-for="call in (entry.event.tool_calls || []).filter(call => !item.step.activities.some(activity => activity.reply_id === entry.reply_id && activity.tool_call_id === call.id))"
-            :key="call.id" :label="userWorkLabel(call.presentation)"
-            :state="userWorkState(entry.event_type === 'require_user_confirm' ? 'asking' : 'external', isTraceActive, isInterrupted)" />
-        </template>
-      </template>
+      <AgentCollaborationStep v-else-if="item.kind === 'collaboration'" :step="item.step"
+        :active="isTraceActive" :interrupted="isInterrupted" />
+      <details v-else-if="item.kind === 'collaboration_feedback'" class="agent-collaboration-feedback">
+        <summary><n-icon :size="15"><MessageCircle /></n-icon><strong>{{ item.feedback.name }}的反馈</strong>
+          <span v-if="item.feedback.teamName">{{ item.feedback.teamName }}</span>
+          <n-icon class="thinking-chevron" :size="14"><ChevronRight /></n-icon>
+        </summary>
+        <div class="feedback-body agent-markdown" v-html="renderMarkdown(item.feedback.text)"></div>
+      </details>
     </template>
     <div v-if="!presentation.answers.length && content" class="agent-markdown" v-html="renderMarkdown(content)"></div>
     <AgentToolCall v-for="entry in presentation.confirmations" :key="entry.key" :call="entry.call"
@@ -58,13 +59,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
-import { AlertTriangle, Bulb, ChevronRight, Circle, CircleCheck, Loader } from '@vicons/tabler'
+import { AlertTriangle, Bulb, ChevronRight, Circle, CircleCheck, Loader, MessageCircle } from '@vicons/tabler'
 import MarkdownIt from 'markdown-it'
 import AgentToolCall from './AgentToolCall.vue'
 import AgentWorkRecord from './AgentWorkRecord.vue'
+import AgentTaskPlan from './AgentTaskPlan.vue'
+import AgentTeamOverview from './AgentTeamOverview.vue'
+import AgentCollaborationStep from './AgentCollaborationStep.vue'
 import type { AgentDataBlock, AgentRuntimeMessage, AgentRuntimeTrace, AgentToolCallBlock } from '@/types/agentRuntime'
 import { findToolResult, isRuntimeActive, isThinkingBlockActive, toolPresentationState } from '@/utils/agentMessagePresentation'
-import { userMessagePresentation, userWorkLabel, userWorkState } from '@/utils/agentUserPresentation'
+import { userMessagePresentation, userWorkLabel } from '@/utils/agentUserPresentation'
 
 const props = withDefaults(defineProps<{
   content?: string
@@ -165,6 +169,13 @@ function renderMarkdown(value: string) {
 .agent-thinking summary:focus-visible { outline:2px solid #177b6d; outline-offset:2px; }
 .thinking-chevron { margin-left:auto; }.agent-thinking[open] .thinking-chevron { transform:rotate(90deg); }
 .thinking-body { margin:2px 0 8px 10px; padding:6px 12px; border-left:2px solid #d7e5df; }
+.agent-collaboration-feedback { min-width:0; border-left:2px solid #c6dcd6; padding-left:10px; font-size:13px; }
+.agent-collaboration-feedback summary { display:flex; align-items:center; gap:8px; padding:8px 3px; cursor:pointer; list-style:none; color:#426960; }
+.agent-collaboration-feedback summary::-webkit-details-marker { display:none; }
+.agent-collaboration-feedback summary:focus-visible { outline:2px solid #177b6d; outline-offset:2px; }
+.agent-collaboration-feedback summary>span { color:#6d837c; font-size:12px; }
+.agent-collaboration-feedback[open] .thinking-chevron { transform:rotate(90deg); }
+.feedback-body { padding:4px 3px 10px; }
 .agent-markdown { min-width:0; color:inherit; font-size:13px; line-height:1.72; overflow-wrap:anywhere; }
 .agent-markdown :deep(p) { margin:0 0 .72em; white-space:normal; }
 .agent-markdown :deep(p:last-child) { margin-bottom:0; }

@@ -1,76 +1,62 @@
 <template>
-  <details class="agent-execution-step agent-collaboration-step" :open="hasPendingWork">
-    <summary>
-      <n-icon :size="16"><Users /></n-icon>
-      <span class="step-title"><strong>{{ step.name }}</strong><small v-if="step.task">{{ step.task }}</small></span>
-      <span class="step-state" :class="`state-${status}`">
-        <n-icon v-if="active && ['queued', 'idle', 'running'].includes(status)" :size="13"><Loader class="spin" /></n-icon>
-        {{ statusLabel }}
+  <details class="agent-collaboration-step" :open="isOpen">
+    <summary @click.prevent="openOverride = !isOpen">
+      <span class="member-avatar" aria-hidden="true">{{ step.name.slice(0, 1) }}</span>
+      <span class="member-heading">
+        <span class="member-identity"><strong>{{ step.name }}</strong><span v-if="step.teamName" class="member-team">{{ step.teamName }}</span></span>
+        <span class="member-task">{{ shortTask || invitationLabel }}</span>
       </span>
-      <n-icon class="step-chevron" :size="14"><ChevronRight /></n-icon>
+      <span class="member-progress">
+        <span class="member-state" :class="`state-${state}`"><n-icon v-if="spinning" :size="13"><Loader class="spin" /></n-icon>{{ stateLabel }}</span>
+        <span v-if="elapsed" class="member-elapsed">{{ elapsed }}</span>
+      </span>
+      <n-icon class="member-chevron" :size="15"><ChevronRight /></n-icon>
     </summary>
-    <div class="step-detail">
-      <p v-if="step.task" class="step-note">{{ step.task }}</p>
-      <ol v-if="step.activities.length" aria-label="协同工作记录">
+    <div class="member-detail">
+      <details v-if="task && task.length > 70" class="member-task-detail">
+        <summary>分配任务</summary><p>{{ task }}</p>
+      </details>
+      <p v-else-if="task" class="member-note">{{ task }}</p>
+      <div class="member-meta"><span>{{ invitationLabel }}</span><span v-if="step.assignedAt">分配于 <time :datetime="step.assignedAt">{{ collaborationTime(step.assignedAt) }}</time></span></div>
+      <ol v-if="step.activities.length" class="member-activities" :aria-label="`${step.name}的工作记录`">
         <li v-for="(activity, index) in step.activities" :key="`${activity.reply_id}:${activity.tool_call_id}:${index}`">
-          <n-icon :size="14"><Tool /></n-icon><span>{{ agentCollaborationActivityLabel(activity) }}</span>
+          <time :datetime="activity.created_at">{{ collaborationTime(activity.created_at) }}</time>
+          <AgentWorkRecord :label="collaborationActivityLabel(activity)" :state="collaborationActivityState(activity, state)" />
         </li>
       </ol>
-      <AgentToolCall v-if="step.call && needsCallDetails" :call="step.call" :result="step.result"
-        :reply-id="step.replyId || ''" :active="active" :interrupted="interrupted"
-        :can-confirm="canConfirm" :confirmation-busy="confirmationBusy" :pending-key="pendingKey"
-        @confirm="forwardConfirmation" />
-      <template v-for="entry in step.pending" :key="`${entry.worker_session_id}:${entry.reply_id}`">
-        <AgentToolCall v-for="call in entry.event.tool_calls || []" :key="call.id" :call="call"
-          :reply-id="entry.reply_id" :active="active" :interrupted="interrupted"
-          :awaiting-external="entry.event_type === 'require_external_execution'"
-          :can-confirm="canConfirm && entry.event_type === 'require_user_confirm'"
-          :confirmation-busy="confirmationBusy" :pending-key="pendingKey" @confirm="forwardConfirmation" />
-      </template>
-      <p v-if="!step.task && !step.activities.length && !step.pending.length && !needsCallDetails" class="step-note">
-        {{ active ? '正在处理请求…' : statusLabel }}
-      </p>
+      <p v-else class="member-note">{{ isWorking ? '工作记录将在处理过程中更新。' : '本次没有更多工作记录。' }}</p>
+      <p v-if="state === 'asking'" class="member-note">等待确认后继续，具体变更见下方确认区。</p>
+      <p v-else-if="state === 'external'" class="member-note">已提交处理请求，正在等待结果返回。</p>
     </div>
   </details>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { NIcon } from 'naive-ui'
-import { ChevronRight, Loader, Tool, Users } from '@vicons/tabler'
-import AgentToolCall from './AgentToolCall.vue'
-import type { AgentToolCallBlock } from '@/types/agentRuntime'
+import { ChevronRight, Loader } from '@vicons/tabler'
+import AgentWorkRecord from './AgentWorkRecord.vue'
 import type { CollaborationStep } from '@/utils/agentMessagePresentation'
-import { agentCollaborationActivityLabel } from '@/utils/agentRuntimeLabels'
+import { collaborationActivityLabel, collaborationActivityState, collaborationElapsed, collaborationIsOpen,
+  collaborationIsWorking, collaborationState, collaborationStateLabel, collaborationTask,
+  collaborationTime } from '@/utils/agentCollaborationPresentation'
 
-const props = withDefaults(defineProps<{
-  step: CollaborationStep
-  active: boolean
-  interrupted?: boolean
-  canConfirm?: boolean
-  confirmationBusy?: boolean
-  pendingKey?: string
-}>(), { interrupted: false, canConfirm: true, confirmationBusy: false, pendingKey: '' })
-const emit = defineEmits<{ confirm: [replyId: string, toolCall: AgentToolCallBlock, confirmed: boolean] }>()
-const hasPendingWork = computed(() => props.active && (props.step.status === 'asking' || props.step.pending.length > 0))
-const needsConfirmation = computed(() => props.active && (props.step.status === 'asking'
-  || props.step.pending.some(entry => entry.event_type === 'require_user_confirm')))
-const needsCallDetails = computed(() => props.step.status === 'asking'
-  || ['error', 'denied', 'interrupted'].includes(props.step.result?.state || ''))
-const status = computed(() => needsConfirmation.value ? 'asking' : hasPendingWork.value ? 'waiting' : props.step.status)
-const statusLabel = computed(() => ({
-  queued: '等待处理', idle: '等待处理', running: '处理中', waiting: '等待反馈', asking: '等待确认',
-  reported: '已反馈', completed: '已完成', failed: '失败', error: '失败', denied: '已拒绝',
-  interrupted: '已停止', finished: '已结束',
-} as Record<string, string>)[status.value] || '处理中')
-function forwardConfirmation(replyId: string, call: AgentToolCallBlock, confirmed: boolean) {
-  emit('confirm', replyId, call, confirmed)
-}
+const props = withDefaults(defineProps<{ step: CollaborationStep; active: boolean; interrupted?: boolean }>(), { interrupted: false })
+const openOverride = ref<boolean | null>(null)
+watch(() => props.step.key, () => { openOverride.value = null })
+const state = computed(() => collaborationState(props.step, props.active, props.interrupted))
+const stateLabel = computed(() => collaborationStateLabel(state.value))
+const isWorking = computed(() => collaborationIsWorking(state.value))
+const isOpen = computed(() => collaborationIsOpen(state.value, openOverride.value))
+const spinning = computed(() => props.active && ['running', 'queued', 'idle'].includes(state.value))
+const task = computed(() => collaborationTask(props.step.task))
+const shortTask = computed(() => collaborationTask(props.step.task, 70))
+const invitationLabel = computed(() => props.step.call?.presentation?.label?.trim() || '协同处理任务')
+const now = ref(Date.now())
+const elapsed = computed(() => collaborationElapsed(props.step, state.value, now.value))
+let timer: ReturnType<typeof setInterval> | undefined
+onMounted(() => { timer = setInterval(() => { if (props.active && isWorking.value) now.value = Date.now() }, 1000) })
+onBeforeUnmount(() => { if (timer) clearInterval(timer) })
 </script>
 
-<style scoped src="./AgentExecutionStep.css"></style>
-<style scoped>
-ol { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
-li { display: flex; align-items: center; gap: 7px; font-size: 12px; line-height: 1.5; }
-li span { overflow-wrap: anywhere; }
-</style>
+<style scoped src="./AgentCollaborationStep.css"></style>

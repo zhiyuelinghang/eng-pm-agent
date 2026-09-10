@@ -242,6 +242,8 @@ async def settle_team_member(
         member.last_error = error
         team.data.settlement_revision += 1
         await storage.upsert_team(user_id, team)
+        from ._service._collaboration_archive import archive_member_settlement
+        await archive_member_settlement(storage, message_bus, user_id, team, member, target_revision, status, reply_id)
         return True
 
 

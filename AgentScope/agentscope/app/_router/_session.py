@@ -781,6 +781,7 @@ async def update_message_metadata(
     user_id: str = Depends(get_current_user_id),
     principal: AgentScopePrincipal = Depends(get_current_principal),
     storage: StorageBase = Depends(get_storage),
+    message_bus: MessageBus = Depends(get_message_bus),
 ) -> dict:
     """Update platform presentation metadata without copying the message."""
     existing = await storage.get_session(user_id, agent_id, session_id)
@@ -790,21 +791,13 @@ async def update_message_metadata(
             detail=f"Session '{session_id}' not found.",
         )
     require_runtime_session_access(principal, existing)
-    message = await storage.get_message(user_id, session_id, message_id)
-    if message is None:
+    from .._service._collaboration_archive import patch_message_metadata
+    updated = await patch_message_metadata(storage, message_bus, user_id, session_id, message_id, body.metadata)
+    if updated is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Message '{message_id}' not found.",
         )
-    updated = message.model_copy(
-        update={
-            "metadata": {
-                **(message.metadata or {}),
-                **body.metadata,
-            },
-        },
-    )
-    await storage.upsert_message(user_id, session_id, updated)
     return updated.model_dump(mode="json")
 
 

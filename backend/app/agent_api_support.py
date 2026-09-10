@@ -586,6 +586,7 @@ def _build_agent_project_context(
 def _agent_reply_extra_data(
     reply: AgentScopeReply,
     trace_summary: dict[str, Any] | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Project AgentScope-owned runtime data into the platform API shape."""
     runtime_messages = reply.raw_messages or (
@@ -596,7 +597,7 @@ def _agent_reply_extra_data(
         "agentscope_message": reply.raw_message,
         "agentscope_messages": runtime_messages,
     }
-    resolved_trace = _resolved_runtime_trace(reply, trace_summary)
+    resolved_trace = _resolved_runtime_trace(reply, trace_summary, session_id)
     if isinstance(resolved_trace, dict):
         result["runtime_trace"] = resolved_trace
     source = reply.raw_message or (
@@ -622,6 +623,7 @@ _ACTIVE_AGENT_REPLY_STATUSES = frozenset(
 def _resolved_runtime_trace(
     reply: AgentScopeReply,
     trace_summary: dict[str, Any] | None,
+    session_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Merge runtime metadata and attach one stable clock to the whole turn."""
     runtime_messages = reply.raw_messages or (
@@ -644,6 +646,10 @@ def _resolved_runtime_trace(
             resolved.update(persisted)
         if trace_summary:
             resolved.update(trace_summary)
+    from .agent_collaboration_archive import merge_archived_collaborations
+    collaborations = merge_archived_collaborations(runtime_messages, session_id, list(resolved.get("collaborations") or []))
+    if collaborations:
+        resolved["collaborations"] = collaborations
     # Used only while materializing a Dobby-orchestrated private task draft;
     # the ordinary message already stores this text, so do not duplicate it
     # inside runtime telemetry metadata.
@@ -798,6 +804,7 @@ def _project_agentscope_reply(
     conversation_id: int,
     reply: AgentScopeReply,
     trace_summary: dict[str, Any] | None = None,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     source = reply.raw_message or (
         reply.raw_messages[-1] if reply.raw_messages else {}
@@ -818,7 +825,7 @@ def _project_agentscope_reply(
             if source.get("id") is not None
             else reply.message_id
         ),
-        "extra_data": _agent_reply_extra_data(reply, trace_summary),
+        "extra_data": _agent_reply_extra_data(reply, trace_summary, session_id),
         "created_at": str(
             source.get("created_at") or datetime.now(UTC).isoformat(),
         ),
@@ -850,7 +857,7 @@ def _finalize_agent_reply(
             ),
             reply.raw_message,
         )
-        resolved_trace = _resolved_runtime_trace(reply, trace_summary)
+        resolved_trace = _resolved_runtime_trace(reply, trace_summary, conversation.agentscope_session_id)
         from .dobby_task_draft_bridge import (  # noqa: PLC0415
             materialize_dobby_task_draft,
         )
@@ -909,6 +916,7 @@ def _finalize_agent_reply(
             conversation.id,
             reply,
             resolved_trace,
+            conversation.agentscope_session_id,
         )
 
 
@@ -935,6 +943,7 @@ def _agentscope_platform_messages(
     conversation_id: int,
     messages: list[dict[str, Any]],
     live_status: str,
+    session_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Project one authorized AgentScope history without a local mirror."""
     result: list[dict[str, Any]] = []
@@ -966,6 +975,7 @@ def _agentscope_platform_messages(
                     list(assistant_group),
                     live_status if latest else "idle",
                 ),
+                session_id=session_id,
             ),
         )
         assistant_group.clear()

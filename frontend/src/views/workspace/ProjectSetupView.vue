@@ -68,7 +68,7 @@
             <div v-else-if="!materialAgentMessages.length && !materialAgentStreamingTrace" class="material-agent-welcome">
               <span class="material-agent-welcome-mark" aria-hidden="true">D</span>
               <div>
-                <small>项目初始化</small>
+                <small>项目资料助手</small>
                 <strong>从现有资料开始完善项目</strong>
                 <p>直接说明已知信息，或添加工程说明、人员表、WBS、风险清单和质量指标文件。整理结果会先交给你核对，确认后再写入项目。</p>
               </div>
@@ -114,7 +114,7 @@
               </div>
             </article>
           </div>
-          <p v-if="materialAgentError" class="material-agent-error">{{ materialAgentError }}</p>
+          <div v-if="materialAgentError" class="material-agent-error" role="alert"><span>{{ materialAgentError }}</span><button v-if="materialAgentConversationId" type="button" :disabled="materialAgentLoading || materialAgentStopping || materialAgentConversationLoading" @click="resyncMaterialAgentConversation">重新同步会话</button></div>
           <section
             v-if="materialAgentDraftDockVisible && materialAgentDraft"
             class="initialization-draft-dock"
@@ -138,7 +138,7 @@
                 <div class="initialization-draft-title">
                   <span class="initialization-draft-dot" aria-hidden="true"></span>
                   <div>
-                    <small>初始化草稿</small>
+                    <small>资料草稿</small>
                     <strong>{{ initializationDraftStatusLabel(materialAgentDraft.status) }}</strong>
                   </div>
                   <em>{{ initializationDraftStageHint(materialAgentDraft) }}</em>
@@ -170,7 +170,8 @@
                 <span><strong>{{ materialAgentDraft.summary.quality_requirements }}</strong>项质量指标</span>
               </div>
               <footer class="initialization-draft-meta">
-                <span v-if="materialAgentDraft.workflow && materialAgentDraft.workflow.stage !== 'completed'">
+                <span v-if="materialAgentDraft.status === 'applied'">本次确认内容已写入项目，可查看提交记录</span>
+                <span v-else-if="materialAgentDraft.workflow && materialAgentDraft.workflow.stage !== 'completed'">
                   已完成 {{ materialAgentDraft.workflow.completed_sections.length }}/{{ materialAgentDraft.workflow.expected_sections.length }} 个专项分区
                   <template v-if="materialAgentDraft.workflow.pending_sections.length">，等待：{{ initializationSectionLabels(materialAgentDraft.workflow.pending_sections) }}</template>
                 </span>
@@ -223,7 +224,7 @@
 
               <template #action>
                 <button v-if="materialAgentLoading || materialAgentStopping" type="button" class="chat-composer-action is-stop" :disabled="materialAgentStopping" :aria-busy="materialAgentStopping" @click="stopMaterialAgentMessage"><n-icon v-if="materialAgentStopping" :size="17" class="project-action-spinner"><Loader /></n-icon><n-icon v-else :size="17"><PlayerStop /></n-icon>{{ materialAgentStopping ? '正在停止…' : '停止分析' }}</button>
-                <button v-else type="submit" class="chat-composer-action" :disabled="!materialAgentPrompt.trim() && !materialAgentFiles.length"><n-icon :size="17"><Send /></n-icon>发送</button>
+                <button v-else type="submit" class="chat-composer-action" :disabled="materialAgentConversationLoading || (!materialAgentPrompt.trim() && !materialAgentFiles.length)"><n-icon :size="17"><Send /></n-icon>发送</button>
               </template>
             </ChatComposerSurface>
           </form>
@@ -651,419 +652,15 @@
         </section>
       </div>
 
-      <div v-if="initializationDraftReviewOpen && materialAgentDraft" class="setup-modal-backdrop initialization-review-backdrop" @click.self="closeInitializationDraftReview">
-        <section class="setup-modal initialization-review-modal" role="dialog" aria-modal="true" aria-labelledby="initialization-review-title">
-          <header class="setup-modal-head">
-            <div><h2 id="initialization-review-title" :title="configProjectName">{{ configProjectName }} · 初始化草稿核对</h2></div>
-            <button type="button" class="modal-close" :disabled="initializationDraftApplying || initializationDraftValidating" aria-label="关闭核对窗口" @click="closeInitializationDraftReview"><n-icon :size="17"><X /></n-icon></button>
-          </header>
-
-          <div class="initialization-review-body">
-            <aside class="initialization-review-navigation" aria-label="需要核验的内容">
-              <header>
-                <strong>需要核验</strong>
-                <span>{{ materialAgentDraft.validation_issues.length }} 项</span>
-              </header>
-              <p>选择分类，快速定位到对应数据。</p>
-              <nav v-if="initializationReviewIssueTabs.length">
-                <button
-                  v-for="tab in initializationReviewIssueTabs"
-                  :key="tab.key"
-                  type="button"
-                  :class="{ active: activeInitializationReviewSection === tab.key, error: tab.errorCount > 0 }"
-                  :aria-current="activeInitializationReviewSection === tab.key ? 'true' : undefined"
-                  @click="focusInitializationReviewSection(tab.key)"
-                >
-                  <span>{{ tab.label }}</span>
-                  <em>{{ tab.count }}</em>
-                </button>
-              </nav>
-              <div v-else class="initialization-review-navigation-empty">当前没有需要核验的内容</div>
-            </aside>
-            <div ref="initializationReviewScrollRef" class="initialization-review-scroll">
-              <div class="initialization-review-content">
-            <p v-if="materialAgentDraft.validation?.status === 'failed'" class="material-agent-error">
-              最近一次规则核验失败：{{ materialAgentDraft.validation.error || '核验服务暂时不可用' }}
-            </p>
-            <section v-if="draftProjectFields.length || initializationSectionIssues('project').length || initializationRecordIssues(materialAgentDraft.payload.project.record_id).length" class="initialization-review-section initialization-project-section" data-initialization-section="project">
-              <header class="initialization-project-head">
-                <div>
-                  <h3>工程基本信息</h3>
-                  <p>核对从项目资料中识别的合同信息与参建单位。</p>
-                </div>
-                <span>{{ draftProjectRecognizedCount }} 项已识别</span>
-              </header>
-              <div class="initialization-project-record">
-                <aside class="initialization-record-validation">
-                  <strong>核验</strong>
-                  <InitializationIssueBadges :issues="initializationSectionIssues('project')" @select="openInitializationIssue" />
-                  <InitializationIssueBadges :issues="initializationAllRecordIssues(materialAgentDraft.payload.project.record_id)" @select="openInitializationIssue" />
-                  <span v-if="!initializationSectionIssues('project').length && !initializationAllRecordIssues(materialAgentDraft.payload.project.record_id).length">—</span>
-                </aside>
-                <div class="initialization-project-record-content">
-                  <article v-if="draftProjectDescription" class="initialization-project-description" :class="{ 'has-validation-issue': draftProjectDescription.issues.length, missing: draftProjectDescription.missing }">
-                    <span>{{ draftProjectDescription.label }}</span>
-                    <p>{{ draftProjectDescription.value }}</p>
-                  </article>
-                  <div v-if="draftProjectContractFields.length" class="initialization-project-contract-grid">
-                    <article v-for="item in draftProjectContractFields" :key="item.key" :class="{ 'has-validation-issue': item.issues.length, missing: item.missing }">
-                      <span>{{ item.label }}</span>
-                      <strong>{{ item.value }}</strong>
-                    </article>
-                  </div>
-                  <div v-if="draftProjectUnitFields.length" class="initialization-project-units">
-                    <h4>参建单位</h4>
-                    <dl>
-                      <div
-                        v-for="item in draftProjectUnitFields"
-                        :key="item.key"
-                        :class="{ primary: item.key === 'construction_unit_name', 'has-validation-issue': item.issues.length, missing: item.missing }"
-                      >
-                        <dt>{{ item.label }}</dt>
-                        <dd>{{ item.value }}</dd>
-                      </div>
-                    </dl>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section v-if="materialAgentDraft.payload.personnel.length || initializationSectionIssues('personnel').length" class="initialization-review-data-section" data-initialization-section="personnel">
-              <button type="button" class="initialization-review-data-toggle" :class="{ expanded: initializationReviewExpanded.personnel }" :aria-expanded="initializationReviewExpanded.personnel" @click="initializationReviewExpanded.personnel = !initializationReviewExpanded.personnel">
-                <n-icon :size="16" aria-hidden="true"><ChevronDown /></n-icon>
-                <span><strong>人员</strong><small>身份、岗位、证书与登录账号</small></span>
-                <em>{{ materialAgentDraft.summary.personnel }} 人 · {{ materialAgentDraft.summary.position_assignments }} 条任职</em>
-              </button>
-              <div v-if="initializationSectionIssues('personnel').length" class="initialization-section-issues">
-                <strong>分区核验</strong>
-                <InitializationIssueBadges :issues="initializationSectionIssues('personnel')" @select="openInitializationIssue" />
-              </div>
-              <div v-show="initializationReviewExpanded.personnel" class="initialization-personnel-list">
-                <p v-if="!initializationPersonnelReviewRows.length" class="initialization-empty-section">当前草稿没有人员记录。</p>
-                <article
-                  v-for="item in initializationPersonnelReviewRows"
-                  :key="item.key"
-                  class="initialization-personnel-card"
-                  :class="{ 'has-validation-issue': item.issues.length }"
-                >
-                  <aside class="initialization-record-validation">
-                    <strong>核验</strong>
-                    <InitializationIssueBadges :issues="item.issues" @select="openInitializationIssue" />
-                    <span v-if="!item.issues.length">—</span>
-                  </aside>
-                  <header class="initialization-personnel-profile">
-                    <div class="initialization-personnel-sequence">
-                      <span>{{ String(item.serial_no).padStart(2, '0') }}</span>
-                    </div>
-                    <div>
-                      <h4>{{ item.real_name }}</h4>
-                      <p>{{ item.positions.map(position => position.position_name).join('、') }}</p>
-                    </div>
-                    <em v-if="item.credential">将新建账号</em>
-                    <em v-else-if="item.existingAccount" class="existing">已匹配账号</em>
-                  </header>
-                  <dl class="initialization-personnel-facts">
-                    <div>
-                      <dt>身份证号</dt>
-                      <dd>{{ item.identity_card_no }}</dd>
-                    </div>
-                    <div>
-                      <dt>任职数量</dt>
-                      <dd>{{ item.positions.length }} 个岗位</dd>
-                    </div>
-                    <div class="responsibility initialization-personnel-assignments">
-                      <dt>岗位与职责</dt>
-                      <dd>
-                        <article v-for="position in item.positions" :key="position.record_id">
-                          <strong>{{ position.position_name }}</strong>
-                          <span>{{ position.responsibility_description || '未填写岗位职责' }}</span>
-                          <small v-if="position.certificate_no">证书：{{ position.certificate_no }}</small>
-                        </article>
-                      </dd>
-                    </div>
-                  </dl>
-                  <div v-if="item.credential" class="initialization-personnel-credential">
-                    <div>
-                      <strong>将新建平台账号</strong>
-                      <span>已按姓名自动生成，可修改</span>
-                    </div>
-                    <label>
-                      登录账号
-                      <input v-model.trim="item.credential.username" autocomplete="off" maxlength="64" spellcheck="false" placeholder="自动生成拼音账号">
-                    </label>
-                    <label>
-                      初始密码
-                      <span class="initialization-generated-password">
-                        <input v-model="item.credential.initial_password" type="text" autocomplete="new-password" maxlength="12" spellcheck="false" placeholder="自动生成 8–12 位密码">
-                        <button type="button" @click="item.credential.initial_password = generateInitializationPassword()">换一个</button>
-                      </span>
-                    </label>
-                    <p>确认入库时创建账号。请将初始密码安全交给本人，并提醒首次登录后修改。</p>
-                  </div>
-                  <div v-else-if="item.existingAccount" class="initialization-personnel-account-ready existing">
-                    <small>已关联现有平台账号</small>
-                    <strong>{{ item.existingAccount.username }}</strong>
-                    <span>身份证号匹配成功。确认后所有岗位均关联该账号，不会重建账号或修改密码。</span>
-                  </div>
-                  <div v-else class="initialization-personnel-account-ready">
-                    <strong>账号状态待确认</strong>
-                    <span>请重新打开草稿获取最新账号匹配结果。</span>
-                  </div>
-                </article>
-              </div>
-            </section>
-
-            <section v-if="materialAgentDraft.payload.wbs.length || initializationSectionIssues('wbs').length" class="initialization-review-data-section" data-initialization-section="wbs">
-              <button type="button" class="initialization-review-data-toggle" :class="{ expanded: initializationReviewExpanded.wbs }" :aria-expanded="initializationReviewExpanded.wbs" @click="initializationReviewExpanded.wbs = !initializationReviewExpanded.wbs">
-                <n-icon :size="16" aria-hidden="true"><ChevronDown /></n-icon>
-                <span><strong>WBS</strong><small>工序计划、执行状态与层级关系</small></span>
-                <em>{{ materialAgentDraft.payload.wbs.length }} 项</em>
-              </button>
-              <div v-if="initializationSectionIssues('wbs').length" class="initialization-section-issues">
-                <strong>分区核验</strong>
-                <InitializationIssueBadges :issues="initializationSectionIssues('wbs')" @select="openInitializationIssue" />
-              </div>
-              <div v-show="initializationReviewExpanded.wbs" class="initialization-wbs-content">
-                <div class="initialization-wbs-toolbar">
-                  <div>
-                    <strong>树形工序结构</strong>
-                    <span>当前显示 {{ visibleInitializationWbsRows.length }}/{{ materialAgentDraft.payload.wbs.length }} 项</span>
-                  </div>
-                  <div>
-                    <button type="button" @click="expandAllInitializationWbs">全部展开</button>
-                    <button type="button" @click="collapseAllInitializationWbs">全部收起</button>
-                  </div>
-                </div>
-                <p v-if="!visibleInitializationWbsRows.length" class="initialization-empty-section">当前草稿没有 WBS 记录。</p>
-                <div class="initialization-wbs-table-wrap">
-                  <table class="initialization-wbs-table">
-                    <thead>
-                      <tr>
-                        <th class="initialization-validation-column">核验</th>
-                        <th>WBS 编码</th>
-                        <th>工序名称</th>
-                        <th>层级</th>
-                        <th>计划开始</th>
-                        <th>计划完成</th>
-                        <th>进度</th>
-                        <th>状态</th>
-                        <th>优先级</th>
-                        <th>前置 WBS</th>
-                        <th>上级</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr
-                        v-for="row in visibleInitializationWbsRows"
-                        :key="row.item.record_id"
-                        :class="{
-                          'is-wbs-group': row.hasChildren,
-                          'has-validation-issue': initializationHasRecordIssues(row.item.record_id),
-                        }"
-                      >
-                        <td class="initialization-validation-cell">
-                          <div class="initialization-validation-stack">
-                            <InitializationIssueBadges :issues="initializationAllRecordIssues(row.item.record_id)" @select="openInitializationIssue" />
-                            <span v-if="!initializationAllRecordIssues(row.item.record_id).length">—</span>
-                          </div>
-                        </td>
-                        <td><strong>{{ row.item.wbs_code }}</strong></td>
-                        <td class="initialization-wbs-name">
-                          <div
-                            class="initialization-wbs-tree-node"
-                            :class="{ root: row.depth === 0 }"
-                            :style="{ '--wbs-depth': row.depth }"
-                          >
-                            <button
-                              v-if="row.hasChildren"
-                              type="button"
-                              class="initialization-wbs-node-toggle"
-                              :class="{ collapsed: isInitializationWbsCollapsed(row.item.wbs_code) }"
-                              :aria-label="`${isInitializationWbsCollapsed(row.item.wbs_code) ? '展开' : '收起'} ${row.item.wbs_code} ${row.item.name}`"
-                              :aria-expanded="!isInitializationWbsCollapsed(row.item.wbs_code)"
-                              @click="toggleInitializationWbsNode(row.item.wbs_code)"
-                            >
-                              <n-icon :size="14" aria-hidden="true"><ChevronDown /></n-icon>
-                            </button>
-                            <span v-else class="initialization-wbs-leaf" aria-hidden="true"></span>
-                            <span class="initialization-wbs-node-copy">
-                              <strong>{{ row.item.name }}</strong>
-                              <small v-if="row.item.item_type">{{ displayWbsItemType(row.item.item_type) }}</small>
-                            </span>
-                          </div>
-                        </td>
-                        <td>{{ row.item.level || '—' }}</td>
-                        <td>{{ formatInitializationDate(row.item.planned_start_at) }}</td>
-                        <td>{{ formatInitializationDate(row.item.planned_finish_at) }}</td>
-                        <td>{{ formatInitializationProgress(row.item.progress_percent) }}</td>
-                        <td>{{ displayWbsStatusText(row.item.status_text) || '—' }}</td>
-                        <td>{{ displayWbsPriorityText(row.item.priority_text, '') || '—' }}</td>
-                        <td class="initialization-wbs-dependencies">
-                          <span v-for="code in row.item.predecessor_wbs_codes || []" :key="code">{{ code }}</span>
-                        </td>
-                        <td>{{ row.item.parent_wbs_code || '' }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </section>
-
-            <section v-if="materialAgentDraft.payload.risks.length || initializationSectionIssues('risks').length" class="initialization-review-data-section" data-initialization-section="risks">
-              <button type="button" class="initialization-review-data-toggle" :class="{ expanded: initializationReviewExpanded.risks }" :aria-expanded="initializationReviewExpanded.risks" @click="initializationReviewExpanded.risks = !initializationReviewExpanded.risks">
-                <n-icon :size="16" aria-hidden="true"><ChevronDown /></n-icon>
-                <span><strong>风险源</strong><small>风险部位、评价条件与风险窗口</small></span>
-                <em>{{ materialAgentDraft.payload.risks.length }} 项</em>
-              </button>
-              <div v-if="initializationSectionIssues('risks').length" class="initialization-section-issues">
-                <strong>分区核验</strong>
-                <InitializationIssueBadges :issues="initializationSectionIssues('risks')" @select="openInitializationIssue" />
-              </div>
-              <div v-show="initializationReviewExpanded.risks" class="initialization-risk-list">
-                <p v-if="!materialAgentDraft.payload.risks.length" class="initialization-empty-section">当前草稿没有风险源记录。</p>
-                <article v-for="item in materialAgentDraft.payload.risks" :key="item.record_id" class="initialization-risk-card" :class="{ 'has-validation-issue': initializationHasRecordIssues(item.record_id) }">
-                  <aside class="initialization-record-validation">
-                    <strong>核验</strong>
-                    <InitializationIssueBadges :issues="initializationAllRecordIssues(item.record_id)" @select="openInitializationIssue" />
-                    <span v-if="!initializationAllRecordIssues(item.record_id).length">—</span>
-                  </aside>
-                  <div class="initialization-risk-card-content">
-                    <header class="initialization-risk-head">
-                      <div>
-                        <span>序号 {{ item.serial_no }}</span>
-                        <h4>{{ item.risk_part }}</h4>
-                      </div>
-                      <strong>{{ item.risk_level }}</strong>
-                    </header>
-                    <dl class="initialization-risk-facts">
-                      <div>
-                        <dt>相关工序</dt>
-                        <dd>{{ item.related_process_name }}</dd>
-                      </div>
-                      <div v-if="item.risk_window_start_date || item.risk_window_end_date">
-                        <dt>风险窗口</dt>
-                        <dd class="initialization-risk-window">
-                          <time v-if="item.risk_window_start_date" :datetime="item.risk_window_start_date">{{ formatInitializationDate(item.risk_window_start_date) }}</time>
-                          <span v-if="item.risk_window_start_date && item.risk_window_end_date">至</span>
-                          <time v-if="item.risk_window_end_date" :datetime="item.risk_window_end_date">{{ formatInitializationDate(item.risk_window_end_date) }}</time>
-                        </dd>
-                      </div>
-                    </dl>
-                    <div class="initialization-risk-details">
-                      <section>
-                        <h5>风险评价条件</h5>
-                        <p>{{ item.evaluation_condition }}</p>
-                      </section>
-                      <section v-if="item.summary || initializationFieldIssues(item.record_id, 'summary').length">
-                        <h5>风险情况简述</h5>
-                        <p>{{ item.summary }}</p>
-                      </section>
-                    </div>
-                  </div>
-                </article>
-              </div>
-            </section>
-
-            <section v-if="materialAgentDraft.payload.quality_requirements.length || initializationSectionIssues('quality_requirements').length" class="initialization-review-data-section" data-initialization-section="quality_requirements">
-              <button type="button" class="initialization-review-data-toggle" :class="{ expanded: initializationReviewExpanded.quality }" :aria-expanded="initializationReviewExpanded.quality" @click="initializationReviewExpanded.quality = !initializationReviewExpanded.quality">
-                <n-icon :size="16" aria-hidden="true"><ChevronDown /></n-icon>
-                <span><strong>质量指标</strong><small>按 WBS 编码关联质量要求</small></span>
-                <em>{{ materialAgentDraft.payload.quality_requirements.length }} 项</em>
-              </button>
-              <div v-if="initializationSectionIssues('quality_requirements').length" class="initialization-section-issues">
-                <strong>分区核验</strong>
-                <InitializationIssueBadges :issues="initializationSectionIssues('quality_requirements')" @select="openInitializationIssue" />
-              </div>
-              <div v-show="initializationReviewExpanded.quality" class="initialization-quality-table-wrap">
-                <p v-if="!materialAgentDraft.payload.quality_requirements.length" class="initialization-empty-section">当前草稿没有质量指标记录。</p>
-                <table class="initialization-quality-table">
-                  <thead>
-                    <tr>
-                      <th class="initialization-validation-column">核验</th>
-                      <th>WBS 编码</th>
-                      <th>质量验收项目</th>
-                      <th>控制指标</th>
-                      <th>检查频次</th>
-                      <th>相关资料</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr
-                      v-for="item in materialAgentDraft.payload.quality_requirements"
-                      :key="item.record_id"
-                      :class="{ 'has-validation-issue': initializationHasRecordIssues(item.record_id) }"
-                    >
-                      <td class="initialization-validation-cell">
-                        <div class="initialization-validation-stack">
-                          <InitializationIssueBadges :issues="initializationAllRecordIssues(item.record_id)" @select="openInitializationIssue" />
-                          <span v-if="!initializationAllRecordIssues(item.record_id).length">—</span>
-                        </div>
-                      </td>
-                      <td><code>{{ item.wbs_code }}</code></td>
-                      <td><strong>{{ item.quality_acceptance_item }}</strong></td>
-                      <td>{{ item.control_indicator || '' }}</td>
-                      <td>{{ item.inspection_frequency || '' }}</td>
-                      <td>{{ item.related_documents || '' }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </section>
-              </div>
-            </div>
-          </div>
-
-          <footer class="initialization-review-actions">
-            <span v-if="materialAgentDraft.status === 'applied'">该版本已经写入正式项目数据。</span>
-            <span v-else-if="!isPlatformAdmin">只有管理人员可以确认正式入库。</span>
-            <span v-else-if="materialAgentDraft.status === 'collecting'">专业智能体仍在整理草稿，全部相关分区完成后将自动进入统一核验。</span>
-            <span v-else-if="materialAgentDraft.status === 'reviewing'">平台正在运行版本化核验规则，完成后才可确认入库。</span>
-            <span v-else>确认后将以该草稿整体写入项目基础数据。</span>
-            <label v-if="draftHasWarnings && !draftHasErrors" class="initialization-partial-confirm"><input v-model="initializationDraftAllowPartial" type="checkbox">我已逐项核对问题标签，确认按当前草稿入库</label>
-            <button
-              v-if="materialAgentDraft.status !== 'applied' && materialAgentDraft.status !== 'rejected' && isPlatformAdmin"
-              type="button"
-              class="modal-secondary"
-              :disabled="initializationDraftApplying || initializationDraftValidating"
-              @click="revalidateInitializationDraft"
-            >{{ initializationDraftValidating ? '正在核验…' : '重新核验' }}</button>
-            <button type="button" class="modal-secondary" :disabled="initializationDraftApplying || initializationDraftValidating" @click="closeInitializationDraftReview">关闭</button>
-            <button v-if="materialAgentDraft.status !== 'applied' && isPlatformAdmin" type="button" class="primary" :disabled="!canApplyInitializationDraft" @click="applyInitializationDraft">{{ initializationDraftApplying ? '正在入库…' : '确认并写入项目' }}</button>
-          </footer>
-        </section>
-        <div v-if="selectedInitializationIssues.length" class="initialization-issue-detail-backdrop" @click.self="closeInitializationIssue">
-          <section class="initialization-issue-detail" role="dialog" aria-modal="true" aria-labelledby="initialization-issue-detail-title">
-            <header>
-              <div>
-                <h3 id="initialization-issue-detail-title">核验说明</h3>
-                <p>共 {{ selectedInitializationIssues.length }} 项问题，请逐项核对。</p>
-              </div>
-              <button type="button" aria-label="关闭问题详情" @click="closeInitializationIssue"><n-icon :size="17"><X /></n-icon></button>
-            </header>
-            <div class="initialization-issue-detail-body">
-              <article v-for="(issue, index) in selectedInitializationIssues" :key="issue.id" class="initialization-issue-detail-item">
-                <header>
-                  <span>{{ index + 1 }}</span>
-                  <strong>{{ issue.title }}</strong>
-                </header>
-                <div>
-                  <section>
-                    <h4>问题</h4>
-                    <p>{{ issue.message }}</p>
-                  </section>
-                  <section>
-                    <h4>处理建议</h4>
-                    <p>{{ issue.suggestion || '请结合原始资料核对后处理。' }}</p>
-                  </section>
-                </div>
-              </article>
-            </div>
-            <footer>
-              <button type="button" class="modal-secondary" @click="closeInitializationIssue">关闭</button>
-            </footer>
-          </section>
-        </div>
-      </div>
+      <InitializationChangeReview
+        :open="initializationDraftReviewOpen"
+        :draft="materialAgentDraft"
+        :project-id="configProjectId"
+        :name="configProjectName"
+        :admin="isPlatformAdmin"
+        @close="initializationDraftReviewOpen = false"
+        @applied="handleInitializationChangesApplied"
+      />
     </div>
   </div>
 </template>
@@ -1082,8 +679,9 @@ import AgentMessageContent from '@/components/agent/AgentMessageContent.vue'
 import ProjectDocumentPermissionPanel from '@/components/admin/ProjectDocumentPermissionPanel.vue'
 import ProjectPlatformPanel from '@/components/business/ProjectPlatformPanel.vue'
 import ChatComposerSurface from '@/components/chat/ChatComposerSurface.vue'
-import InitializationIssueBadges from '@/components/initialization/InitializationIssueBadges.vue'
+import InitializationChangeReview from '@/components/initialization/InitializationChangeReview.vue'
 import { useProjectSetupConfiguration } from '@/composables/useProjectSetupConfiguration'
+import { useInitializationDraftSync } from '@/composables/useInitializationDraftSync'
 import { useAppStore, type ProjectConfigScope } from '@/stores/app'
 import type { DirConfig, Member, MemberPosition, PlatformFieldMapping, QualityMetric, RemindRule, RiskLevel, RiskSource, WbsItem } from '@/types'
 import {
@@ -1099,10 +697,6 @@ import {
   type ApiInitializationDraft,
   type ApiInitializationFile,
   type InitializationAttachment,
-  type InitializationCredentialForm,
-  type InitializationDraftIssue,
-  type InitializationPersonnelReviewGroup,
-  type InitializationReviewSectionKey,
   type ManualSection,
   type MaterialAgentMessage,
   type MaterialAgentPreparation,
@@ -1111,20 +705,14 @@ import {
 } from './project-setup/types'
 import {
   ACTIVE_MATERIAL_AGENT_STATUSES,
-  buildInitializationWbsTree,
   buildManualWbsTree,
   cloneMaterialAgentTrace,
-  displayWbsItemType,
-  displayWbsPriorityText,
-  displayWbsStatusText,
   formalRiskLevelLabel,
   formalWbsItemType,
   formalWbsPriorityLabel,
   formalWbsStatusLabel,
   formatFileSize,
   formatFormalDate,
-  formatInitializationDate,
-  formatInitializationProgress,
   formatProgress,
   formatRiskWindow,
   formatSourceDateTime,
@@ -1136,11 +724,8 @@ import {
   initializationDraftStageHint,
   initializationDraftStatusLabel,
   initializationSectionLabels,
-  initializationVisibleIssueFields,
   mapMaterialAgentMessage,
   maskedIdentityCard,
-  materialAgentTraceHasActiveRuntime,
-  projectFieldLabels,
   riskLabel,
   sourceFieldLabel,
   traceHasPendingMaterialToolCall,
@@ -1163,7 +748,7 @@ const projectRequiredNotice = computed(() => route.query.projectRequired === '1'
 const configScope = reactive<ProjectConfigScope>({ members: [], wbsItems: [], riskSources: [], qualityMetrics: [], platformMappings: [], dirConfig: { mainDir: '', archiveDir: '', tempDir: '', failedDir: '', backupDir: '', scanInterval: 30, enabled: false }, remindRules: [] })
 const activeWorkspaceTab = ref<WorkspaceTab>('agent')
 const workspaceTabs: Array<{ key: WorkspaceTab; label: string; hint: string }> = [
-  { key: 'agent', label: 'Dobby 配置助手', hint: '初始化' },
+  { key: 'agent', label: 'Dobby 配置助手', hint: '资料补充与更新' },
   { key: 'manual', label: '项目配置', hint: '基础信息与业务规则' },
 ]
 const projectCreateOpen = ref(false)
@@ -1300,7 +885,19 @@ const materialAgentPreparationDetail = computed(() => {
   }
   return '你的消息已经进入对话，正在准备本次初始化任务。'
 })
-const materialAgentDraft = ref<ApiInitializationDraft | null>(null)
+const initializationDraftCollapsed = ref(false)
+const initializationDraftReviewOpen = ref(false)
+const materialDraftSyncRunning = computed(() => materialAgentLoading.value || ACTIVE_MATERIAL_AGENT_STATUSES.has(materialAgentConversationStatus.value))
+const { draft: materialAgentDraft, refresh: refreshInitializationDraft } = useInitializationDraftSync<ApiInitializationDraft>({
+  projectId: configProjectId,
+  conversationId: materialAgentConversationId,
+  running: materialDraftSyncRunning,
+  onChange: (next, previous) => {
+    if (!next) initializationDraftReviewOpen.value = false
+    if (next && (!previous || next.id !== previous.id || next.revision !== previous.revision)) initializationDraftCollapsed.value = false
+  },
+  onError: detail => { materialAgentError.value = detail },
+})
 const initializationDraftSourceNames = computed(() => {
   const names = (materialAgentDraft.value?.source_files || [])
     .map((source) => {
@@ -1314,42 +911,11 @@ const initializationDraftSourceNames = computed(() => {
     .filter(name => name.length > 0)
   return [...new Set(names)]
 })
-const materialAgentActiveRuntimeTrace = computed<AgentRuntimeTrace | null>(() => {
-  if (
-    materialAgentDraft.value
-    && ['ready', 'invalid'].includes(materialAgentDraft.value.status)
-  ) {
-    return null
-  }
-  const latestAssistantTrace = [...materialAgentMessages.value]
-    .reverse()
-    .find(item => item.role === 'assistant' && item.runtimeTrace)
-    ?.runtimeTrace || null
-  const trace = materialAgentStreamingTrace.value || latestAssistantTrace
-  return trace && materialAgentTraceHasActiveRuntime(trace) ? trace : null
-})
 const materialAgentDraftDockVisible = computed(() => Boolean(
   materialAgentDraft.value
-  && !['applied', 'rejected'].includes(materialAgentDraft.value.status)
-  && !materialAgentActiveRuntimeTrace.value
+  && materialAgentDraft.value.status !== 'rejected'
 ))
 
-const initializationDraftCollapsed = ref(false)
-const initializationDraftReviewOpen = ref(false)
-const collapsedInitializationWbsCodes = ref<Set<string>>(new Set())
-const initializationReviewScrollRef = ref<HTMLElement | null>(null)
-const activeInitializationReviewSection = ref<InitializationReviewSectionKey | null>(null)
-const initializationReviewExpanded = reactive({
-  personnel: true,
-  wbs: true,
-  risks: true,
-  quality: true,
-})
-const selectedInitializationIssues = ref<InitializationDraftIssue[]>([])
-const initializationDraftApplying = ref(false)
-const initializationDraftValidating = ref(false)
-const initializationDraftAllowPartial = ref(false)
-const initializationCredentialForms = ref<InitializationCredentialForm[]>([])
 const projectPositionCount = computed(() => new Set(
   configScope.members.flatMap(member => member.positions.map(position => position.positionId)),
 ).size)
@@ -1506,8 +1072,6 @@ const filteredRisks = computed(() => configScope.riskSources.filter(item => matc
   item.summary,
 )))
 const filteredMappings = computed(() => configScope.platformMappings.filter(item => matchesManualSearch(item.platformName, item.targetField, item.sourceField, item.transformRule)))
-const draftHasErrors = computed(() => materialAgentDraft.value?.validation_issues.some(item => item.level === 'error') ?? false)
-const draftHasWarnings = computed(() => materialAgentDraft.value?.validation_issues.some(item => item.level === 'warning') ?? false)
 const initializationDraftErrorCount = computed(() => (
   materialAgentDraft.value?.validation_issues.filter(item => item.level === 'error').length || 0
 ))
@@ -1520,255 +1084,6 @@ const initializationDraftIssueSummary = computed(() => {
     initializationDraftWarningCount.value ? `${initializationDraftWarningCount.value} 项需要核对` : '',
   ].filter(Boolean).join('，')
 })
-const initializationReviewSectionDefinitions: Array<{
-  key: InitializationReviewSectionKey
-  label: string
-}> = [
-  { key: 'project', label: '工程信息' },
-  { key: 'personnel', label: '人员' },
-  { key: 'wbs', label: 'WBS' },
-  { key: 'risks', label: '风险源' },
-  { key: 'quality_requirements', label: '质量指标' },
-]
-const initializationReviewIssueTabs = computed(() => (
-  initializationReviewSectionDefinitions
-    .map(section => {
-      const issues = (materialAgentDraft.value?.validation_issues || []).filter(
-        issue => issue.section === section.key,
-      )
-      return {
-        ...section,
-        count: issues.length,
-        errorCount: issues.filter(issue => issue.level === 'error').length,
-      }
-    })
-    .filter(section => section.count > 0)
-))
-const initializationIssuesByLocation = computed(() => {
-  const result = new Map<string, InitializationDraftIssue[]>()
-  for (const issue of materialAgentDraft.value?.validation_issues || []) {
-    const key = issue.target_record_id === null
-      ? `section:${issue.section}`
-      : `record:${issue.target_record_id}:${issue.field_name || ''}`
-    result.set(key, [...(result.get(key) || []), issue])
-  }
-  return result
-})
-
-const initializationIssuesByRecord = computed(() => {
-  const result = new Map<number, InitializationDraftIssue[]>()
-  for (const issue of materialAgentDraft.value?.validation_issues || []) {
-    if (issue.target_record_id === null) continue
-    result.set(issue.target_record_id, [
-      ...(result.get(issue.target_record_id) || []),
-      issue,
-    ])
-  }
-  return result
-})
-
-function initializationAllRecordIssues(recordId: number | null | undefined) {
-  if (!recordId) return []
-  return initializationIssuesByRecord.value.get(recordId) || []
-}
-
-function initializationFieldIssues(recordId: number | null | undefined, fieldName: string) {
-  if (!recordId) return []
-  return initializationIssuesByLocation.value.get(`record:${recordId}:${fieldName}`) || []
-}
-
-function initializationRecordIssues(recordId: number | null | undefined) {
-  if (!recordId) return []
-  return (materialAgentDraft.value?.validation_issues || []).filter(issue => {
-    if (issue.target_record_id !== recordId) return false
-    if (!issue.field_name) return true
-    const visibleFields = initializationVisibleIssueFields[issue.section]
-    return visibleFields !== null && !visibleFields.has(issue.field_name)
-  })
-}
-
-function initializationSectionIssues(section: InitializationDraftIssue['section']) {
-  return initializationIssuesByLocation.value.get(`section:${section}`) || []
-}
-
-function initializationHasRecordIssues(recordId: number | null | undefined) {
-  return initializationAllRecordIssues(recordId).length > 0
-}
-
-function openInitializationIssue(issues: Array<{ id: number }>) {
-  const issuesById = new Map(
-    (materialAgentDraft.value?.validation_issues || []).map(issue => [issue.id, issue]),
-  )
-  selectedInitializationIssues.value = issues
-    .map(issue => issuesById.get(issue.id))
-    .filter((issue): issue is InitializationDraftIssue => Boolean(issue))
-}
-
-function closeInitializationIssue() {
-  selectedInitializationIssues.value = []
-}
-
-async function focusInitializationReviewSection(section: InitializationReviewSectionKey) {
-  activeInitializationReviewSection.value = section
-  if (section === 'personnel') initializationReviewExpanded.personnel = true
-  if (section === 'wbs') initializationReviewExpanded.wbs = true
-  if (section === 'risks') initializationReviewExpanded.risks = true
-  if (section === 'quality_requirements') initializationReviewExpanded.quality = true
-  await nextTick()
-  const scrollContainer = initializationReviewScrollRef.value
-  const target = scrollContainer?.querySelector<HTMLElement>(
-    `[data-initialization-section="${section}"]`,
-  )
-  if (!scrollContainer || !target) return
-  const targetTop = (
-    target.getBoundingClientRect().top
-    - scrollContainer.getBoundingClientRect().top
-    + scrollContainer.scrollTop
-    - 12
-  )
-  scrollContainer.scrollTo({
-    top: Math.max(0, targetTop),
-    behavior: 'smooth',
-  })
-}
-
-const initializationWbsTree = computed(() => buildInitializationWbsTree(
-  materialAgentDraft.value?.payload.wbs || [],
-))
-const visibleInitializationWbsRows = computed(() => {
-  const collapsedCodes = collapsedInitializationWbsCodes.value
-  return initializationWbsTree.value.rows.filter(
-    row => !row.ancestorCodes.some(code => collapsedCodes.has(code)),
-  )
-})
-const draftProjectFields = computed(() => Object.entries(materialAgentDraft.value?.payload.project || {})
-  .filter(([key, value]) => (
-    key !== 'record_id'
-    && (
-      (value !== null && value !== '')
-      || initializationFieldIssues(
-        materialAgentDraft.value?.payload.project.record_id,
-        key,
-      ).length > 0
-    )
-  ))
-  .map(([key, value]) => {
-    const missing = value === null || value === ''
-    return {
-      key,
-      label: projectFieldLabels[key] || key,
-      missing,
-      value: missing
-        ? '未识别'
-        : key === 'contract_duration_days'
-          ? `${value} 天`
-          : key === 'contract_amount_wan_yuan'
-            ? `${value} 万元`
-            : String(value),
-      issues: initializationFieldIssues(
-        materialAgentDraft.value?.payload.project.record_id,
-        key,
-      ),
-    }
-  }))
-const draftProjectRecognizedCount = computed(() => (
-  draftProjectFields.value.filter(item => !item.missing).length
-))
-const draftProjectDescription = computed(() => (
-  draftProjectFields.value.find(item => item.key === 'engineering_type_description')
-))
-const draftProjectContractFields = computed(() => {
-  const keys = new Set([
-    'contract_start_date',
-    'contract_end_date',
-    'contract_duration_days',
-    'contract_amount_wan_yuan',
-  ])
-  return draftProjectFields.value.filter(item => keys.has(item.key))
-})
-const draftProjectUnitFields = computed(() => {
-  const keys = new Set([
-    'construction_unit_name',
-    'general_contractor_unit_name',
-    'supervision_unit_name',
-    'design_unit_name',
-    'survey_unit_name',
-  ])
-  return draftProjectFields.value.filter(item => keys.has(item.key))
-})
-const initializationPersonnelReviewRows = computed(() => {
-  const credentialByIdentityCard = new Map(
-    initializationCredentialForms.value.map(item => [item.identity_card_no, item]),
-  )
-  const existingAccountByIdentityCard = new Map(
-    (materialAgentDraft.value?.existing_personnel_accounts || []).map(item => [item.identity_card_no, item]),
-  )
-  const groups = new Map<string, InitializationPersonnelReviewGroup>()
-  for (const item of materialAgentDraft.value?.payload.personnel || []) {
-    const normalizedIdentityCard = item.identity_card_no.trim()
-    const normalizedName = item.real_name.trim().toLocaleLowerCase('zh-CN')
-    const key = normalizedIdentityCard
-      ? `identity:${normalizedIdentityCard}`
-      : `name:${normalizedName}`
-    const existing = groups.get(key)
-    if (existing) {
-      existing.positions.push(item)
-      existing.record_ids.push(item.record_id)
-      existing.serial_no = Math.min(existing.serial_no, item.serial_no)
-      continue
-    }
-    groups.set(key, {
-      key,
-      serial_no: item.serial_no,
-      real_name: item.real_name,
-      identity_card_no: item.identity_card_no,
-      positions: [item],
-      record_ids: [item.record_id],
-      existingAccount: existingAccountByIdentityCard.get(item.identity_card_no) || null,
-      credential: credentialByIdentityCard.get(item.identity_card_no) || null,
-      issues: [],
-    })
-  }
-  return [...groups.values()].map(group => {
-    const issuesByContent = new Map<string, InitializationDraftIssue>()
-    for (const recordId of group.record_ids) {
-      for (const issue of initializationAllRecordIssues(recordId)) {
-        const issueKey = [
-          issue.rule_id,
-          issue.title,
-          issue.message,
-          issue.suggestion || '',
-        ].join('|')
-        if (!issuesByContent.has(issueKey)) issuesByContent.set(issueKey, issue)
-      }
-    }
-    return {
-      ...group,
-      issues: [...issuesByContent.values()],
-    }
-  })
-})
-const canApplyInitializationDraft = computed(() => {
-  const draft = materialAgentDraft.value
-  if (
-    !draft
-    || !isPlatformAdmin.value
-    || draft.status !== 'ready'
-    || draft.validation?.status !== 'completed'
-    || draft.validation?.draft_revision !== draft.revision
-    || draft.validation?.result_status !== 'ready'
-    || initializationDraftApplying.value
-    || initializationDraftValidating.value
-    || draftHasErrors.value
-    || (draftHasWarnings.value && !initializationDraftAllowPartial.value)
-  ) return false
-  const usernames = initializationCredentialForms.value.map(item => item.username.trim())
-  if (new Set(usernames).size !== usernames.length) return false
-  return initializationCredentialForms.value.every(item => (
-    item.username.trim().length > 0 && item.initial_password.length >= 8
-  ))
-})
-
 function setupQueryValue(value: unknown) {
   return Array.isArray(value) ? String(value[0] || '') : String(value || '')
 }
@@ -2150,7 +1465,6 @@ watch(configProjectId, projectId => {
   materialAgentDraft.value = null
   initializationDraftCollapsed.value = false
   initializationDraftReviewOpen.value = false
-  initializationCredentialForms.value = []
   clearMaterialAgentFiles()
   activeProjectConnectorKey.value = 'wecom'
   syncProjectBaseInfo(projectId)
@@ -2236,8 +1550,12 @@ async function loadMaterialAgentConversation(
     const preferredConversationId = requestedConversationId
       || materialAgentConversationId.value
       || (Number.isInteger(routeConversationId) && routeConversationId > 0 ? routeConversationId : null)
-    const conversation = response.data.data.find(item => item.id === preferredConversationId)
-      || response.data.data[0]
+    const requestedConversation = response.data.data.find(item => item.id === preferredConversationId)
+    if (requestedConversationId && !requestedConversation) {
+      materialAgentError.value = '该会话已不可用，请从会话列表选择其他会话。'
+      return false
+    }
+    const conversation = requestedConversation || response.data.data[0]
     if (!conversation) {
       materialAgentConversationId.value = null
       materialAgentConversationStatus.value = ''
@@ -2325,6 +1643,9 @@ function syncMaterialAgentConversationRoute(conversationId?: number) {
 
 function resetMaterialAgentConversationView() {
   cancelMaterialAgentRequests()
+  materialConversationLoadSequence += 1
+  materialAgentConversationListLoading.value = false
+  materialAgentConversationLoading.value = false
   materialAgentReconcileSequence += 1
   materialAgentConversationId.value = null
   materialAgentConversationStatus.value = ''
@@ -2355,143 +1676,25 @@ async function selectMaterialAgentConversation(conversationId: number) {
   await loadMaterialAgentConversation(configProjectId.value, conversationId)
 }
 
+async function resyncMaterialAgentConversation() {
+  if (materialAgentLoading.value || materialAgentStopping.value || materialAgentConversationLoading.value) return
+  const projectId = configProjectId.value
+  const conversationId = materialAgentConversationId.value
+  if (!projectId || !conversationId) return
+  await loadMaterialAgentConversation(projectId, conversationId)
+}
+
 async function loadInitializationDraft(projectId = configProjectId.value) {
-  if (!projectId) return
-  try {
-    const response = await api.get<ApiEnvelope<ApiInitializationDraft | null>>(
-      `/projects/${projectId}/initialization-drafts/latest`,
-    )
-    if (projectId !== configProjectId.value) return
-    const nextDraft = response.data.data
-    const previousDraft = materialAgentDraft.value
-    if (
-      nextDraft
-      && (
-        !previousDraft
-        || nextDraft.id !== previousDraft.id
-        || nextDraft.revision !== previousDraft.revision
-      )
-    ) {
-      initializationDraftCollapsed.value = false
-    }
-    materialAgentDraft.value = nextDraft
-  } catch (error: any) {
-    if (projectId === configProjectId.value) {
-      materialAgentError.value = error.response?.data?.detail || '初始化草稿加载失败。'
-    }
-  }
+  if (projectId === configProjectId.value) await refreshInitializationDraft()
 }
-
-function isInitializationWbsCollapsed(code: string) {
-  return collapsedInitializationWbsCodes.value.has(code)
-}
-
-function toggleInitializationWbsNode(code: string) {
-  const next = new Set(collapsedInitializationWbsCodes.value)
-  if (next.has(code)) next.delete(code)
-  else next.add(code)
-  collapsedInitializationWbsCodes.value = next
-}
-
-function expandAllInitializationWbs() {
-  collapsedInitializationWbsCodes.value = new Set()
-}
-
-function collapseAllInitializationWbs() {
-  collapsedInitializationWbsCodes.value = new Set(initializationWbsTree.value.groupCodes)
-}
-
 function openInitializationDraftReview() {
-  const draft = materialAgentDraft.value
-  if (!draft) return
-  Object.assign(initializationReviewExpanded, {
-    personnel: true,
-    wbs: true,
-    risks: true,
-    quality: true,
-  })
-  collapsedInitializationWbsCodes.value = new Set()
-  initializationDraftAllowPartial.value = false
-  selectedInitializationIssues.value = []
-  activeInitializationReviewSection.value = initializationReviewIssueTabs.value[0]?.key || null
-  const currentCredentialByIdentityCard = new Map(
-    initializationCredentialForms.value.map(item => [item.identity_card_no, item]),
-  )
-  initializationCredentialForms.value = draft.required_personnel_credentials.map(item => ({
-    ...item,
-    username: currentCredentialByIdentityCard.get(item.identity_card_no)?.username || item.suggested_username,
-    initial_password: currentCredentialByIdentityCard.get(item.identity_card_no)?.initial_password || generateInitializationPassword(),
-  }))
-  initializationDraftReviewOpen.value = true
-  nextTick(() => initializationReviewScrollRef.value?.scrollTo({ top: 0, left: 0 }))
+  if (materialAgentDraft.value) initializationDraftReviewOpen.value = true
 }
 
-function closeInitializationDraftReview() {
-  if (!initializationDraftApplying.value && !initializationDraftValidating.value) {
-    selectedInitializationIssues.value = []
-    initializationDraftReviewOpen.value = false
-  }
+async function handleInitializationChangesApplied() {
+  await Promise.all([loadInitializationDraft(), loadConfigProjectScope()])
+  message.success('所选项目资料已更新。')
 }
-
-function initializationApplyError(error: any) {
-  const detail = error.response?.data?.detail
-  if (typeof detail === 'string') return detail
-  if (detail && typeof detail === 'object') {
-    return String(detail.message || '初始化草稿入库失败。')
-  }
-  return error.message || '初始化草稿入库失败。'
-}
-
-async function applyInitializationDraft() {
-  const draft = materialAgentDraft.value
-  if (!draft || !canApplyInitializationDraft.value) return
-  initializationDraftApplying.value = true
-  try {
-    await api.post(
-      `/projects/${configProjectId.value}/initialization-drafts/${draft.id}/apply`,
-      {
-        allow_partial: initializationDraftAllowPartial.value,
-        personnel_credentials: initializationCredentialForms.value.map(item => ({
-          identity_card_no: item.identity_card_no,
-          username: item.username.trim(),
-          initial_password: item.initial_password,
-        })),
-      },
-      { timeout: 60_000 },
-    )
-    await Promise.all([
-      loadInitializationDraft(),
-      loadConfigProjectScope(),
-    ])
-    message.success('项目初始化数据已确认入库。')
-  } catch (error: any) {
-    message.error(initializationApplyError(error))
-  } finally {
-    initializationDraftApplying.value = false
-  }
-}
-
-async function revalidateInitializationDraft() {
-  const draft = materialAgentDraft.value
-  if (!draft || initializationDraftValidating.value) return
-  initializationDraftValidating.value = true
-  materialAgentDraft.value = { ...draft, status: 'reviewing' }
-  try {
-    await api.post(
-      `/projects/${configProjectId.value}/initialization-drafts/${draft.id}/validate`,
-      {},
-      { timeout: 120_000 },
-    )
-    await loadInitializationDraft()
-    message.success('项目初始化草稿核验完成。')
-  } catch (error: any) {
-    await loadInitializationDraft()
-    message.error(initializationApplyError(error))
-  } finally {
-    initializationDraftValidating.value = false
-  }
-}
-
 async function ensureMaterialAgentConversation(signal?: AbortSignal): Promise<number> {
   if (materialAgentConversationId.value) return materialAgentConversationId.value
   const response = await api.post<ApiEnvelope<ApiAgentConversation>>(
@@ -2545,7 +1748,7 @@ async function uploadMaterialAgentFiles(
 
 async function sendMaterialAgentMessage() {
   const requestedContent = materialAgentPrompt.value.trim()
-  if (!configProjectId.value || materialAgentLoading.value || materialAgentStopping.value) return
+  if (!configProjectId.value || materialAgentLoading.value || materialAgentStopping.value || materialAgentConversationLoading.value) return
   const selectedFiles = [...materialAgentFiles.value]
   if (!requestedContent && !selectedFiles.length) return
   const controller = new AbortController()

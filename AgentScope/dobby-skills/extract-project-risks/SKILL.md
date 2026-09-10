@@ -12,13 +12,19 @@ description: 整理风险源记录，并写入自己负责的初始化草稿分�
 fields，并使用 `record_id=chunk_id`、`limit=1`、`text_field="content"`、
 `text_offset=0`、`text_limit=6000`。每页检查 `_text_page`，用 `next_offset`
 继续读取，直到 `has_more=false`；必须读完所有相关分块，禁止只读第一页。随后再读取
-当前草稿和分区。
+当前草稿和分区；按需调用 `dobby_get_project_initialization_state(section="risks", offset=0, limit=20)`
+读取正式旧数据，依 `page.next_offset` 分页。
 新分区调用 `dobby_create_initialization_risks_section`；已有
-自己提交的分区调用 `dobby_update_initialization_risks_section`。写入完整数组、来源
+自己提交的分区调用 `dobby_update_initialization_risks_section`。写入本次草稿数组、来源
 和核对说明，不写正式业务表。`payload` 顶层必须直接是风险数组，禁止再包裹
 `risks`、`items`、`data`、`result` 或 `summary`。写入成功就是完成边界，无需再
 调用 `TeamSay`。每条记录的字段名必须逐字使用写入工具 schema 中的英文技术字段，
 禁止中文字段名和 schema 外字段。
+
+相关工序原文和风险部位是必需的匹配线索，不用序号判断是否同一风险。其他字段只写
+本次资料明确给出的内容，未识别字段省略，不填 `null`。更新草稿保留该分区已提取
+的其他记录，不复制全部正式旧风险，不把附件缺行当作删除。平台负责新旧匹配、
+差异与新增必填项核验；完成本分区即可提交，不等其他分区齐全。
 
 `source_files` 必须非空并明确记录本次使用的 `file_id/chunk_id` 与文件名；
 `extraction_notes` 只记录原文中实际存在的跳号、冲突或日期转换，没有疑点时传空数组。

@@ -56,7 +56,7 @@ test('仅内部事件不会产生空卡片或已完成提示，运行中仍有�
   assert.equal(agentConversationItems(run).length, 0)
 })
 
-test('完成后保留调用记录和答复，隐藏调用参数与模型指标', async () => {
+test('完成后保留成员任务、调用记录和答复，隐藏原始参数与模型指标', async () => {
   const run = collaborationTrace()
   const html = await render(run)
   const positions = ['我先核对项目资料', '接着请资料助手', '已完成分类核对'].map(text => html.indexOf(text))
@@ -64,7 +64,10 @@ test('完成后保留调用记录和答复，隐藏调用参数与模型指标',
   assert.match(html, /读取项目基本信息/)
   assert.match(html, /协同处理任务/)
   assert.match(html, /检索知识库/)
-  assert.doesNotMatch(html, /dobby_get_project|agent_invoke|检查施工方案与验收资料的分类|示例模型|调用详情/)
+  assert.match(html, /资料助手/)
+  assert.match(html, /资料协同/)
+  assert.match(html, /检查施工方案与验收资料的分类/)
+  assert.doesNotMatch(html, /dobby_get_project|agent_invoke|agent_id|示例模型|调用详情/)
 })
 
 test('旧 AgentInvite 也按各自位置展示，不把一条消息中的协同挪到开头', () => {

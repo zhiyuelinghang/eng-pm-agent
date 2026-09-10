@@ -66,6 +66,7 @@ from ._permission_review import (
 )
 from ._attachment_pipeline import AttachmentPipeline
 from ._run_checkpoint import RunCheckpoint
+from ._collaboration_archive import assignment_anchors, save_message_with_collaboration_progress
 
 from ..._logging import logger
 from ...agent import Agent, ContextConfig, ExecutionPolicy, ModelConfig, ReActConfig
@@ -78,6 +79,7 @@ from ...event import (
     ReplyFinishedReason,
     UserConfirmResultEvent,
     ExternalExecutionResultEvent,
+    ToolResultEndEvent,
     UserInterruptEvent,
 )
 from ._errors import _classify_error
@@ -867,7 +869,7 @@ class ChatService:
                     leader_session_id=session_id,
                 )
             await register_inbox_consumer(self._message_bus, session_id)
-            checkpoint = RunCheckpoint(self._storage, user_id, agent_id, session_id)
+            checkpoint = RunCheckpoint(self._storage, user_id, agent_id, session_id, message_bus=self._message_bus)
             try:
                 if input_msg is None or isinstance(input_msg, (Msg, list)):
                     # Case A: new reply (user message(s), or retrigger with
@@ -908,6 +910,8 @@ class ChatService:
                         elif reply_msg is not None:
                             reply_msg.append_event(event)
                         try:
+                            if isinstance(event, ToolResultEndEvent) and reply_msg is not None and any(call_id == event.tool_call_id for call_id, _ in assignment_anchors(reply_msg)):
+                                await save_message_with_collaboration_progress(self._storage, self._message_bus, user_id, session_id, reply_msg)
                             if isinstance(event, ModelCallStartEvent):
                                 await checkpoint.save(agent, reply_msg)
                             await publish_session_event(
@@ -957,6 +961,8 @@ class ChatService:
                         if reply_msg is not None:
                             reply_msg.append_event(event)
                         try:
+                            if isinstance(event, ToolResultEndEvent) and reply_msg is not None and any(call_id == event.tool_call_id for call_id, _ in assignment_anchors(reply_msg)):
+                                await save_message_with_collaboration_progress(self._storage, self._message_bus, user_id, session_id, reply_msg)
                             if isinstance(event, ModelCallStartEvent):
                                 await checkpoint.save(agent, reply_msg)
                             await publish_session_event(
@@ -1042,11 +1048,7 @@ class ChatService:
                         await self._message_bus.log_trim(events_key)
                         return
                     if reply_msg is not None:
-                        await self._storage.upsert_message(
-                            user_id,
-                            session_id,
-                            reply_msg,
-                        )
+                        await save_message_with_collaboration_progress(self._storage, self._message_bus, user_id, session_id, reply_msg)
                     try:
                         await self._storage.update_session_state(
                             user_id=user_id,

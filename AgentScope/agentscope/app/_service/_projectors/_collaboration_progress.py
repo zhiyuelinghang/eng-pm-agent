@@ -223,9 +223,15 @@ class CollaborationProgressProjector:
         if activity is None:
             return
 
+        same_reply = stored is not None and stored.get("reply_id") == activity.get("reply_id")
+        revision = (int(stored.get("work_revision") or 0) if same_reply else member.active_revision)
+        if not revision and member.work_revision == member.settled_revision:
+            revision = member.settled_revision
+        if not revision:
+            return
         same_revision = (
             stored is not None
-            and int(stored.get("work_revision") or 0) == member.work_revision
+            and int(stored.get("work_revision") or 0) == revision
         )
         activities = list(stored.get("activities") or []) if same_revision else []
         activities = self._append_activity(activities, activity)
@@ -241,14 +247,14 @@ class CollaborationProgressProjector:
             "worker_session_id": session_record.id,
             "worker_agent_id": agent_record.id,
             "worker_agent_name": agent_record.data.name,
-            "work_revision": member.work_revision,
+            "work_revision": revision,
             "work_status": status,
-            "assigned_at": self._iso(member.assigned_at),
+            "assigned_at": (stored or {}).get("assigned_at") if same_revision else self._iso(member.assigned_at) if member.work_revision == revision else None,
             "started_at": (
                 activity["created_at"]
                 if isinstance(event, ReplyStartEvent)
-                else self._iso(member.started_at)
-                or (stored or {}).get("started_at")
+                else (stored or {}).get("started_at") if same_revision
+                else self._iso(member.started_at) if member.work_revision == revision else None
             ),
             "settled_at": (
                 activity["created_at"]

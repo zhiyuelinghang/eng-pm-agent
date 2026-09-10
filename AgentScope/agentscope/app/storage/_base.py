@@ -508,6 +508,10 @@ class StorageBase(ABC):
             msg (`Msg`): The message to persist.
         """
 
+    async def update_message_if_exists(self, user_id: str, session_id: str, msg: Msg) -> bool:
+        """Replace an existing message without recreating deleted history."""
+        raise NotImplementedError("This storage does not support conditional message updates")
+
     @abstractmethod
     async def get_message(
         self,

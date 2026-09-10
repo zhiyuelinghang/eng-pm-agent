@@ -19,13 +19,19 @@ description: 整理人员与岗位记录，并写入自己负责的初始化草�
 使用 `record_id=chunk_id`、`limit=1`、`text_field="content"`、`text_offset=0`、
 `text_limit=6000`。每页检查 `_text_page`，用 `next_offset` 继续读取，直到
 `has_more=false`；必须读完所有相关分块，禁止只读第一页。
-随后再读取当前草稿和分区。新分区调用
+随后按需调用 `dobby_get_project_initialization_state(section="personnel", offset=0, limit=20)`
+读取当前项目正式任职，依 `page.next_offset` 分页，再读取当前草稿和分区。新分区调用
 `dobby_create_initialization_personnel_section`；已有自己提交的分区调用
-`dobby_update_initialization_personnel_section`。写入完整人员数组、来源文件和
+`dobby_update_initialization_personnel_section`。写入本次草稿人员数组、来源文件和
 核对说明，不写正式业务表。`payload` 顶层必须直接是人员数组，禁止再包裹
 `personnel`、`items`、`data`、`result` 或 `summary`。写入成功就是完成边界，
 无需再调用 `TeamSay`。每条记录的字段名必须逐字使用写入工具 schema 中的英文技术
 字段，禁止中文字段名和 schema 外字段。
+
+身份证号和岗位是必需的匹配线索，其他字段仅写本次资料明确给出的内容；
+未识别字段省略，不填 `null`，不把旧人员未出现在附件中当作删除。更新草稿分区时
+保留该分区已提取的其他记录，不把正式人员全量抄入草稿。最终人员匹配、新旧差异和
+新增必填项由平台核验；完成本分区即可提交，不等其他分区齐全。
 
 `source_files` 必须非空并明确记录本次使用的 `file_id/chunk_id` 与文件名；
 `extraction_notes` 只记录原文中实际存在的冲突、缺失或转换，没有疑点时传空数组。

@@ -662,7 +662,7 @@ def _agent_reply_runtime_metadata(
     }:
         trace_summary["turn_finished_at"] = datetime.now(UTC).isoformat()
     return {
-        **_agent_reply_extra_data(reply, trace_summary),
+        **_agent_reply_extra_data(reply, trace_summary, thread.agentscope_session_id),
         "agent_name": thread.agent_name,
         "source_message_id": source.id,
         "agentscope_session_id": thread.agentscope_session_id,

@@ -9,6 +9,8 @@ import type {
   AgentToolCallBlock,
   AgentToolResultBlock,
 } from '@/types/agentRuntime'
+import { collaborationFeedbackMembers, parseCollaborationFeedback, type CollaborationFeedback } from './agentCollaborationFeedback'
+import { collaborationTask } from './agentCollaborationPresentation'
 
 const activeStatuses = new Set([
   'queued', 'creating', 'running', 'interrupting', 'awaiting_permission', 'awaiting_external_result',
@@ -45,11 +47,16 @@ export function toolPresentationState(
 }
 
 export function publicToolActivities(activities: AgentCollaborationActivity[]) {
+  return publicCollaborationActivities(activities).filter(activity => activity.kind === 'tool')
+}
+
+export function publicCollaborationActivities(activities: AgentCollaborationActivity[]) {
   const records: AgentCollaborationActivity[] = []
   for (const activity of activities) {
-    if (activity.kind !== 'tool' || !activity.tool_name || isInternalTool(activity.tool_name)) continue
-    const index = activity.tool_call_id ? records.findIndex(previous =>
-      previous.reply_id === activity.reply_id && previous.tool_call_id === activity.tool_call_id,
+    if (!['started', 'analysis', 'tool', 'waiting', 'finished'].includes(activity.kind)) continue
+    if (activity.kind === 'tool' && (!activity.tool_name || isInternalTool(activity.tool_name))) continue
+    const index = activity.kind === 'tool' && activity.tool_call_id ? records.findIndex(previous =>
+      previous.kind === 'tool' && previous.reply_id === activity.reply_id && previous.tool_call_id === activity.tool_call_id,
     ) : -1
     if (index < 0) records.push(activity)
     else records[index] = activity
@@ -67,12 +74,22 @@ export type CollaborationStep = {
   call?: AgentToolCallBlock
   result?: AgentToolResultBlock
   replyId?: string
+  teamId?: string
+  teamName?: string
+  workerSessionId?: string
+  workRevision?: number
+  assignedAt?: string | null
+  startedAt?: string | null
+  settledAt?: string | null
+  updatedAt?: string | null
+  currentActivity?: AgentCollaborationActivity | null
 }
 
 export type AgentConversationItem =
   | { kind: 'block'; key: string; message: AgentRuntimeMessage; block: AgentContentBlock }
   | { kind: 'error'; key: string; message: AgentRuntimeMessage }
   | { kind: 'collaboration'; key: string; step: CollaborationStep }
+  | { kind: 'collaboration_feedback'; key: string; message: AgentRuntimeMessage; feedback: CollaborationFeedback }
 
 function isPublicBlock(block: AgentContentBlock) {
   if (block.type === 'text') return Boolean(block.text.trim())
@@ -103,6 +120,7 @@ export function isThinkingBlockActive(
 function memberStatus(member: AgentCollaborationMember | undefined, trace: AgentRuntimeTrace) {
   const status = member?.work_status || 'queued'
   if (['reported', 'completed', 'failed', 'interrupted'].includes(status)) return status
+  if (trace.status === 'interrupting') return 'interrupting'
   if (!isRuntimeActive(trace)) return trace.status === 'interrupted' ? 'interrupted' : 'finished'
   return status
 }
@@ -112,13 +130,19 @@ export function agentConversationItems(trace?: AgentRuntimeTrace | null): AgentC
   if (!trace) return []
   const claimedMembers = new Set<string>()
   const claimedPending = new Set<AgentSubagentHitlEntry>()
-  const pending = isRuntimeActive(trace) ? trace.subagentHitl : []
-  const messages = trace.messages.filter(message => message.role === 'assistant')
+  const pending = isRuntimeActive(trace) && trace.status !== 'interrupting' ? trace.subagentHitl : []
+  const feedbackMembers = collaborationFeedbackMembers(trace)
+  const messages = trace.messages.filter(message => message.role !== 'system')
   const groups = messages.map(message => {
     const items: AgentConversationItem[] = []
     for (const block of message.content) {
-      if (!isPublicBlock(block)) continue
       const key = `${message.id}:${block.type}:${block.id}`
+      if (block.type === 'hint') {
+        const feedback = parseCollaborationFeedback(block, message, feedbackMembers)
+        if (feedback) items.push({ kind: 'collaboration_feedback', key, message, feedback })
+        continue
+      }
+      if (message.role !== 'assistant' || !isPublicBlock(block)) continue
       if (block.type !== 'tool_call' || !collaborationTools.has(block.name)) {
         items.push({ kind: 'block', key, message, block })
         continue
@@ -149,18 +173,26 @@ export function agentConversationItems(trace?: AgentRuntimeTrace | null): AgentC
         && (!member.reply_id || entry.reply_id === member.reply_id)) : []
       entries.forEach(entry => claimedPending.add(entry))
       let status = failed ? result.state : memberStatus(member, trace)
-      if (block.state === 'asking' && !result && isRuntimeActive(trace)) status = 'asking'
+      if (block.state === 'asking' && !result && isRuntimeActive(trace) && trace.status !== 'interrupting') status = 'asking'
       // A successful dispatch confirms acceptance, not successful completion of the work.
       if (!member && revision && trace.collaborations.some(candidate =>
         candidate.worker_session_id === sessionId && candidate.work_revision > revision)) status = 'finished'
       const step: CollaborationStep = {
         key,
         name: member?.worker_agent_name || String(metadata.worker_agent_name || targetName || '协同智能体'),
-        task: String(input.task || input.prompt || ''),
+        task: collaborationTask(input.task || input.prompt),
         status,
-        activities: publicToolActivities(member?.activities || []),
+        activities: publicCollaborationActivities(member?.activities || []),
         pending: entries,
         call: block, result, replyId: message.id,
+        teamId: member?.team_id || String(metadata.team_id || ''),
+        teamName: member?.team_name || String(metadata.team_name || ''),
+        workerSessionId: member?.worker_session_id || sessionId,
+        workRevision: member?.work_revision || revision,
+        assignedAt: member?.assigned_at || String(metadata.assigned_at || message.created_at),
+        startedAt: member?.started_at || null, settledAt: member?.settled_at || null,
+        updatedAt: member?.updated_at || message.finished_at || null,
+        currentActivity: member?.current_activity || null,
       }
       items.push({ kind: 'collaboration', key, step })
     }
@@ -181,7 +213,10 @@ export function agentConversationItems(trace?: AgentRuntimeTrace | null): AgentC
     extra.push({ at: member.assigned_at || member.started_at || member.updated_at, item: {
       kind: 'collaboration', key, step: {
         key, name: member.worker_agent_name, task: '', status: memberStatus(member, trace),
-        activities: publicToolActivities(member.activities), pending: entries,
+        activities: publicCollaborationActivities(member.activities), pending: entries,
+        teamId: member.team_id, teamName: member.team_name, workerSessionId: member.worker_session_id,
+        workRevision: member.work_revision, assignedAt: member.assigned_at, startedAt: member.started_at,
+        settledAt: member.settled_at, updatedAt: member.updated_at, currentActivity: member.current_activity,
       },
     } })
   }
@@ -190,6 +225,7 @@ export function agentConversationItems(trace?: AgentRuntimeTrace | null): AgentC
     const key = `confirmation:${entry.worker_session_id}:${entry.reply_id}`
     extra.push({ at: entry.created_at, item: { kind: 'collaboration', key, step: {
       key, name: entry.worker_agent_name, task: '', status: 'waiting', activities: [], pending: [entry],
+      workerSessionId: entry.worker_session_id, assignedAt: entry.created_at,
     } } })
   }
   extra.sort((a, b) => a.at.localeCompare(b.at))

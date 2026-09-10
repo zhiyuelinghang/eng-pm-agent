@@ -359,10 +359,20 @@ def test_initialization_derives_roles_and_applies_name_based_permissions() -> No
         )
         db.flush()
 
+        from backend.app.initialization_change_contracts import PreviewInitializationChangesInput
+        from backend.app.initialization_change_service import create_change_preview
+
+        class Validator:
+            def validate_project_initialization(self, payload):
+                return {"package_id": "project-initialization-validator", "package_version": "2.0.0", "duration_ms": 1,
+                        "result": {"status": "ready", "validation_issues": []}}
+
+        preview = create_change_preview(db, draft, creator, PreviewInitializationChangesInput(), client=Validator())
         result = apply_initialization_draft(
             db,
             draft,
             ApplyInitializationDraftInput(
+                preview_id=preview["preview_id"],
                 personnel_credentials=[
                     PersonnelCredentialInput(
                         identity_card_no="INIT-PM",

@@ -16,7 +16,7 @@ import re
 from typing import Any
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import ValidationError
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -52,12 +52,12 @@ from .models import (
 from .initialization_draft_queries import (
     sync_initialization_draft_section_records,
 )
-from .project_initialization import (
-    PersonnelDraft,
-    ProjectDetailsDraft,
-    QualityRequirementDraft,
-    RiskDraftItem,
-    WbsDraft,
+from .initialization_draft_contracts import (
+    _INITIALIZATION_ARRAY_SECTIONS,
+    _INITIALIZATION_SECTION_MODELS,
+    _initialization_section_payload_schema,
+    _normalize_initialization_section_payload,
+    _validate_initialization_section_evidence,
 )
 from .database_interaction_contracts import (
     ContextBindingMode,
@@ -95,34 +95,10 @@ _SENSITIVE_FIELD_PARTS = (
     "storage_path",
 )
 _SYSTEM_MANAGED_FIELDS = frozenset({"created_at", "updated_at"})
-_DECLARATIVE_CATALOG_VERSION = 20
+_DECLARATIVE_CATALOG_VERSION = 21
 _MAX_BATCH_RECORD_IDS = 12
 _MAX_JSON_PAGE_ITEMS = 20
 _MAX_TEXT_PAGE_CHARS = 6000
-
-_INITIALIZATION_SECTION_MODELS: dict[str, type[BaseModel]] = {
-    "project": ProjectDetailsDraft,
-    "personnel": PersonnelDraft,
-    "wbs": WbsDraft,
-    "risks": RiskDraftItem,
-    "quality_requirements": QualityRequirementDraft,
-}
-_INITIALIZATION_ARRAY_SECTIONS = frozenset(
-    {"personnel", "wbs", "risks", "quality_requirements"},
-)
-_INITIALIZATION_SECTION_MAX_ITEMS = {
-    "personnel": 2000,
-    "wbs": 10000,
-    "risks": 5000,
-    "quality_requirements": 10000,
-}
-_INITIALIZATION_SECTION_ADAPTERS = {
-    "project": TypeAdapter(ProjectDetailsDraft),
-    "personnel": TypeAdapter(list[PersonnelDraft]),
-    "wbs": TypeAdapter(list[WbsDraft]),
-    "risks": TypeAdapter(list[RiskDraftItem]),
-    "quality_requirements": TypeAdapter(list[QualityRequirementDraft]),
-}
 
 _OBSOLETE_INITIALIZATION_TABLES = {
     "project_initialization_normalizations",
@@ -617,12 +593,15 @@ def update_table_policy(
             if main_policy is None:
                 interaction.enabled = False
                 continue
-            interaction.input_schema = build_table_interaction_schema(
+            interaction.input_schema = _runtime_handler_input_schema(
+                interaction.runtime_policy or {},
+            ) or build_table_interaction_schema(
                 db,
                 main_policy,
                 interaction.table_operation,
                 interaction.join_rules or [],
                 interaction.context_bindings or [],
+                interaction.fixed_values or {},
             )
     db.commit()
     db.refresh(row)
@@ -678,123 +657,6 @@ def _read_field_catalog(
         for name in rule.get("filterable_fields") or []:
             filterable[f"{rule['alias']}.{name}"] = target_table.c[name]
     return readable, filterable
-
-
-def _initialization_section_payload_schema(section: str) -> dict[str, Any]:
-    """Return the canonical schema for one complete specialist payload."""
-    model = _INITIALIZATION_SECTION_MODELS.get(section)
-    if model is None:
-        raise HTTPException(status_code=422, detail="初始化草稿分区类型无效")
-    item_schema = model.model_json_schema()
-    item_schema.get("properties", {}).pop("record_id", None)
-    if isinstance(item_schema.get("required"), list):
-        item_schema["required"] = [
-            name for name in item_schema["required"] if name != "record_id"
-        ]
-    if section == "project":
-        item_schema["description"] = (
-            "工程信息对象；字段名必须与此结构完全一致，禁止额外包裹。"
-        )
-        return item_schema
-    return {
-        "type": "array",
-        "items": item_schema,
-        "minItems": 0,
-        "maxItems": _INITIALIZATION_SECTION_MAX_ITEMS[section],
-        "description": (
-            "该分区的完整标准记录数组；字段名必须与 items 完全一致，"
-            "禁止嵌套 children 或额外包裹。"
-        ),
-    }
-
-
-def _normalize_initialization_section_payload(
-    section: str,
-    payload: Any,
-) -> dict[str, Any] | list[dict[str, Any]]:
-    """Validate and serialize one project-initialization payload batch."""
-    adapter = _INITIALIZATION_SECTION_ADAPTERS.get(section)
-    if adapter is None:
-        raise HTTPException(status_code=422, detail="初始化草稿分区类型无效")
-    if section in _INITIALIZATION_ARRAY_SECTIONS:
-        max_items = _INITIALIZATION_SECTION_MAX_ITEMS[section]
-        if not isinstance(payload, list) or len(payload) > max_items:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "数组型初始化分区必须写入不超过 "
-                    f"{max_items} 条完整标准记录"
-                ),
-            )
-    if isinstance(payload, list):
-        normalized_input = [
-            {key: value for key, value in item.items() if key != "record_id"}
-            if isinstance(item, dict)
-            else item
-            for item in payload
-        ]
-    elif isinstance(payload, dict):
-        normalized_input = {
-            key: value for key, value in payload.items() if key != "record_id"
-        }
-    else:
-        normalized_input = payload
-    try:
-        validated = adapter.validate_python(normalized_input)
-    except ValidationError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "初始化草稿分区字段不符合标准结构",
-                "errors": exc.errors(include_input=False),
-            },
-        ) from exc
-    serialized = adapter.dump_python(validated, mode="json")
-    if isinstance(serialized, list):
-        return [
-            {key: value for key, value in item.items() if key != "record_id"}
-            for item in serialized
-        ]
-    return {
-        key: value for key, value in serialized.items() if key != "record_id"
-    }
-
-
-def _validate_initialization_section_evidence(values: dict[str, Any]) -> None:
-    """Require every specialist write to retain a usable evidence trail."""
-    source_files = values.get("source_files")
-    valid_source_files = (
-        isinstance(source_files, dict)
-        and bool(source_files)
-    ) or (
-        isinstance(source_files, list)
-        and bool(source_files)
-        and all(
-            (isinstance(item, str) and bool(item.strip()))
-            or (isinstance(item, dict) and bool(item))
-            for item in source_files
-        )
-    )
-    if not valid_source_files:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "初始化草稿分区必须记录非空 source_files，"
-                "并保留 file_id、chunk_id 或来源文件名"
-            ),
-        )
-    extraction_notes = values.get("extraction_notes")
-    if not isinstance(extraction_notes, list) or any(
-        not isinstance(item, str) or not item.strip()
-        for item in extraction_notes
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                "初始化草稿分区必须显式提交 extraction_notes 数组；"
-                "没有真实疑点时使用空数组"
-            ),
-        )
 
 
 def _initialization_section_from_policy(
@@ -1127,20 +989,18 @@ def _load_declarative_catalog() -> DeclarativeCatalog:
     return catalog
 
 
-def _declared_interaction_schema(
-    db: Session,
-    policy: DatabaseInteractionTablePolicy,
-    seed: DeclarativeInteractionSeed,
-    join_rules: list[dict[str, Any]],
-    context_bindings: list[dict[str, str]],
-) -> dict[str, Any]:
-    if seed.runtime_policy.get("handler") == "project_basic_info_status":
+def _runtime_handler_input_schema(runtime_policy: dict[str, Any]) -> dict[str, Any] | None:
+    if runtime_policy.get("handler") == "project_initialization_state":
+        from .initialization_state_reader import initialization_state_input_schema
+
+        return initialization_state_input_schema()
+    if runtime_policy.get("handler") == "project_basic_info_status":
         return {
             "type": "object",
             "properties": {},
             "additionalProperties": False,
         }
-    if seed.runtime_policy.get("handler") == "project_initialization_validation":
+    if runtime_policy.get("handler") == "project_initialization_validation":
         return {
             "type": "object",
             "properties": {
@@ -1152,7 +1012,17 @@ def _declared_interaction_schema(
             "required": ["record_id"],
             "additionalProperties": False,
         }
-    return build_table_interaction_schema(
+    return None
+
+
+def _declared_interaction_schema(
+    db: Session,
+    policy: DatabaseInteractionTablePolicy,
+    seed: DeclarativeInteractionSeed,
+    join_rules: list[dict[str, Any]],
+    context_bindings: list[dict[str, str]],
+) -> dict[str, Any]:
+    return _runtime_handler_input_schema(seed.runtime_policy) or build_table_interaction_schema(
         db,
         policy,
         seed.table_operation,
@@ -1302,6 +1172,10 @@ def bootstrap_declarative_catalog(db: Session) -> int:
                 # edits remain the database source of truth.
                 _validate_policy_input(payload)
                 for name, value in policy_values.items():
+                    if name in {"minimum_role", "enabled"}:
+                        # A structural schema upgrade must never re-enable a
+                        # disabled capability or downgrade an admin-only policy.
+                        continue
                     setattr(row, name, value)
             continue
         _validate_policy_input(payload)
@@ -1395,6 +1269,22 @@ def bootstrap_declarative_catalog(db: Session) -> int:
             or row.id in reusable_interaction_ids
             or (migrated is None and seed.upgrade_existing)
         ):
+            preserved_permissions = None
+            if (
+                seed.key == "dobby_get_project_initialization_state"
+                and row.id not in legacy_ids
+                and row.id not in reusable_interaction_ids
+            ):
+                # Upgrade the old same-session draft reader in place.  Its
+                # assignments, disabled state and administrator access choices
+                # remain authoritative even though the read implementation changes.
+                preserved_permissions = {
+                    "table_policy_id": row.table_policy_id,
+                    "allowed_conversation_types": row.allowed_conversation_types,
+                    "access_mode": row.access_mode,
+                    "requires_confirmation": row.requires_confirmation,
+                    "default_assigned": row.default_assigned,
+                }
             # Preserve the stable catalogue identity while replacing either
             # a fixed Python handler or a binding to a removed pipeline table
             # with the current declarative table/operation definition. A
@@ -1425,6 +1315,9 @@ def bootstrap_declarative_catalog(db: Session) -> int:
             row.built_in = False
             row.default_assigned = seed.default_assigned
             row.sort_order = seed.sort_order
+            if preserved_permissions is not None:
+                for name, value in preserved_permissions.items():
+                    setattr(row, name, value)
             changed += 1
         else:
             seed_rule_changed = False
@@ -1611,12 +1504,15 @@ def update_interaction(
         setattr(row, name, value)
     row.join_rules = join_rules
     row.context_bindings = context_bindings
-    row.input_schema = build_table_interaction_schema(
+    row.input_schema = _runtime_handler_input_schema(
+        row.runtime_policy or {},
+    ) or build_table_interaction_schema(
         db,
         policy,
         payload.table_operation,
         join_rules,
         context_bindings,
+        row.fixed_values or {},
     )
     row.read_only = payload.table_operation == "read"
     db.commit()
@@ -2380,6 +2276,12 @@ def execute_table_interaction(
                     values["payload"],
                 )
                 _validate_initialization_section_evidence(values)
+            if initialization_section:
+                from .initialization_draft_write_guard import require_writable_initialization_draft
+
+                require_writable_initialization_draft(
+                    db, context, operation, arguments, values, actor_agent_id,
+                )
             if (
                 interaction.key
                 == "dobby_create_project_initialization_draft"

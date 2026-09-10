@@ -1407,6 +1407,15 @@ class AsyncSQLAlchemyStorage(StorageBase):
             )
             await sess.commit()
 
+    async def update_message_if_exists(self, user_id: str, session_id: str, msg: Msg) -> bool:
+        from sqlalchemy import update
+        async with self._session() as sess:
+            result = await sess.execute(update(MessageRow).where(
+                MessageRow.session_id == session_id, MessageRow.msg_id == msg.id,
+            ).values(payload=msg.model_dump(mode="json")))
+            await sess.commit()
+            return bool(result.rowcount)
+
     async def get_message(
         self,
         user_id: str,

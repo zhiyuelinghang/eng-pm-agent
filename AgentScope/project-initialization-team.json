@@ -90,7 +90,7 @@
     {
       "key": "orchestrator",
       "name": "Dobby 项目初始化助手",
-      "description": "理解任意格式的项目资料，先制定执行计划，再组织专项智能体形成待用户核对的初始化草稿。",
+      "description": "读取项目正式现状，按本次资料组织专项智能体形成可分批核对的新增或更新草稿，由平台展示新旧差异后等待用户确认。",
       "skill_name": "orchestrate-project-initialization",
       "sort_order": 900,
       "initialization_role": "orchestrator",

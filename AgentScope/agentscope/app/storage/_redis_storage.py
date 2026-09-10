@@ -1184,6 +1184,25 @@ class RedisStorage(StorageBase):
         await self._client.rpush(key, msg.model_dump_json())
         await self._refresh_key_ttl(key)
 
+    async def update_message_if_exists(self, user_id: str, session_id: str, msg: Msg) -> bool:
+        """Update a non-tail message in place, never recreate a deleted list."""
+        key = self._message_key(user_id, session_id)
+        for _attempt in range(5):
+            async with self._client.pipeline(transaction=True) as pipe:
+                try:
+                    await pipe.watch(key)
+                    index = await self._find_message_index(key, msg.id)
+                    if index is None:
+                        return False
+                    pipe.multi()
+                    pipe.lset(key, index, msg.model_dump_json())
+                    await pipe.execute()
+                    await self._refresh_key_ttl(key)
+                    return True
+                except _watch_error():
+                    continue
+        raise RuntimeError("Message changed repeatedly while updating metadata")
+
     async def get_message(
         self,
         user_id: str,

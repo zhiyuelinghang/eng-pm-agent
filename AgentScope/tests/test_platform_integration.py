@@ -3063,6 +3063,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
     async def test_platform_metadata_is_merged_into_source_message(
         self,
     ) -> None:
+        from agentscope.app.message_bus import InMemoryMessageBus
         message = UserMsg(
             name="平台用户",
             content="测试消息",
@@ -3077,7 +3078,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
         storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id=None))),
             get_session=AsyncMock(return_value=session),
             get_message=AsyncMock(return_value=message),
-            upsert_message=AsyncMock(),
+            update_message_if_exists=AsyncMock(return_value=True),
         )
 
         result = await update_message_metadata(
@@ -3089,6 +3090,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
             agent_id="agent-1",
             user_id=USER_ID,
             storage=storage,
+            message_bus=InMemoryMessageBus(),
             principal=AgentScopePrincipal(
                 kind="management",
                 subject=USER_ID,
@@ -3103,7 +3105,7 @@ class PlatformAgentContractTest(IsolatedAsyncioTestCase):
                 "platform_status": "completed",
             },
         )
-        persisted = storage.upsert_message.await_args.args[2]
+        persisted = storage.update_message_if_exists.await_args.args[2]
         self.assertEqual(
             persisted.metadata["platform_status"],
             "completed",

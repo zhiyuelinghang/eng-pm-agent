@@ -40,7 +40,7 @@ class _SuccessfulValidator:
                         "level": "warning",
                         "section": "project",
                         "target_record_id": record_id,
-                        "field_name": "construction_unit_name",
+                        "field_name": "engineering_type_description",
                         "label": "信息缺失",
                         "title": "建设单位未识别",
                         "message": "仍有字段待用户确认",
@@ -157,7 +157,7 @@ def test_direct_mcp_validation_persists_version_result_and_duration() -> None:
         issue = db.scalar(select(ProjectInitializationValidationIssue))
         assert issue is not None
         assert issue.target_record_id == draft.payload["project"]["record_id"]
-        assert issue.field_name == "construction_unit_name"
+        assert issue.field_name == "engineering_type_description"
 
 
 def test_failed_mcp_validation_is_recorded_without_faking_draft_completion() -> None:

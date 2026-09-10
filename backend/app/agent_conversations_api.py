@@ -154,7 +154,7 @@ def list_agent_conversations(
         )
     if agent_id:
         statement = statement.where(AgentConversation.agent_id == agent_id)
-    statement = statement.order_by(AgentConversation.updated_at.desc())
+    statement = statement.order_by(AgentConversation.updated_at.desc(), AgentConversation.id.desc())
     rows = db.scalars(statement).all()
     return ok([serialize(row) for row in rows])
 
@@ -477,6 +477,7 @@ def list_agent_conversation_messages(
         conversation.id,
         list(history.get("messages") or []),
         live_status,
+        conversation.agentscope_session_id,
     )
     first_user_message = next(
         (item for item in messages if item["role"] == "user"),

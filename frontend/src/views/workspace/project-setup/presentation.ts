@@ -1,4 +1,6 @@
 import dayjs from 'dayjs'
+import { displayWbsItemType, displayWbsPriorityText, displayWbsStatusText } from '@/utils/initializationFieldPresentation'
+export { displayWbsItemType, displayWbsPriorityText, displayWbsStatusText, formatInitializationDate } from '@/utils/initializationFieldPresentation'
 
 import type { RiskLevel, RiskSource, WbsItem } from '@/types'
 import {
@@ -327,66 +329,12 @@ export function wbsStatusLabel(status: WbsItem['status']) {
   } as Record<WbsItem['status'], string>)[status]
 }
 
-export function displayWbsStatusText(
-  value?: string | null,
-  fallback = '',
-) {
-  const raw = value?.trim() || ''
-  const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_')
-  const translated: Record<string, string> = {
-    not_started: '未开始',
-    pending: '待处理',
-    open: '打开',
-    active: '活动',
-    in_progress: '进行中',
-    completed: '已完成',
-    complete: '已完成',
-    done: '已完成',
-    delayed: '已延期',
-    overdue: '已逾期',
-  }
-  return translated[normalized] || raw || fallback
-}
-
 export function formalWbsStatusLabel(item: WbsItem) {
   return displayWbsStatusText(item.statusText)
 }
 
-export function displayWbsPriorityText(
-  value?: string | null,
-  fallback = '未设置优先级',
-) {
-  if (!value?.trim()) return fallback
-  const raw = value.trim()
-  const translated: Record<string, string> = {
-    critical: '紧急优先级',
-    urgent: '紧急优先级',
-    high: '高优先级',
-    medium: '中优先级',
-    normal: '普通优先级',
-    low: '低优先级',
-  }
-  return translated[raw.toLowerCase()]
-    || (raw.includes('优先级') ? raw : `${raw}优先级`)
-}
-
 export function formalWbsPriorityLabel(value?: string) {
   return displayWbsPriorityText(value, '')
-}
-
-export function displayWbsItemType(value: string | null | undefined) {
-  const raw = value?.trim() || ''
-  const normalized = raw.toLowerCase().replace(/[\s_-]+/g, '')
-  const translated: Record<string, string> = {
-    project: '项目',
-    summary: '汇总任务',
-    summarytask: '汇总任务',
-    taskgroup: '任务组',
-    group: '任务组',
-    task: '任务',
-    milestone: '里程碑',
-  }
-  return translated[normalized] || raw
 }
 
 export function formalWbsItemType(item: WbsItem) {
@@ -417,11 +365,11 @@ export function initializationDraftStatusLabel(
   status: ApiInitializationDraft['status'],
 ) {
   return {
-    collecting: '平台处理中',
+    collecting: '资料持续整理中',
     reviewing: '平台核验中',
-    invalid: '草稿需要修正',
-    ready: '草稿可以核对',
-    applied: '初始化已完成',
+    invalid: '部分内容需要修正',
+    ready: '草稿可分批确认',
+    applied: '本次资料已提交',
     rejected: '草稿已退回',
   }[status]
 }
@@ -441,7 +389,7 @@ export function initializationDraftStageHint(draft: ApiInitializationDraft) {
   if (draft.status === 'applied') return '已写入项目'
   if (draft.status === 'collecting') return '专家处理中'
   if (draft.status === 'reviewing') return '规则核验中'
-  return '等待平台确认'
+  return '可选择内容确认'
 }
 
 export function initializationDraftCollapsedLabel(
@@ -459,10 +407,6 @@ export function formatValidationDuration(durationMs?: number | null) {
   return `${(durationMs / 1000).toFixed(durationMs < 10_000 ? 1 : 0)} 秒`
 }
 
-export function formatInitializationDate(value?: string | null) {
-  return value ? value.slice(0, 10) : ''
-}
-
 export function formatInitializationProgress(
   value?: number | string | null,
 ) {
@@ -471,32 +415,7 @@ export function formatInitializationProgress(
   return Number.isFinite(progress) ? `${progress}%` : String(value)
 }
 
-export function generateInitializationPassword(length = 12) {
-  const targetLength = Math.min(12, Math.max(8, length))
-  const characterGroups = [
-    'ABCDEFGHJKLMNPQRSTUVWXYZ',
-    'abcdefghijkmnopqrstuvwxyz',
-    '23456789',
-    '!@#$%&*',
-  ]
-  const randomIndex = (size: number) => {
-    const value = new Uint32Array(1)
-    window.crypto.getRandomValues(value)
-    return value[0] % size
-  }
-  const password = characterGroups.map(group => group[randomIndex(group.length)])
-  const allCharacters = characterGroups.join('')
-  while (password.length < targetLength) {
-    password.push(allCharacters[randomIndex(allCharacters.length)])
-  }
-  for (let index = password.length - 1; index > 0; index -= 1) {
-    const swapIndex = randomIndex(index + 1)
-    const currentCharacter = password[index]
-    password[index] = password[swapIndex]
-    password[swapIndex] = currentCharacter
-  }
-  return password.join('')
-}
+export { generateInitializationPassword } from '@/utils/initializationChangePresentation'
 
 export function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
