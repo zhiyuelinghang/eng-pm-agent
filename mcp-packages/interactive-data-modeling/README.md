@@ -47,3 +47,6 @@
 `data/agentscope/test-packages/interactive-data-modeling-mcp-windows.zip`。
 
 完整差异、边界和升级说明见 [平台适配说明.md](平台适配说明.md)。
+
+模型推荐和训练计划以 [planning.py](src/shield_prediction_mcp/engine/planning.py) 为准，
+可用模型与默认参数见 [modeling.py](src/shield_prediction_mcp/engine/modeling.py)，不再维护独立的参数副本。

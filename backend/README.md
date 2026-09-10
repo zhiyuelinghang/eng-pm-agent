@@ -1,18 +1,21 @@
 # Dobby 后端
 
-后端使用 FastAPI + SQLAlchemy，默认以 SQLite 启动，部署时通过 `DATABASE_URL` 切换到 PostgreSQL。
+业务 API 使用 FastAPI、Pydantic 和 SQLAlchemy。标准运行使用 PostgreSQL，`DATABASE_URL`
+必须显式配置；SQLite 分支供测试或兼容用途，不是默认启动配置。模型凭证与参数在
+AgentScope 管理端配置，平台通过服务令牌调用共享模型。
 
-## Python 运行环境约定（重要）
-
-本项目启动脚本固定使用项目根目录下的便携 Python：`python-3.13.14\python.exe`。后端启动、依赖核验和本地调试均应优先使用该解释器，不使用系统 `python`、`py` 或 Anaconda `base` 的环境状态判断项目是否缺少依赖。
-
-如需切换到 Conda 环境，必须明确修改 `start-frontend.bat` 并同步更新项目根目录 `README.md`；便携运行时缺失时不要静默回退到其他 Python 环境。
-
-项目根目录已提供 `.env.example`；首次运行前复制为 `.env` 并填入 `JWT_SECRET`。模型凭证与参数统一在 AgentScope 管理端配置，并为平台总控选择固定模型；工程平台通过 `AGENTSCOPE_SERVICE_TOKEN` 使用该配置。
+从项目根目录启动和验证：
 
 ```powershell
-.\python-3.13.14\python.exe -m pip install -r backend/requirements.txt
-.\python-3.13.14\python.exe -m uvicorn app.main:app --app-dir backend --reload --port 38430
+.\start-frontend.bat
+.\test-all.bat --suite structure --suite backend
 ```
 
-首次启动会创建开发管理员：`admin / ChangeMe123!`。部署前必须通过环境变量和初始化流程替换该账号与 `JWT_SECRET`。
+启动脚本使用项目内嵌 `python-3.13.14\python.exe`。数据库结构需事先准备，启动不会
+自动迁移。管理员初始化行为见 [main.py](app/main.py) 的 `seed_admin`；生产部署应检查
+初始账号并修改密码，当前没有通过管理员环境变量替换该逻辑的机制。
+
+- [main.py](app/main.py)：路由装配和生命周期；领域路由分布在各 `*_api.py`。
+- [models.py](app/models.py)、[workspace_models.py](app/workspace_models.py)、[交互授权模型](app/database_interaction_assignment_model.py)：业务表定义；版本变更见 [Alembic 迁移](alembic/versions)。
+- [config.py](app/config.py)：配置字段；[agentscope_client.py](app/agentscope_client.py)：智能体服务网关。
+- [后端开发规范](../docs/开发规范/后端开发规范.md)、[测试规范](../docs/开发规范/测试规范.md)、[服务器部署说明](../服务器部署说明.md)。

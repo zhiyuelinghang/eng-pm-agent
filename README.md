@@ -1,302 +1,98 @@
 # 工程管理智能体
 
-## 版本说明
+Dobby 将工程资料、项目初始化、任务管理、群聊与智能体协作接入同一业务平台。
+本文件是项目阅读入口；各主题只维护下表对应的现行文档。功能是否已实现以源码和
+对应测试为准，设计提案与版本记录不代替现行规则。
 
-- [2026-09-10：智能体协作、记忆学习与模型管理升级](docs/版本说明/2026-09-10-智能体协作与记忆学习升级.md) — 完整记录主智能体职责、双向协作权限、任务助手、统一记忆学习、管理界面精简、权限审核、共享模型与原生图片输入，以及验证结果和部署事项。
+## 本地开发
 
-## 本地启动
-
-在项目根目录运行：
-
-```powershell
-.\start_agentscope.bat
-.\start-frontend.bat
-```
-
-第一个脚本启动 Dobby 智能体管理与执行服务；第二个脚本在 `38430`
-端口启动平台后端 API，并在 `38429` 端口启动平台前端。两个服务都启动后，
-平台全局主智能体才能读取或操作 Dobby 项目数据。启动顺序不影响权限边界，
-但本地开发建议先启动 AgentScope，便于平台创建会话时立即完成健康检查。
-
-也可以直接运行：
+所有命令均在仓库根目录执行。配置项见 [.env.example](.env.example)，Python 固定使用
+项目内嵌的 `python-3.13.14\python.exe`；不要使用系统 Python、`py` 或 Conda 环境替代。
 
 ```powershell
 .\start-all.bat
 ```
 
-统一停止全部服务：
+也可分别运行 `start_agentscope.bat` 和 `start-frontend.bat`。后者启动平台 API
+（38430）和业务前端（38429）；AgentScope 提供智能体管理与执行服务。建议先启动
+AgentScope，使业务平台创建会话时能够完成健康检查。
 
 ```powershell
 .\一键停止全部服务.bat
+.\一键停止全部服务.bat /dry-run
 ```
 
-启停脚本会在 `data\runtime\dobby-service-pids.json` 登记本次启动的服务 PID。
-停止时同时校验端口、PID、启动时间、可执行文件和服务类型；如果端口属于其他程序，
-脚本只报告冲突，不会结束该进程。处理记录写入
-`data\runtime\process-control.log`。可执行 `一键停止全部服务.bat /dry-run`
-进行只读安全检查。
+停止脚本按端口、PID、启动时间、可执行文件和服务类型核验进程身份。
+服务登记与启停记录位于 `data/runtime/`；端口被其他程序占用时只报告冲突。
 
-## 开发与验证
+## 项目结构与事实入口
 
-项目统一验证入口为：
+| 部分 | 职责与入口 |
+| --- | --- |
+| [业务前端](frontend/README.md) | Vue 3、TypeScript、Naive UI；页面入口见 [路由](frontend/src/router/index.ts)。 |
+| [平台后端](backend/README.md) | FastAPI；[main.py](backend/app/main.py) 装配路由和后台服务，各领域 API 完成业务权限校验。 |
+| [AgentScope](AgentScope/UPSTREAM.md) | 智能体运行核心与本项目扩展；本地装配见 [agentscope_dev_app.py](scripts/agentscope_dev_app.py)，[管理端](AgentScope/agentscope-web-ui/frontend/README.md) 使用 React。 |
+| [MCP 包](mcp-packages) | 附件解析、初始化核验、任务引擎、数据建模及企业微信通知；包入口各自维护使用与构建方式。 |
+| [utils](utils) | 记忆、学习、来源校验和共享持久化服务。 |
+| [数据库模型](backend/app/models.py)与[迁移](backend/alembic/versions) | 平台模型、数据库修订和约束；AgentScope、记忆及任务引擎还有各自存储实现，不能只按业务模型重建全库。 |
+| [scripts](scripts) | 启停、构建、安装、显式迁移和验证入口。 |
+| [原型](原型)与[业务参考](docs/业务参考/真如项目/README.md) | 产品和业务输入；原型的工程基本信息文件仍被初始化解析测试引用。 |
 
-```powershell
-.\test-all.bat
-```
+平台业务数据使用 PostgreSQL 的 `platform` schema；任务引擎使用独立 schema。
+AgentScope 保存对话正文、工具调用和协作过程，业务平台按授权映射读取，避免维护另一份
+聊天正文。管理账号与业务账号分离，平台后端通过服务令牌访问 AgentScope，浏览器不直接
+访问其内部 API。记忆访问按真实用户、项目、来源与运行场景取交集。
 
-查看或选择结构、后端、AgentScope、MCP、前端和发布包冒烟套件：
+## 现行文档
+
+| 要做什么 | 阅读入口 |
+| --- | --- |
+| 开发、评审与测试 | [开发规范](docs/开发规范/README.md) |
+| 部署或更新服务器 | [服务器部署说明](服务器部署说明.md) |
+| 使用智能体管理中心 | [操作手册](docs/操作说明/智能体管理中心全局操作说明.html) |
+| 调整智能体职责与协作 | [智能体分工与协作规则](docs/操作说明/智能体分工与协作规则.md) |
+| 修改记忆和学习 | [记忆与学习职责与运行规则](docs/操作说明/记忆与学习职责与运行规则.md) |
+| 修改执行、停止和恢复 | [智能体运行自动管理](docs/操作说明/智能体运行自动管理.md) |
+| 修改模型或图片输入 | [统一模型与原生图片输入](docs/操作说明/统一模型与原生图片输入.md) |
+| 修改对话过程展示 | [工作状态展示规则](docs/开发规范/Dobby对话工作状态展示.md) |
+| 开发或上传 MCP | [MCP 包上传与运行说明](docs/MCP包上传与运行说明.md) |
+| 对接任务引擎 | [任务引擎入口](mcp-packages/task-engine/README.md)、[Dobby 接入指南](mcp-packages/task-engine/Dobby接入指南.md) |
+| 修改资料问答 | [知识库助手接入](docs/知识库问答接入平台资料助手.md) |
+| 修改群聊实时通信 | [群聊实时通信说明](docs/项目群聊实时通信说明.md) |
+| 配置初始化团队与能力 | [初始化能力清单](AgentScope/dobby-skills/CAPABILITY_MATRIX.md)、[团队定义](AgentScope/project-initialization-team.json) |
+
+初始化工作流由 [dobby-skills](AgentScope/dobby-skills) 中的技能定义；附件解析后由模型
+创建计划、组织专项智能体写入隔离草稿，平台调用选定版本的核验 MCP。用户确认前不写入
+正式项目数据。技能是运行资源，不能按普通说明删除，也不应在后端再复制一套流程。
+
+普通业务数据访问经过受控数据库交互或语义工具、真实会话身份与权限检查。
+任意 SQL 和宿主命令执行不属于智能体开放能力；平台各入口遵守同一工具策略。
+
+## 验证与发布
 
 ```powershell
 .\test-all.bat --list
 .\test-all.bat --suite structure --suite backend --suite frontend
 ```
 
-代码结构、测试、前端、后端及评审约定统一收录在
-[开发规范](docs/开发规范/README.md)。
+不带参数运行已登记的默认套件。两套前端及其他未登记测试的补充命令和适用范围见
+[测试规范](docs/开发规范/测试规范.md)，不要把某次历史通过数量当作当前版本验收。
 
-## Windows 服务器更新
-
-原有“前端更新”和“后端更新”两个压缩包不包含 AgentScope 核心、Dobby 管理端
-和根目录接入脚本。服务器部署请改用：
+生产包使用开发机预构建前端和便携运行环境：
 
 ```powershell
 .\生成服务器完整更新包.bat
 ```
 
-首次在服务器部署 AgentScope 时，覆盖代码后运行：
+服务器使用“服务器”前缀的入口。程序启动不建表、不自动迁移；数据库变更须先备份，
+审阅并人工执行对应 SQL。数据库 SQL 和配置迁移的交付边界以部署手册为准。
 
-```powershell
-.\服务器首次部署检查.bat
-.\服务器一键启动.bat
-```
+## 参考材料
 
-如果版本包含数据库变更，应在启动前由管理员审阅并通过 PostgreSQL 客户端人工执行
-`数据库更新` 目录中对应版本的 `.sql` 文件。
+- [原始设计提案](docs/设计草案/README.md)：业务构想与需求输入，不代表已实现功能。
+- [WeKnora 外部接口参考](docs/WeKnora接口参考.md)：外部服务接口示例，不作为本项目当前架构。
+- [版本说明](docs/版本说明/2026-09-10-智能体协作与记忆学习升级.md)：记录版本变化和升级事项，不承诺各环境已完成升级。
 
-生成脚本会同时产生首次部署包和日常更新包。两套前端均在开发机完成构建，
-首次部署包还携带完整便携 Python、AgentScope 依赖与 Centrifugo 运行程序；服务器只需复制覆盖，
-不需要安装 Node.js、npm、pnpm，也不执行 pip。完整流程见
-[服务器部署说明](服务器部署说明.md)。更新包不包含 `.env` 和 `data`，
-不会主动覆盖服务器账号、平台数据库或 AgentScope 运行数据。
-
-这里的“无需安装 Node.js”是指平台本体的生产运行环境，不代表 MCP 只支持 Python。
-上传的 Node.js MCP 必须在安装包内携带独立 Node 运行时和完整依赖；禁止使用服务器
-`PATH` 中的全局 `node`，也禁止在服务器上现场安装依赖。
-
-服务器专用脚本都使用“服务器”前缀，压缩包中只保留以下运行入口：
-
-- `服务器首次部署检查.bat`：首次部署时检查便携运行环境与配置；
-- `服务器一键启动.bat`：统一启动平台和 Dobby 智能体服务；
-- `服务器启动工程管理平台.bat`：仅启动工程管理平台；
-- `服务器启动Dobby智能体服务.bat`：仅启动智能体服务与管理端；
-- `安装群聊实时服务.bat`：Centrifugo 运行程序损坏后的修复或手动升级入口；
-- `start-centrifugo.bat`：启动项目群聊实时广播服务；
-- `一键停止全部服务.bat`：只停止通过身份校验的本项目服务。
-
-项目根目录中的 `start-all.bat`、`start-frontend.bat` 和
-`start_agentscope.bat` 是开发机热重载入口，不会放入服务器更新包。
-
-平台和 AgentScope 的启动流程不会创建表或执行数据库迁移。代码更新包含数据库
-变更时，必须先停止全部服务、备份数据库，再由管理员审阅并人工执行随版本提供的
-SQL 文件，确认成功后才启动新程序。
-
-## Python 运行环境约定（重要）
-
-本项目默认不使用系统 `python`、`py`、Anaconda `base` 或其他 Conda 环境运行后端。
-
-`start-frontend.bat` 已固定使用项目自带的便携 Python：
-
-```text
-<项目根目录>\python-3.13.14\python.exe
-```
-
-因此，后端启动、依赖核验和本地调试应优先使用这个解释器。不得根据系统 Python 或 Conda `base` 中缺少某个包，就判断项目运行环境缺少依赖。
-
-只有在明确调整启动方案时，才改用 Conda 环境；届时必须同步修改启动脚本和本文档。若便携运行时目录缺失，应先恢复该目录，不要静默回退到其他 Python 环境。
-
-## 目录说明
-
-- `frontend`：Vue 3 + TypeScript 前端。
-- `backend`：FastAPI 后端。
-- `python-3.13.14`：项目默认便携 Python 运行时及已安装依赖。
-- `AgentScope`：AgentScope 2.x 核心与管理 Web UI。
-- `doc`：MVP 需求、架构、接口和开发排期资料。
-- `原型`：产品原型和智能体架构方案。
-- `会议纪要`：项目评审与决策记录。
-
-## AgentScope 平台接入
-
-AgentScope Web UI 是智能体管理端，工程管理平台是业务使用端：
-
-总控、管理层/执行层智能体、MCP、受控数据库能力、长期记忆和直接 `@` 的目标边界，统一以
-[Dobby 总控与智能体协同架构设计](docs/Dobby总控与智能体协同架构设计.md)为后续改造基线。
-第 17 节的逐项实现证据见[Dobby 总控与智能体协同验收记录](docs/Dobby总控与智能体协同验收记录.md)。
-
-- AgentScope 使用独立管理账号登录，该账号只作为进入管理页的凭证，与工程管理平台账号无关。
-- 凭证、模型、智能体、知识库、MCP、权限策略等所有 AgentScope 配置对整个平台全局生效。
-- 工程管理平台账号禁止登录 AgentScope；平台后端使用独立服务令牌调用 AgentScope。
-- 在 AgentScope 的智能体配置中，将一个智能体设为“平台全局主智能体”。
-- 将专项智能体设为“业务智能体”，并启用、发布；它们会动态显示在平台“业务工具”页面。
-- 普通“问问 Dobby”对话进入全局主智能体，业务工具对话直接进入对应专项智能体。
-- Dobby 只通过 `agent_search` 搜索管理中心明确开启“允许 Dobby 调用”的候选摘要，选定后再用 `agent_invoke` 加载并调用目标；不会预载全部智能体，也不能运行时创建智能体。
-- 普通智能体只可调用自身 `call_allowlist` 中的目标；`published` 只控制直接业务入口，不能替代调用授权。
-- 管理层智能体可按需使用按用户/项目隔离的共享长期记忆；执行层智能体不挂载长期记忆工具。普通问候不会自动检索记忆或激活项目数据库工具组。
-- 首页和项目群的显式 `@` 最多选择一个目标，并直接调用该智能体；任务助手是保留入口，只生成私有草稿，确认前不发布。
-- 平台后端负责用户、项目权限校验，并将受限的项目数据摘要注入当前对话；浏览器不会直接访问 AgentScope API。
-- 平台会话会按需挂载 `dobby_*` 语义工具。工具只携带 AgentScope 会话 ID，
-  平台后端再从数据库反查真实账号与项目，并在每次调用时重新校验成员状态；
-  模型不能传入或伪造用户 ID、项目 ID。
-- MCP 上传与开发语言无关：Node.js、TypeScript、Python、Go、Rust、Java 等实现只要提供
-  标准 STDIO MCP 和依赖完整的可运行包，都可在管理端上传并按智能体勾选分配；平台不会
-  在上传时执行 `npm install`、`pip install` 或源码构建。包格式、Node/Python 示例、升级
-  和并发规则见 [MCP 包上传与运行说明](MCP包上传与运行说明.md)。
-- 普通专项智能体会话只获得只读平台能力；项目初始化专项智能体仅能使用明确
-  分配的草稿区数据库交互，不能写正式项目表。普通对话中的业务写操作仍会校验
-  平台账号权限并记录审计。
-- 工具网关只暴露任务、WBS、风险、资料、项目变更等受控业务动作，不提供
-  任意 SQL、任意 API、账号权限、AgentScope 凭证或系统配置修改能力。
-
-### 命令执行工具策略（暂行）
-
-- PowerShell 在 AgentScope 管理端和工程管理业务平台中统一禁用，主智能体、
-  专项智能体及团队成员均不得直接调用。
-- 管理端与业务端必须使用同一工具策略，禁止开发时依赖 PowerShell、发布后再
-  单独移除，避免智能体在两个运行环境中表现不一致。
-- 暂时不得用宿主机 Python、Bash 或其他命令执行能力替代 PowerShell。未来只有
-  在代码执行沙箱的隔离边界、资源限制、审计和数据访问规则完成设计与评审后，
-  才能重新讨论向智能体开放代码执行能力。
-- 平台业务数据只能通过经过权限校验和审计的 `dobby_*` 语义工具读取或修改。
-
-项目初始化附件工具、领域技能、智能体协作关系和明确限制统一记录在
-[Dobby 初始化能力清单](AgentScope/dobby-skills/CAPABILITY_MATRIX.md)。
-
-项目初始化由专用 AgentScope 主智能体真实编排。平台只负责保存上传文件，并在模型
-收到消息前通过固定解析器把每个附件转换为可核对文本。模型收到资料后的第一项业务
-动作是 `TaskCreate`；随后读取已有草稿、判断实际分区、邀请持久化专项智能体，并将
-计划、模型调用、工具调用和团队协作过程原样流式展示。知识库不是固定步骤。
-
-专项智能体通过各自被分配的数据库交互写入隔离的草稿分区；全部分区完成后，初始化
-主智能体只提交草稿编号，由平台自动调用版本化核验 MCP，直接检查结构化草稿并标记
-`ready`/`invalid`。核验不再产生额外模型轮次。无论模型如何协作，用户在草稿页确认前
-都不会写入正式项目表。平台不再用固定表格映射或确定性快速入库替代 AI 理解。
-草稿中每条工程信息、人员、WBS、风险和质量数据都有数据库分配的稳定记录 ID；核验
-结果按“记录 ID + 字段名”单独落库。草稿核对页只在对应数据和字段旁展示问题标签，
-点击标签查看规则说明、处理建议和关联记录，不再维护一套前端写死的问题分类列表。
-
-初始化团队结构和能力分配声明在
-`AgentScope/project-initialization-team.json`；实际业务流程只写在各智能体已分配的
-`SKILL.md` 中，工程后端不会再注入一份重复流程。更新团队结构或数据库交互后，使用
-项目便携 Python 执行一次幂等配置同步：
-
-```powershell
-.\python-3.13.14\python.exe .\scripts\provision_initialization_agents.py
-```
-
-该命令会校准 Dobby 的窄权限编排策略，创建或校准资料助手、风险研判助手、任务助手、
-数据分析助手，以及一个初始化主智能体和五个专项智能体，并配置调用许可、技能、MCP
-与草稿区数据库交互。它是管理员显式执行的幂等同步，不会随应用启动自动运行，也不
-执行数据库迁移。各智能体使用全局主智能体的模型配置作为模板。
-默认保留管理端已经编辑过的同名技能；只有明确要用仓库版本覆盖平台内容时，才执行：
-
-```powershell
-.\python-3.13.14\python.exe .\scripts\provision_initialization_agents.py --replace-skills
-```
-
-项目初始化核验规则位于
-`mcp-packages/project-initialization-validator`。修改规则并提高 `mcp.json` 版本后，构建
-并在 AgentScope「平台设置 → 项目初始化智能体」中上传新版本；上传不会自动切换，
-需要在版本下拉框中选择并保存后才会用于后续核验。当前版本可从同一位置下载，未被
-使用的历史版本可按版本删除，不需要修改初始化智能体：
-
-```powershell
-.\python-3.13.14\python.exe .\scripts\build_project_initialization_validator_mcp_package.py
-.\python-3.13.14\python.exe .\scripts\smoke_test_project_initialization_validator_mcp_package.py
-.\python-3.13.14\python.exe .\scripts\install_project_initialization_validator.py
-```
-
-生成文件为
-`data/agentscope/test-packages/project-initialization-validator-mcp-windows.zip`。
-
-AgentScope 管理员登录时不需要填写服务器地址。开发环境由 Web UI 将
-同源路径 `/agentscope-api` 自动代理到本机 AgentScope API；外网部署时
-由 Nginx/网关转发该路径即可。如需覆盖，可在构建时设置
-`VITE_AGENTSCOPE_API_BASE_URL`，内部地址不会交给登录用户配置。
-
-默认连接配置位于 `.env.example`：
-
-```text
-AGENTSCOPE_BASE_URL=http://127.0.0.1:18642
-AGENTSCOPE_ADMIN_USERNAME=请设置独立的管理账号
-AGENTSCOPE_ADMIN_PASSWORD=请设置高强度管理密码
-AGENTSCOPE_AUTH_SECRET=请替换为至少32位随机签名密钥
-AGENTSCOPE_SERVICE_TOKEN=请替换为至少32位随机平台服务令牌
-# 可选：单独设置 AgentScope -> Dobby 工具网关令牌；留空时复用平台服务令牌
-DOBBY_AGENT_TOOL_TOKEN=
-# 平台固定附件解析工具；未配置时使用工具包内默认地址
-MINERU_FILE_PARSE_URL=https://mgwzs689.xiaomy.net/file_parse
-MINERU_BACKEND=hybrid-engine
-MINERU_SERVER_URL=
-MINERU_TIMEOUT_SECONDS=180
-# 可选；默认从 DOBBY_AGENT_TOOL_BASE_URL 推导
-# DOBBY_INTERNAL_API_BASE_URL=http://127.0.0.1:38430/api/internal
-AGENTSCOPE_GLOBAL_CONFIG_ID=default
-AGENTSCOPE_REQUEST_TIMEOUT_SECONDS=150
-AGENTSCOPE_POLL_INTERVAL_SECONDS=0.35
-```
-
-## 任务引擎与企业微信通知
-
-任务流、计划、节点、活动与触发日志由任务引擎保存在 PostgreSQL 的 `task_engine`
-schema；工程平台只通过宿主适配器提供项目、工点、责任人和确认人。企业微信通知不改
-任务引擎核心：任务事件先写入平台 schema 的 `outbound_notifications`，后端投递循环
-再向项目群机器人发送，失败按退避策略重试，通知失败不会回滚已经下发的任务。
-
-管理员在“工程配置 → 企业微信配置”填写项目群名称和群机器人 Webhook。Webhook 只
-以服务端密文保存；保存后可主动“测试发送”。成员在“个人设置 → 企业微信配置”填写
-手机号或企业微信 UserID，任务通知优先按手机号在项目群中 @ 当前责任人。未配置项目
-群机器人时，任务仍正常下发，只是不创建外部通知。
-
-分支保留的文本、Markdown、图片、图文和状态查询 5 个 MCP 工具位于
-`mcp-packages/wecom-notify`。平台运行时，MCP 通过会话绑定的内部网关发送，不会获得
-项目 Webhook。修改包后可依次构建、无外发探测并安装：
-
-```powershell
-.\python-3.13.14\python.exe .\scripts\build_wecom_notify_mcp_package.py
-.\python-3.13.14\python.exe .\scripts\smoke_test_wecom_notify_mcp_package.py
-.\python-3.13.14\python.exe .\scripts\install_wecom_notify_mcp.py
-```
-
-不得把 `wecom-notify` 直接分配给 Dobby。后续需要由智能体主动发送通知时，应在管理
-中心创建专用通知智能体，仅向该智能体分配 MCP，并同时配置 Dobby 调用许可与人工确认。
-旧的 `assign_wecom_notify_to_global_main.py` 仅保留为防误用保护，执行时会明确拒绝。
-
-AgentScope 管理端的“数据库交互”不是任意 SQL 编辑器。工程平台数据库内维护三类
-权威记录：数据表白名单、可分配交互定义、智能体分配关系。管理员先在“数据表”
-中选择真实业务表，配置当前项目/当前用户/仅管理员的行级范围，以及可读、可写、
-可筛选字段；再创建一个确定的查询、新增、修改或删除交互并分配给智能体。普通
-查询接受白名单内的精确筛选和文本关键词检索。直接暴露给智能体的数据表写操作固定要求人工确认；仅供 MCP/工作流内部调用的交互可在明确限定会话类型并配置可信上下文绑定后自动执行。范围字段、审计
-时间和口令/令牌等敏感字段不能由调用方写入；主键和外键仍会按数据库结构、项目与会话范围校验。运行时会重新校验交互启用状态、
-智能体分配、数据表白名单、平台账号角色和会话绑定项目，前端参数不构成授权。
-
-系统首次升级时从 `backend/database_interaction_defaults.json` 导入一组只读的
-默认白名单和交互定义；数据库记录是唯一运行来源，不会再回跳 Python 中的旧业务
-处理器。智能体管理端只能查看和分配允许的数据库交互，不能修改表白名单。初始化
-状态和草稿分区都通过受控数据库交互访问，跨步骤执行由真实 AgentScope 计划和团队
-协作负责，不放进 MCP，也不由平台快速状态机替代。
-
-附件解析是平台固定、全局启用且不可取消的系统工具，不属于可分配 MCP。其代码以
-独立工具包维护，平台上传和聊天附件共用同一解析内核。PDF、图片、DOCX、PPTX、
-XLSX 优先调用 MinerU；接口不可用或解析失败时使用包内本地解析器，CSV、TXT、
-Markdown 和旧版 XLS 直接本地解析。
-
-工程平台业务数据统一保存在 PostgreSQL 的 `platform` schema；聊天正文、思考、
-工具调用和协同过程均以 PostgreSQL 的 AgentScope 存储为唯一数据源，
-一条消息只写入一次。平台读取历史时先校验账号与项目权限，再根据授权映射由
-后端读取对应 AgentScope 会话并投影为业务端展示格式；AgentScope 暂时不可用时
-明确返回服务错误，不使用另一份可能过期的平台消息副本兜底。
-
-AgentScope 管理端的“平台交互审计”按“平台用户 → 项目 → 会话”三级查看。
-管理员选择具体会话后一次读取并展示该会话的全部 AgentScope 历史，不在界面上
-做消息分页。该模块严格只读：平台会话不会出现在管理端普通聊天列表中，管理
-账号也不能通过聊天、确认、停止、删除、会话配置或工作区接口干预平台会话；
-平台服务令牌同样不能访问管理端测试会话。
+临时日志、截图、执行结果与一次性脚本统一放入忽略目录 `artifacts/` 或 `scratch/`，
+任务结束后清理。普通修复不新建说明、总结或验收文档；需长期维护的变化直接更新上表
+对应文档。密钥、真实业务数据及本机配置不进入版本库。

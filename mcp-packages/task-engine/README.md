@@ -1,204 +1,104 @@
-# 任务引擎 (task-engine)
+# 任务引擎（task-engine）
 
-通用任务引擎，以 **MCP Server** 形式交付。把一句自然语言需求转换成多级流转的任务流，支持定时与周期自动布置、节点流转、转办、逾期判定与完整留痕。
+任务引擎负责结构化任务流、定时触发、节点流转、验收和审计，以 Python 库和 STDIO MCP
+两种方式提供能力。Dobby 的接入边界见 [Dobby 接入指南](Dobby接入指南.md)。
 
-引擎与具体业务系统解耦——领域逻辑不依赖任何宿主产品，换一个工程或项目管理系统也能接入。
+## 核心概念与规则
 
-## 为什么需要它
-
-多数项目管理系统能存任务、能改状态，但**「到点自动布置任务」这件事往往是缺失的**：界面上让用户配了「每周五执行」，提交时这个配置却被拼成一句人类可读的文本存进备注字段，没有任何调度器会读它。用户以为设好了定时，实际上永远不会触发。
-
-这个引擎补的就是这一段，并顺带把流转、留痕、逾期判定一起做成产品无关的通用能力。
-
-## 能力
-
-| 能力 | 说明 |
+| 概念 | 用途 |
 |---|---|
-| **责任制强约束** | 每项待办必须落到具体的人、具体的工点、具体的验收责任，缺一不可布置 |
-| **自然语言生成** | 「每周五检查基坑监测数据」→ 结构化任务流 + 周期触发规则 |
-| **定时/周期触发** | 到点自动布置任务，支持 时/天/周/月 间隔、次数上限、截止日期 |
-| **多级流转** | 节点依次流转，完成、跳过、受阻、转办，全部留痕 |
-| **主动逾期判定** | 不依赖任何人打开列表页，`tick` 时主动扫描标记 |
-| **验收闭环** | 全节点完成 → 待验收 → 仅指定确认人可通过或退回 |
-| **完整审计轨迹** | 每次状态变化都记入历史，可完整回溯 |
-| **模型可选** | 未配模型时降级为规则解析，用户始终拿到可用结果 |
+| 任务流 `TaskFlow` | 可复用的流程模板，包含节点、触发规则与宿主上下文 |
+| 触发计划 `Schedule` | 按规则创建任务实例，支持暂停、恢复和取消 |
+| 任务实例 `TaskInstance` | 某次执行的流程快照；修改模板不会改写已派发任务 |
+| 节点 `Step` | 顺序执行的办理环节，保留责任人、材料及操作记录 |
 
-## 责任制：每项任务必须回答的六个问题
+人工流程在布置或登记计划前，必须明确具体责任人、工点和确认人。岗位到人员的解析、
+项目成员资格和文件访问权限由宿主平台校验；模板和待确认草稿可以保留缺项。
+每个人工节点还应说明要做什么、截止时间和交付材料。
 
-工程管理的提醒与待办不能只发给「安全员」「资料员」这类抽象角色——出了事追不到人，
-任务也无从判断该谁办。引擎在模型层面强制了这一点：
+- 同一任务按节点顺序流转，不能跨越当前节点办理；已完成节点的责任归属不能改写。
+- 要求留证的节点必须提交材料；退回重做时保留旧材料用于审计，但必须补交新材料。
+- 验收与退回由指定确认人执行。引擎不负责登录鉴权，宿主必须传入真实操作人。
+- `list_tasks(assignee=...)` 查询当前由该人员办理的任务；尚未轮到的节点不会提前成为待办。
+- 已完成、已取消的任务不能继续流转；逾期任务仍可以办理。
+- 自动节点用 `automated` 标记，具体动作保存在 `TaskFlow.scope["step_actions"]`，
+  由宿主执行。纯自动流程按自动节点规则校验，不能套用人工流程的缺项判断。
 
-| # | 问题 | 对应字段 | 强制程度 |
-|---|---|---|---|
-| 1 | 谁负责 | `Step.assignee`（具体人，非岗位） | 布置前必填 |
-| 2 | 要做什么 | `Step.name` + `instruction` | 必填 |
-| 3 | 截止时间 | `Step.due_at`，逾期主动标记 | 自动计算 |
-| 4 | 关联哪个工点 | `Task.site` | 布置前必填 |
-| 5 | 需要提交什么材料 | `Step.deliverable` + `requires_attachment` | 可强制留证 |
-| 6 | 完成后由谁确认 | `Task.confirmer`，仅此人可验收 | 布置前必填 |
+任务状态为 `pending → running → review → done`，另有 `blocked`、`overdue`、
+`cancelled`。节点状态为 `waiting → active → done`，另有 `skipped`、`blocked`。
+状态转换以 [领域状态机](src/task_engine/domain/flow.py) 为准。
 
-`Assignee` 不接受空标识——岗位到人的解析属于宿主系统的组织架构职责，必须在进入引擎
-之前完成。模板阶段可以留空以便复用，但一旦要变成真实待办，三要素必须齐备：
+## 生成与模板
 
-```
-以下节点尚未指定责任人，无法布置：第 2 个「派单整改」
-任务未指定确认人，无法布置——完成后需要有人验收
-任务未关联工点，无法布置
-只有确认人 王工 可以验收该任务
-```
+`generate_task_flow` 只接受 AI 生成结果。未配置模型、请求失败或结果不合法时明确报错，
+不会静默改用规则模板。需要固定流程时，显式调用 `create_flow_from_template`。
 
-## 快速开始
+内置模板包括隐患整改、条件核查、资料补全、风险处置、报告审核、周期巡检和通用流程。
+模板定义集中在 [templates.py](src/task_engine/generator/templates.py)，无需在说明中另存副本。
 
-```bash
-python3.13 -m venv .venv
-.venv/bin/pip install -e .
+Dobby 通过管理中心指定的任务助手调用已分配的任务引擎生成草稿。生成不等于发布：
+用户补齐并确认草稿后，平台才布置任务或登记执行计划。
 
-# 生成任务流（无需配置模型）
-task-engine generate "每周五检查基坑监测数据，异常时由监测员复核并归档"
+## 定时触发
 
-# 查看内置模板
-task-engine templates
-```
+引擎由外部调用 `tick` 推进：创建到期任务、扫描逾期任务。Dobby 已在后端
+[服务生命周期](../../backend/app/main.py) 中运行循环，间隔由
+`TASK_ENGINE_TICK_INTERVAL_SECONDS` 配置，无需另设 cron。
 
-### 端到端演示
+触发规则支持分钟、小时、天、周、月间隔，以及每日、工作日、指定星期和每月日期的
+日历规则；可设截止日期和次数上限。具体参数见
+[Trigger](src/task_engine/domain/models.py) 和 [触发计算](src/task_engine/domain/trigger.py)。
 
-```bash
-export PYTHONPATH=src
-P() { .venv/bin/python -m task_engine.cli --db demo.db "$@"; }
+- 重复推进同一个触发点不会重复创建任务，数据库的 `(schedule_id, fire_at)` 约束保证幂等。
+- 按月触发锚定原始日期，月末缩短后后续月份会恢复原日期。
+- 停机恢复时只处理一个已到期触发点，再跳到未来，避免集中补发全部历史任务。
+- 时间使用带时区的值，默认时区为 `Asia/Shanghai`；触发精度受宿主推进间隔影响。
 
-# 1. 生成任务流（自动识别「每周五」→ 周期触发）
-P generate "每周五检查基坑监测数据，异常时由监测员复核，负责人确认后归档"
-FLOW=$(P --json flows | python3 -c "import sys,json;print(json.load(sys.stdin)['flows'][0]['id'])")
+## 存储与模型配置
 
-# 2. 登记触发计划
-P schedule "$FLOW" --at "2026-08-14 09:00" --mode recurring --every 1 --unit week
+Dobby 后端与平台 MCP 共用 PostgreSQL 的 `task_engine` schema。平台缺少 PostgreSQL
+配置时直接报错，不回退 SQLite。`TASK_ENGINE_DB` 仅供独立运行或隔离测试使用。
 
-# 3. 推进引擎
-P tick --now "2026-08-13 09:00"   # 未到点 → 触发 0 个任务
-P tick --now "2026-08-14 09:00"   # 到点   → 触发 1 个任务
-P tick --now "2026-08-14 09:00"   # 重复   → 触发 0 个（幂等）
-P tick --now "2026-08-21 09:00"   # 下周   → 触发 1 个
+| 配置 | 用途 |
+|---|---|
+| `TASK_ENGINE_DATABASE_URL` | 平台 MCP 的 PostgreSQL 连接；由受信能力注入，不写入发行包 |
+| `TASK_ENGINE_SCHEMA` | 任务引擎 schema，默认 `task_engine` |
+| `TASK_ENGINE_TZ` | 触发和任务时间的时区 |
+| `TASK_ENGINE_AI_KEY` | MCP 内部生成器的模型密钥；缺少时 AI 生成报错 |
+| `TASK_ENGINE_AI_BASE_URL` | MCP 内部生成器的 OpenAI 兼容接口地址 |
+| `TASK_ENGINE_AI_MODEL` | MCP 内部生成器使用的模型标识 |
+| `TASK_ENGINE_DB` | 独立运行或测试时显式提供的 SQLite 路径 |
 
-# 4. 办理
-TASK=$(P --json tasks | python3 -c "import sys,json;print(json.load(sys.stdin)['tasks'][0]['id'])")
-P complete "$TASK" 0 --actor u1 --comment "已采集" --attach data.xlsx
-P forward "$TASK" 1 u2 --name "李四"      # 转办
-P accept "$TASK" --actor boss             # 验收
-```
-
-## 作为 MCP Server 接入
-
-### Claude Code
-
-```bash
-claude mcp add task-engine -- python3 /path/to/task-engine/server.py
-```
-
-或写进 `.mcp.json`：
-
-```json
-{
-  "mcpServers": {
-    "task-engine": {
-      "command": "python3",
-      "args": ["/path/to/task-engine/server.py"],
-      "env": {
-        "TASK_ENGINE_DB": "/path/to/task_engine.db",
-        "TASK_ENGINE_TZ": "Asia/Shanghai"
-      }
-    }
-  }
-}
-```
-
-接入后可直接用自然语言驱动：
-
-> 「每周一给张三派一个现场巡检任务，抄送项目经理」
-> 「我现在有哪些待办任务？」
-> 「把第二个节点转给李四，他更熟悉现场」
-
-### 驱动定时触发
-
-引擎是**拉模式**——不常驻进程，由外部定期调用 `tick`。这让引擎可随时重启，触发时机对调用方完全透明。
-
-```bash
-# crontab：每 5 分钟推进一次
-*/5 * * * * cd /path/to/task-engine && PYTHONPATH=src python3 -m task_engine.cli tick
-```
-
-`tick` 是幂等的，调用频率高于触发间隔也不会重复创建任务。
-
-## 配置
-
-全部通过环境变量，均为可选：
-
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `TASK_ENGINE_DB` | `task_engine.db` | SQLite 数据库路径 |
-| `TASK_ENGINE_TZ` | `Asia/Shanghai` | 时区 |
-| `TASK_ENGINE_AI_KEY` | 空 | 模型 API Key；留空时 `generate_task_flow` 明确报错 |
-| `TASK_ENGINE_AI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容接口地址 |
-| `TASK_ENGINE_AI_MODEL` | `gpt-4o-mini` | 模型名 |
-
-走 OpenAI 兼容接口，因此 OpenAI、通义、DeepSeek、本地 vLLM 都只需改 `BASE_URL` 与 `MODEL`。
-
-`generate_task_flow` **只接受 AI 结果，不做静默降级**。未配 key、连接失败、接口返回错误或模型结果校验失败时，调用会直接失败并返回具体原因；生成器本身不设置固定模型读取时限，调用生命周期由宿主控制（Web 端使用显式停止）。需要规则模板时，请显式调用 `create_flow_from_template`。
+任务助手的对话模型在管理端配置；MCP 内部生成器仍读取上述 `TASK_ENGINE_AI_*`
+参数。两层配置的实际注入方式见 [接入指南](Dobby接入指南.md)，不能仅凭助手模型可用
+就判断 MCP 生成器已经配置成功。
 
 ## MCP 工具
 
-**生成** — `generate_task_flow`、`list_templates`、`create_flow_from_template`、`list_flows`
-**布置与调度** — `dispatch_task`、`create_schedule`、`list_schedules`、`pause_schedule`、`cancel_schedule`、`tick`
-**查询** — `list_tasks`、`get_task`
-**办理** — `complete_step`、`forward_step`、`skip_step`、`block_step`、`unblock_step`、`add_note`
-**闭环** — `accept_task`、`reject_task`、`cancel_task`
+| 用途 | 工具 |
+|---|---|
+| 生成与模板 | `generate_task_flow`、`list_templates`、`create_flow_from_template`、`list_flows` |
+| 布置与计划 | `dispatch_task`、`create_schedule`、`list_schedules`、`pause_schedule`、`cancel_schedule`、`tick` |
+| 查询 | `list_tasks`、`get_task` |
+| 办理 | `complete_step`、`forward_step`、`skip_step`、`block_step`、`unblock_step`、`add_note` |
+| 闭环 | `accept_task`、`reject_task`、`cancel_task` |
 
-`list_tasks` 传 `assignee` 时返回「此人当前负责」的任务——即他所在节点正处于活跃状态的任务，这正是「我的任务」的语义。节点完成后任务会自动从上一个人的列表移到下一个人的列表。
+完整参数以 [tools.json](tools.json) 为准。工具包提供的能力不等于任意智能体均可调用，
+Dobby 任务助手的草稿生成权限由平台进一步限制。
 
-## 内置模板
+## 构建与验证
 
-隐患整改、条件核查、资料补全、风险处置、报告审核、周期巡检、通用流程。
+以下命令在仓库根目录执行，使用项目内嵌 Python：
 
-每个模板都包含**执行 → 复核 → 归档**三类环节，涉及现场作业的节点强制要求上传证明材料——工程场景的可追溯性要求任何处理都得有人复核、有材料留痕。
-
-## 架构
-
-```
-src/task_engine/
-├── domain/          # 纯领域逻辑，不依赖 MCP / DB / HTTP
-│   ├── models.py    # TaskFlow / TaskInstance / Step / Trigger / Schedule
-│   ├── trigger.py   # 触发时间计算（纯函数）
-│   └── flow.py      # 状态机与节点推进
-├── store/           # SQLite 持久化
-├── generator/       # 模板 / 规则解析 / 模型生成
-├── engine.py        # 服务门面：用例编排
-├── tools.py         # MCP 工具实现
-├── serialize.py     # 领域对象 → JSON
-└── cli.py           # 命令行入口
-server.py            # MCP stdio 入口
+```powershell
+.\python-3.13.14\python.exe scripts\build_task_engine_mcp_package.py
+.\python-3.13.14\python.exe scripts\pytest_entry.py --prepend mcp-packages/task-engine/src -- mcp-packages/task-engine/tests -q
 ```
 
-**分层铁律**：`domain/` 不 import 任何 MCP、SQLite、HTTP。这是「换个产品也能用」的前提——宿主差异全部收在外层。
+包的上传与升级遵循 [MCP 包上传与运行说明](../../docs/MCP包上传与运行说明.md)。
+平台接入测试见 [test_task_engine_integration.py](../../backend/tests/test_task_engine_integration.py)，
+草稿生成测试见 [test_task_assistant_generation.py](../../backend/tests/test_task_assistant_generation.py)。
 
-### 两个关键设计
-
-**触发时间锚定首次执行时刻，而非逐次迭代。** 1月31日按月重复，得到的是 2/28、3/31、4/30，而不是 2/28、3/28、4/28。逐次迭代会让日期逐月漂移，一年后偏出好几天。
-
-**触发幂等由数据库主键保证。** `fire_log` 表以 `(schedule_id, fire_at)` 为主键，重复 `tick` 会撞主键冲突而非重复建任务。重复布置任务会直接骚扰到真实的人，这个不变量必须硬保证。
-
-## 测试
-
-```bash
-.venv/bin/python -m pytest tests/ -q
-```
-
-覆盖领域逻辑、存储往返、调度幂等、生成降级，以及通过**真实子进程**驱动的 MCP 协议契约测试。
-
-重点覆盖的边界：月末溢出（1/31 + 1月 = 2/28）、长时间停机后不补跑历史触发、模型编造人员被丢弃、规则解析扛住畸形输入。
-
-## 状态模型
-
-**任务状态**：`pending` → `running` → `review` → `done`，旁支 `blocked`（受阻）、`overdue`（逾期）、`cancelled`（取消）。
-
-**节点状态**：`waiting` → `active` → `done`，旁支 `skipped`（跳过）、`blocked`（受阻）。
-
-任务状态由节点状态推导，不各自独立维护——调用方推进节点，整体状态自动跟随。
+领域模型、触发和状态机位于 `src/task_engine/domain/`；存储实现位于 `store/`；
+模型生成与模板位于 `generator/`；`engine.py` 为服务入口，`tools.py` 与
+`server.py` 提供 MCP 协议。宿主业务差异放在平台接入层，避免侵入领域模型。

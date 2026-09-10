@@ -8,6 +8,10 @@ node_modules/
 frontend/dist/
 data/
 /scratch/
+/artifacts/
+/tmp/
+/design-qa.md
+/design-system/
 /更新文件/
 /runtime/centrifugo/
 
@@ -25,6 +29,10 @@ data/
 /python-3.13.14/Lib/site-packages/
 /python-3.13.14/Scripts/
 /python-3.13.14/share/
+
+# 独立任务引擎试验生成的结果，不作为版本验收依据
+/mcp-packages/task-engine/robustness_results.json
+/mcp-packages/task-engine/scenario_results.json
 
 # Hermes 第三方项目（NousResearch/hermes-agent，2.2G），从上游获取，不纳入本仓库
 /hermes/*

@@ -1,34 +1,19 @@
-# Frontend
+# 工程管理业务前端
 
-Dobby 前端采用独立 Web 工程，不使用 Python 前端。
+本目录使用 Vue 3、TypeScript、Vite、Naive UI、Pinia、Vue Router 和 Axios，负责工程
+业务页面。智能体管理端是独立的 [React 工程](../AgentScope/agentscope-web-ui/frontend/README.md)。
 
-推荐技术栈：
+在本目录执行：
 
-- Vue 3
-- TypeScript
-- Vite
-- Element Plus
-- Vue Router
-- Pinia
-- Axios 或基于 OpenAPI 生成的 API Client
-
-前端通过 FastAPI 提供的 JSON API 与后端交互，负责页面路由、表格表单、任务操作、审核交互、文件上传和异步作业进度展示。
-
-后续初始化 Vite 工程后，建议目录结构：
-
-```text
-frontend/
-├── package.json
-├── vite.config.ts
-├── index.html
-└── src/
-    ├── api/
-    ├── router/
-    ├── stores/
-    ├── views/
-    ├── components/
-    ├── styles/
-    └── types/
+```powershell
+npm run dev
+npm run check
 ```
 
-当前目录先保留说明文件，避免在方案阶段生成未验证的依赖和脚手架文件。
+`check` 包含 Node 测试、Vue/TypeScript 类型检查和生产构建，具体命令以
+[package.json](package.json) 为准。联动后端启动使用项目根目录的 `start-frontend.bat`。
+
+- [src/router/index.ts](src/router/index.ts)：实际页面路由及访问入口。
+- [src/views/workspace](src/views/workspace)：业务工作区；[src/components](src/components)：组件。
+- [src/api](src/api)、[src/stores](src/stores)：请求与共享状态；[tests](tests)：现有自动测试。
+- [前端开发规范](../docs/开发规范/前端开发规范.md)、[测试规范](../docs/开发规范/测试规范.md)。两套前端字体均不得小于 12px。
