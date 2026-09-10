@@ -1,8 +1,11 @@
 """The real MCP envelope must reach the editable task draft intact."""
 import copy
 import json
+from datetime import datetime
 
 import pytest
+from task_engine.domain.models import CalendarMode, RunMode, StepSpec, TaskFlow, Trigger
+from task_engine.serialize import flow_json
 
 from backend.app.agentscope_client import AgentScopeReply
 from backend.app.chat_api import _task_flow_from_agent_reply, _task_draft_payload
@@ -60,6 +63,31 @@ def test_unrelated_mcp_cannot_satisfy_task_engine_call():
         raw_message={"content": [{"type": "tool_call", "name": "mcp__other__generate_task_flow"}]})
     with pytest.raises(RuntimeError, match="没有调用"):
         _task_flow_from_agent_reply(reply)
+
+
+@pytest.mark.parametrize("mode,weekdays,day", [
+    (CalendarMode.WEEKLY, (2, 4), None),
+    (CalendarMode.MONTHLY, (), 15),
+])
+def test_native_calendar_schedule_reaches_editable_draft(mode, weekdays, day):
+    flow = flow_json(TaskFlow(
+        title="合成日历任务", origin="ai",
+        trigger=Trigger(
+            run_mode=RunMode.CALENDAR,
+            first_at=datetime.fromisoformat("2026-09-10T09:00:00+08:00"),
+            calendar_mode=mode, calendar_weekdays=weekdays, calendar_day=day,
+        ),
+        steps=(StepSpec(name="合成节点"),),
+    ))
+    before = copy.deepcopy(flow)
+
+    draft = TaskInput.model_validate(_task_draft_payload(flow, "合成日历需求"))
+
+    assert flow == before
+    assert draft.run_mode == "calendar"
+    assert draft.trigger_calendar_mode == mode
+    assert draft.trigger_weekdays == list(weekdays)
+    assert draft.trigger_day_of_month == day
 
 
 def test_native_rule_fallback_is_not_accepted_as_ai_draft():

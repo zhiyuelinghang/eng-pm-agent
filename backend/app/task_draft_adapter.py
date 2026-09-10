@@ -78,8 +78,8 @@ def normalize_task_flow(flow: dict[str, Any]) -> dict[str, Any]:
         "trigger_until_date": until.strftime("%Y-%m-%d") if until else None,
         "trigger_max_fires": max_fires,
         "trigger_calendar_mode": trigger.get("calendar_mode") or "weekdays",
-        "trigger_weekdays": trigger.get("weekdays") or [],
-        "trigger_day_of_month": trigger.get("day_of_month"),
+        "trigger_weekdays": trigger.get("calendar_weekdays") or [],
+        "trigger_day_of_month": trigger.get("calendar_day"),
         "cc": "，".join(str(person.get("name") or "") for person in flow.get("watchers") or [] if isinstance(person, dict)),
         "generation_note": flow.get("origin_note"),
     }
