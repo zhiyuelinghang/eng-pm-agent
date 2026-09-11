@@ -94,6 +94,7 @@ class SessionStatus(StrEnum):
 
     RUNNING = "running"
     IDLE = "idle"
+    INTERRUPTED = "interrupted"
     AWAITING_PERMISSION = "awaiting_permission"
     AWAITING_EXTERNAL_RESULT = "awaiting_external_result"
 
@@ -218,6 +219,8 @@ class SessionService:
         if session is None:
             return None
 
+        if getattr(session.config, "user_stopped_at", None) is not None:
+            return SessionStatus.INTERRUPTED
         return self._derive_parked_status(session.state.context)
 
     @staticmethod
@@ -460,6 +463,30 @@ class SessionService:
                 record.id,
             )
 
+    async def cancel_team_runs(self, user_id: str, team_id: str) -> None:
+        """Broadcast cancellation to the whole team before any archival I/O."""
+        seen: set[str] = set()
+
+        async def cancel_team(owner: str, tid: str) -> None:
+            if tid in seen:
+                return
+            seen.add(tid)
+            team = await self._storage.get_team(owner, tid)
+            if team is None:
+                return
+            members = await _ensure_team_members(self._storage, owner, team)
+            await asyncio.gather(*(
+                self._bus.publish(MessageBusKeys.session_cancel_channel(), {"session_id": member.session_id})
+                for member in members
+            ))
+            async def cancel_descendants(member):
+                session = await self._storage.get_session(member.owner_id, member.agent_id, member.session_id)
+                if session is not None and session.team_id and session.team_id != tid:
+                    await cancel_team(member.owner_id, session.team_id)
+            await asyncio.gather(*(cancel_descendants(member) for member in members))
+
+        await cancel_team(user_id, team_id)
+
     async def delete_team(self, user_id: str, team_id: str) -> bool:
         """Cancel, delete and bus-purge a team.
 
@@ -500,7 +527,7 @@ class SessionService:
             return await self._storage.delete_team(user_id, team_id)
 
         members = await _ensure_team_members(self._storage, user_id, team)
-        for member in members:
+        async def delete_member(member):
             if member.role == "created":
                 await self.delete_agent(member.owner_id, member.agent_id)
             else:  # invited
@@ -509,6 +536,10 @@ class SessionService:
                     member.agent_id,
                     member.session_id,
                 )
+
+        # Send cancellation to every worker immediately. A slow worker's
+        # cleanup must not postpone stopping all subsequent members.
+        await asyncio.gather(*(delete_member(member) for member in members))
 
         # storage.delete_team walks the same members again to run its
         # own role-aware cascade — those calls are now idempotent

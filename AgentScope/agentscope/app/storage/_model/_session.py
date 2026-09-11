@@ -203,6 +203,9 @@ class SessionConfig(BaseModel):
     memory_run_id: str | None = None
     """Server-owned business request identity, retained across delegated replies."""
 
+    user_stopped_at: datetime | None = None
+    """Explicit stop fence; only a later user message may start another run."""
+
 
 class SessionRecord(_RecordBase):
     """The session record."""

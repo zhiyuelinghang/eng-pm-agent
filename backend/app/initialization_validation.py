@@ -13,7 +13,6 @@ from .initialization_draft_queries import (
     compose_initialization_draft_payload,
     serialize_initialization_validation_issue,
 )
-from .initialization_integrity import validate_initialization_integrity
 from .models import (
     ProjectInitializationDraft,
     ProjectInitializationDraftRecord,
@@ -30,6 +29,8 @@ from .project_initialization import (
 
 
 class InitializationValidatorClient(Protocol):
+    def get_initialization_validation_binding(self) -> dict[str, Any] | None: ...
+
     def validate_project_initialization(
         self,
         payload: dict[str, Any],
@@ -145,33 +146,6 @@ def _normalize_issues(
             },
         )
     return issues
-
-
-def _merge_integrity_issues(
-    mcp_issues: list[dict[str, Any]],
-    integrity_issues: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    merged = list(mcp_issues)
-    seen = {
-        (
-            item["rule_id"],
-            item["target_record_id"],
-            item["field_name"],
-            item["message"],
-        )
-        for item in merged
-    }
-    for issue in integrity_issues:
-        key = (
-            issue["rule_id"],
-            issue["target_record_id"],
-            issue["field_name"],
-            issue["message"],
-        )
-        if key not in seen:
-            seen.add(key)
-            merged.append(issue)
-    return merged
 
 
 def latest_initialization_validation_run(

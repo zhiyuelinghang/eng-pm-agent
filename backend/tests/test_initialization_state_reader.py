@@ -195,7 +195,7 @@ def test_sparse_wbs_observation_survives_database_writer_without_implicit_defaul
     update_agent_assignments(db, "wbs-specialist", [writer.id])
     interaction, policy = resolve_assigned_interaction(db, "wbs-specialist", writer.key)
     item_schema = interaction.input_schema["properties"]["values"]["properties"]["payload"]["items"]
-    assert item_schema["required"] == ["wbs_code"]
+    assert item_schema.get("required", []) == []
     result, _ = execute_table_interaction(db, context, interaction, policy, {
         "values": {"draft_id": draft.id, "payload": [{"wbs_code": "1", "progress_percent": 0}],
                    "source_files": ["本周进度.xlsx"], "extraction_notes": []},
@@ -204,7 +204,7 @@ def test_sparse_wbs_observation_survives_database_writer_without_implicit_defaul
     record = db.scalar(select(ProjectInitializationDraftRecord).where(
         ProjectInitializationDraftRecord.section_id == section.id,
     ))
-    assert section.payload == [{"wbs_code": "1", "progress_percent": "0"}]
+    assert section.payload == [{"wbs_code": "1", "progress_percent": 0}]
     assert record.payload == section.payload[0]
 
 
@@ -224,10 +224,9 @@ def test_sparse_models_keep_only_observed_fields(section, observation):
 
 
 @pytest.mark.parametrize("observation", [
-    [{"progress_percent": 10}], [{"wbs_code": "1", "progress_percent": 101}],
     [{"wbs_code": "1", "children": []}],
 ])
-def test_sparse_models_keep_matching_keys_type_limits_and_unknown_field_rejection(observation):
+def test_sparse_models_reject_unknown_transport_fields(observation):
     with pytest.raises(HTTPException) as error:
         _normalize_initialization_section_payload("wbs", observation)
     assert error.value.status_code == 422
@@ -257,7 +256,7 @@ def test_management_edits_preserve_state_finalizer_and_specialist_schemas(databa
             assert "section" in interaction.input_schema["properties"]
         else:
             schema = interaction.input_schema["properties"]["values"]["properties"]["payload"]
-            assert schema["items"]["required"] == ["wbs_code"]
+            assert schema["items"].get("required", []) == []
 
 
 @pytest.mark.parametrize("status", ["applied", "rejected"])
@@ -303,6 +302,7 @@ def test_agent_sparse_finalize_and_later_section_work_after_partial_confirmation
                 "duration_ms": 1, "result": {"status": "ready", "ruleset_version": "test", "validation_issues": []}}
 
     monkeypatch.setattr(AgentScopeClient, "validate_project_initialization", validate)
+    monkeypatch.setattr(AgentScopeClient, "get_initialization_validation_binding", lambda _self: {"package_id": "project-initialization-validator", "package_version": "1.2.0"})
     keys = ["dobby_create_project_initialization_draft", "dobby_create_initialization_wbs_section",
             "dobby_create_initialization_risks_section", "dobby_finalize_project_initialization_draft"]
     interactions = list(db.scalars(select(DatabaseInteraction).where(DatabaseInteraction.key.in_(keys))).all())
@@ -335,3 +335,39 @@ def test_agent_sparse_finalize_and_later_section_work_after_partial_confirmation
     assert execute(keys[-1], {"record_id": draft.id})["status"] == "ready"
     assert calls[-1]["wbs"][0]["progress_percent"] == 40
     assert calls[-1]["risks"][0]["risk_part"] == "基坑"
+
+
+@pytest.mark.parametrize("observation", [
+    {"progress_percent": 101}, {"wbs_code": "", "level": -1},
+    {"wbs_code": "1", "planned_start_at": "原文日期待核对"},
+])
+def test_material_defects_reach_mcp_without_transport_verdict(observation):
+    assert _normalize_initialization_section_payload("wbs", [observation]) == [observation]
+
+
+@pytest.mark.parametrize("table_name,operation,values", [
+    ("project_initialization_drafts", "update", {"status": "ready", "validation_issues": []}),
+    ("project_initialization_validation_issues", "create", {"message": "伪造问题"}),
+    ("project_initialization_change_previews", "create", {"review": {"can_apply": True}}),
+    ("projects", "update", {"construction_unit_name": "越权写入"}),
+])
+def test_custom_database_policy_cannot_grant_initializer_verdict_or_formal_writes(database, table_name, operation, values):
+    db, context, _ = database
+    # Deliberately broaden the configurable policy: the runtime boundary must
+    # reject this even for an assigned tool, without writing any records.
+    policy = DatabaseInteractionTablePolicy(table_name=table_name, allowed_operations=[operation], writable_fields=list(values), readable_fields=["id"], filterable_fields=[], scope_type="global", minimum_role="member")
+    interaction = DatabaseInteraction(key="custom_bypass", table_operation=operation, allowed_conversation_types=["initialization"], fixed_values={}, context_bindings=[])
+    with pytest.raises(HTTPException) as caught:
+        execute_table_interaction(db, context, interaction, policy, {"record_id": 1, "values": values}, actor_agent_id="initializer")
+    assert caught.value.status_code == 403
+
+
+@pytest.mark.parametrize("channel", ["values", "fixed", "bound"])
+def test_new_draft_verdict_cannot_be_injected_through_any_write_channel(database, channel):
+    from backend.app.initialization_tool_authority import require_initialization_tool_authority
+    _, context, _ = database
+    channels = {"values": {}, "fixed": {}, "bound": {}}
+    channels[channel] = {"status": "ready"}
+    with pytest.raises(HTTPException) as caught:
+        require_initialization_tool_authority("project_initialization_drafts", "create", context, channels["values"], channels["fixed"], channels["bound"])
+    assert caught.value.status_code == 403

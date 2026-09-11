@@ -15,7 +15,7 @@ from .models import (
     ProjectInitializationValidationIssue,
     ProjectInitializationValidationRun,
 )
-from .project_initialization import ProjectInitializationPayload
+from .initialization_patch import ProjectInitializationPatchPayload
 
 
 _DRAFT_SECTIONS = frozenset(
@@ -117,9 +117,9 @@ def sync_initialization_draft_section_records(
 def compose_initialization_draft_payload(
     db: Session,
     draft: ProjectInitializationDraft,
-) -> ProjectInitializationPayload:
+) -> ProjectInitializationPatchPayload:
     """Compose a draft from its database-addressable business rows."""
-    data = ProjectInitializationPayload().model_dump(mode="python")
+    data = ProjectInitializationPatchPayload().model_dump(mode="python")
     sections = _section_rows(db, draft.id)
     records = list(
         db.scalars(
@@ -164,7 +164,7 @@ def compose_initialization_draft_payload(
             # Existing databases are backfilled at startup. This fallback keeps
             # an empty section valid and makes a partially migrated DB readable.
             data[section_row.section] = section_row.payload
-    return ProjectInitializationPayload.model_validate(data)
+    return ProjectInitializationPatchPayload.model_validate(data)
 
 
 def latest_initialization_validation_issues(

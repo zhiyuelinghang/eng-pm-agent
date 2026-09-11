@@ -75,10 +75,11 @@ class WorkerAutoReportTest(IsolatedAsyncioTestCase):
         leader_session = SimpleNamespace(
             id="leader-session",
             agent_id="leader-agent",
+            config=SimpleNamespace(user_stopped_at=None),
         )
         service._storage = SimpleNamespace(
             get_session=AsyncMock(
-                side_effect=[worker_session, leader_session],
+                side_effect=lambda _user, _agent, sid: worker_session if sid == 'worker-session' else leader_session,
             ),
             get_team=AsyncMock(
                 return_value=SimpleNamespace(
@@ -221,4 +222,18 @@ class WorkerAutoReportTest(IsolatedAsyncioTestCase):
             )
 
         settle.assert_awaited_once()
+        deliver.assert_not_awaited()
+
+    async def test_user_stops_team_worker_settles_without_restarting_leader(self) -> None:
+        from datetime import UTC, datetime
+        service, worker_agent = self._service()
+        leader = await service._storage.get_session('default', '', 'leader-session')
+        leader.config.user_stopped_at = datetime.now(UTC)
+        reply = AssistantMsg(name='核验智能体', content='已停止', finished_reason=ReplyFinishedReason.INTERRUPTED)
+        with patch('agentscope.app._service._chat.deliver_team_message', AsyncMock()) as deliver, patch(
+            'agentscope.app._service._chat.settle_team_member', AsyncMock(return_value=True),
+        ) as settle:
+            await service._auto_report_worker_reply(user_id='default', session_id='worker-session',
+                agent_id='worker-agent', agent_record=worker_agent, reply_msg=reply, work_revision=3)
+        self.assertEqual(settle.await_args.kwargs['status'], 'interrupted')
         deliver.assert_not_awaited()

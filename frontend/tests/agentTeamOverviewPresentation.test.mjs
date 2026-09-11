@@ -14,18 +14,20 @@ const { applyAgentRuntimeEvents, runtimeTraceFromExtraData } = await server.ssrL
 const render = run => renderToString(h(Overview, { runtimeTrace: run }))
 const worker = (id, overrides = {}) => member({ worker_session_id: id, worker_agent_id: id, worker_agent_name: `${id}助手`, ...overrides })
 
-test('按真实团队分组，仅两个及以上不同成员呈现紧凑概览', async () => {
+test('按真实团队分组，单人团队也直接显示成员进度', async () => {
   const run = trace([], { collaborations: [worker('资料'), worker('风险', { work_status: 'running' }),
     worker('单人', { team_id: 'single', team_name: '单人团队' }), worker('无团队', { team_id: '' })] })
   const teams = present(run)
-  assert.equal(teams.length, 1)
+  assert.equal(teams.length, 2)
   assert.equal(teams[0].completedCount, 1)
   assert.equal(teams[0].members.length, 2)
   const html = await render(run)
   assert.match(html, /资料协同 · 已完成 1\/2/)
   assert.match(html, /<details[^>]*class="agent-team-overview"/)
   assert.match(html, /<summary/)
-  assert.doesNotMatch(html, /单人团队|无团队助手/)
+  assert.match(html, /单人团队/)
+  assert.match(html, /<details[^>]*open/)
+  assert.doesNotMatch(html, /无团队助手/)
 })
 
 test('多团队独立计数，相同会话标识不会跨团队合并', () => {
@@ -115,4 +117,6 @@ test('完整用户消息必须接入团队概览，历史加载仍显示成员�
   assert.match(html, /data-worker-id="资料"/)
   assert.match(html, /data-worker-id="风险"/)
   assert.match(html, /工程资料已核对。/)
+  assert.ok(html.indexOf('工程资料已核对。') < html.indexOf('class="agent-team-overviews"'))
+  assert.ok(html.indexOf('class="agent-team-overviews"') < html.indexOf('class="agent-runtime-footer"'))
 })

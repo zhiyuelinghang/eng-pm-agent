@@ -59,7 +59,9 @@ def validate_initialization_payload(
 
 
 @pytest.mark.parametrize('through_api', [False, True])
-def test_ready_draft_can_be_applied_with_current_structured_validation(through_api) -> None:
+def test_ready_draft_can_be_applied_with_current_structured_validation(through_api, monkeypatch) -> None:
+    from backend.app.agentscope_client import AgentScopeClient
+    monkeypatch.setattr(AgentScopeClient, "get_initialization_validation_binding", lambda _self: {"package_id": "project-initialization-validator", "package_version": "2.0.0"})
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},

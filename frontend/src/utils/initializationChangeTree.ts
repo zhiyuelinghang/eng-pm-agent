@@ -6,6 +6,10 @@ export type InitializationChangeTreeRow = {
   ancestorKeys: string[]
   hasChildren: boolean
   contextOnly: boolean
+  /** Vertical branches for ancestors that still have a following sibling. */
+  ancestorBranches?: boolean[]
+  lastSibling?: boolean
+  childCount?: number
 }
 
 /** Keep filtered ancestors as context, but never add them to the selection. */
@@ -46,14 +50,14 @@ export function buildInitializationChangeTree(changes: InitializationChange[], m
   for (const siblings of children.values()) siblings.sort(compare)
   const treeRows: InitializationChangeTreeRow[] = []
   const seen = new Set<string>()
-  function append(change: InitializationChange, ancestorKeys: string[]) {
+  function append(change: InitializationChange, ancestorKeys: string[], ancestorBranches: boolean[] = [], lastSibling = true) {
     if (seen.has(change.key)) return
     seen.add(change.key)
     const descendants = (children.get(change.key) || []).filter(child => !seen.has(child.key))
-    treeRows.push({ change, depth: ancestorKeys.length, ancestorKeys, hasChildren: descendants.length > 0, contextOnly: !matches.has(change.key) })
-    for (const child of descendants) append(child, [...ancestorKeys, change.key])
+    treeRows.push({ change, depth: ancestorKeys.length, ancestorKeys, ancestorBranches, lastSibling, childCount: descendants.length, hasChildren: descendants.length > 0, contextOnly: !matches.has(change.key) })
+    for (const [index, child] of descendants.entries()) append(child, [...ancestorKeys, change.key], [...ancestorBranches, !lastSibling], index === descendants.length - 1)
   }
-  for (const root of roots) append(root, [])
+  for (const [index, root] of roots.entries()) append(root, [], [], index === roots.length - 1)
   // Broken imported cycles must remain visible and addressable for correction.
   for (const change of wbs.filter(item => included.has(item.key)).sort(compare)) append(change, [])
   const rows: InitializationChangeTreeRow[] = []

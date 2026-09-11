@@ -646,6 +646,17 @@ def _resolved_runtime_trace(
             resolved.update(persisted)
         if trace_summary:
             resolved.update(trace_summary)
+    model_names = list(dict.fromkeys(
+        name
+        for item in [
+            *[message.get("metadata") or {} for message in runtime_messages],
+            *persisted_traces, trace_summary or {},
+        ]
+        for name in item.get("model_names", [])
+        if isinstance(name, str) and name.strip()
+    ))
+    if model_names:
+        resolved["model_names"] = model_names
     from .agent_collaboration_archive import merge_archived_collaborations
     collaborations = merge_archived_collaborations(runtime_messages, session_id, list(resolved.get("collaborations") or []))
     if collaborations:

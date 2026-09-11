@@ -3,11 +3,16 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
+import json
+from pathlib import Path
 from typing import Any, Literal
 
 
 ValidationLevel = Literal["error", "warning"]
-RULESET_VERSION = "2026.08.2"
+RULESET_VERSION = "2026.09.4"
+PROJECT_RULES = json.loads(Path(__file__).with_name("project_rules.json").read_text(encoding="utf-8"))
+PERSONNEL_POSITIONS = tuple(PROJECT_RULES["personnel_positions"])
 
 
 def _record_id(record: dict[str, Any] | None) -> int | None:
@@ -56,7 +61,14 @@ def _groups(
 ) -> dict[Any, list[dict[str, Any]]]:
     grouped: dict[Any, list[dict[str, Any]]] = defaultdict(list)
     for record in records:
-        grouped[record.get(field_name)].append(record)
+        value = record.get(field_name)
+        try:
+            hash(value)
+        except TypeError:
+            # Invalid scalar values have their own field annotation; they
+            # must not crash duplicate checks and hide all validation output.
+            continue
+        grouped[value].append(record)
     return grouped
 
 
@@ -132,6 +144,93 @@ def _records(
     return records
 
 
+def _batch_issues(issues: list[dict[str, Any]], scope: Any, records: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """The MCP owns which business findings affect a partially selected batch."""
+    if scope is None:
+        return issues
+    targets = scope["record_targets"]
+    selected = set(scope["selected_keys"])
+    by_id = {str(row.get("record_id")): row for row in (records or [])}
+    by_key = {key: (raw_id, by_id.get(raw_id, {})) for raw_id, mapping in targets.items() for key in mapping.get("change_keys", [])}
+    sections = set(scope["sections"])
+    result = []
+    seen = set()
+    for issue in issues:
+        target = targets.get(str(issue.get("target_record_id")), {})
+        keys = list(target.get("change_keys", []))
+        field = issue.get("field_name")
+        if target.get("section") == "project" and field:
+            fields = ("contract_start_date", "contract_end_date") if issue["rule_id"] == "project.contract_date_order" else (field,)
+            keys = [target.get("field_changes", {}).get(name) for name in fields]
+        for related_id in issue.get("related_record_ids", []):
+            keys.extend(targets.get(str(related_id), {}).get("change_keys", []))
+        affected = list(dict.fromkeys(key for key in keys if key in selected))
+        if not affected and (issue.get("target_record_id") is not None or issue["section"] not in sections or issue["rule_id"].endswith(".empty")):
+            continue
+        for key in affected or [None]:
+            annotation = {**issue, "details": {**issue.get("details", {}), "change_keys": [key] if key else []}}
+            raw_id, row = by_key.get(key, (None, {}))
+            code = row.get("wbs_code")
+            if raw_id and issue["section"] == "wbs":
+                annotation["target_record_id"] = int(raw_id)
+                if issue["rule_id"] == "wbs.sibling_start_order" and issue.get("details", {}).get("wbs_code") != code:
+                    annotation["message"] = f"关联工序 {issue['details']['wbs_code']} 的计划开始早于本工序（{code}），请核对两项计划时间。"
+                if issue["rule_id"] == "wbs.predecessor_overlap" and code == issue.get("details", {}).get("predecessor_wbs_code"):
+                    annotation["field_name"] = "planned_finish_at"
+                    annotation["message"] = f"本工序（{code}）作为前置工序，计划完成晚于后续工序的计划开始。"
+            identity = (annotation["rule_id"], key, annotation.get("field_name"), annotation["message"])
+            if identity in seen:
+                continue
+            seen.add(identity)
+            result.append(annotation)
+    return result
+
+
+def _catalogue_issues(sections: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Versioned catalogue and value rules; no platform imports or mutation."""
+    issues: list[dict[str, Any]] = []
+    for person in sections["personnel"]:
+        raw = person.get("position_name")
+        position = raw.strip() if isinstance(raw, str) else None
+        if position not in PERSONNEL_POSITIONS:
+            issues.append(_issue(
+                "personnel.unsupported_position", "error", "personnel", person,
+                "position_name", "岗位不在固定范围",
+                f"岗位「{position or raw or '空白岗位'}」不在系统固定的 {len(PERSONNEL_POSITIONS)} 个岗位中。",
+                f"请人工核对岗位并修改原始资料后重新上传。允许岗位：{'、'.join(PERSONNEL_POSITIONS)}。",
+                details={"allowed_positions": list(PERSONNEL_POSITIONS)},
+            ))
+    for section, fields in PROJECT_RULES["numeric_fields"].items():
+        for row in sections[section]:
+            for field, rule in fields.items():
+                raw = row.get(field)
+                if raw is None or (isinstance(raw, str) and not raw.strip()):
+                    # These rules constrain supplied values, not requiredness.
+                    continue
+                try:
+                    number = Decimal(str(raw))
+                    valid_number = not isinstance(raw, bool) and number.is_finite()
+                except (InvalidOperation, ValueError):
+                    valid_number = False
+                if not valid_number:
+                    reason = "必须为有效的有限数值。"
+                elif rule.get("integer") and number != number.to_integral_value():
+                    reason = "必须为整数。"
+                elif number < rule["minimum"] or (rule.get("exclusive_minimum") and number == rule["minimum"]):
+                    reason = f"必须{'大于' if rule.get('exclusive_minimum') else '大于或等于'} {rule['minimum']}。"
+                elif "maximum" in rule and number > rule["maximum"]:
+                    reason = f"不能大于 {rule['maximum']}。"
+                else:
+                    continue
+                issues.append(_issue(
+                    f"{section}.{field}.value", "error", section, row, field,
+                    f"{rule['label']}取值不符合规则", f"{rule['label']}{reason}",
+                    "请人工核对原始资料，修正后重新上传。",
+                    details={"value": raw, "constraint": rule},
+                ))
+    return issues
+
+
 def validate_project_initialization(draft: dict[str, Any]) -> dict[str, Any]:
     """Validate one canonical draft and return row/field annotations."""
     if not isinstance(draft, dict):
@@ -156,6 +255,42 @@ def validate_project_initialization(draft: dict[str, Any]) -> dict[str, Any]:
     wbs = _records(draft, "wbs", issues)
     risks = _records(draft, "risks", issues)
     quality = _records(draft, "quality_requirements", issues)
+    issues.extend(_catalogue_issues({
+        "project": [project], "personnel": personnel, "wbs": wbs,
+        "risks": risks, "quality_requirements": quality,
+    }))
+
+    # The platform supplies identity matches as facts; only the MCP turns a
+    # duplicate identity into a material issue requiring human correction.
+    scope = draft.get("validation_scope") or {}
+    records_by_id = {str(row.get("record_id")): row for row in [project, *personnel, *wbs, *risks, *quality]}
+    for raw_id, target in scope.get("record_targets", {}).items():
+        section = target["section"]
+        row = records_by_id.get(raw_id, {"record_id": int(raw_id)})
+        if section != "project" and target.get("target_id") is not None and len(target.get("observations", [])) > 1:
+            issues.append(_issue(
+                "matching.duplicate_target", "error", section, row, None,
+                "多条上传记录对应同一现有记录", "本次资料中有多条记录修改同一旧记录。",
+                "请人工整理原始资料，消除重复后重新上传。",
+            ))
+        account = target.get("existing_account")
+        if account and not target.get("updates_existing_identity") and row.get("real_name") != account.get("real_name"):
+            issues.append(_issue(
+                "personnel.existing_account_name", "error", "personnel", row, "real_name",
+                "姓名与已有账号不一致", f"上传姓名「{row.get('real_name') or ''}」与已有账号姓名「{account['real_name']}」不同。",
+                "请人工核对身份证号和姓名，修正原始资料后重新上传。",
+            ))
+        candidates = target.get("matching_candidates", [])
+        if len(candidates) < 2:
+            continue
+        section = target["section"]
+        field = {"personnel": "identity_card_no", "wbs": "wbs_code", "quality_requirements": "wbs_code", "risks": "related_process_name"}.get(section)
+        issues.append(_issue(
+            "matching.duplicate_identity", "error", section, {"record_id": int(raw_id)}, field,
+            "现有记录的识别信息重复", f"同一组识别信息对应 {len(candidates)} 条现有记录，无法确定本次更新对象。",
+            "请人工核对现有记录与原始资料，消除重复后重新上传。",
+            details={"candidate_ids": [item["id"] for item in candidates]},
+        ))
 
     project_start = _temporal(project.get("contract_start_date"))
     project_end = _temporal(project.get("contract_end_date"))
@@ -522,6 +657,7 @@ def validate_project_initialization(draft: dict[str, Any]) -> dict[str, Any]:
                             f"计划开始早于前任 {predecessor_code} 的计划完成。",
                             "如属于搭接施工或开始—开始关系，可核对后继续。",
                             related=[predecessor],
+                            details={"predecessor_wbs_code": predecessor_code},
                         ),
                     )
 
@@ -664,6 +800,7 @@ def validate_project_initialization(draft: dict[str, Any]) -> dict[str, Any]:
         if key not in seen:
             seen.add(key)
             unique_issues.append(item)
+    unique_issues = _batch_issues(unique_issues, draft.get("validation_scope"), [project, *personnel, *wbs, *risks, *quality])
     error_count = sum(item["level"] == "error" for item in unique_issues)
     warning_count = sum(item["level"] == "warning" for item in unique_issues)
     return {

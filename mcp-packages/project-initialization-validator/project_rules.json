@@ -1,0 +1,29 @@
+{
+  "personnel_positions": [
+    "项目经理", "项目常务副经理", "项目商务副经理", "项目总工", "项目技术员",
+    "安全员", "质量员", "施工员", "劳务员", "材料员", "机械员", "测量员",
+    "资料员", "标准员", "取样员"
+  ],
+  "numeric_fields": {
+    "project": {
+      "contract_duration_days": {"label": "合同工期", "integer": true, "minimum": 0, "exclusive_minimum": true},
+      "contract_amount_wan_yuan": {"label": "合同金额", "minimum": 0}
+    },
+    "personnel": {
+      "serial_no": {"label": "人员序号", "integer": true, "minimum": 0, "exclusive_minimum": true}
+    },
+    "wbs": {
+      "sort_order": {"label": "排序", "integer": true, "minimum": 0},
+      "level": {"label": "WBS 层级", "integer": true, "minimum": 1, "maximum": 100},
+      "progress_percent": {"label": "完成进度", "minimum": 0, "maximum": 100},
+      "duration_hours": {"label": "工期", "minimum": 0},
+      "estimated_hours": {"label": "预计工时", "minimum": 0},
+      "time_log_minutes": {"label": "已记录工时", "integer": true, "minimum": 0},
+      "budget": {"label": "预算", "minimum": 0},
+      "actual_cost": {"label": "实际成本", "minimum": 0}
+    },
+    "risks": {
+      "serial_no": {"label": "风险序号", "integer": true, "minimum": 0, "exclusive_minimum": true}
+    }
+  }
+}

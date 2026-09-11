@@ -16,6 +16,7 @@ from uuid import uuid4
 import httpx
 
 from .config import Settings
+from .agentscope_validation_client import InitializationValidationClientMixin
 from .agent_pending_input import pending_input_message
 
 
@@ -104,7 +105,7 @@ class AgentScopeTeamState:
         return self.members_pending or self.leader_summary_pending
 
 
-class AgentScopeClient:
+class AgentScopeClient(InitializationValidationClientMixin):
     """Minimal backend-only client for catalogue and chat operations."""
 
     _CATALOG_CACHE_SECONDS = 15.0
@@ -688,20 +689,6 @@ class AgentScopeClient:
             f"{quote(resource_id, safe='')}",
             params=self._weknora_scope_params(agent_id),
         )
-
-    def validate_project_initialization(
-        self,
-        payload: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Run the active platform validation MCP without an LLM turn."""
-        result = self._request(
-            "POST",
-            "/mcp-registry/platform/project-initialization-validation",
-            json={"payload": payload},
-        )
-        if not isinstance(result, dict):
-            raise AgentScopeGatewayError("项目初始化核验 MCP 返回格式无效。")
-        return result
 
     def create_session(
         self,

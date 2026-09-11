@@ -495,7 +495,8 @@ class AgentCallConfigTest(IsolatedAsyncioTestCase):
                 list_resource=AsyncMock(return_value=[caller, target]),
             ),
         )
-        self.assertIsNotNone(await toolkit.get_tool("TaskCreate"))
+        for name in ("TaskCreate", "TaskUpdate", "TaskList", "TaskGet"):
+            self.assertIsNone(await toolkit.get_tool(name))
         self.assertIsNotNone(await toolkit.get_tool("AgentInvite"))
 
     async def test_home_general_session_hides_direct_task_engine_mcp(

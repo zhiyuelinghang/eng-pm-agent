@@ -33,7 +33,8 @@ async def test_language_rule_reaches_native_agent_prompt_after_other_instruction
     assert prompt.endswith(THINKING_LANGUAGE_INSTRUCTION)
     assert "必须使用简体中文" in prompt
     assert "标识符" in prompt
-    assert "最终答复的语言继续遵循用户需求" in prompt
+    assert "进度说明、协同反馈和最终答复默认必须使用简体中文" in prompt
+    assert "用户明确要求其他语言时" in prompt
     assert await agent._get_system_prompt() == prompt
     assert agent._system_prompt == "项目资料助手，只读取用户授权资料。"
 

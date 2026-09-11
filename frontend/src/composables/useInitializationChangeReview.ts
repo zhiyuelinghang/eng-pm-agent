@@ -1,6 +1,6 @@
 import { computed, onScopeDispose, ref, watch } from 'vue'
 import { applyInitializationChanges, initializationChangeError, previewInitializationChanges } from '@/api/initializationChanges'
-import type { InitializationChange, InitializationChangeCredential, InitializationChangePreview, InitializationDraftReference, InitializationPreviewInput } from '@/types/initializationChanges'
+import type { InitializationChange, InitializationChangeCredential, InitializationChangePreview, InitializationCredentialField, InitializationDraftReference, InitializationPreviewInput } from '@/types/initializationChanges'
 import { generateInitializationPassword, initializationCredentialError, reconcileInitializationCredentials, selectableInitializationChange } from '@/utils/initializationChangePresentation'
 
 type ReviewProps = { open: boolean; projectId: string; draft: InitializationDraftReference | null; admin: boolean }
@@ -9,8 +9,14 @@ type ReviewDependencies = {
   apply: typeof applyInitializationChanges
   password: () => string
   debounceMs: number
+  beforeReveal: () => Promise<void>
 }
-const defaults: ReviewDependencies = { preview: previewInitializationChanges, apply: applyInitializationChanges, password: generateInitializationPassword, debounceMs: 200 }
+function paintLoadingState() {
+  return typeof requestAnimationFrame === 'function'
+    ? new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+    : Promise.resolve()
+}
+const defaults: ReviewDependencies = { preview: previewInitializationChanges, apply: applyInitializationChanges, password: generateInitializationPassword, debounceMs: 200, beforeReveal: paintLoadingState }
 
 export function useInitializationChangeReview(props: ReviewProps, onApplied: () => void, dependencies: Partial<ReviewDependencies> = {}) {
   const deps = { ...defaults, ...dependencies }
@@ -19,19 +25,21 @@ export function useInitializationChangeReview(props: ReviewProps, onApplied: () 
   const resolutions = ref<Record<string, number | null>>({})
   const credentials = ref<InitializationChangeCredential[]>([])
   const loading = ref(false)
+  const opening = ref(false)
   const applying = ref(false)
   const stale = ref(true)
   const error = ref('')
   const notice = ref('')
   const allowWarnings = ref(false)
+  const remainingChanges = computed(() => (preview.value?.changes || []).filter(change => change.operation !== 'applied'))
   let sequence = 0
   let controller: AbortController | null = null
   let timer: ReturnType<typeof setTimeout> | undefined
   let hasSelection = false
   let disposed = false
 
-  const warnings = computed(() => preview.value?.issues.filter(issue => issue.level === 'warning') || [])
-  const errors = computed(() => preview.value?.issues.filter(issue => issue.level === 'error') || [])
+  const warnings = computed(() => [...(preview.value?.issues || []), ...(preview.value?.operation_issues || [])].filter(issue => issue.level === 'warning'))
+  const errors = computed(() => [...(preview.value?.issues || []), ...(preview.value?.operation_issues || [])].filter(issue => issue.level === 'error'))
   const credentialErrors = computed(() => credentials.value.map(item => initializationCredentialError(item, credentials.value)))
   const canApply = computed(() => Boolean(
     props.open && props.admin && !loading.value && !applying.value && !stale.value
@@ -51,9 +59,9 @@ export function useInitializationChangeReview(props: ReviewProps, onApplied: () 
     allowWarnings.value = false
   }
 
-  async function refresh(resetSelection = false) {
+  async function refresh(resetSelection = false, forceValidation = false) {
     invalidate()
-    if (disposed || !props.open || !props.projectId || !props.draft || applying.value) return
+    if (disposed || !props.open || !props.projectId || !props.draft || applying.value) { opening.value = false; return }
     if (resetSelection) hasSelection = false
     const requestSequence = sequence
     const draftId = props.draft.id
@@ -65,22 +73,27 @@ export function useInitializationChangeReview(props: ReviewProps, onApplied: () 
     const input: InitializationPreviewInput = {
       ...(hasSelection ? { selected_keys: [...selectedKeys.value] } : {}),
       resolutions: { ...resolutions.value },
+      ...(forceValidation ? { force_validation: true } : {}),
     }
     try {
       const result = await deps.preview(projectId, draftId, input, requestController.signal)
+      if (disposed || requestSequence !== sequence || !props.open) return
+      // Paint the lightweight dialog before mounting a full draft, even when
+      // the response is already cached. Reopening must not mount old rows first.
+      if (opening.value) await deps.beforeReveal()
       if (disposed || requestSequence !== sequence || !props.open) return
       preview.value = result
       selectedKeys.value = [...result.selected_keys]
       hasSelection = true
       credentials.value = reconcileInitializationCredentials(result.required_personnel_credentials, credentials.value, deps.password)
       stale.value = false
-      if (result.validation.status === 'failed') error.value = result.validation.error || '所选内容核验失败，请重新核验。'
+      if (result.validation.status === 'failed') error.value = result.validation.error || '核验服务未完成检查，请稍后重新打开草稿。'
     } catch (failure: unknown) {
       if (requestSequence !== sequence) return
       const failureState = initializationChangeError(failure)
       if (!failureState.cancelled) error.value = failureState.message
     } finally {
-      if (requestSequence === sequence) loading.value = false
+      if (requestSequence === sequence) { loading.value = false; opening.value = false }
     }
   }
 
@@ -153,13 +166,25 @@ export function useInitializationChangeReview(props: ReviewProps, onApplied: () 
     if (notice.value) await refresh()
   }
 
+  function updateCredential(identity: string, field: InitializationCredentialField, value: string) {
+    if (!props.admin || applying.value || !props.open) return
+    const credential = credentials.value.find(item => item.identity_card_no === identity)
+    if (credential) credential[field] = field === 'username' ? value.trim() : value
+  }
+
+  let reviewIdentity = ''
   watch([() => props.open, () => props.projectId, () => props.draft?.id], () => {
     invalidate()
-    preview.value = null
-    credentials.value = []
-    resolutions.value = {}
-    selectedKeys.value = []
-    hasSelection = false
+    opening.value = props.open
+    const identity = `${props.projectId}:${props.draft?.id}`
+    if (identity !== reviewIdentity) {
+      reviewIdentity = identity
+      preview.value = null
+      credentials.value = []
+      resolutions.value = {}
+      selectedKeys.value = []
+      hasSelection = false
+    }
     error.value = ''
     notice.value = ''
     if (props.open) void refresh()
@@ -171,5 +196,5 @@ export function useInitializationChangeReview(props: ReviewProps, onApplied: () 
   }, { flush: 'sync' })
   onScopeDispose(() => { disposed = true; invalidate() })
 
-  return { preview, selectedKeys, resolutions, credentials, loading, applying, stale, error, notice, allowWarnings, warnings, errors, credentialErrors, canApply, refresh, selectChange, selectMany, resolveChange, apply }
+  return { preview, remainingChanges, selectedKeys, resolutions, credentials, loading, opening, applying, stale, error, notice, allowWarnings, warnings, errors, credentialErrors, canApply, refresh, selectChange, selectMany, resolveChange, updateCredential, apply }
 }

@@ -13,6 +13,7 @@ that wants them subscribes through the
 """
 import asyncio
 import json
+from datetime import UTC, datetime
 from contextlib import nullcontext
 
 from fastapi import HTTPException
@@ -205,6 +206,7 @@ class ChatService:
         self._mcp_registry_manager = mcp_registry_manager
         self._skill_registry_manager = skill_registry_manager
         self._attachment_pipeline = AttachmentPipeline()
+        self._interrupt_cleanup_tasks: set[asyncio.Task] = set()
         self._projection = SessionProjection(message_bus)
         self._projectors: list[EventProjector] = [
             SubagentHitlProjector(storage),
@@ -298,9 +300,9 @@ class ChatService:
 
         Two paths, chosen by session liveness:
 
-        - **Running** (lock held): publish on the interrupt channel so
+        - **Running** (lock held): publish on the cancel channel so
           the local :class:`~agentscope.app._manager.CancelDispatcher`
-          cancels its chat-run task; the agent's ``CancelledError``
+          cancels its chat-run and background tasks; the agent's ``CancelledError``
           cleanup runs (fake tool results for pending calls, fallback
           message, ``ReplyEndEvent(INTERRUPTED)``).
         - **Not running**: enqueue a ``resume`` trigger carrying a
@@ -329,14 +331,21 @@ class ChatService:
         if session is None:
             raise LookupError(f"Session '{session_id}' not found.")
 
+        # Persist before cancelling: worker termination can itself emit a
+        # report and enqueue another leader wakeup.
+        session.config.user_stopped_at = datetime.now(UTC)
+        await self._storage.upsert_session(
+            user_id, agent_id, session.config, session_id=session_id,
+            source=session.source, source_schedule_id=session.source_schedule_id,
+        )
+
         running = await self._message_bus.is_locked(
             MessageBusKeys.session_lock(session_id),
         )
-        if running:
-            await self._message_bus.publish(
-                MessageBusKeys.session_interrupt_channel(),
-                {"session_id": session_id},
-            )
+        await self._message_bus.publish(
+            MessageBusKeys.session_cancel_channel(),
+            {"session_id": session_id},
+        )
 
         # A leader can be idle while its workers are still running or parked
         # on confirmation. Cancel and purge those temporary sessions as well,
@@ -347,9 +356,23 @@ class ChatService:
             if team is not None and team.session_id == session_id:
                 from ._session import SessionService
 
-                await SessionService(
+                service = SessionService(
                     storage=self._storage, message_bus=self._message_bus,
-                ).delete_team(user_id, team_id)
+                )
+                await service.cancel_team_runs(user_id, team_id)
+                # Models and background tools have all received cancellation.
+                # Archiving their interrupted replies and deleting temporary
+                # sessions must not hold the user's stop request open.
+                tasks = getattr(self, "_interrupt_cleanup_tasks", None)
+                if tasks is None:
+                    tasks = self._interrupt_cleanup_tasks = set()
+                task = asyncio.create_task(service.delete_team(user_id, team_id))
+                tasks.add(task)
+                def completed(finished):
+                    tasks.discard(finished)
+                    if not finished.cancelled() and finished.exception() is not None:
+                        logger.error("Stopped team cleanup failed: %s", finished.exception())
+                task.add_done_callback(completed)
         if running:
             return
 
@@ -489,6 +512,10 @@ class ChatService:
                 session_id,
                 agent_id,
             )
+            if isinstance(failure, asyncio.CancelledError) or (
+                reply_msg is not None and reply_msg.finished_reason == ReplyFinishedReason.INTERRUPTED
+            ):
+                collaboration_pending = False
             error_message = None
             if failure is not None:
                 error_message = (
@@ -573,6 +600,20 @@ class ChatService:
                 ),
             )
         if not isinstance(input_msg, UserInterruptEvent):
+            from .._user_stop import input_resumes_stopped_session, team_root_was_stopped
+            if await team_root_was_stopped(self._storage, user_id, session_record):
+                logger.info("Cancelling worker continuation for stopped team: %s", session_id)
+                return None
+            stopped_at = getattr(session_record.config, "user_stopped_at", None)
+            if not input_resumes_stopped_session(input_msg, stopped_at):
+                logger.info("Discarding late continuation for stopped session %s", session_id)
+                return None
+            if stopped_at is not None:
+                session_record.config.user_stopped_at = None
+                await self._storage.upsert_session(
+                    user_id, agent_id, session_record.config, session_id=session_id,
+                    source=session_record.source, source_schedule_id=session_record.source_schedule_id,
+                )
             from ._platform_settings import ensure_fixed_agent_entry, get_platform_duties
             duties = await get_platform_duties(self._storage, user_id)
             delegated = False
@@ -1271,6 +1312,11 @@ class ChatService:
         )
         if not newly_settled:
             return
+        # Cancellation still records the worker's actual terminal state, but
+        # must not turn that cleanup result into a new request for the leader.
+        recipient = await self._storage.get_session(user_id, "", leader_session.id)
+        if recipient is None or getattr(recipient.config, "user_stopped_at", None) is not None:
+            return
         await deliver_team_message(
             self._message_bus,
             user_id=user_id,
@@ -1326,6 +1372,8 @@ class ChatService:
             report_recipient_session_id(team, session_id),
         )
         if leader_session is None:
+            return
+        if getattr(leader_session.config, "user_stopped_at", None) is not None:
             return
         worker_agent = await self._storage.get_agent(user_id, agent_id)
         sender_name = (

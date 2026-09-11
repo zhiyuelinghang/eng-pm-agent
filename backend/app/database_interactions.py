@@ -40,6 +40,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .db import Base
+from .initialization_tool_authority import agent_writable_fields, require_initialization_tool_authority
 from .models import (
     DatabaseInteraction,
     DatabaseInteractionAgentAssignment,
@@ -823,7 +824,8 @@ def build_table_interaction_schema(
     exposed_writable_fields = [
         name
         for name in policy.writable_fields
-        if name not in bound_fields
+        if name in agent_writable_fields(policy.table_name, policy.writable_fields)
+        and name not in bound_fields
         and (operation == "create" or name not in primary_keys)
     ]
     writable = {
@@ -863,40 +865,10 @@ def build_table_interaction_schema(
             "type": "array",
             "items": {"type": "string", "minLength": 1},
             "description": (
-                "仅记录从原文实际发现的冲突、缺失或转换；"
-                "没有疑点时传空数组，禁止写通用免责声明。"
+                "仅记录来源位置、读取情况和格式转换；"
+                "不生成资料合格性结论或问题列表，没有说明时传空数组。"
             ),
         }
-    if (
-        policy.table_name == "project_initialization_drafts"
-        and operation == "update"
-    ):
-        if "status" in writable:
-            writable["status"] = {
-                "type": "string",
-                "enum": ["ready", "invalid"],
-                "description": "存在 error 时为 invalid，否则为 ready。",
-            }
-        if "validation_issues" in writable:
-            writable["validation_issues"] = {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "level": {
-                            "type": "string",
-                            "enum": ["error", "warning"],
-                        },
-                        "path": {"type": "string", "minLength": 1},
-                        "message": {"type": "string", "minLength": 1},
-                    },
-                    "required": ["level", "path", "message"],
-                    "additionalProperties": False,
-                },
-                "description": (
-                    "标准核验问题数组；每项只包含 level、path、message。"
-                ),
-            }
     values_schema: dict[str, Any] = {
         "type": "object",
         "properties": writable,
@@ -907,15 +879,6 @@ def build_table_interaction_schema(
         required_value_fields = [
             name
             for name in ("payload", "source_files", "extraction_notes")
-            if name in writable
-        ]
-    elif (
-        policy.table_name == "project_initialization_drafts"
-        and operation == "update"
-    ):
-        required_value_fields = [
-            name
-            for name in ("status", "validation_issues")
             if name in writable
         ]
     if required_value_fields:
@@ -1972,6 +1935,10 @@ def execute_table_interaction(
         actor_agent_id,
     )
     fixed_values = dict(interaction.fixed_values or {})
+    require_initialization_tool_authority(
+        policy.table_name, operation, context, arguments.get("values") or {},
+        fixed_values, bound_write_values,
+    )
     initialization_section = _initialization_section_from_policy(
         policy,
         fixed_values,
@@ -2259,7 +2226,7 @@ def execute_table_interaction(
             if isinstance(item, dict) and item.get("field")
         }
         bound_fields.update(fixed_values)
-        writable = set(policy.writable_fields) - bound_fields
+        writable = agent_writable_fields(policy.table_name, policy.writable_fields) - bound_fields
         if operation != "create":
             writable.difference_update(primary_key_names)
         values = arguments.get("values") or {}
@@ -2283,8 +2250,8 @@ def execute_table_interaction(
                     db, context, operation, arguments, values, actor_agent_id,
                 )
             if (
-                interaction.key
-                == "dobby_create_project_initialization_draft"
+                policy.table_name == "project_initialization_drafts"
+                and operation == "create"
             ):
                 # A new draft is a workflow envelope; all business content is
                 # owned by project_initialization_draft_sections.  Do not let

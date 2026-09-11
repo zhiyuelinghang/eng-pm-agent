@@ -143,8 +143,11 @@ def test_platform_skill_is_the_only_initialization_workflow_source() -> None:
         / ORCHESTRATOR.skill_name
         / "SKILL.md"
     ).read_text(encoding="utf-8")
-    assert "TaskCreate" in skill
-    assert "第一个业务工具调用" in skill
+    assert "不创建执行计划" in skill
+    assert "TaskCreate" not in skill
+    assert "不得自行修复、删改问题记录" in skill
+    assert "只能由用户修改原始资料后重新上传" in skill
+    assert "进度说明、协同反馈和最终答复必须使用简体中文" in _system_prompt(ORCHESTRATOR)
     assert "<parsed-attachment-manifest>" in skill
     assert "严禁把解析正文复制进邀请 prompt" in skill
     assert "`ready` 才能说“核验通过”" in skill

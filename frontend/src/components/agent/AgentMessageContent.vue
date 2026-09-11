@@ -4,15 +4,14 @@
       <span class="working-mark"><n-icon :size="16"><Loader class="spin" /></n-icon></span>
       <span>{{ !canConfirm && presentation.confirmations.length ? '等待请求发起人确认后继续' : workingLabel }}</span>
     </div>
-    <AgentTaskPlan :runtime-trace="runtimeTrace" />
-    <AgentTeamOverview :runtime-trace="runtimeTrace" />
+    <AgentTaskPlan v-if="showTaskPlan" :runtime-trace="runtimeTrace" />
     <template v-for="item in presentation.items" :key="item.key">
       <template v-if="item.kind === 'block'">
         <details v-if="item.block.type === 'thinking'" class="agent-thinking" :open="isThinkingBlockActive(runtimeTrace, item.message, item.block)">
           <summary><n-icon :size="15"><Bulb /></n-icon><span>思考过程</span><n-icon class="thinking-chevron" :size="14"><ChevronRight /></n-icon></summary>
           <div class="thinking-body agent-markdown" v-html="renderMarkdown(item.block.thinking || '正在思考…')"></div>
         </details>
-        <AgentWorkRecord v-else-if="item.block.type === 'tool_call'" :label="userWorkLabel(item.block.presentation)"
+        <AgentWorkRecord v-else-if="item.block.type === 'tool_call' && (showTaskPlan || !isTaskPlanTool(item.block.name))" :label="userWorkLabel(item.block.presentation)"
           :state="callState(item.message, item.block)" />
         <div v-if="item.block.type === 'text'" class="agent-markdown" v-html="renderMarkdown(item.block.text)"></div>
         <figure v-else-if="item.block.type === 'data' && dataUrl(item.block)" class="agent-media">
@@ -41,7 +40,8 @@
       {{ isInterrupted ? '本次处理已停止。' : '本次处理已结束，暂时没有可展示的结果。' }}
     </p>
 
-    <footer v-if="runtimeTrace && !isTraceActive && (presentation.answers.length || content)" class="agent-runtime-footer">
+    <AgentTeamOverview :runtime-trace="runtimeTrace" />
+    <footer v-if="runtimeTrace && (isTraceActive || presentation.items.length || content || hasError)" class="agent-runtime-footer" aria-label="本次回复运行信息">
       <span class="agent-runtime-state" :class="{ running: isTraceActive, error: hasError, interrupted: isInterrupted }">
         <n-icon :size="13">
           <Loader v-if="isTraceActive" class="spin" />
@@ -52,6 +52,12 @@
         {{ statusLabel }}
       </span>
       <span v-if="elapsedLabel">{{ elapsedLabel }}</span>
+      <span v-if="isTraceActive && runtimeSummary.waitingNames.length" class="agent-runtime-waiting">等待：{{ runtimeSummary.waitingNames.join('、') }}</span>
+      <div class="agent-runtime-metrics">
+        <span v-if="runtimeSummary.modelNames.length" :title="runtimeSummary.modelNames.join('、')">模型：{{ runtimeSummary.modelNames.join('、') }}</span>
+        <span>输出 {{ runtimeSummary.outputLength.toLocaleString('zh-CN') }} 字符</span>
+        <span v-if="runtimeSummary.usage">Token 输入 {{ runtimeSummary.usage.input.toLocaleString('zh-CN') }} · 输出 {{ runtimeSummary.usage.output.toLocaleString('zh-CN') }}</span>
+      </div>
     </footer>
   </div>
 </template>
@@ -69,6 +75,7 @@ import AgentCollaborationStep from './AgentCollaborationStep.vue'
 import type { AgentDataBlock, AgentRuntimeMessage, AgentRuntimeTrace, AgentToolCallBlock } from '@/types/agentRuntime'
 import { findToolResult, isRuntimeActive, isThinkingBlockActive, toolPresentationState } from '@/utils/agentMessagePresentation'
 import { userMessagePresentation, userWorkLabel } from '@/utils/agentUserPresentation'
+import { agentRuntimeSummary } from '@/utils/agentRuntimeSummary'
 
 const props = withDefaults(defineProps<{
   content?: string
@@ -79,9 +86,10 @@ const props = withDefaults(defineProps<{
   assistantName?: string
   canConfirm?: boolean
   confirmationBusy?: boolean
+  showTaskPlan?: boolean
 }>(), {
   content: '', runtimeTrace: null, streaming: false, startingLabel: '正在处理请求…',
-  canConfirm: true, confirmationBusy: false,
+  canConfirm: true, confirmationBusy: false, showTaskPlan: true,
 })
 const emit = defineEmits<{ confirm: [replyId: string, toolCall: AgentToolCallBlock, confirmed: boolean] }>()
 const pendingConfirmationKey = ref('')
@@ -99,6 +107,8 @@ watch(() => props.runtimeTrace?.status, () => {
 })
 
 const presentation = computed(() => userMessagePresentation(props.runtimeTrace, props.streaming))
+const runtimeSummary = computed(() => agentRuntimeSummary(props.runtimeTrace))
+const isTaskPlanTool = (name: string) => ['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'].includes(name)
 const workingLabel = computed(() => {
   if (props.assistantName && !props.runtimeTrace?.messages.length) return props.startingLabel
   return props.assistantName ? presentation.value.workingLabel.replace(/^Dobby/, props.assistantName) : presentation.value.workingLabel
@@ -121,6 +131,7 @@ const statusLabel = computed(() => {
   if (hasError.value) return '处理失败'
   if (props.runtimeTrace?.status === 'awaiting_permission') return '等待确认'
   if (props.runtimeTrace?.status === 'awaiting_external_result') return '等待操作结果'
+  if (isTraceActive.value && runtimeSummary.value.waitingNames.length) return '协同处理中'
   if (isTraceActive.value) return '处理中'
   return '已回复'
 })
@@ -202,6 +213,8 @@ function renderMarkdown(value: string) {
 .agent-runtime-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 5px; color: #6d837c; font-size: 12px; }
 .agent-runtime-state { display: inline-flex; align-items: center; gap: 4px; color: #4e6e68; }
 .agent-runtime-state.running { color: #0b7768; }.agent-runtime-state.interrupted { color: #8a5b19; }.agent-runtime-state.error { color: #a4472d; }
+.agent-runtime-metrics { display:flex; flex-wrap:wrap; gap:8px 14px; margin-left:auto; font-variant-numeric:tabular-nums; }
+.agent-runtime-waiting { color:#48766b; }
 .spin { animation: spin .8s linear infinite; }@keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 </style>

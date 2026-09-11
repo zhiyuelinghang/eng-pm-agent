@@ -146,6 +146,6 @@ def _validate_initialization_section_evidence(values: dict[str, Any]) -> None:
             status_code=422,
             detail=(
                 "初始化草稿分区必须显式提交 extraction_notes 数组；"
-                "没有真实疑点时使用空数组"
+                "没有来源或转换说明时使用空数组"
             ),
         )

@@ -279,6 +279,15 @@ class Msg(BaseModel):
                 )
                 self.error = event.error
 
+            case EventType.MODEL_CALL_START:
+                # Persist the actual model with the source message, including
+                # replies that finish after the browser stream disconnects.
+                self.metadata = dict(self.metadata or {})
+                names = list(self.metadata.get("model_names") or [])
+                if event.model_name and event.model_name not in names:
+                    names.append(event.model_name)
+                self.metadata["model_names"] = names
+
             case EventType.MODEL_CALL_END:
                 if self.usage is None:
                     self.usage = Usage(

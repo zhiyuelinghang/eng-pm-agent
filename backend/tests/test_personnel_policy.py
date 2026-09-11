@@ -9,7 +9,6 @@ from backend.app.engineering_document_catalog import (
     reconcile_name_based_catalogue_permissions,
     sync_document_catalogue,
 )
-from backend.app.initialization_integrity import validate_initialization_integrity
 from backend.app.models import (
     AgentConversation,
     EngineeringDocumentNode,
@@ -31,7 +30,6 @@ from backend.app.personnel_policy import (
 from backend.app.project_initialization import (
     ApplyInitializationDraftInput,
     PersonnelCredentialInput,
-    ProjectInitializationPayload,
     apply_initialization_draft,
 )
 
@@ -80,36 +78,6 @@ def _assign(
     )
     db.flush()
     return position
-
-
-def test_unknown_initialization_position_is_a_targeted_error() -> None:
-    payload = ProjectInitializationPayload.model_validate(
-        {
-            "personnel": [
-                {
-                    "record_id": 7,
-                    "serial_no": 1,
-                    "real_name": "测试人员",
-                    "identity_card_no": "CARD-UNKNOWN",
-                    "position_name": "技术负责人",
-                    "certificate_no": "无",
-                    "responsibility_description": "技术工作",
-                },
-            ],
-        },
-    )
-
-    issues = validate_initialization_integrity(payload)
-
-    issue = next(
-        item
-        for item in issues
-        if item["rule_id"] == "platform.integrity.personnel.unsupported_position"
-    )
-    assert issue["target_record_id"] == 7
-    assert issue["field_name"] == "position_name"
-    assert "技术负责人" in issue["message"]
-    assert all(name in issue["message"] for name in PROJECT_POSITION_NAMES)
 
 
 def test_account_role_is_derived_from_admin_username_or_project_manager() -> None:
@@ -275,7 +243,9 @@ def test_catalogue_sync_rebinds_default_permission_when_remote_id_changes() -> N
         assert result["permission_policy"]["default_knowledge_base_found"] is True
 
 
-def test_initialization_derives_roles_and_applies_name_based_permissions() -> None:
+def test_initialization_derives_roles_and_applies_name_based_permissions(monkeypatch) -> None:
+    from backend.app.agentscope_client import AgentScopeClient
+    monkeypatch.setattr(AgentScopeClient, "get_initialization_validation_binding", lambda _self: {"package_id": "project-initialization-validator", "package_version": "2.0.0"})
     engine = _engine()
     Base.metadata.create_all(engine)
     with Session(engine) as db:

@@ -32,6 +32,7 @@ from .initialization_draft_queries import initialization_draft_workflow_summary,
 from .initialization_validation import latest_initialization_validation_run, validation_run_view
 from .project_initialization import suggest_unique_username
 from .models import User
+from .initialization_change_models import AppliedInitializationChange
 
 
 def build_initialization_draft_review(
@@ -47,6 +48,12 @@ def build_initialization_draft_review(
     ]
     data["payload"] = payload
     data["workflow"] = workflow
+    data["extraction_notes"] = [
+        {"section": section.section, "notes": section.extraction_notes or []}
+        for section in db.scalars(select(ProjectInitializationDraftSection).where(
+            ProjectInitializationDraftSection.draft_id == draft.id,
+        )).all() if section.extraction_notes
+    ]
     data["validation_issues"] = current_issues
     latest_validation = latest_initialization_validation_run(db, draft.id)
     data["validation"] = validation_run_view(latest_validation)
@@ -139,4 +146,17 @@ def build_initialization_draft_review(
         if isinstance(payload.get("quality_requirements"), list)
         else 0,
     }
+    # Preserve source rows and the apply ledger for audit, but the draft card
+    # describes only the portion still awaiting confirmation.
+    if db.scalar(select(AppliedInitializationChange.id).where(AppliedInitializationChange.draft_id == draft.id).limit(1)):
+        from .initialization_changes import build_change_plan
+        remaining = [row for row in build_change_plan(db, draft)["changes"] if row["operation"] != "applied"]
+        data["pending_change_count"] = sum(row["operation"] in {"add", "update", "conflict"} for row in remaining)
+        personnel = [row for row in remaining if row["section"] == "personnel"]
+        data["summary"] = {
+            "project_fields": sum(row["section"] == "project" for row in remaining),
+            "personnel": len({row["after"].get("identity_card_no") or row["key"] for row in personnel}),
+            "position_assignments": len(personnel),
+            **{section: sum(row["section"] == section for row in remaining) for section in ("wbs", "risks", "quality_requirements")},
+        }
     return data

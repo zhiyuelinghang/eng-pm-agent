@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 from .initialization_change_validation import validate_change_plan
 from .initialization_draft_queries import serialize_initialization_validation_issue
 from .initialization_draft_view import draft_review_payload
+from .initialization_validation_snapshot import save_validation_snapshot, snapshot_key
+from .agentscope_client import AgentScopeClient
+from .config import get_settings
 from .models import ProjectInitializationDraft, ProjectInitializationValidationIssue, ProjectInitializationValidationRun
 
 
@@ -26,21 +29,17 @@ def run_incremental_validation(db: Session, draft: ProjectInitializationDraft, *
     db.commit()
     run_id, revision = run.id, run.draft_revision
     try:
-        issues, validation = validate_change_plan(plan, client=client)
+        validator = client or AgentScopeClient(get_settings())
+        key, binding = snapshot_key(plan, validator)
+        issues, validation = validate_change_plan(plan, client=validator)
         db.expire_all()
         if draft.revision != revision:
             raise InitializationValidationError("草稿在核验期间已更新，本次结果已作废，请重新核验。")
         refreshed = build_change_plan(db, draft)
         if refreshed["baseline_hash"] != plan["baseline_hash"]:
             raise InitializationValidationError("项目数据在核验期间已更新，请重新核验。")
+        save_validation_snapshot(db, draft, plan, key, issues, validation, binding)
         by_key = {row["key"]: row for row in plan["changes"]}
-        # Ambiguous proposals remain visible in the overall draft; the change
-        # preview can still confirm an independent subset without these rows.
-        for change in plan["changes"]:
-            if change["operation"] == "conflict":
-                issues.append({"rule_id": "platform.change.match", "level": "error", "section": change["section"],
-                    "change_key": change["key"], "field_name": None, "label": "匹配待确认", "title": "需要确认对应记录",
-                    "message": "请在差异窗口选择对应的旧记录，或明确作为新增。"})
         saved = []
         for issue in issues:
             change = by_key.get(issue.get("change_key"))
@@ -57,7 +56,7 @@ def run_incremental_validation(db: Session, draft: ProjectInitializationDraft, *
             saved.append(row)
         db.flush()
         serialized = [serialize_initialization_validation_issue(row) for row in saved]
-        status = "invalid" if any(row["level"] == "error" for row in issues) else "ready"
+        status = "invalid" if validation.get("result_status") == "invalid" or any(row["level"] == "error" for row in issues) else "ready"
         run.status, run.result_status = "completed", status
         run.package_id = validation.get("package_id")
         run.package_version = validation.get("package_version")

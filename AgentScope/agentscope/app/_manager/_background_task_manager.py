@@ -398,6 +398,8 @@ class BackgroundTaskManager:
         for bg_task in list(self.tasks.values()):
             if bg_task.session_id != session_id:
                 continue
+            if bg_task.asyncio_task.done() or bg_task.asyncio_task.cancelling():
+                continue
             logger.info(
                 "Cancelling background task for session cancel: "
                 "task_id=%s, session_id=%s, agent_id=%s",

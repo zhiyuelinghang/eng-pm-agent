@@ -25,12 +25,52 @@ function review(t, options = {}) {
   const calls = [], applyCalls = []
   let applied = 0
   const state = scope.run(() => useInitializationChangeReview(props, () => applied++, {
-    debounceMs: 0, password: () => 'Abc12345!xyz',
+    debounceMs: 0, password: () => 'Abc12345!xyz', beforeReveal: options.beforeReveal || (() => Promise.resolve()),
     preview: async (...args) => { calls.push(args); return options.preview ? options.preview(...args) : preview() },
     apply: async (...args) => { applyCalls.push(args); return options.apply ? options.apply(...args) : { result: { status: 'partially_applied', counts: { wbs: 1 } } } },
   }))
   return { props, state, calls, applyCalls, applied: () => applied }
 }
+
+test('快速返回的草稿也先显示加载态，等浏览器绘制后再展示内容', async t => {
+  const paint = deferred()
+  const { state } = review(t, { beforeReveal: () => paint.promise })
+  assert.equal(state.opening.value, true)
+  assert.equal(state.loading.value, true)
+  await tick()
+  assert.equal(state.preview.value, null)
+  assert.equal(state.canApply.value, false)
+  paint.resolve()
+  await tick()
+  assert.equal(state.opening.value, false)
+  assert.equal(state.loading.value, false)
+  assert.equal(state.preview.value.preview_id, 'preview-1')
+  assert.equal(state.canApply.value, true)
+})
+
+test('关闭后重新打开，旧绘制等待结束不会覆盖新结果或提前撤销加载态', async t => {
+  const oldPaint = deferred(), newPaint = deferred()
+  let request = 0, paint = 0
+  const { state, props } = review(t, {
+    preview: async () => preview(undefined, { preview_id: `request-${++request}` }),
+    beforeReveal: () => ++paint === 1 ? oldPaint.promise : newPaint.promise,
+  })
+  await tick()
+  props.open = false
+  assert.equal(state.opening.value, false)
+  props.open = true
+  await tick()
+  oldPaint.resolve()
+  await tick()
+  assert.equal(state.preview.value, null)
+  assert.equal(state.opening.value, true)
+  assert.equal(state.loading.value, true)
+  newPaint.resolve()
+  await tick()
+  assert.equal(state.preview.value.preview_id, 'request-2')
+  assert.equal(state.opening.value, false)
+  assert.equal(state.loading.value, false)
+})
 
 test('草稿还在收集或整体无效时，可对已核验的部分生成预览并提交', async t => {
   const { state, props, calls } = review(t)
@@ -40,6 +80,31 @@ test('草稿还在收集或整体无效时，可对已核验的部分生成预�
   assert.equal(state.canApply.value, true)
   props.draft.status = 'invalid'
   assert.equal(state.canApply.value, true)
+})
+
+test('同份草稿重新打开保留选择及账号编辑，只有主动重新核验才请求强制执行', async t => {
+  const required = [{ identity_card_no: 'id-one', real_name: '张工', position_name: '施工员', suggested_username: 'zhang.gong' }]
+  const { state, props, calls } = review(t, { preview: async (_pid, _did, input) => preview(undefined, {
+    selected_keys: input.selected_keys ?? ['wbs:1', 'wbs:2'], required_personnel_credentials: required,
+  }) })
+  await tick()
+  state.selectChange(state.preview.value.changes[0], false)
+  await tick()
+  state.updateCredential('id-one', 'username', 'kept.username')
+  const password = state.credentials.value[0].initial_password
+  props.open = false
+  props.open = true
+  assert.equal(state.opening.value, true)
+  assert.equal(state.loading.value, true)
+  assert.equal(state.preview.value !== null, true)
+  await tick()
+  assert.equal(state.opening.value, false)
+  assert.deepEqual(state.selectedKeys.value, ['wbs:2'])
+  assert.equal(state.credentials.value[0].username, 'kept.username')
+  assert.equal(state.credentials.value[0].initial_password, password)
+  assert.equal(calls.at(-1)[2].force_validation, undefined)
+  await state.refresh(false, true)
+  assert.equal(calls.at(-1)[2].force_validation, true)
 })
 
 test('取消一个记录立即使旧预览失效，并只核验余下选择', async t => {
@@ -124,7 +189,7 @@ test('非管理员、规则失败或选中记录错误都不可提交', async t 
   }
 })
 
-test('部分提交后保留未选项为未选，展示已提交项与余项，不清空剩余草稿', async t => {
+test('部分提交后保留未选项为未选，仅展示余项并保留后台追溯记录', async t => {
   let saved = false
   const { state, applyCalls, applied } = review(t, {
     preview: async (_pid, _did, input) => saved ? preview([change('wbs:1', 'applied'), change('wbs:2')], { preview_id: 'remaining', selected_keys: input.selected_keys }) : preview(undefined, { selected_keys: ['wbs:1'] }),
@@ -137,6 +202,7 @@ test('部分提交后保留未选项为未选，展示已提交项与余项，�
   assert.equal(state.preview.value.preview_id, 'remaining')
   assert.deepEqual(state.selectedKeys.value, [])
   assert.equal(state.preview.value.changes[1].key, 'wbs:2')
+  assert.deepEqual(state.remainingChanges.value.map(row => row.key), ['wbs:2'])
   assert.match(state.notice.value, /已提交 1 项/)
   assert.equal(state.canApply.value, false)
 })
@@ -161,6 +227,7 @@ test('预览加载失败可重试，关闭弹窗取消请求且忽略迟到结�
   const { state, props, calls } = review(t, { preview: async () => { attempt++; if (attempt === 1) throw new Error('读取失败'); return late.promise } })
   await tick()
   assert.equal(state.loading.value, false)
+  assert.equal(state.opening.value, false)
   assert.match(state.error.value, /读取失败/)
   const pending = state.refresh()
   props.open = false
@@ -208,13 +275,13 @@ test('新人员账号与密码校验影响提交，刷新预览保留已修改�
   const { state, applyCalls } = review(t, { preview: async () => preview(undefined, { required_personnel_credentials: required }) })
   await tick()
   assert.equal(state.credentials.value[0].username, 'zhangke')
-  state.credentials.value[0].username = 'liwen'
+  state.updateCredential('110001', 'username', 'liwen')
   assert.equal(state.canApply.value, false)
   assert.match(state.credentialErrors.value[0], /重复/)
-  state.credentials.value[0].username = 'manager.zhang'
-  state.credentials.value[0].initial_password = 'short'
+  state.updateCredential('110001', 'username', ' manager.zhang ')
+  state.updateCredential('110001', 'initial_password', 'short')
   assert.equal(state.canApply.value, false)
-  state.credentials.value[0].initial_password = 'Safe1234!'
+  state.updateCredential('110001', 'initial_password', 'Safe1234!')
   await state.refresh()
   assert.equal(state.credentials.value[0].username, 'manager.zhang')
   assert.equal(state.credentials.value[0].initial_password, 'Safe1234!')
@@ -224,8 +291,8 @@ test('新人员账号与密码校验影响提交，刷新预览保留已修改�
 
 test('分区、关键词与变化筛选相交；对比保留未修改字段且不暴露内部标识', () => {
   const changes = [change('工程经理', 'update', 'personnel'), change('分部工程', 'add'), change('已归档', 'applied'), change('一致记录', 'unchanged')]
-  assert.deepEqual(presentation.filterInitializationChanges(changes, 'wbs', 'changes', '工程').map(item => item.key), ['分部工程'])
-  assert.deepEqual(presentation.filterInitializationChanges(changes, 'all', 'applied', '').map(item => item.key), ['已归档'])
+  assert.deepEqual(presentation.filterInitializationChanges(changes, 'wbs', 'add', '工程').map(item => item.key), ['分部工程'])
+  assert.deepEqual(presentation.filterInitializationChanges(changes, 'all', 'update', '').map(item => item.key), ['工程经理'])
   const comparison = presentation.initializationComparisonFields(change('x', 'update', 'wbs', { before: { id: 8, name: '旧名称', level: 0 }, after: { record_id: 12, name: '新名称', level: 0 }, fields: [{ name: 'name', before: '旧名称', after: '新名称' }] }))
   assert.deepEqual(comparison.map(item => item.name), ['name', 'level'])
   assert.equal(comparison[0].changed, true)
@@ -243,8 +310,8 @@ test('工程字段分别显示字段名称和单字段差异，不把完整工�
   })
   assert.equal(presentation.initializationChangeTitle(item), '合同工期（天）')
   assert.deepEqual(presentation.initializationComparisonFields(item).map(field => field.name), ['contract_duration_days'])
-  assert.equal(presentation.filterInitializationChanges([item], 'project', 'changes', '工程概况').length, 0)
-  assert.equal(presentation.filterInitializationChanges([item], 'project', 'changes', '工期').length, 1)
+  assert.equal(presentation.filterInitializationChanges([item], 'project', 'update', '工程概况').length, 0)
+  assert.equal(presentation.filterInitializationChanges([item], 'project', 'update', '工期').length, 1)
   item.operation = 'applied'; item.fields = []
   assert.deepEqual(presentation.initializationComparisonFields(item).map(field => field.name), ['contract_duration_days'])
 })
@@ -257,4 +324,13 @@ test('取消请求与业务错误分别归一化，密码包含四类字符且�
     assert.equal(password.length, Math.min(12, Math.max(8, length)))
     assert.match(password, /[A-Z]/); assert.match(password, /[a-z]/); assert.match(password, /[0-9]/); assert.match(password, /[!@#$%&*]/)
   }
+})
+
+
+test('分类明确区分全部、新增、更新', () => {
+  assert.deepEqual(presentation.initializationChangeFilters, [{ key: 'all', label: '全部' }, { key: 'add', label: '新增' }, { key: 'update', label: '更新' }])
+  const rows = [change('new'), change('old', 'update'), change('issue', 'conflict')]
+  assert.deepEqual(presentation.filterInitializationChanges(rows, 'all', 'all', '').map(row => row.key), ['new', 'old', 'issue'])
+  assert.deepEqual(presentation.filterInitializationChanges(rows, 'all', 'add', '').map(row => row.key), ['new'])
+  assert.deepEqual(presentation.filterInitializationChanges(rows, 'all', 'update', '').map(row => row.key), ['old'])
 })

@@ -25,8 +25,7 @@ from .models import (
     ProjectPosition, QualityMetric, RiskSource, User, WbsItem, WbsPredecessor,
 )
 from .personnel_policy import (
-    normalize_project_position_name, reconcile_user_management_roles,
-    require_supported_project_position,
+    reconcile_user_management_roles,
 )
 from .project_initialization import (
     InitializationApplyError, PersonnelDraft, ProjectDetailsDraft,
@@ -44,7 +43,7 @@ MODELS = {
 }
 FORMAL_MODELS = {"wbs": WbsItem, "risks": RiskSource, "quality_requirements": QualityMetric}
 FIELD_ADAPTERS = {
-    (section, name): TypeAdapter(field.rebuild_annotation())
+    (section, name): TypeAdapter(field.annotation)
     for section, model in MODELS.items() for name, field in model.model_fields.items()
     if name != "record_id"
 }
@@ -96,14 +95,9 @@ def _patch(section: str, raw: dict[str, Any]) -> dict[str, Any]:
         try:
             value = FIELD_ADAPTERS[(section, key)].validate_python(value)
         except ValidationError:
-            # Keep the observation addressable; selected-row validation below
-            # produces the precise field issue rather than losing the draft.
+            # Keep the observation intact for the MCP to judge.
             pass
         result[key] = _json(value)
-        if key == "predecessor_wbs_codes" and isinstance(result[key], list) and all(isinstance(item, str) for item in result[key]):
-            result[key] = sorted(set(result[key]))
-    if "position_name" in result:
-        result["position_name"] = normalize_project_position_name(result["position_name"])
     return result
 
 
@@ -120,13 +114,26 @@ def _canonical(section: str, row: dict[str, Any]) -> dict[str, Any]:
             except ValidationError:
                 pass
             result[name] = _json(value)
-            if name == "predecessor_wbs_codes" and isinstance(result[name], list):
-                result[name] = sorted(set(result[name]))
         elif field.is_required():
             result[name] = None
         else:
             result[name] = _json(field.get_default(call_default_factory=True))
     return result
+
+
+def _storage_record(section: str, values: dict[str, Any]):
+    """Decode storage types after MCP acceptance, without another rule engine."""
+    decoded = {}
+    for name, value in values.items():
+        if name == "record_id" or (section, name) not in FIELD_ADAPTERS:
+            continue
+        # SQL non-null text represents a source blank as an empty string.
+        # This is encoding only; the MCP has already decided if it is allowed.
+        annotation = MODELS[section].model_fields[name].annotation
+        if value is None and annotation is str:
+            value = ""
+        decoded[name] = None if value is None else FIELD_ADAPTERS[(section, name)].validate_python(value)
+    return MODELS[section].model_construct(**decoded)
 
 
 def _baseline(db: Session, project: Project) -> tuple[dict[str, Any], str]:
@@ -173,21 +180,17 @@ def _match(section: str, patch: dict[str, Any], index: dict[str, Any]) -> tuple[
 
     if section == "personnel":
         exact = [row for row in matches("identity_card_no") if eq(row, "position_name")]
-        # Holding another position is a valid new assignment for an existing
-        # account. Name-only matches are ambiguous and require a decision.
-        weak = [row for row in matches("real_name") if not eq(row, "identity_card_no")]
     elif section == "wbs":
         exact = matches("wbs_code")
-        weak = matches("name") + matches("msp_uid")
     elif section == "quality_requirements":
         exact = matches("wbs_code")
-        weak = []
     else:
         exact = [row for row in matches("related_process_name") if eq(row, "risk_part")]
-        weak = matches("risk_part") + matches("serial_no")
     if len(exact) == 1:
         return exact[0], []
-    return None, list({row["id"]: row for row in exact or weak}.values())
+    # Different identities are new records; names and source row numbers never
+    # ask the reviewer to choose an unrelated existing record to overwrite.
+    return None, list({row["id"]: row for row in exact}.values())
 
 
 def _issue(change: dict[str, Any] | None, message: str, *, rule: str = "conflict", field: str | None = None) -> dict[str, Any]:
@@ -229,6 +232,8 @@ def build_change_plan(
     if project is None:
         raise InitializationApplyError("草稿关联项目不存在")
     baseline, baseline_hash = _baseline(db, project)
+    project_has_data = any(_nonempty(value) for value in _canonical("project", baseline["project"]).values())
+    mode = "update" if project_has_data or any(baseline[section] for section in SECTIONS[1:]) else "initialization"
     users = list(db.scalars(select(User)).all())
     users_by_card = {user.identity_card_no: user for user in users}
     match_indexes: dict[str, Any] = {}
@@ -278,25 +283,18 @@ def build_change_plan(
                 elif decision != (target["id"] if target else None):
                     resolution_error = "当前变更不支持该匹配决定，请重新预览。"
             before = _canonical(section, target) if target else None
+            if section == "project" and not project_has_data:
+                before = None
             after = {**(before or {}), **proposal}
-            account_name_warning = None
-            account = users_by_card.get(after.get("identity_card_no")) if section == "personnel" else None
-            if account is not None and (before is None or before.get("identity_card_no") != account.identity_card_no):
-                observed_name = after.get("real_name")
-                # Adding this person to a project reuses the global identity;
-                # it does not authorize changing their name in other projects.
-                after["real_name"] = account.real_name
-                if observed_name and observed_name != account.real_name:
-                    account_name_warning = f"上传姓名「{observed_name}」与已有账号姓名「{account.real_name}」不同，本次任职沿用已有账号姓名及登录凭证。"
             fields = [{"name": field, "before": (before or {}).get(field), "after": value}
                       for field, value in after.items() if (before or {}).get(field) != value]
             operation = "conflict" if candidates or resolution_error else (
-                "add" if target is None else "update" if fields else "unchanged"
+                "add" if target is None or (section == "project" and not project_has_data) else "update" if fields else "unchanged"
             )
             applied = ledger.get(key)
             if applied is not None and applied.payload_hash == payload_hash:
                 operation = "applied"
-            selected = operation in {"add", "update"} if requested is None else key in requested
+            selected = operation in {"add", "update", "conflict"} if requested is None else key in requested
             if operation in {"applied", "unchanged"}:
                 selected = False
             change = {
@@ -306,46 +304,17 @@ def build_change_plan(
                 "before": before, "after": after, "fields": fields,
                 "selected": selected, "candidates": [{"id": row["id"], "title": _title(section, row)} for row in candidates],
                 "payload_hash": payload_hash,
+                "source_values": {field: value for field, value in dict(record.payload or {}).items() if field != "record_id"},
             }
             changes.append(change)
-            if account_name_warning and selected and operation in {"add", "update"}:
-                warning = _issue(change, account_name_warning, rule="existing_account_name", field="real_name")
-                warning.update({"level": "warning", "label": "账号复用", "title": "沿用已有账号姓名",
-                                "suggestion": "请核对身份证号；如需更正账号姓名，请在人员信息中明确修改。"})
-                issues.append(warning)
             if resolution_error:
                 issues.append(_issue(change, resolution_error, rule="resolution"))
-            elif operation == "conflict" and selected:
-                item = _issue(change, "无法唯一确定新资料对应的旧记录，请选择更新哪条记录，或明确作为新增。")
-                issues.append(item)
 
     known = {change["key"] for change in changes}
     for key in (requested or set()) - known:
         issues.append(_issue(None, f"变更 {key} 已失效，请重新预览。", rule="selection"))
     for key in resolutions.keys() - known:
         issues.append(_issue(None, f"匹配决定 {key} 已失效，请重新预览。", rule="resolution"))
-
-    # Allocate serials for additions; updating a record must not accidentally
-    # take another record's number because the uploaded sheet restarted at 1.
-    for section in ("personnel", "risks"):
-        occupied = {row["serial_no"]: row["id"] for row in baseline[section]}
-        for change in changes:
-            if change["section"] != section or not change["selected"] or change["operation"] not in {"add", "update"}:
-                continue
-            serial = change["after"].get("serial_no")
-            if change["operation"] == "update":
-                previous_serial = change["before"]["serial_no"]
-                if not isinstance(serial, int) or (serial in occupied and occupied[serial] != change["target_id"]):
-                    serial = previous_serial
-                if serial != previous_serial:
-                    occupied.pop(previous_serial, None)
-            elif not isinstance(serial, int) or serial <= 0 or serial in occupied:
-                serial = max(occupied, default=0) + 1
-            change["after"]["serial_no"] = serial
-            occupied[serial] = change["target_id"] or -change["record_id"]
-            before = change["before"] or {}
-            change["fields"] = [{"name": field, "before": before.get(field), "after": value}
-                                for field, value in change["after"].items() if before.get(field) != value]
 
     # Synthetic IDs are isolated from every draft row ID, including rows in a
     # different draft; callers use the mapping to route validation annotations.
@@ -369,23 +338,13 @@ def build_change_plan(
             next_id += 1
         effective[section] = composed[0] if section == "project" else composed
 
-    selected_targets: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
     for change in changes:
-        if not change["selected"] or change["operation"] not in {"add", "update"}:
+        if not change["selected"] or change["operation"] not in {"add", "update", "conflict"}:
             continue
         section = change["section"]
-        if section != "project" and change["target_id"] is not None:
-            selected_targets[(section, change["target_id"])].append(change)
-        try:
-            # Construct defaults for nullable WBS fields that are required in
-            # the full payload contract but legitimately absent in a patch.
-            candidate = _canonical(section, change["after"])
-            validated = _json(MODELS[section].model_validate(candidate).model_dump(exclude={"record_id"}))
-        except ValidationError as exc:
-            for error in exc.errors(include_url=False):
-                field = str(error["loc"][0]) if error["loc"] else None
-                issues.append(_issue(change, f"{field or '记录'}：{error['msg']}", rule="invalid_record", field=field))
-            continue
+        # Send every observation, including empty/invalid fields, to the MCP.
+        # Transport models must not decide whether a business record is valid.
+        validated = _canonical(section, change["after"])
         change["after"] = validated
         if section == "project":
             # Validate each project proposal against the full accumulated row,
@@ -409,26 +368,19 @@ def build_change_plan(
         mapping["change_key"] = mapping["change_key"] or change["key"]
         mapping["change_keys"].append(change["key"])
         mapping["record_id"] = change["record_id"]
+        mapping.setdefault("observations", []).append({
+            "change_key": change["key"], "values": change["source_values"],
+        })
+        if section == "personnel":
+            card = change["after"].get("identity_card_no")
+            account = users_by_card.get(card) if isinstance(card, str) else None
+            if account is not None:
+                mapping["existing_account"] = {"real_name": account.real_name}
+                mapping["updates_existing_identity"] = bool(change["before"] and change["before"].get("identity_card_no") == card)
+        if change["candidates"]:
+            mapping["matching_candidates"] = change["candidates"]
         for field in change["fields"]:
             mapping["field_changes"][field["name"]] = change["key"]
-    for group in selected_targets.values():
-        if len(group) > 1:
-            for change in group:
-                issues.append(_issue(change, "本次选择中有多条草稿修改同一旧记录，请保留一条后提交。", rule="duplicate_target"))
-
-    # Imported identifiers may be corrected explicitly, but a rename must not
-    # silently change references that were outside the reviewed selection.
-    for change in changes:
-        if not change["selected"] or change["section"] != "wbs" or change["operation"] != "update":
-            continue
-        old_code = change["before"]["wbs_code"]
-        if change["after"].get("wbs_code") == old_code:
-            continue
-        dependent = any(row.get("parent_wbs_code") == old_code or old_code in row.get("predecessor_wbs_codes", []) for row in baseline["wbs"])
-        dependent = dependent or any(row["wbs_code"] == old_code for row in baseline["quality_requirements"])
-        if dependent:
-            issues.append(_issue(change, "该 WBS 编码已有父子、前置或质量关联，请先在项目配置中调整关联编码后再导入。", rule="referenced_code", field="wbs_code"))
-
     unavailable = {user.username for user in users}
     credentials: dict[str, dict[str, Any]] = {}
     existing_accounts: dict[str, dict[str, Any]] = {}
@@ -457,7 +409,7 @@ def build_change_plan(
             if card in credentials:
                 credentials[card]["change_keys"].append(change["key"])
     return {
-        "draft_id": draft.id, "draft_revision": draft.revision,
+        "draft_id": draft.id, "draft_revision": draft.revision, "mode": mode,
         "baseline_hash": baseline_hash, "changes": changes,
         "selected_keys": [change["key"] for change in changes if change["selected"]],
         "resolutions": resolutions, "effective_payload": effective,
@@ -509,6 +461,8 @@ def apply_change_plan(
     errors = [issue for issue in plan.get("issues", []) if issue.get("level") == "error" and issue.get("blocking", True)]
     if errors:
         raise InitializationApplyError("所选变更仍有需要处理的问题", errors)
+    if any(change["selected"] and change["operation"] == "conflict" for change in plan["changes"]):
+        raise InitializationApplyError("记录写入目标不唯一，无法执行本次写入。")
     selected = [change for change in plan["changes"] if change["selected"] and change["operation"] in {"add", "update"}]
     if not selected:
         raise InitializationApplyError("请至少选择一项新增或更新内容。")
@@ -524,13 +478,13 @@ def apply_change_plan(
         counts[section] += 1
         operations[change["operation"]] += 1
         if section == "project":
-            converted = ProjectDetailsDraft.model_validate(change["after"])
+            converted = _storage_record(section, change["after"])
             for field in change["fields"]:
                 setattr(project, field["name"], getattr(converted, field["name"]))
             applied_targets[change["key"]] = project.id
         elif section == "personnel":
-            person = PersonnelDraft.model_validate(change["after"])
-            position_name = require_supported_project_position(person.position_name)
+            person = _storage_record(section, change["after"])
+            position_name = person.position_name
             assignment = db.get(ProjectMemberPosition, change["target_id"]) if change["target_id"] else None
             if assignment is not None and assignment.project_id != project.id:
                 raise InitializationApplyError("人员记录不属于当前项目。")
@@ -579,7 +533,7 @@ def apply_change_plan(
             row = db.get(model, change["target_id"]) if change["target_id"] else None
             if row is not None and row.project_id != project.id:
                 raise InitializationApplyError("变更目标不属于当前项目。")
-            converted = MODELS[section].model_validate(change["after"]).model_dump(exclude={"record_id"})
+            converted = _storage_record(section, change["after"]).model_dump(exclude={"record_id"})
             if row is None:
                 row = model(project_id=project.id)
                 db.add(row)

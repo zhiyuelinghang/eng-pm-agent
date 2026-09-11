@@ -90,6 +90,19 @@ def test_missing_platform_validator_returns_service_unavailable() -> None:
     asyncio.run(scenario())
 
 
+def test_snapshot_metadata_reads_selected_version_without_running_mcp() -> None:
+    async def scenario() -> None:
+        manager = SimpleNamespace(get_record=AsyncMock(return_value=_record()), get_platform_client=AsyncMock())
+        response = await validate_project_initialization(
+            ProjectInitializationValidationRequest(metadata_only=True),
+            principal=AgentScopePrincipal(kind="service", subject="platform"),
+            user_id="default", storage=_storage(), manager=manager,
+        )
+        assert response == {"metadata_only": True, "package_id": "custom-validation-rules", "package_version": "2.1.0"}
+        manager.get_platform_client.assert_not_awaited()
+    asyncio.run(scenario())
+
+
 def test_platform_validator_executes_the_selected_package_version_and_tool() -> None:
     async def scenario() -> None:
         result = {

@@ -192,6 +192,7 @@ class OpenAIChatFormatter(_OpenAIFormatterBase):
             'Defaults to ``["text/plain", "image/*", "audio/*"]``.'
         ),
     )
+    preserve_reasoning_content: bool = False
 
     async def format(
         self,
@@ -216,6 +217,7 @@ class OpenAIChatFormatter(_OpenAIFormatterBase):
             msg = msgs[i]
             content_blocks = []
             tool_calls = []
+            reasoning_parts = []
 
             for block in msg.get_content_blocks():
                 if isinstance(block, TextBlock):
@@ -229,7 +231,7 @@ class OpenAIChatFormatter(_OpenAIFormatterBase):
                         content_blocks.append(formatted)
 
                 elif isinstance(block, HintBlock):
-                    if content_blocks or tool_calls:
+                    if content_blocks or tool_calls or reasoning_parts:
                         msg_openai = {
                             "role": msg.role,
                             "name": msg.name,
@@ -237,9 +239,12 @@ class OpenAIChatFormatter(_OpenAIFormatterBase):
                         }
                         if tool_calls:
                             msg_openai["tool_calls"] = tool_calls
+                        if self.preserve_reasoning_content and msg.role == "assistant":
+                            msg_openai["reasoning_content"] = "\n".join(reasoning_parts)
                         messages.append(msg_openai)
                         content_blocks = []
                         tool_calls = []
+                        reasoning_parts = []
 
                     if isinstance(block.hint, str):
                         messages.append(
@@ -281,7 +286,7 @@ class OpenAIChatFormatter(_OpenAIFormatterBase):
                     )
 
                 elif isinstance(block, ToolResultBlock):
-                    if content_blocks or tool_calls:
+                    if content_blocks or tool_calls or reasoning_parts:
                         msg_openai_flush = {
                             "role": msg.role,
                             "name": msg.name,
@@ -289,9 +294,12 @@ class OpenAIChatFormatter(_OpenAIFormatterBase):
                         }
                         if tool_calls:
                             msg_openai_flush["tool_calls"] = tool_calls
+                        if self.preserve_reasoning_content and msg.role == "assistant":
+                            msg_openai_flush["reasoning_content"] = "\n".join(reasoning_parts)
                         messages.append(msg_openai_flush)
                         content_blocks = []
                         tool_calls = []
+                        reasoning_parts = []
 
                     (
                         textual_output,
@@ -330,9 +338,10 @@ class OpenAIChatFormatter(_OpenAIFormatterBase):
                             )
 
                 elif isinstance(block, ThinkingBlock):
-                    # OpenAI API does not accept reasoning/thinking content
-                    # in conversation history — skip thinking blocks silently.
-                    pass
+                    # Compatible providers may require their actual reasoning
+                    # to be replayed across tool calls and team continuations.
+                    if self.preserve_reasoning_content:
+                        reasoning_parts.append(block.thinking)
 
                 else:
                     logger.warning(
@@ -348,9 +357,11 @@ class OpenAIChatFormatter(_OpenAIFormatterBase):
 
             if tool_calls:
                 msg_openai["tool_calls"] = tool_calls
+            if self.preserve_reasoning_content and msg.role == "assistant":
+                msg_openai["reasoning_content"] = "\n".join(reasoning_parts)
 
             # When both content and tool_calls are None, skipped
-            if msg_openai["content"] or msg_openai.get("tool_calls"):
+            if msg_openai["content"] or msg_openai.get("tool_calls") or reasoning_parts:
                 messages.append(msg_openai)
 
             # Move to next message

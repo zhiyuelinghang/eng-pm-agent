@@ -160,7 +160,9 @@ class OpenAIChatModel(ChatModelBase):
             retry_delay=retry_delay,
             context_size=context_size,
         )
-        self.formatter = formatter or OpenAIChatFormatter()
+        self.formatter = formatter or OpenAIChatFormatter(
+            preserve_reasoning_content=model.rsplit("/", 1)[-1].lower().startswith("deepseek"),
+        )
         self.client_kwargs = client_kwargs or {}
         self.extra_body = dict(extra_body) if extra_body is not None else None
 

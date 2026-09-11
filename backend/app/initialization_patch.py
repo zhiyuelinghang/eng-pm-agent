@@ -2,11 +2,11 @@
 
 Omitted fields mean the attachment supplied no change.  Keep ``exclude_unset``
 when serializing these models; defaults must not become instructions to clear
-the existing project.  Final merged records still use the strict draft models.
+the existing project. Material values remain observations until the MCP judges
+them; these models only enforce the transport envelope and known field names.
 """
 from __future__ import annotations
 
-from copy import deepcopy
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -27,33 +27,18 @@ class StrictInitializationPatch(BaseModel):
 def _patch_model(
     name: str,
     source: type[BaseModel],
-    required_keys: frozenset[str] = frozenset(),
 ) -> type[BaseModel]:
     fields: dict[str, Any] = {}
     for field_name, source_field in source.model_fields.items():
-        field = deepcopy(source_field)
-        annotation = field.annotation
-        if field_name not in required_keys:
-            annotation = annotation | None
-            field.default = None
-            field.default_factory = None
-        fields[field_name] = (annotation, field)
+        fields[field_name] = (Any, Field(default=None, description=source_field.description))
     return create_model(name, __base__=StrictInitializationPatch, **fields)
 
 
 ProjectDetailsPatch = _patch_model("ProjectDetailsPatch", ProjectDetailsDraft)
-PersonnelPatch = _patch_model(
-    "PersonnelPatch", PersonnelDraft,
-    frozenset({"identity_card_no", "position_name"}),
-)
-WbsPatch = _patch_model("WbsPatch", WbsDraft, frozenset({"wbs_code"}))
-RiskPatch = _patch_model(
-    "RiskPatch", RiskDraftItem,
-    frozenset({"related_process_name", "risk_part"}),
-)
-QualityRequirementPatch = _patch_model(
-    "QualityRequirementPatch", QualityRequirementDraft, frozenset({"wbs_code"}),
-)
+PersonnelPatch = _patch_model("PersonnelPatch", PersonnelDraft)
+WbsPatch = _patch_model("WbsPatch", WbsDraft)
+RiskPatch = _patch_model("RiskPatch", RiskDraftItem)
+QualityRequirementPatch = _patch_model("QualityRequirementPatch", QualityRequirementDraft)
 
 
 class ProjectInitializationPatchPayload(StrictInitializationPatch):

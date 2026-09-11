@@ -124,8 +124,9 @@
 .initialization-draft-actions button,.initialization-draft-collapsed { border:0; font:inherit; cursor:pointer; transition:color .16s ease,background .16s ease,transform .16s ease; }
 .initialization-draft-collapse { display:inline-flex; min-height:30px; align-items:center; gap:4px; border-radius:5px !important; padding:5px 8px; color:#657d78; background:transparent; font-size:12px !important; font-weight:700; }
 .initialization-draft-collapse:hover { color:#275c54; background:#e7f1ee; }
-.initialization-draft-review { min-height:30px; border-radius:5px !important; padding:6px 10px; color:#fff; background:#16796c; font-size:12px !important; font-weight:800; }
-.initialization-draft-review:hover { background:#0d6b5f; }
+.initialization-draft-review { display:inline-flex; min-width:94px; min-height:30px; align-items:center; justify-content:center; gap:6px; border-radius:5px !important; padding:6px 10px; color:#fff; background:#16796c; font-size:12px !important; font-weight:800; }
+.initialization-draft-review:hover:not(:disabled) { background:#0d6b5f; }
+.initialization-draft-review:disabled { cursor:wait; opacity:.7; }
 .initialization-draft-actions button:active,.initialization-draft-collapsed:active { transform:translateY(1px); }
 .initialization-draft-actions button:focus-visible,.initialization-draft-collapsed:focus-visible { outline:2px solid rgba(15,118,110,.26); outline-offset:-2px; }
 .initialization-draft-summary { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); overflow:hidden; border:1px solid #dbe8e5; border-radius:6px; background:rgba(255,255,255,.82); }

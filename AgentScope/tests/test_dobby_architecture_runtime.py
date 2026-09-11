@@ -1,5 +1,6 @@
 """Executable regressions for the v1.1 collaboration and confirmation boundary."""
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -177,16 +178,21 @@ async def test_user_stop_also_cancels_the_leaders_workers(running):
     service = object.__new__(ChatService)
     service._storage = SimpleNamespace(get_platform_settings=AsyncMock(return_value=PlatformSettingsRecord(user_id="test", data=PlatformSettingsData(global_main_agent_id='dobby'))),
         get_session=AsyncMock(return_value=SimpleNamespace(
-            id="root", team_id="team", state=SimpleNamespace(reply_id="reply"))),
+            id="root", team_id="team", state=SimpleNamespace(reply_id="reply"),
+            config=SimpleNamespace(user_stopped_at=None), source='user', source_schedule_id=None)),
+        upsert_session=AsyncMock(),
         get_team=AsyncMock(return_value=SimpleNamespace(id="team", session_id="root")),
     )
     service._message_bus = SimpleNamespace(is_locked=AsyncMock(return_value=running),
                                            publish=AsyncMock())
     with (
+        patch("agentscope.app._service._session.SessionService.cancel_team_runs", new_callable=AsyncMock) as broadcast,
         patch("agentscope.app._service._session.SessionService.delete_team", new_callable=AsyncMock) as cancel,
         patch("agentscope.app._service._chat.enqueue_run_trigger", new_callable=AsyncMock),
     ):
         await service.interrupt("owner", "root", "dobby")
+        broadcast.assert_awaited_once_with("owner", "team")
+        await asyncio.gather(*service._interrupt_cleanup_tasks)
     cancel.assert_awaited_once_with("owner", "team")
 
 

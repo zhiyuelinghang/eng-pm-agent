@@ -41,6 +41,7 @@ class ProjectInitializationValidationRequest(BaseModel):
     """Canonical draft payload supplied by the engineering platform."""
 
     payload: dict[str, Any] = Field(default_factory=dict)
+    metadata_only: bool = False
 
 
 class ProjectInitializationValidationMCPConfig(BaseModel):
@@ -139,6 +140,9 @@ async def validate_project_initialization(
         )
     record = await _require_validation_record(manager, binding)
     tool_name = record.tools[0].name
+    if request.metadata_only:
+        return {"metadata_only": True, "package_id": record.id,
+                "package_version": record.manifest.version}
 
     started = time.perf_counter()
     try:

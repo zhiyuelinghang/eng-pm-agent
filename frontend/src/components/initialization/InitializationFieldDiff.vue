@@ -3,15 +3,17 @@
     <span class="section-field-label" :class="{ 'visually-hidden': label === 'hidden' }">{{ labelText }}</span>
     <div v-if="showBefore" class="section-field-value is-before"><span>现有</span><del>{{ valueText(field.before) }}</del></div>
     <div class="section-field-value" :class="{ 'is-after': showBefore }"><span v-if="showBefore">本次</span><strong>{{ valueText(field.after) }}</strong></div>
+    <InitializationFieldIssues :issues="issues" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { InitializationOperation } from '@/types/initializationChanges'
+import type { InitializationChangeIssue, InitializationOperation } from '@/types/initializationChanges'
+import InitializationFieldIssues from './InitializationFieldIssues.vue'
 import type { InitializationComparisonField } from '@/utils/initializationSectionTable'
 import { formatInitializationChangeValue } from '@/utils/initializationChangePresentation'
-const props = withDefaults(defineProps<{ field: InitializationComparisonField; operation: InitializationOperation; baseline: boolean; label?: 'full' | 'short' | 'hidden'; inline?: boolean }>(), { label: 'full', inline: false })
+const props = withDefaults(defineProps<{ field: InitializationComparisonField; operation: InitializationOperation; baseline: boolean; label?: 'full' | 'short' | 'hidden'; inline?: boolean; issues?: InitializationChangeIssue[] }>(), { label: 'full', inline: false, issues: () => [] })
 const showBefore = computed(() => props.field.changed && !['add', 'unchanged'].includes(props.operation) && (props.baseline || props.operation === 'update'))
 const labelText = computed(() => props.label === 'short' ? /start/.test(props.field.name) ? '开始' : '结束' : props.field.label)
 function valueText(value: unknown) {

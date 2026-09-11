@@ -145,7 +145,7 @@ class CancelDispatcher:
                 The session whose runs and BG tasks should be cancelled.
         """
         task = self._registry.get(session_id)
-        if task is not None and not task.done():
+        if task is not None and not task.done() and not task.cancelling():
             logger.info(
                 "CancelDispatcher: cancelling local chat run for "
                 "session %s",
@@ -237,7 +237,7 @@ class CancelDispatcher:
                 The session whose chat run should be interrupted.
         """
         task = self._registry.get(session_id)
-        if task is not None and not task.done():
+        if task is not None and not task.done() and not task.cancelling():
             logger.info(
                 "CancelDispatcher: interrupting local chat run for "
                 "session %s",

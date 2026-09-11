@@ -1,11 +1,11 @@
 <template>
   <section v-if="teams.length" class="agent-team-overviews" aria-label="团队协同概览">
     <details v-for="team in teams" :key="team.id" class="agent-team-overview"
-      :open="expanded[team.id] || false" @toggle="onToggle(team.id, $event)">
+      :open="expanded[team.id] ?? true" @toggle="onToggle(team.id, $event)">
       <summary>
         <n-icon :size="16" aria-hidden="true"><Users /></n-icon>
         <strong>{{ team.name }} · 已完成 {{ team.completedCount }}/{{ team.members.length }}</strong>
-        <span class="team-toggle">{{ expanded[team.id] ? '收起' : '展开' }}</span>
+        <span class="team-toggle">{{ (expanded[team.id] ?? true) ? '收起' : '展开' }}</span>
         <n-icon class="team-chevron" :size="15" aria-hidden="true"><ChevronRight /></n-icon>
       </summary>
       <ul aria-label="团队成员当前进度">

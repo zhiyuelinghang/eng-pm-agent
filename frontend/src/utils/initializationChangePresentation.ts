@@ -6,11 +6,11 @@ export const initializationSections: Array<{ key: InitializationSection; label: 
   { key: 'wbs', label: 'WBS 与进度' }, { key: 'risks', label: '风险源' }, { key: 'quality_requirements', label: '质量指标' },
 ]
 export const initializationOperationLabels: Record<InitializationOperation, string> = {
-  add: '新增', update: '更新', unchanged: '无变化', conflict: '待匹配', applied: '已提交',
+  add: '新增', update: '更新', unchanged: '无变化', conflict: '待核对', applied: '已提交',
 }
-export type InitializationChangeFilter = 'all' | 'changes' | 'conflict' | 'applied'
+export type InitializationChangeFilter = 'all' | 'add' | 'update'
 export const initializationChangeFilters: Array<{ key: InitializationChangeFilter; label: string }> = [
-  { key: 'changes', label: '仅变化' }, { key: 'all', label: '全部' }, { key: 'conflict', label: '待匹配' }, { key: 'applied', label: '已提交' },
+  { key: 'all', label: '全部' }, { key: 'add', label: '新增' }, { key: 'update', label: '更新' },
 ]
 const fieldLabels: Record<string, string> = {
   name: '名称', engineering_type_description: '工程概况', contract_start_date: '合同开始日期',
@@ -62,7 +62,7 @@ export function filterInitializationChanges(changes: InitializationChange[], sec
   const search = query.trim().toLocaleLowerCase('zh-CN')
   return changes.filter(change => (
     (section === 'all' || change.section === section)
-    && (filter === 'all' || (filter === 'changes' ? selectableInitializationChange(change) : change.operation === filter))
+    && (filter === 'all' || change.operation === filter)
     && (!search || `${initializationChangeTitle(change)} ${initializationComparisonFields(change).map(field => formatInitializationChangeValue(field.after, field.name)).join(' ')}`.toLocaleLowerCase('zh-CN').includes(search))
   ))
 }

@@ -81,6 +81,7 @@
               <div>
                 <AgentMessageContent
                   v-if="item.role === 'assistant'"
+                  :show-task-plan="false"
                   :content="item.content"
                   :runtime-trace="item.runtimeTrace"
                   :confirmation-busy="materialAgentLoading || materialAgentStopping"
@@ -107,6 +108,7 @@
               <div>
                 <AgentMessageContent
                   :runtime-trace="materialAgentStreamingTrace"
+                  :show-task-plan="false"
                   :confirmation-busy="materialAgentLoading || materialAgentStopping"
                   streaming
                   @confirm="confirmMaterialAgentToolCall"
@@ -154,8 +156,9 @@
                     <n-icon :size="15" aria-hidden="true"><ChevronDown /></n-icon>
                     <span>收起</span>
                   </button>
-                  <button type="button" class="initialization-draft-review" @click="openInitializationDraftReview">
-                    {{ materialAgentDraft.status === 'applied' ? '查看内容' : '核对草稿' }}
+                  <button type="button" class="initialization-draft-review" :disabled="initializationDraftReviewLoading" :aria-busy="initializationDraftReviewLoading" @click="openInitializationDraftReview">
+                    <n-icon v-if="initializationDraftReviewLoading" :size="15" class="project-action-spinner" aria-hidden="true"><Loader /></n-icon>
+                    {{ initializationDraftReviewLoading ? '正在加载…' : materialAgentDraft.status === 'applied' ? '查看内容' : '核对草稿' }}
                   </button>
                 </div>
               </header>
@@ -190,7 +193,7 @@
           </section>
           <form class="material-agent-composer" @submit.prevent="sendMaterialAgentMessage">
             <input ref="materialAgentFileInput" class="visually-hidden" type="file" multiple accept=".xls,.xlsx,.csv,.docx,.pptx,.pdf,.txt,.md,.png,.jpg,.jpeg,.bmp,.webp,.tif,.tiff" @change="selectMaterialAgentFiles">
-            <ChatComposerSurface :busy="materialAgentLoading || materialAgentStopping" contained>
+            <ChatComposerSurface :busy="materialAgentWorking || materialAgentStopping" contained>
               <template v-if="materialAgentFiles.length" #attachments>
                 <div class="material-agent-file-head">
                   <span>已选择 {{ materialAgentFiles.length }} 个附件</span>
@@ -210,20 +213,20 @@
                 v-model="materialAgentPrompt"
                 class="chat-composer-input"
                 rows="1"
-                :disabled="materialAgentLoading"
+                :disabled="materialAgentWorking"
                 placeholder="描述需要补充的工程信息，或添加附件"
                 @keydown.enter.exact.prevent="sendMaterialAgentMessage"
               ></textarea>
 
               <template #tools>
-                <button type="button" class="chat-composer-tool" :disabled="materialAgentLoading" @click="openMaterialAgentFilePicker">
+                <button type="button" class="chat-composer-tool" :disabled="materialAgentWorking" @click="openMaterialAgentFilePicker">
                   <n-icon :size="17"><Paperclip /></n-icon>
                   <span>附件</span>
                 </button>
               </template>
 
               <template #action>
-                <button v-if="materialAgentLoading || materialAgentStopping" type="button" class="chat-composer-action is-stop" :disabled="materialAgentStopping" :aria-busy="materialAgentStopping" @click="stopMaterialAgentMessage"><n-icon v-if="materialAgentStopping" :size="17" class="project-action-spinner"><Loader /></n-icon><n-icon v-else :size="17"><PlayerStop /></n-icon>{{ materialAgentStopping ? '正在停止…' : '停止分析' }}</button>
+                <button v-if="materialAgentWorking || materialAgentStopping" type="button" class="chat-composer-action is-stop" :disabled="materialAgentStopping" :aria-busy="materialAgentStopping" @click="stopMaterialAgentMessage"><n-icon v-if="materialAgentStopping" :size="17" class="project-action-spinner"><Loader /></n-icon><n-icon v-else :size="17"><PlayerStop /></n-icon>{{ materialAgentStopping ? '正在停止…' : '停止分析' }}</button>
                 <button v-else type="submit" class="chat-composer-action" :disabled="materialAgentConversationLoading || (!materialAgentPrompt.trim() && !materialAgentFiles.length)"><n-icon :size="17"><Send /></n-icon>发送</button>
               </template>
             </ChatComposerSurface>
@@ -658,6 +661,7 @@
         :project-id="configProjectId"
         :name="configProjectName"
         :admin="isPlatformAdmin"
+        @loading-change="initializationDraftReviewLoading = $event"
         @close="initializationDraftReviewOpen = false"
         @applied="handleInitializationChangesApplied"
       />
@@ -682,6 +686,7 @@ import ChatComposerSurface from '@/components/chat/ChatComposerSurface.vue'
 import InitializationChangeReview from '@/components/initialization/InitializationChangeReview.vue'
 import { useProjectSetupConfiguration } from '@/composables/useProjectSetupConfiguration'
 import { useInitializationDraftSync } from '@/composables/useInitializationDraftSync'
+import { showInitializationDraftDock } from '@/utils/initializationDraftDock'
 import { useAppStore, type ProjectConfigScope } from '@/stores/app'
 import type { DirConfig, Member, MemberPosition, PlatformFieldMapping, QualityMetric, RemindRule, RiskLevel, RiskSource, WbsItem } from '@/types'
 import {
@@ -887,7 +892,12 @@ const materialAgentPreparationDetail = computed(() => {
 })
 const initializationDraftCollapsed = ref(false)
 const initializationDraftReviewOpen = ref(false)
+const initializationDraftReviewLoading = ref(false)
 const materialDraftSyncRunning = computed(() => materialAgentLoading.value || ACTIVE_MATERIAL_AGENT_STATUSES.has(materialAgentConversationStatus.value))
+const materialAgentWorking = computed(() => materialAgentLoading.value || (
+  materialAgentConversationStatus.value !== 'interrupting'
+  && ACTIVE_MATERIAL_AGENT_STATUSES.has(materialAgentConversationStatus.value)
+))
 const { draft: materialAgentDraft, refresh: refreshInitializationDraft } = useInitializationDraftSync<ApiInitializationDraft>({
   projectId: configProjectId,
   conversationId: materialAgentConversationId,
@@ -895,6 +905,12 @@ const { draft: materialAgentDraft, refresh: refreshInitializationDraft } = useIn
   onChange: (next, previous) => {
     if (!next) initializationDraftReviewOpen.value = false
     if (next && (!previous || next.id !== previous.id || next.revision !== previous.revision)) initializationDraftCollapsed.value = false
+    // After a reload there is no local SSE request. Keep both the reply and
+    // its terminal status in sync while the server still owns this turn.
+    if (!materialAgentLoading.value && !materialAgentConversationLoading.value
+      && ACTIVE_MATERIAL_AGENT_STATUSES.has(materialAgentConversationStatus.value)) {
+      void loadMaterialAgentConversation(configProjectId.value, materialAgentConversationId.value ?? undefined)
+    }
   },
   onError: detail => { materialAgentError.value = detail },
 })
@@ -911,10 +927,13 @@ const initializationDraftSourceNames = computed(() => {
     .filter(name => name.length > 0)
   return [...new Set(names)]
 })
-const materialAgentDraftDockVisible = computed(() => Boolean(
-  materialAgentDraft.value
-  && materialAgentDraft.value.status !== 'rejected'
+const materialAgentDraftDockVisible = computed(() => showInitializationDraftDock(
+  materialAgentDraft.value, materialDraftSyncRunning.value,
 ))
+watch([materialAgentDraftDockVisible, initializationDraftCollapsed], () => {
+  // Capture the user's follow preference before the dock changes viewport size.
+  if (materialAgentFollowOutput.value) void scrollMaterialAgentToEnd('auto', true)
+}, { flush: 'pre' })
 
 const projectPositionCount = computed(() => new Set(
   configScope.members.flatMap(member => member.positions.map(position => position.positionId)),
@@ -1688,7 +1707,10 @@ async function loadInitializationDraft(projectId = configProjectId.value) {
   if (projectId === configProjectId.value) await refreshInitializationDraft()
 }
 function openInitializationDraftReview() {
-  if (materialAgentDraft.value) initializationDraftReviewOpen.value = true
+  if (materialAgentDraft.value && !initializationDraftReviewLoading.value) {
+    initializationDraftReviewLoading.value = true
+    initializationDraftReviewOpen.value = true
+  }
 }
 
 async function handleInitializationChangesApplied() {
@@ -1748,7 +1770,7 @@ async function uploadMaterialAgentFiles(
 
 async function sendMaterialAgentMessage() {
   const requestedContent = materialAgentPrompt.value.trim()
-  if (!configProjectId.value || materialAgentLoading.value || materialAgentStopping.value || materialAgentConversationLoading.value) return
+  if (!configProjectId.value || materialAgentWorking.value || materialAgentStopping.value || materialAgentConversationLoading.value) return
   const selectedFiles = [...materialAgentFiles.value]
   if (!requestedContent && !selectedFiles.length) return
   const controller = new AbortController()
@@ -1966,7 +1988,6 @@ async function stopMaterialAgentMessage() {
   const conversationId = materialAgentConversationId.value
   if (materialAgentStopping.value) return
   materialAgentStopping.value = true
-  let reconciling = false
   try {
     if (materialAgentPreparation.value) {
       cancelMaterialAgentRequests()
@@ -1979,27 +2000,23 @@ async function stopMaterialAgentMessage() {
       cancelMaterialAgentRequests()
       return
     }
-    const refreshed = await loadMaterialAgentConversation()
-    if (
-      refreshed
-      && !ACTIVE_MATERIAL_AGENT_STATUSES.has(materialAgentConversationStatus.value)
-    ) {
-      cancelMaterialAgentRequests()
-      materialAgentStreamingTrace.value = null
-      message.info('该任务已经结束，页面已同步最新结果。')
-      return
+    // Stopping must not wait for history, catalogue or attachment reads.
+    if (materialAgentStreamingTrace.value?.messages.length) {
+      materialAgentMessages.value.push({
+        id: `stopped-${Date.now()}`, role: 'assistant', content: '',
+        runtimeTrace: cloneMaterialAgentTrace(materialAgentStreamingTrace.value),
+      })
     }
+    cancelMaterialAgentRequests()
     await api.post(
       `/agent-conversations/${conversationId}/interrupt`,
       undefined,
-      { timeout: 30_000 },
+      { timeout: 10_000 },
     )
     materialAgentConversationStatus.value = 'interrupting'
     markActiveMaterialAgentMessagesInterrupted()
-    cancelMaterialAgentRequests()
     message.info('停止请求已接收，正在同步中断前已生成的内容。')
     if (configProjectId.value) {
-      reconciling = true
       void reconcileMaterialAgentAfterStop(
         configProjectId.value,
         conversationId,
@@ -2007,9 +2024,9 @@ async function stopMaterialAgentMessage() {
     }
   } catch (error: any) {
     message.error(error?.response?.data?.detail || '停止初始化助手失败。')
-    await loadMaterialAgentConversation()
+    void loadMaterialAgentConversation()
   } finally {
-    if (!reconciling) materialAgentStopping.value = false
+    materialAgentStopping.value = false
   }
 }
 

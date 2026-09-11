@@ -8,6 +8,7 @@ class PreviewInitializationChangesInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     selected_keys: list[str] | None = Field(default=None, max_length=30000)
     resolutions: dict[str, int | None] = Field(default_factory=dict)
+    force_validation: bool = False
 
     @field_validator("selected_keys")
     @classmethod

@@ -178,6 +178,7 @@ export type InitializationDraftSourceFile = {
 }
 
 export type ApiInitializationDraft = {
+  pending_change_count?: number
   id: number
   project_id: number
   conversation_id: number

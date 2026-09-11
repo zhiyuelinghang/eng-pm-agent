@@ -65,7 +65,6 @@ export function agentTeamOverviewPresentation(trace?: AgentRuntimeTrace | null):
   }
   const teams: AgentTeamOverview[] = []
   for (const [id, latest] of grouped) {
-    if (latest.size < 2) continue
     const sources = [...latest.values()]
     const name = [...sources].sort((a, b) => updatedAt(b) - updatedAt(a))
       .map(member => label(member.team_name)).find(Boolean) || '协同团队'

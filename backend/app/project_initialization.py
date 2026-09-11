@@ -1,4 +1,4 @@
-"""Validated project-initialization drafts and transactional application."""
+"""Initialization storage types and transactional application; MCP owns rules."""
 
 from __future__ import annotations
 
@@ -31,93 +31,95 @@ from .models import (
     WbsPredecessor,
     WbsRiskLink,
 )
-from .initialization_integrity import validate_initialization_integrity
 from .personnel_policy import (
     reconcile_user_management_roles,
-    require_supported_project_position,
 )
 from .security import hash_password
 
 
 class StrictInitializationModel(BaseModel):
-    """Canonical initialization data must never silently discard fields."""
+    """Storage field types only; requiredness and business rules belong to MCP.
+
+    Draft ingestion uses the Any-valued patch envelope. These representations
+    are constructed only for serialization/storage after the MCP decision.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
 
 class ProjectDetailsDraft(StrictInitializationModel):
-    record_id: int | None = Field(default=None, gt=0)
-    engineering_type_description: str | None = Field(default=None, max_length=10000)
+    record_id: int | None = Field(default=None)
+    engineering_type_description: str | None = Field(default=None)
     contract_start_date: date | None = None
     contract_end_date: date | None = None
-    contract_duration_days: int | None = Field(default=None, gt=0)
-    contract_amount_wan_yuan: Decimal | None = Field(default=None, ge=0)
-    construction_unit_name: str | None = Field(default=None, max_length=300)
-    general_contractor_unit_name: str | None = Field(default=None, max_length=300)
-    supervision_unit_name: str | None = Field(default=None, max_length=300)
-    design_unit_name: str | None = Field(default=None, max_length=300)
-    survey_unit_name: str | None = Field(default=None, max_length=300)
+    contract_duration_days: int | None = Field(default=None)
+    contract_amount_wan_yuan: Decimal | None = Field(default=None)
+    construction_unit_name: str | None = Field(default=None)
+    general_contractor_unit_name: str | None = Field(default=None)
+    supervision_unit_name: str | None = Field(default=None)
+    design_unit_name: str | None = Field(default=None)
+    survey_unit_name: str | None = Field(default=None)
 
 
 class PersonnelDraft(StrictInitializationModel):
-    record_id: int | None = Field(default=None, gt=0)
-    serial_no: int = Field(gt=0)
-    real_name: str = Field(min_length=1, max_length=100)
-    identity_card_no: str = Field(min_length=1, max_length=30)
-    position_name: str = Field(min_length=1, max_length=100)
-    certificate_no: str = Field(min_length=1, max_length=100)
-    responsibility_description: str = Field(min_length=1, max_length=10000)
+    record_id: int | None = Field(default=None)
+    serial_no: int = Field(default=None)
+    real_name: str = Field(default=None)
+    identity_card_no: str = Field(default=None)
+    position_name: str = Field(default=None)
+    certificate_no: str = Field(default=None)
+    responsibility_description: str = Field(default=None)
 
 
 class WbsDraft(StrictInitializationModel):
-    record_id: int | None = Field(default=None, gt=0)
-    wbs_code: str = Field(min_length=1, max_length=128)
-    parent_wbs_code: str | None = Field(max_length=128)
-    predecessor_wbs_codes: list[str] = Field(default_factory=list, max_length=100)
-    sort_order: int = Field(default=0, ge=0)
-    color_value: str | None = Field(default=None, max_length=50)
-    name: str = Field(min_length=1, max_length=300)
-    assigned_to_text: str | None = Field(default=None, max_length=300)
-    planned_start_at: datetime | None
-    planned_finish_at: datetime | None
+    record_id: int | None = Field(default=None)
+    wbs_code: str = Field(default=None)
+    parent_wbs_code: str | None = Field(default=None)
+    predecessor_wbs_codes: list[str] = Field(default_factory=list)
+    sort_order: int = Field(default=0)
+    color_value: str | None = Field(default=None)
+    name: str = Field(default=None)
+    assigned_to_text: str | None = Field(default=None)
+    planned_start_at: datetime | None = None
+    planned_finish_at: datetime | None = None
     deadline_at: datetime | None = None
-    progress_percent: Decimal | None = Field(ge=0, le=100)
-    duration_hours: Decimal | None = Field(default=None, ge=0)
-    estimated_hours: Decimal | None = Field(default=None, ge=0)
-    time_log_minutes: int | None = Field(default=None, ge=0)
-    status_text: str | None = Field(max_length=100)
-    priority_text: str | None = Field(max_length=100)
-    description: str | None = Field(default=None, max_length=20000)
-    budget: Decimal | None = Field(default=None, ge=0)
-    actual_cost: Decimal | None = Field(default=None, ge=0)
-    msp_uid: str | None = Field(default=None, max_length=100)
-    msp_id: str | None = Field(default=None, max_length=100)
+    progress_percent: Decimal | None = Field(default=None)
+    duration_hours: Decimal | None = Field(default=None)
+    estimated_hours: Decimal | None = Field(default=None)
+    time_log_minutes: int | None = Field(default=None)
+    status_text: str | None = Field(default=None)
+    priority_text: str | None = Field(default=None)
+    description: str | None = Field(default=None)
+    budget: Decimal | None = Field(default=None)
+    actual_cost: Decimal | None = Field(default=None)
+    msp_uid: str | None = Field(default=None)
+    msp_id: str | None = Field(default=None)
     source_created_at: datetime | None = None
-    source_creator: str | None = Field(default=None, max_length=200)
-    item_type: str | None = Field(default=None, max_length=100)
-    source_project_path: str | None = Field(default=None, max_length=10000)
-    level: int = Field(gt=0, le=100)
+    source_creator: str | None = Field(default=None)
+    item_type: str | None = Field(default=None)
+    source_project_path: str | None = Field(default=None)
+    level: int = Field(default=None)
 
 
 class RiskDraftItem(StrictInitializationModel):
-    record_id: int | None = Field(default=None, gt=0)
-    serial_no: int = Field(gt=0)
-    related_process_name: str = Field(min_length=1, max_length=300)
-    risk_part: str = Field(min_length=1, max_length=300)
-    risk_level: str = Field(min_length=1, max_length=50)
-    evaluation_condition: str = Field(min_length=1, max_length=20000)
+    record_id: int | None = Field(default=None)
+    serial_no: int = Field(default=None)
+    related_process_name: str = Field(default=None)
+    risk_part: str = Field(default=None)
+    risk_level: str = Field(default=None)
+    evaluation_condition: str = Field(default=None)
     risk_window_start_date: date | None = None
     risk_window_end_date: date | None = None
-    summary: str | None = Field(default=None, max_length=20000)
+    summary: str | None = Field(default=None)
 
 
 class QualityRequirementDraft(StrictInitializationModel):
-    record_id: int | None = Field(default=None, gt=0)
-    wbs_code: str = Field(min_length=1, max_length=128)
-    quality_acceptance_item: str = Field(min_length=1, max_length=20000)
-    control_indicator: str = Field(min_length=1, max_length=20000)
-    inspection_frequency: str = Field(min_length=1, max_length=10000)
-    related_documents: str = Field(min_length=1, max_length=20000)
+    record_id: int | None = Field(default=None)
+    wbs_code: str = Field(default=None)
+    quality_acceptance_item: str = Field(default=None)
+    control_indicator: str = Field(default=None)
+    inspection_frequency: str = Field(default=None)
+    related_documents: str = Field(default=None)
 
 
 class ProjectInitializationPayload(StrictInitializationModel):

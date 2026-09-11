@@ -307,6 +307,10 @@ class WakeupDispatcher:
             )
             return
 
+        if getattr(session.config, "user_stopped_at", None) is not None:
+            if not isinstance(input_msg, UserInterruptEvent):
+                return
+
         if is_team_wake and session.team_id is not None:
             team = await self._storage.get_team(user_id, session.team_id)
             if (

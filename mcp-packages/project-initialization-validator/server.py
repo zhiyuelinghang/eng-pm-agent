@@ -10,7 +10,7 @@ from initialization_validator import validate_project_initialization
 
 
 SERVER_NAME = "project-initialization-validator"
-SERVER_VERSION = "1.0.0"
+SERVER_VERSION = "2.4.0"
 
 
 def _load_tools() -> list[dict[str, Any]]:

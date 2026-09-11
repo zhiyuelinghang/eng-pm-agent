@@ -14,7 +14,7 @@ from backend.app.initialization_change_service import apply_change_preview, crea
 from backend.app.initialization_changes import build_change_plan
 from backend.app.models import ProjectInitializationDraftSection, QualityMetric, User
 from backend.app.project_initialization import ApplyInitializationDraftInput, InitializationApplyError, apply_initialization_draft
-from backend.tests.test_initialization_changes import db, _draft, _wbs  # noqa: F401
+from backend.tests.test_initialization_changes import db, _draft, _wbs, _risk  # noqa: F401
 
 spec = importlib.util.spec_from_file_location("change_validator", Path(__file__).resolve().parents[2] / "mcp-packages/project-initialization-validator/initialization_validator.py")
 validator_module = importlib.util.module_from_spec(spec)
@@ -22,6 +22,9 @@ spec.loader.exec_module(validator_module)
 
 
 class Validator:
+    def get_initialization_validation_binding(self):
+        return {"package_id": "project-initialization-validator", "package_version": "2.0.0"}
+
     def validate_project_initialization(self, payload):
         return {"package_id": "project-initialization-validator", "package_version": "2.0.0", "duration_ms": 1,
                 "result": validator_module.validate_project_initialization(payload)}
@@ -32,7 +35,8 @@ def preview(db, draft, user, **kwargs):
 
 
 def apply(db, draft, user, review, **kwargs):
-    result = apply_change_preview(db, draft, user, ApplyInitializationChangesInput(preview_id=review["preview_id"], **kwargs))
+    client = kwargs.pop("client", None) or Validator()
+    result = apply_change_preview(db, draft, user, ApplyInitializationChangesInput(preview_id=review["preview_id"], **kwargs), client=client)
     db.commit()
     return result
 
@@ -60,7 +64,39 @@ def test_unselected_incomplete_record_does_not_gate_valid_field(db):
     assert selected["can_apply"]
     apply(db, draft, user, selected)
     assert project.construction_unit_name == "新单位"
-    assert preview(db, draft, user)["can_apply"] is False
+    remainder = preview(db, draft, user)
+    # The platform cannot add a required-field rule absent from the active MCP.
+    assert remainder["can_apply"] is True
+    assert not any(issue["rule_id"].startswith("platform.") for issue in remainder["issues"])
+
+
+def test_first_initialization_adds_empty_project_fields_without_old_data(db):
+    project, user, draft = _draft(db, {"project": {"construction_unit_name": "建设单位", "contract_duration_days": 0}})
+    project.engineering_type_description = None
+    project.construction_unit_name = None
+    review = preview(db, draft, user)
+    assert review["mode"] == "initialization"
+    assert review["summary"]["update"] == 0
+    assert all(row["operation"] == "add" and row["before"] is None for row in review["changes"])
+    key = next(row["key"] for row in review["changes"] if "construction_unit_name" in row["key"])
+    apply(db, draft, user, preview(db, draft, user, selected_keys=[key]))
+    assert project.construction_unit_name == "建设单位"
+    assert preview(db, draft, user)["mode"] == "update"
+
+
+def test_invalid_fields_do_not_skip_mcp_checks_of_other_records(db):
+    _project, user, draft = _draft(db, {
+        "wbs": [{"wbs_code": "1", "name": "任务名称", "level": 1}],
+        "quality_requirements": [{"wbs_code": "1"}],
+    })
+    review = preview(db, draft, user)
+    assert review["can_apply"]
+    assert review["validation"]["package_version"] == "2.0.0"
+    assert not any(issue["rule_id"].endswith("invalid_record") for issue in review["issues"])
+    assert any(issue["rule_id"] == "wbs.placeholder_name" for issue in review["issues"])
+    assert not any("Input should" in issue["message"] for issue in review["issues"])
+    identities = [(issue["rule_id"], issue.get("change_key"), issue.get("field_name"), issue["message"]) for issue in review["issues"]]
+    assert len(identities) == len(set(identities))
 
 
 def test_quality_only_import_validates_against_existing_wbs(db):
@@ -85,6 +121,37 @@ def test_contract_start_change_is_checked_against_existing_end(db):
     review = preview(db, draft, user)
     assert not review["can_apply"]
     assert any(issue["rule_id"].endswith("contract_date_order") for issue in review["issues"])
+
+
+def test_duplicate_identity_is_a_mcp_issue_and_other_data_can_still_be_submitted(db):
+    project, user, draft = _draft(db, {
+        "project": {"construction_unit_name": "新单位"},
+        "risks": [{"related_process_name": "土方开挖", "risk_part": "基坑边坡", "risk_level": "中"}],
+    })
+    first, second = _risk(db, project), _risk(db, project, serial_no=2)
+    checked = preview(db, draft, user)
+    assert not checked["can_apply"] and checked["operation_issues"] == []
+    assert any(issue["rule_id"] == "matching.duplicate_identity" for issue in checked["issues"])
+    key = next(row["key"] for row in checked["changes"] if row["section"] == "project")
+    checked = preview(db, draft, user, selected_keys=[key])
+    assert checked["can_apply"]
+    apply(db, draft, user, checked)
+    assert first.risk_level == second.risk_level == "高"
+
+
+def test_draft_card_counts_only_remaining_material_and_retains_audit_rows(db):
+    from backend.app.initialization_draft_view import build_initialization_draft_review
+    _, user, draft = _draft(db, {"project": {"construction_unit_name": "新单位", "engineering_type_description": "新工程"}})
+    checked = preview(db, draft, user)
+    first = preview(db, draft, user, selected_keys=checked["selected_keys"][:1])
+    apply(db, draft, user, first)
+    remaining = build_initialization_draft_review(db, draft)
+    assert remaining["pending_change_count"] == remaining["summary"]["project_fields"] == 1
+    apply(db, draft, user, preview(db, draft, user))
+    finished = build_initialization_draft_review(db, draft)
+    assert finished["status"] == "applied" and finished["pending_change_count"] == 0
+    assert all(count == 0 for count in finished["summary"].values())
+    assert len(list(db.scalars(select(AppliedInitializationChange)))) == 2
 
 
 @pytest.mark.parametrize("kind", ["formal", "draft", "expired"])

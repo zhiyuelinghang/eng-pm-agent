@@ -243,7 +243,8 @@ async def get_toolkit(
     # Dobby's platform surface is deliberately narrower than an ordinary
     # AgentScope workspace: it receives only native orchestration, managed
     # business interactions, and management-level memory.
-    if not is_platform_dobby:
+    initialization_role = getattr(getattr(agent_record.data, "platform_config", None), "initialization_role", None)
+    if not is_platform_dobby and not initialization_role:
         tools += [TaskCreate(), TaskList(), TaskGet(), TaskUpdate()]
 
     # Background-task control.

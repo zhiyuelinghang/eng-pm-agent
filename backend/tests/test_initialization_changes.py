@@ -149,17 +149,24 @@ def test_risk_serial_does_not_silently_match_unrelated_old_risk(db):
         "risk_level": "高", "evaluation_condition": "高度超限",
     }]})
     old = _risk(db, project)
-    ambiguous = build_change_plan(db, draft)
-    change = ambiguous["changes"][0]
-    assert change["operation"] == "conflict"
-    assert change["candidates"][0]["id"] == old.id
-    assert ambiguous["issues"] == [] and ambiguous["selected_keys"] == []
-    plan = build_change_plan(db, draft, [change["key"]], {change["key"]: None})
+    plan = build_change_plan(db, draft)
+    change = plan["changes"][0]
+    assert change["operation"] == "add" and change["candidates"] == []
+    assert plan["selected_keys"] == [change["key"]]
     assert plan["issues"] == []
-    assert plan["changes"][0]["after"]["serial_no"] == 2
-    apply_change_plan(db, draft, plan, [])
-    assert len(list(db.scalars(select(RiskSource)))) == 2
+    assert plan["changes"][0]["after"]["serial_no"] == 1
+    assert [row["serial_no"] for row in plan["effective_payload"]["risks"]] == [1, 1]
+    assert len(list(db.scalars(select(RiskSource)))) == 1
     assert db.get(RiskSource, old.id).risk_part == "基坑边坡"
+
+
+def test_same_wbs_name_with_different_code_is_new_without_manual_matching(db):
+    project, _user, draft = _draft(db, {"wbs": [{"wbs_code": "2", "name": "原工序", "level": 1}]})
+    old = _wbs(db, project)
+    plan = build_change_plan(db, draft)
+    change = plan["changes"][0]
+    assert change["operation"] == "add" and change["target_id"] is None and not change["candidates"]
+    assert old.wbs_code == "1"
 
 
 def test_risk_natural_match_updates_and_keeps_operational_fields(db):
@@ -243,13 +250,13 @@ def test_changed_formal_runtime_value_invalidates_review(db):
     assert wbs.name == "原工序"
 
 
-def test_incomplete_selected_new_record_is_reported_without_invalid_payload(db):
+def test_incomplete_selected_new_record_is_preserved_for_mcp_validation(db):
     _project, _user, draft = _draft(db, {"personnel": [{"real_name": "仅姓名"}]})
     plan = build_change_plan(db, draft)
-    assert any(issue["rule_id"] == "platform.change.invalid_record" for issue in plan["issues"])
-    assert plan["effective_payload"]["personnel"] == []
-    with pytest.raises(InitializationApplyError, match="仍有需要处理"):
-        apply_change_plan(db, draft, plan, [])
+    assert plan["issues"] == []
+    assert len(plan["effective_payload"]["personnel"]) == 1
+    assert plan["effective_payload"]["personnel"][0]["identity_card_no"] is None
+    assert plan["effective_payload"]["personnel"][0]["real_name"] == "仅姓名"
 
 
 def test_existing_legacy_empty_fields_do_not_block_unrelated_new_project_field(db):
@@ -268,7 +275,9 @@ def test_multiple_proposals_targeting_one_formal_row_require_user_selection(db):
     ]})
     _wbs(db, project)
     plan = build_change_plan(db, draft)
-    assert any(issue["rule_id"] == "platform.change.duplicate_target" for issue in plan["issues"])
+    assert plan["issues"] == []
+    mapping = next(value for value in plan["record_targets"].values() if value["section"] == "wbs")
+    assert [item["values"]["name"] for item in mapping["observations"]] == ["候选甲", "候选乙"]
     selected = build_change_plan(db, draft, [plan["changes"][0]["key"]])
     assert selected["issues"] == []
     apply_change_plan(db, draft, selected, [])
@@ -304,7 +313,7 @@ def test_new_parent_and_child_are_both_created_before_parent_links(db):
 
 def test_one_new_account_can_receive_two_positions_with_distinct_serials(db):
     _project, _user, draft = _draft(db, {"personnel": [
-        _person(position_name="安全员"), _person(position_name="质量员"),
+        _person(position_name="安全员"), _person(serial_no=2, position_name="质量员"),
     ]})
     plan = build_change_plan(db, draft)
     assert len(plan["required_personnel_credentials"]) == 1
@@ -377,7 +386,7 @@ def test_personnel_import_initializes_missing_permission_mode_and_preserves_exis
     assert db.get(EngineeringDocumentSyncState, project.id).access_mode == expected_mode
 
 
-def test_new_assignment_reuses_existing_global_name_and_password_with_visible_warning(db):
+def test_existing_account_is_a_fact_for_mcp_without_replacing_uploaded_name(db):
     project, user, draft = _draft(db, {"personnel": [_person(
         identity_card_no="ADMIN-CARD", real_name="上传中的不同姓名",
     )]})
@@ -388,14 +397,13 @@ def test_new_assignment_reuses_existing_global_name_and_password_with_visible_wa
     db.flush()
     plan = build_change_plan(db, draft)
     assert plan["required_personnel_credentials"] == []
-    warning = next(issue for issue in plan["issues"] if issue["rule_id"] == "platform.change.existing_account_name")
-    assert warning["level"] == "warning"
-    assert "上传中的不同姓名" in warning["message"] and "管理员" in warning["message"]
-    assert plan["changes"][0]["after"]["real_name"] == "管理员"
-    assert next(field for field in plan["changes"][0]["fields"] if field["name"] == "real_name")["after"] == "管理员"
-    apply_change_plan(db, draft, plan, [])
+    assert plan["issues"] == []
+    assert plan["changes"][0]["after"]["real_name"] == "上传中的不同姓名"
+    assert next(field for field in plan["changes"][0]["fields"] if field["name"] == "real_name")["after"] == "上传中的不同姓名"
+    mapping = next(value for value in plan["record_targets"].values() if value["section"] == "personnel")
+    assert mapping["existing_account"] == {"real_name": "管理员"}
+    assert not mapping["updates_existing_identity"]
     assert user.real_name == "管理员" and user.password_hash == "existing-password"
-    assert db.scalar(select(ProjectMember).where(ProjectMember.project_id == project.id)).user_id == user.id
 
 
 def test_review_shows_existing_personnel_username_without_secrets_or_unrelated_accounts(db, monkeypatch):

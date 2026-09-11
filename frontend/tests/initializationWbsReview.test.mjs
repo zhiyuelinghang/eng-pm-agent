@@ -20,11 +20,16 @@ test('WBS按父子关系和自然编码排序，逐级折叠不会改动选中�
   assert.deepEqual(visibleInitializationChangeTreeRows(tree.rows, new Set(tree.groupKeys)).map(row => row.change.key), ['1'])
   assert.equal(visibleInitializationChangeTreeRows(tree.rows, new Set()).length, 4)
   assert.deepEqual(changes.filter(change => change.selected).map(change => change.key), selected)
+  const leaf = tree.rows.find(row => row.change.key === '3')
+  assert.deepEqual(leaf.ancestorBranches, [false, true])
+  assert.equal(leaf.lastSibling, true)
+  assert.equal(tree.rows[0].childCount, 2)
+  assert.equal(tree.rows.find(row => row.change.key === '2').lastSibling, false)
 })
 
 test('搜索子节点保留上级路径，但上级上下文不进入当前筛选批量选择', () => {
   const changes = [wbs('1', '1', null, { operation: 'unchanged', fields: [] }), wbs('2', '1.2', '1'), wbs('3', '1.3', '1')]
-  const matching = filterInitializationChanges(changes, 'wbs', 'changes', '1.2')
+  const matching = filterInitializationChanges(changes, 'wbs', 'update', '1.2')
   const tree = buildInitializationChangeTree(changes, matching)
   assert.deepEqual(tree.rows.map(row => [row.change.key, row.contextOnly]), [['1', true], ['2', false]])
   assert.deepEqual(matching.filter(selectableInitializationChange).map(change => change.key), ['2'])
@@ -36,7 +41,7 @@ test('搜索子节点保留上级路径，但上级上下文不进入当前筛�
 test('筛选已提交子节点时仍可恢复树路径，其他分区记录不被折叠', () => {
   const project = { ...wbs('4', ''), key: '4:construction_unit_name', section: 'project', operation: 'applied', after: { construction_unit_name: '建设单位' } }
   const changes = [project, wbs('1', '1'), wbs('2', '1.2', '1', { operation: 'applied' })]
-  const matching = filterInitializationChanges(changes, 'all', 'applied', '')
+  const matching = changes.filter(change => change.operation === 'applied')
   const tree = buildInitializationChangeTree(changes, matching)
   assert.deepEqual(tree.rows.map(row => row.change.key), ['4:construction_unit_name', '1', '2'])
   assert.deepEqual(visibleInitializationChangeTreeRows(tree.rows, new Set(tree.groupKeys)).map(row => row.change.key), ['4:construction_unit_name', '1'])
